@@ -17,5 +17,7 @@
 pub mod instance;
 mod reality;
 mod hysteria2;
+mod trojan;
+mod ws_tls;
 
 pub use instance::Instance;
