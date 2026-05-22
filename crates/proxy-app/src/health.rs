@@ -48,7 +48,11 @@ impl HealthChecker {
         for (tag, _) in &outbounds {
             states.insert(tag.clone(), OutboundState::default());
         }
-        let checker = Arc::new(Self { outbounds, states: states.clone(), config });
+        let checker = Arc::new(Self {
+            outbounds,
+            states: states.clone(),
+            config,
+        });
         (checker, states)
     }
 

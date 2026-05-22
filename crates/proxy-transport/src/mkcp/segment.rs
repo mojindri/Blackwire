@@ -26,9 +26,18 @@ pub struct Segment {
 impl Segment {
     pub fn new(conv: u32, cmd: u8) -> Self {
         Self {
-            conv, cmd, frg: 0, wnd: 0, ts: 0, sn: 0, una: 0,
+            conv,
+            cmd,
+            frg: 0,
+            wnd: 0,
+            ts: 0,
+            sn: 0,
+            una: 0,
             data: Bytes::new(),
-            resendts: 0, rto: 200, fastack: 0, xmit: 0,
+            resendts: 0,
+            rto: 200,
+            fastack: 0,
+            xmit: 0,
         }
     }
 
@@ -45,7 +54,9 @@ impl Segment {
     }
 
     pub fn decode(src: &mut &[u8]) -> Option<Self> {
-        if src.len() < OVERHEAD { return None; }
+        if src.len() < OVERHEAD {
+            return None;
+        }
         let conv = src.get_u32_le();
         let cmd = src.get_u8();
         let frg = src.get_u8();
@@ -54,9 +65,24 @@ impl Segment {
         let sn = src.get_u32_le();
         let una = src.get_u32_le();
         let len = src.get_u32_le() as usize;
-        if src.len() < len { return None; }
+        if src.len() < len {
+            return None;
+        }
         let data = Bytes::copy_from_slice(&src[..len]);
         src.advance(len);
-        Some(Self { conv, cmd, frg, wnd, ts, sn, una, data, resendts: 0, rto: 200, fastack: 0, xmit: 0 })
+        Some(Self {
+            conv,
+            cmd,
+            frg,
+            wnd,
+            ts,
+            sn,
+            una,
+            data,
+            resendts: 0,
+            rto: 200,
+            fastack: 0,
+            xmit: 0,
+        })
     }
 }
