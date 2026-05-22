@@ -13,6 +13,7 @@
 
 pub mod freedom;
 pub mod socks;
+pub mod trojan;
 pub mod vless;
 
 // Phase 2+
@@ -26,6 +27,5 @@ pub mod vless;
 
 // Phase 6+
 // pub mod vmess;
-// pub mod trojan;
 // pub mod ss2022;
 // pub mod http;

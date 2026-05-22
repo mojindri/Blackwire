@@ -1737,6 +1737,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing-subscriber",
+ "uuid",
  "x25519-dalek",
 ]
 
@@ -2685,6 +2686,7 @@ dependencies = [
  "async-trait",
  "base64",
  "bytes",
+ "futures",
  "hex",
  "hkdf",
  "libc",
