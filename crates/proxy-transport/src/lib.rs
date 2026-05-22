@@ -23,9 +23,9 @@ pub mod tcp;
 pub mod quic;
 pub mod hysteria2;
 
-// Phase 2+ (remaining)
-// pub mod tls;
-// pub mod websocket;
+// Phase 4: TLS and WebSocket transports
+pub mod tls;
+pub mod ws;
 
 // Phase 4+
 // pub mod tun;
@@ -42,6 +42,8 @@ pub use hysteria2::{
     Hysteria2Client, Hysteria2ClientConfig, Hysteria2OutboundHandler, Hysteria2Server,
     Hysteria2ServerConfig,
 };
+pub use tls::{build_server_config as tls_build_server_config, tls_accept, tls_connect};
+pub use ws::{ws_accept, ws_connect, WsConnectConfig};
 
 // Re-export quinn's congestion module so downstream crates can implement
 // or use congestion controllers without depending on quinn directly.
