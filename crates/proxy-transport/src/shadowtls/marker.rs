@@ -16,6 +16,7 @@
 
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -34,6 +35,13 @@ pub fn compute_marker(psk: &[u8], server_random: &[u8; 32]) -> [u8; 8] {
     let mut out = [0u8; 8];
     out.copy_from_slice(&result[..8]);
     out
+}
+
+/// Compare two markers without leaking which byte mismatched.
+///
+/// This keeps authentication behavior stable even when the peer sends junk.
+pub(crate) fn markers_equal(expected: &[u8; 8], candidate: &[u8; 8]) -> bool {
+    expected.ct_eq(candidate).into()
 }
 
 #[cfg(test)]

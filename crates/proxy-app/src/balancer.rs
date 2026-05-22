@@ -56,7 +56,10 @@ impl Balancer {
             .outbounds
             .iter()
             .filter(|(tag, _)| {
-                self.states.get(tag.as_str()).map(|s| s.alive).unwrap_or(true)
+                self.states
+                    .get(tag.as_str())
+                    .map(|s| s.alive)
+                    .unwrap_or(true)
             })
             .collect();
 
@@ -69,7 +72,10 @@ impl Balancer {
             Strategy::Latency => alive
                 .iter()
                 .min_by_key(|(tag, _)| {
-                    self.states.get(tag.as_str()).map(|s| s.latency_ms).unwrap_or(u64::MAX)
+                    self.states
+                        .get(tag.as_str())
+                        .map(|s| s.latency_ms)
+                        .unwrap_or(u64::MAX)
                 })
                 .map(|(_, ob)| ob.clone()),
 
