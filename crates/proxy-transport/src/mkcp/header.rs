@@ -15,7 +15,10 @@ impl HeaderType {
     pub fn size(self) -> usize {
         match self {
             HeaderType::None => 0,
-            HeaderType::Srtp | HeaderType::Utp | HeaderType::WechatVideo | HeaderType::Wireguard => 4,
+            HeaderType::Srtp
+            | HeaderType::Utp
+            | HeaderType::WechatVideo
+            | HeaderType::Wireguard => 4,
             HeaderType::Dtls => 13,
         }
     }
@@ -30,7 +33,9 @@ impl HeaderType {
 
     pub fn strip(self, packet: &[u8]) -> Option<&[u8]> {
         let hdr = self.size();
-        if packet.len() < hdr { return None; }
+        if packet.len() < hdr {
+            return None;
+        }
         Some(&packet[hdr..])
     }
 
@@ -38,33 +43,49 @@ impl HeaderType {
         match self {
             HeaderType::None => {}
             HeaderType::Srtp => {
-                buf[0] = 0x80; buf[1] = 0x61;
+                buf[0] = 0x80;
+                buf[1] = 0x61;
                 let r = (buf.as_ptr() as u32).wrapping_mul(0x9e3779b9);
-                buf[2] = (r >> 8) as u8; buf[3] = r as u8;
+                buf[2] = (r >> 8) as u8;
+                buf[3] = r as u8;
             }
             HeaderType::Utp => {
-                buf[0] = 0x01; buf[1] = 0x00;
+                buf[0] = 0x01;
+                buf[1] = 0x00;
                 let r = (buf.as_ptr() as u32).wrapping_mul(0x9e3779b9);
-                buf[2] = (r >> 8) as u8; buf[3] = r as u8;
+                buf[2] = (r >> 8) as u8;
+                buf[3] = r as u8;
             }
             HeaderType::WechatVideo => {
                 static C: AtomicU32 = AtomicU32::new(0);
                 let c = C.fetch_add(1, Ordering::Relaxed);
-                buf[0] = 0xa1; buf[1] = 0x08;
-                buf[2] = (c >> 8) as u8; buf[3] = c as u8;
+                buf[0] = 0xa1;
+                buf[1] = 0x08;
+                buf[2] = (c >> 8) as u8;
+                buf[3] = c as u8;
             }
             HeaderType::Dtls => {
                 static C: AtomicU32 = AtomicU32::new(0);
                 let c = C.fetch_add(1, Ordering::Relaxed);
-                buf[0] = 0x16; buf[1] = 0xfe; buf[2] = 0xff;
-                buf[3] = 0; buf[4] = 0;
-                buf[5] = 0; buf[6] = 0;
-                buf[7] = (c >> 24) as u8; buf[8] = (c >> 16) as u8;
-                buf[9] = (c >> 8) as u8; buf[10] = c as u8;
-                buf[11] = 0; buf[12] = 0;
+                buf[0] = 0x16;
+                buf[1] = 0xfe;
+                buf[2] = 0xff;
+                buf[3] = 0;
+                buf[4] = 0;
+                buf[5] = 0;
+                buf[6] = 0;
+                buf[7] = (c >> 24) as u8;
+                buf[8] = (c >> 16) as u8;
+                buf[9] = (c >> 8) as u8;
+                buf[10] = c as u8;
+                buf[11] = 0;
+                buf[12] = 0;
             }
             HeaderType::Wireguard => {
-                buf[0] = 0x04; buf[1] = 0; buf[2] = 0; buf[3] = 0;
+                buf[0] = 0x04;
+                buf[1] = 0;
+                buf[2] = 0;
+                buf[3] = 0;
             }
         }
     }

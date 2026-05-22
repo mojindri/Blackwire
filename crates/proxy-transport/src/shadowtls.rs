@@ -25,10 +25,13 @@
 //! 5. Continue with the real proxy protocol (e.g. VLESS).
 
 pub mod client;
+mod fuzzing;
 pub mod handshake;
 pub mod marker;
 pub mod server;
 
 pub use client::shadowtls_connect;
+#[cfg(feature = "fuzzing")]
+pub use fuzzing::validate_first_application_record;
 pub use marker::compute_marker;
 pub use server::{shadowtls_accept, write_marker_record};

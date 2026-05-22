@@ -64,7 +64,14 @@ pub async fn mkcp_connect(cfg: &MkcpClientConfig) -> Result<MkcpStream> {
 
     let header = cfg.header;
     let interval = cfg.interval_ms;
-    tokio::spawn(run_driver(kcp, socket, header, rx_from_user, tx_to_user, interval));
+    tokio::spawn(run_driver(
+        kcp,
+        socket,
+        header,
+        rx_from_user,
+        tx_to_user,
+        interval,
+    ));
 
     Ok(MkcpStream::new(tx_to_driver, rx_from_driver))
 }
@@ -111,5 +118,9 @@ async fn run_driver(
 
 fn now_ms() -> u32 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    (SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() & 0xFFFFFFFF) as u32
+    (SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        & 0xFFFFFFFF) as u32
 }

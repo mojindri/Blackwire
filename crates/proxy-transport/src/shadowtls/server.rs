@@ -14,6 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use proxy_common::{BoxedStream, ProxyError};
 
+use super::fuzzing::validate_first_application_record;
 use super::handshake::relay_handshake;
 use super::marker::compute_marker;
 
@@ -39,53 +40,23 @@ pub async fn shadowtls_accept(
     // Phase 2: Compute the expected HMAC marker.
     let expected_marker = compute_marker(psk, &server_random);
 
-    // Phase 3: Read and verify the marker from the next client bytes.
-    // The client sends the marker as the first 8 bytes of its first
-    // Application Data record payload (after the 5-byte TLS record header).
-    //
-    // We read a 5-byte TLS header first, then verify the first 8 bytes of payload.
+    // Read the first TLS Application Data record as raw bytes, then reuse the
+    // same validation helper that the fuzz target exercises.
     let mut header = [0u8; 5];
     stream
         .read_exact(&mut header)
         .await
         .map_err(|e| ProxyError::Transport(format!("ShadowTLS server: read app header: {e}")))?;
 
-    let record_type = header[0];
-    if record_type != 23 {
-        return Err(ProxyError::Protocol(format!(
-            "ShadowTLS: expected Application Data (23), got {record_type}"
-        )));
-    }
-
     let payload_len = u16::from_be_bytes([header[3], header[4]]) as usize;
-    if payload_len < 8 {
-        return Err(ProxyError::Protocol(
-            "ShadowTLS: first Application Data too short to contain marker".into(),
-        ));
-    }
-
-    // Read the marker bytes.
-    let mut marker_buf = [0u8; 8];
+    let mut record = header.to_vec();
+    record.resize(5 + payload_len, 0);
     stream
-        .read_exact(&mut marker_buf)
+        .read_exact(&mut record[5..])
         .await
-        .map_err(|e| ProxyError::Transport(format!("ShadowTLS server: read marker: {e}")))?;
+        .map_err(|e| ProxyError::Transport(format!("ShadowTLS server: read payload: {e}")))?;
 
-    if marker_buf != expected_marker {
-        return Err(ProxyError::AuthFailed);
-    }
-
-    // Read the rest of the first application data payload (if any).
-    let remaining = payload_len - 8;
-    let prefix = if remaining > 0 {
-        let mut rest = vec![0u8; remaining];
-        stream.read_exact(&mut rest).await.map_err(|e| {
-            ProxyError::Transport(format!("ShadowTLS server: read payload rest: {e}"))
-        })?;
-        rest
-    } else {
-        vec![]
-    };
+    let prefix = validate_first_application_record(&expected_marker, &record)?;
 
     // Prepend the remaining bytes so the protocol handler sees the full payload.
     if prefix.is_empty() {
