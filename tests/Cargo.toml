@@ -26,6 +26,7 @@ rcgen.workspace        = true
 quinn.workspace        = true
 x25519-dalek.workspace = true
 rand.workspace         = true
+uuid.workspace         = true
 
 [lib]
 name = "integration_tests"
