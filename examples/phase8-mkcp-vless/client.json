@@ -1,0 +1,52 @@
+{
+  "log": {
+    "level": "info",
+    "json": false
+  },
+  "inbounds": [
+    {
+      "tag": "socks-local",
+      "protocol": "socks",
+      "listen": "127.0.0.1",
+      "port": 18280
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "vless-mkcp-out",
+      "protocol": "vless",
+      "settings": {
+        "address": "203.0.113.30",
+        "port": 18443,
+        "users": [
+          {
+            "id": "a3482e88-686a-4a58-8126-99c9df64b7bf",
+            "flow": ""
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "kcp",
+        "security": "none",
+        "kcpSettings": {
+          "header": "none",
+          "mtu": 1350,
+          "tti": 50,
+          "uplink_capacity": 10,
+          "downlink_capacity": 50,
+          "congestion": false,
+          "read_buffer_size": 4,
+          "write_buffer_size": 4
+        }
+      }
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "type": "field",
+        "outboundTag": "vless-mkcp-out"
+      }
+    ]
+  }
+}
