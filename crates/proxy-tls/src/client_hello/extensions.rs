@@ -31,7 +31,11 @@ impl ClientHelloBuilder {
                 0x002B => self.ext_supported_versions(&mut buf),
                 0x001B => self.ext_compress_certificate(&mut buf),
                 0x0015 => self.ext_padding(&mut buf),
-                _ => {}
+                // Pass unknown extensions through as empty bodies so the profile
+                // list is never silently truncated.  An operator who adds a new
+                // extension type to a profile gets a well-formed (zero-length)
+                // placeholder rather than a silent omission.
+                _ => put_extension(&mut buf, ext_type, &[]),
             }
         }
 
