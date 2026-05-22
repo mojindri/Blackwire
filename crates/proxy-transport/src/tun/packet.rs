@@ -17,7 +17,9 @@ pub struct IpPacket {
 }
 
 pub fn parse_ip_packet(buf: &[u8]) -> Option<IpPacket> {
-    if buf.is_empty() { return None; }
+    if buf.is_empty() {
+        return None;
+    }
     match buf[0] >> 4 {
         4 => parse_ipv4(buf),
         6 => parse_ipv6(buf),
@@ -26,9 +28,13 @@ pub fn parse_ip_packet(buf: &[u8]) -> Option<IpPacket> {
 }
 
 fn parse_ipv4(buf: &[u8]) -> Option<IpPacket> {
-    if buf.len() < 20 { return None; }
+    if buf.len() < 20 {
+        return None;
+    }
     let ihl = (buf[0] & 0x0F) as usize * 4;
-    if buf.len() < ihl + 4 { return None; }
+    if buf.len() < ihl + 4 {
+        return None;
+    }
     let proto = buf[9];
     let src = Ipv4Addr::new(buf[12], buf[13], buf[14], buf[15]);
     let dst = Ipv4Addr::new(buf[16], buf[17], buf[18], buf[19]);
@@ -39,12 +45,18 @@ fn parse_ipv4(buf: &[u8]) -> Option<IpPacket> {
         dst: dst.into(),
         src_port,
         dst_port,
-        protocol: match proto { 6 => TransportProtocol::Tcp, 17 => TransportProtocol::Udp, p => TransportProtocol::Other(p) },
+        protocol: match proto {
+            6 => TransportProtocol::Tcp,
+            17 => TransportProtocol::Udp,
+            p => TransportProtocol::Other(p),
+        },
     })
 }
 
 fn parse_ipv6(buf: &[u8]) -> Option<IpPacket> {
-    if buf.len() < 44 { return None; }
+    if buf.len() < 44 {
+        return None;
+    }
     let next_hdr = buf[6];
     let src = Ipv6Addr::from(<[u8; 16]>::try_from(&buf[8..24]).ok()?);
     let dst = Ipv6Addr::from(<[u8; 16]>::try_from(&buf[24..40]).ok()?);
@@ -55,7 +67,11 @@ fn parse_ipv6(buf: &[u8]) -> Option<IpPacket> {
         dst: dst.into(),
         src_port,
         dst_port,
-        protocol: match next_hdr { 6 => TransportProtocol::Tcp, 17 => TransportProtocol::Udp, p => TransportProtocol::Other(p) },
+        protocol: match next_hdr {
+            6 => TransportProtocol::Tcp,
+            17 => TransportProtocol::Udp,
+            p => TransportProtocol::Other(p),
+        },
     })
 }
 
