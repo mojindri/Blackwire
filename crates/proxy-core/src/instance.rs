@@ -12,6 +12,15 @@
 //! 3. The instance holds `JoinHandle`s for all tasks. If any task panics,
 //!    the error is logged but the other tasks keep running.
 //!
+//! # Transport layering (Phase 4)
+//!
+//! Each inbound now goes through a layered handler stack:
+//!
+//!   TCP accept → [TLS] → [WebSocket] → Protocol handler
+//!
+//! The layers are applied based on `streamSettings.security` and
+//! `streamSettings.network` in the config. If neither is set, it is plain TCP.
+//!
 //! # Hot-reload (Phase 2)
 //!
 //! When the config file changes, the config manager sends a notification.
@@ -42,6 +51,8 @@ use crate::reality::{
     build_reality_client, build_reality_server, uses_reality, RealityConnectionHandler,
     RealityVlessOutbound,
 };
+use crate::trojan::{build_trojan_inbound, build_trojan_outbound};
+use crate::ws_tls::{build_conn_handler, uses_tls, uses_ws};
 
 /// The running proxy instance.
 pub struct Instance {
@@ -75,6 +86,8 @@ impl Instance {
                     .with_context(|| format!("building VLESS outbound '{}'", out_cfg.tag))?,
                 Protocol::Hysteria2 => build_hysteria2_outbound(out_cfg)
                     .with_context(|| format!("building Hysteria2 outbound '{}'", out_cfg.tag))?,
+                Protocol::Trojan => build_trojan_outbound(out_cfg)
+                    .with_context(|| format!("building Trojan outbound '{}'", out_cfg.tag))?,
                 ref p => {
                     anyhow::bail!("outbound protocol {:?} not yet implemented", p)
                 }
@@ -123,6 +136,8 @@ impl Instance {
                 Protocol::Socks => Socks5Inbound::new(&in_cfg.tag),
                 Protocol::Vless => build_vless_inbound(in_cfg)
                     .with_context(|| format!("building VLESS inbound '{}'", in_cfg.tag))?,
+                Protocol::Trojan => build_trojan_inbound(in_cfg)
+                    .with_context(|| format!("building Trojan inbound '{}'", in_cfg.tag))?,
                 ref p => {
                     anyhow::bail!("inbound protocol {:?} not yet implemented", p)
                 }
@@ -130,20 +145,35 @@ impl Instance {
 
             info!(tag = %handler.tag(), addr = %addr, "starting inbound listener");
 
-            // Wrap the inbound in a ConnectionHandler adapter so the transport
-            // layer can call it without knowing about the protocol.
             let dispatcher_for_handler = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
-            let conn_handler: Arc<dyn ConnectionHandler> = if uses_reality(&in_cfg.stream_settings)
-            {
-                let reality = build_reality_server(in_cfg)
-                    .with_context(|| format!("building REALITY inbound '{}'", in_cfg.tag))?;
-                RealityConnectionHandler::new(reality, Arc::clone(&handler), dispatcher_for_handler)
-            } else {
-                Arc::new(InboundConnectionHandler {
-                    inbound: Arc::clone(&handler),
-                    dispatcher: dispatcher_for_handler,
-                })
-            };
+
+            // Choose the connection handler stack based on stream settings.
+            let conn_handler: Arc<dyn ConnectionHandler> =
+                if uses_reality(&in_cfg.stream_settings) {
+                    // REALITY: unwrap REALITY TLS camouflage first.
+                    let reality = build_reality_server(in_cfg)
+                        .with_context(|| format!("building REALITY inbound '{}'", in_cfg.tag))?;
+                    RealityConnectionHandler::new(
+                        reality,
+                        Arc::clone(&handler),
+                        dispatcher_for_handler,
+                    )
+                } else if uses_tls(&in_cfg.stream_settings) || uses_ws(&in_cfg.stream_settings) {
+                    // Phase 4: TLS and/or WebSocket layering.
+                    build_conn_handler(handler, dispatcher_for_handler, &in_cfg.stream_settings)
+                        .with_context(|| {
+                            format!(
+                                "building TLS/WS connection handler for inbound '{}'",
+                                in_cfg.tag
+                            )
+                        })?
+                } else {
+                    // Plain TCP: no transport wrapping.
+                    Arc::new(InboundConnectionHandler {
+                        inbound: Arc::clone(&handler),
+                        dispatcher: dispatcher_for_handler,
+                    })
+                };
 
             // Start the TCP accept loop for this inbound.
             let transport = proxy_transport::TcpServerTransport::new(
