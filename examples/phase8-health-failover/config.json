@@ -1,0 +1,93 @@
+{
+  "log": {
+    "level": "info",
+    "json": false
+  },
+  "metricsAddr": "127.0.0.1:18090",
+  "inbounds": [
+    {
+      "tag": "socks-local",
+      "protocol": "socks",
+      "listen": "127.0.0.1",
+      "port": 18080
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "primary-vless",
+      "protocol": "vless",
+      "settings": {
+        "address": "203.0.113.10",
+        "port": 443,
+        "users": [
+          {
+            "id": "a3482e88-686a-4a58-8126-99c9df64b7bf",
+            "flow": ""
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "primary.example.com",
+          "allowInsecure": false
+        },
+        "wsSettings": {
+          "path": "/proxy",
+          "headers": {
+            "Host": "primary.example.com"
+          }
+        }
+      }
+    },
+    {
+      "tag": "backup-ss2022",
+      "protocol": "shadowsocks",
+      "settings": {
+        "address": "203.0.113.20",
+        "port": 8388,
+        "method": "2022-blake3-aes-256-gcm",
+        "password": "CHANGE_ME_USE_A_STRONG_RANDOM_PASSWORD"
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    }
+  ],
+  "routing": {
+    "balancers": [
+      {
+        "tag": "auto-proxy",
+        "selector": [
+          "primary-vless",
+          "backup-ss2022"
+        ],
+        "strategy": "latency",
+        "health_check": {
+          "url": "http://www.gstatic.com/generate_204",
+          "interval_secs": 30,
+          "timeout_secs": 5,
+          "max_failures": 2
+        }
+      }
+    ],
+    "rules": [
+      {
+        "type": "field",
+        "ip": [
+          "127.0.0.1/8",
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "outboundTag": "auto-proxy"
+      }
+    ]
+  }
+}
