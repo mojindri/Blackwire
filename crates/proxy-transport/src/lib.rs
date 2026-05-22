@@ -28,10 +28,13 @@ pub mod tls;
 pub mod ws;
 
 // Phase 4+
-// pub mod tun;
+pub mod tun;
 
 // Phase 5: gRPC transport
 pub mod grpc;
+
+// mKCP transport
+pub mod mkcp;
 
 // Phase 7: ShadowTLS v3 transport
 pub mod shadowtls;
@@ -41,12 +44,14 @@ pub use hysteria2::{
     Hysteria2Client, Hysteria2ClientConfig, Hysteria2OutboundHandler, Hysteria2Server,
     Hysteria2ServerConfig,
 };
+pub use mkcp::{mkcp_connect, MkcpClientConfig, MkcpServerConfig};
 pub use quic::{build_client_endpoint, build_server_endpoint, dev_self_signed};
 pub use quic::{BrutalCC, BrutalCCFactory};
 pub use reality::{RealityClient, RealityClientConfig, RealityServer, RealityServerConfig};
 pub use shadowtls::{compute_marker, shadowtls_accept, shadowtls_connect, write_marker_record};
 pub use tcp::{TcpClientTransport, TcpServerTransport};
 pub use tls::{build_server_config as tls_build_server_config, tls_accept, tls_connect};
+pub use tun::{create_tun, IpPacket, TransportProtocol, TunConfig};
 pub use ws::{ws_accept, ws_connect, WsConnectConfig};
 
 // Re-export quinn's congestion module so downstream crates can implement
