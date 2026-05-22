@@ -38,12 +38,16 @@
 //! - `inbound` — server-side handler (read salt, check replay, decrypt header)
 //! - `outbound`— client-side handler (generate salt, encrypt header)
 
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 pub mod inbound;
 pub mod outbound;
 pub mod replay;
 pub mod stream;
 pub mod subkey;
 
+#[cfg(feature = "fuzzing")]
+pub use fuzzing::try_decrypt_chunk_for_fuzz;
 pub use inbound::Ss2022Inbound;
 pub use outbound::Ss2022Outbound;
 pub use replay::SaltReplay;
