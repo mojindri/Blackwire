@@ -369,11 +369,10 @@ It is an operating-system-level traffic capture/redirect mechanism.
 ### Repo Status
 
 The repo can parse top-level `tun` config and has low-level Linux helpers for
-device creation, route installation, cleanup, and packet parsing. `proxy-core`
-still rejects `tun` at startup because the safe packet runtime is missing: TCP
-and UDP packets from the virtual interface must be turned into proxy sessions
-with NAT/session tracking and response packet synthesis. Starting routes without
-that stack would break traffic.
+device creation, route installation, cleanup, IP packet parsing, UDP response
+packet synthesis, and flow/NAT session tracking. `proxy-core` still rejects
+`tun` at startup because the privileged device loop and TCP stream reassembly
+are not implemented. Starting routes without that runtime would break traffic.
 
 ## ShadowTLS
 

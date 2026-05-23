@@ -18,11 +18,13 @@ capabilities because it creates a TUN device and installs `ip rule`, `ip route`,
 and `iptables` rules.
 
 Current caveat: the top-level `tun` schema is parsed and the Linux helper module
-can create the device and install routes, but `proxy-core` deliberately rejects
-`tun` configs at startup. A safe runtime still needs a packet-to-proxy TCP/UDP
-stack, NAT/session tracking, DNS handling, and cleanup behavior. Enabling the
-device/route helpers without that packet runtime would blackhole real traffic,
-so this example documents the expected deployment shape only.
+can create the device and install routes. The transport crate also has packet
+parsing, UDP response packet synthesis, and NAT/session tracking primitives.
+`proxy-core` still deliberately rejects `tun` configs at startup because a safe
+runtime still needs the privileged device loop, TCP stream reassembly, DNS
+handling, and cleanup behavior. Enabling routes without that runtime would
+blackhole real traffic, so this example documents the expected deployment shape
+only.
 
 Validate:
 
