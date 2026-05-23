@@ -427,6 +427,36 @@ SSH_SERVER=<server-ip> SSH_CLIENT=<client-ip> make check-vps
 
 Important: the VPS commands run local checks on the Mac first, then VPS network tests. They do not run the full Rust test suite on the VPS yet.
 
+### 8. Cleanup generated logs and artifacts
+
+The test and realism commands generate reports, logs, pcaps, baselines, and fingerprint summaries under `labs/realistic/reports/`. These are runtime artifacts, not source files.
+
+Safe cleanup for generated reports/logs/pcaps:
+
+```sh
+make clean-generated
+```
+
+Clean only pcap and fingerprint outputs:
+
+```sh
+make clean-pcaps
+```
+
+Clean all generated reports plus Rust build outputs:
+
+```sh
+make clean-all-generated
+```
+
+Cleanup targets intentionally do **not** delete:
+
+- `.env.vm`
+- Lima VM instances
+- UTM/VirtualBox/Parallels VMs
+- browser profiles outside the repository
+- Rust `target/`, unless you explicitly run `make clean-all-generated`
+
 ### More help
 
 ```sh
