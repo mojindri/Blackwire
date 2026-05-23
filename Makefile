@@ -21,8 +21,6 @@ test:
 	cargo test --workspace
 
 ## check: Fast syntax check without producing a binary (useful during development).
-check:
-	cargo check --workspace
 
 ## fmt: Auto-format all source files.
 fmt:
@@ -97,3 +95,39 @@ ci-fuzz-smoke:
 
 ci-prod-readiness-with-fuzz:
 	$(MAKE) -C labs/realistic prod-readiness-with-fuzz
+
+
+# ── One-place test entrypoints ────────────────────────────────────────────────
+.PHONY: local local-fast local-prod local-fuzz local-total vps vps-total test-help
+
+local: ci-all ## Run the normal full local gate. Excludes fuzz and VPS.
+
+local-fast: ci ## Run fast local Rust checks only.
+
+local-prod: ci-prod-readiness ## Run production-readiness helpers only. Excludes fuzz and VPS.
+
+local-fuzz: ci-fuzz-smoke ## Run fuzz smoke only. Uses nightly/cargo-fuzz and is intentionally opt-in.
+
+local-total: ci-all ci-fuzz-smoke ## Run all local gates including fuzz. Excludes VPS.
+
+vps: ci-vps ## Run the real two-VPS SSH gate. Requires SSH_SERVER and SSH_CLIENT.
+
+vps-total: ci-vps ## Alias for the full VPS gate. Requires SSH_SERVER and SSH_CLIENT.
+
+test-help: ## Show the recommended local/VPS commands.
+	@echo "Recommended commands:"
+	@echo "  make local       - normal full local gate; no fuzz, no VPS"
+	@echo "  make local-fast  - fast Rust-only checks"
+	@echo "  make local-prod  - production-readiness helpers only; no fuzz"
+	@echo "  make local-fuzz  - fuzz smoke only; opt-in because it is heavier"
+	@echo "  make local-fuzz-total - heavier fuzz pass; override with FUZZ_RUNS=10000"
+	@echo "  make local-total - all local gates including fuzz; no VPS"
+	@echo "  make vps         - real two-VPS SSH gate; requires SSH_SERVER and SSH_CLIENT"
+	@echo "  make vps-total   - same as make vps"
+
+
+ci-fuzz-total:
+	$(MAKE) -C labs/realistic fuzz-total
+
+
+local-fuzz-total: ci-fuzz-total ## Run heavier fuzz pass. Override with FUZZ_RUNS=10000.
