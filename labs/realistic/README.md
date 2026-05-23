@@ -24,7 +24,7 @@ Phase 7/8 features are not mandatory green until they have realistic-lab proof:
 
 - ShadowTLS v3 has local e2e coverage, but external sing-box/shadow-tls interop still needs VPS proof.
 - mKCP multi-peer mode has local e2e coverage, but loss/latency behavior still needs VPS proof.
-- TUN config/device helpers exist, but packet runtime is intentionally rejected until TCP/UDP stack and NAT are implemented.
+- TUN config/device helpers plus packet/NAT primitives exist, but startup is intentionally rejected until the privileged device loop and TCP reassembly are implemented.
 - health/failover realistic failover scenarios
 - geo/FakeIP production routing scenarios
 
