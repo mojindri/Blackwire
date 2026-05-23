@@ -473,7 +473,7 @@ async fn top_level_tun_config_is_rejected_until_packet_runtime_exists() {
         .await
         .expect_err("TUN must stay disabled until packet runtime exists");
     let msg = err.to_string();
-    assert!(msg.contains("packet-to-proxy TCP/UDP stack and NAT"));
+    assert!(msg.contains("privileged device loop and TCP stream reassembly"));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

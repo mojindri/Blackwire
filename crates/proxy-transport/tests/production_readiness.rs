@@ -30,7 +30,9 @@ use proxy_transport::{
 use proxy_transport::mkcp::header::HeaderType;
 use proxy_transport::mkcp::segment::{Segment, CMD_ACK, CMD_PUSH, OVERHEAD};
 use proxy_transport::reality::parse_client_hello;
-use proxy_transport::tun::{parse_ip_packet, TransportProtocol};
+use proxy_transport::tun::{
+    build_udp_response_packet, parse_ip_packet, TransportProtocol, TunSessionTable,
+};
 
 const SHORT_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -629,14 +631,21 @@ fn mkcp_segment_decode_rejects_incomplete_data_without_consuming_payload() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn ipv4_packet(proto: u8, src: [u8; 4], dst: [u8; 4], src_port: u16, dst_port: u16) -> Vec<u8> {
-    let mut pkt = vec![0u8; 24];
+    let transport_len = if proto == 6 { 20 } else { 8 };
+    let mut pkt = vec![0u8; 20 + transport_len];
+    let pkt_len = pkt.len() as u16;
     pkt[0] = 0x45; // IPv4, IHL=5.
-    pkt[2..4].copy_from_slice(&(24u16).to_be_bytes());
+    pkt[2..4].copy_from_slice(&pkt_len.to_be_bytes());
     pkt[9] = proto;
     pkt[12..16].copy_from_slice(&src);
     pkt[16..20].copy_from_slice(&dst);
     pkt[20..22].copy_from_slice(&src_port.to_be_bytes());
     pkt[22..24].copy_from_slice(&dst_port.to_be_bytes());
+    if proto == 6 {
+        pkt[32] = 0x50;
+    } else if proto == 17 {
+        pkt[24..26].copy_from_slice(&(transport_len as u16).to_be_bytes());
+    }
     pkt
 }
 
@@ -647,13 +656,20 @@ fn ipv6_packet(
     src_port: u16,
     dst_port: u16,
 ) -> Vec<u8> {
-    let mut pkt = vec![0u8; 44];
+    let transport_len = if next_header == 6 { 20 } else { 8 };
+    let mut pkt = vec![0u8; 40 + transport_len];
     pkt[0] = 0x60;
+    pkt[4..6].copy_from_slice(&(transport_len as u16).to_be_bytes());
     pkt[6] = next_header;
     pkt[8..24].copy_from_slice(&src);
     pkt[24..40].copy_from_slice(&dst);
     pkt[40..42].copy_from_slice(&src_port.to_be_bytes());
     pkt[42..44].copy_from_slice(&dst_port.to_be_bytes());
+    if next_header == 6 {
+        pkt[52] = 0x50;
+    } else if next_header == 17 {
+        pkt[44..46].copy_from_slice(&(transport_len as u16).to_be_bytes());
+    }
     pkt
 }
 
@@ -724,6 +740,49 @@ fn tun_parser_rejects_ipv4_total_length_smaller_than_header() {
         parse_ip_packet(&pkt).is_none(),
         "IPv4 total_length smaller than header must be rejected"
     );
+}
+
+#[test]
+fn tun_builds_udp_response_packet_with_reverse_tuple() {
+    let mut request = ipv4_packet(17, [10, 0, 0, 2], [8, 8, 8, 8], 53000, 53);
+    request.extend_from_slice(b"query");
+    let total_length = request.len() as u16;
+    request[2..4].copy_from_slice(&total_length.to_be_bytes());
+    let udp_length = (8 + b"query".len()) as u16;
+    request[24..26].copy_from_slice(&udp_length.to_be_bytes());
+
+    let parsed = parse_ip_packet(&request).expect("request rejected");
+    assert_eq!(parsed.payload(&request).unwrap(), b"query");
+
+    let response = build_udp_response_packet(&parsed, b"answer").expect("response build failed");
+    let parsed_response = parse_ip_packet(&response).expect("response rejected");
+
+    assert_eq!(parsed_response.src, parsed.dst);
+    assert_eq!(parsed_response.dst, parsed.src);
+    assert_eq!(parsed_response.src_port, 53);
+    assert_eq!(parsed_response.dst_port, 53000);
+    assert_eq!(parsed_response.payload(&response).unwrap(), b"answer");
+}
+
+#[test]
+fn tun_session_table_tracks_reverse_udp_flow_and_expiry() {
+    let request = ipv4_packet(17, [10, 0, 0, 2], [8, 8, 8, 8], 53000, 53);
+    let response = ipv4_packet(17, [8, 8, 8, 8], [10, 0, 0, 2], 53, 53000);
+    let request = parse_ip_packet(&request).expect("request rejected");
+    let response = parse_ip_packet(&response).expect("response rejected");
+    let now = std::time::Instant::now();
+
+    let mut table = TunSessionTable::new();
+    table.observe_packet(&request, now).expect("flow rejected");
+    assert!(table.find_response_flow(&response).is_some());
+    assert_eq!(
+        table.remove_expired(
+            now + std::time::Duration::from_secs(61),
+            std::time::Duration::from_secs(60)
+        ),
+        1
+    );
+    assert!(table.is_empty());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

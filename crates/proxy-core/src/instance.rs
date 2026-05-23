@@ -96,7 +96,7 @@ impl Instance {
     pub async fn from_config(config: Arc<Config>) -> Result<Self> {
         if config.tun.is_some() {
             anyhow::bail!(
-                "top-level tun config is parsed, but TUN runtime is not production-ready: device/route helpers exist, but packet-to-proxy TCP/UDP stack and NAT are not implemented yet"
+                "top-level tun config is parsed, but TUN runtime is not production-ready: device/route helpers and packet/NAT primitives exist, but the privileged device loop and TCP stream reassembly are not implemented yet"
             );
         }
 
