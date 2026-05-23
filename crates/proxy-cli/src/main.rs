@@ -112,11 +112,17 @@ fn main() {
             // Build the async runtime first, then hand control to `run_proxy`.
             // We use `new_multi_thread` so we get one OS thread per CPU core.
             // All proxy I/O is async, so more threads = more parallelism.
-            let rt = tokio::runtime::Builder::new_multi_thread()
+            let rt = match tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(num_cpus::get())
                 .enable_all()
                 .build()
-                .expect("failed to build Tokio runtime");
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Error: failed to build Tokio runtime: {e}");
+                    std::process::exit(1);
+                }
+            };
 
             // `block_on` runs the async function to completion on this thread.
             // It returns only when the proxy exits (Ctrl-C or error).
@@ -131,10 +137,16 @@ fn main() {
         }
 
         Command::Test(args) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
+            let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("failed to build Tokio runtime");
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Error: failed to build Tokio runtime: {e}");
+                    std::process::exit(1);
+                }
+            };
 
             if let Err(e) = rt.block_on(test_config(args.config)) {
                 eprintln!("Config error: {e:#}");
@@ -220,8 +232,13 @@ async fn shutdown_signal(instance: Instance) {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm =
-            signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+        let mut sigterm = match signal(SignalKind::terminate()) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                info!("SIGTERM handler unavailable ({e}); waiting for SIGINT/listener exit");
+                None
+            }
+        };
 
         tokio::select! {
             _ = &mut listeners_done => {
@@ -230,7 +247,13 @@ async fn shutdown_signal(instance: Instance) {
             _ = tokio::signal::ctrl_c() => {
                 info!("received SIGINT — shutting down");
             }
-            _ = sigterm.recv() => {
+            _ = async {
+                if let Some(sigterm) = sigterm.as_mut() {
+                    sigterm.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
                 info!("received SIGTERM — shutting down");
             }
         }

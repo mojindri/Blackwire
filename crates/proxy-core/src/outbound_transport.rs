@@ -187,7 +187,11 @@ async fn connect_transport(
     }
 
     if uses_tls(stream_settings) {
-        let settings = stream_settings.as_ref().expect("checked by uses_tls");
+        let Some(settings) = stream_settings.as_ref() else {
+            return Err(ProxyError::Protocol(
+                "security=tls requested without streamSettings".into(),
+            ));
+        };
         let tls = settings.tls_settings.as_ref();
         let server_name = tls
             .map(|t| t.server_name.as_str())
@@ -202,7 +206,11 @@ async fn connect_transport(
     }
 
     if uses_grpc(stream_settings) {
-        let settings = stream_settings.as_ref().expect("checked by uses_grpc");
+        let Some(settings) = stream_settings.as_ref() else {
+            return Err(ProxyError::Protocol(
+                "network=grpc requested without streamSettings".into(),
+            ));
+        };
         let grpc_cfg = settings.grpc_settings.as_ref();
         let service_name = grpc_cfg
             .map(|g| g.service_name.as_str())
@@ -220,7 +228,11 @@ async fn connect_transport(
     }
 
     if uses_ws(stream_settings) {
-        let settings = stream_settings.as_ref().expect("checked by uses_ws");
+        let Some(settings) = stream_settings.as_ref() else {
+            return Err(ProxyError::Protocol(
+                "network=ws requested without streamSettings".into(),
+            ));
+        };
         let ws = settings.ws_settings.as_ref();
         let mut headers = ws
             .map(|w| {
