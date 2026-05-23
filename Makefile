@@ -162,6 +162,30 @@ check-sequence-with-vps: check-sequence ## Run recommended local/Lima sequence, 
 	$(MAKE) check-vps
 	@echo "==> check-sequence-with-vps complete"
 
+.PHONY: clean-reports clean-pcaps clean-lima-artifacts clean-generated clean-all-generated
+
+clean-reports: ## Remove generated test reports/logs under labs/realistic/reports.
+	rm -rf labs/realistic/reports
+
+clean-pcaps: ## Remove generated pcap artifacts and fingerprint comparison outputs.
+	rm -rf labs/realistic/reports/production/baselines
+	rm -rf labs/realistic/reports/production/artifacts/pcaps
+	rm -f labs/realistic/reports/production/fingerprint-compare.json
+	rm -f labs/realistic/reports/production/fingerprint-compare.log
+	rm -f labs/realistic/reports/production/fingerprint-verify.log
+
+clean-lima-artifacts: ## Remove generated Lima lab configs/log references from this repo only; does not delete Lima VM.
+	rm -f labs/realistic/reports/production/artifacts/configs/lima-*.yaml
+	rm -f labs/realistic/reports/production/lima-browser-baseline*.log
+	rm -f labs/realistic/reports/production/lima-browser-baseline-summary-*.txt
+	rm -f labs/realistic/reports/production/artifacts/logs/lima-*.log
+
+clean-generated: clean-reports ## Remove generated repo reports/logs/pcaps, but keep build cache and external VMs.
+
+clean-all-generated: clean-generated ## Remove generated repo reports plus Rust build outputs.
+	cargo clean
+
+
 test-help: ## Show compact command help.
 	@echo "Main commands:"
 	@echo "  make check              - same as make local-total"
@@ -213,6 +237,12 @@ test-help: ## Show compact command help.
 	@echo "  make vps-total-with-fuzz        - all local gates including fuzz, then VPS gate"
 	@echo "  make vps                        - VPS-only SSH gate"
 	@echo ""
+	@echo ""
+	@echo "Cleanup commands:"
+	@echo "  make clean-reports       - remove generated labs/realistic reports/logs/pcaps"
+	@echo "  make clean-pcaps         - remove generated pcap/fingerprint outputs only"
+	@echo "  make clean-generated     - remove generated repo reports/logs/pcaps; keep target/ and VMs"
+	@echo "  make clean-all-generated - clean-generated plus cargo clean"
 	@echo "Important:"
 	@echo "  check-sequence intentionally repeats some work because check-all-local includes local-total again."
 	@echo "  For fastest combined local+browser run, use only: make check-all-local"
