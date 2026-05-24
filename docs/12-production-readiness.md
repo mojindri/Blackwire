@@ -10,7 +10,7 @@ no `make ci-*` wrappers for most of these — use the commands directly or run
 | Gate | Purpose | Command |
 |---|---|---|
 | Host Rust quality | fmt, check, clippy, test | `make verify-local` |
-| Lab realism | Docker + Lima + external clients | `make verify-lab` |
+| Lab realism | Docker + Lima + configured external-client checks | `make verify-lab` |
 | VPS matrix | public-network protocol coverage | `make verify-remote` |
 | Load | high-concurrency data-plane pressure | `make -C labs/realistic load` or `make local-load` |
 | Soak | leak/degradation over time | `make soak` or `make -C labs/realistic soak` |

@@ -86,9 +86,9 @@ make -C labs/realistic docker-down
 
 ## External Client Compatibility
 
-The external-client lab checks real Xray and sing-box clients against a
-`proxy-rs` server inbound. This is different from `vps-test`, which checks
-`proxy-rs` client to `proxy-rs` server.
+The external-client lab checks the scenarios currently configured under
+`external-clients/scenarios.env` against a `proxy-rs` server inbound. This is
+different from `vps-test`, which checks `proxy-rs` client to `proxy-rs` server.
 
 ```sh
 make -C labs/realistic external-clients-docker
@@ -105,8 +105,10 @@ Generated configs and Hiddify import artifacts are written under
 `labs/realistic/external-clients/generated/`. Reports are written under
 `labs/realistic/reports/external-clients/`.
 
-Run this before claiming GUI-client compatibility. A passing `proxy-rs` client
-matrix does not prove Xray, sing-box, or Hiddify inbound compatibility.
+Run this before claiming GUI-client compatibility for a specific scenario set. A
+passing `proxy-rs` client matrix does not prove Xray, sing-box, or Hiddify
+inbound compatibility on paths that are not in the current external-client
+scenario file.
 
 ## Two-VPS Gate
 
