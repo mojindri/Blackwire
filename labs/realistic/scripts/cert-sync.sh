@@ -23,7 +23,8 @@ fi
 
 mkdir -p "$DEST"
 cp "$ACME_DIR/$DOMAIN.crt" "$DEST/cert.pem"
-cp "$ACME_DIR/$DOMAIN.key" "$DEST/key.pem"
+# Convert to PKCS#8 to maximize parser compatibility across TLS stacks.
+openssl pkcs8 -topk8 -nocrypt -in "$ACME_DIR/$DOMAIN.key" -out "$DEST/key.pem"
 chown -R proxy-rs:proxy-rs "$DEST"
 chmod 640 "$DEST/key.pem"
 

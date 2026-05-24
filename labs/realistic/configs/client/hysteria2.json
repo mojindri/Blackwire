@@ -14,6 +14,7 @@
       "protocol": "hysteria2",
       "settings": {
         "server": "${SERVER_HOST}:4433",
+        "serverName": "${TEST_DOMAIN}",
         "auth": "${HYSTERIA2_PASSWORD}",
         "upMbps": 50,
         "downMbps": 50

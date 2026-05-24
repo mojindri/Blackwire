@@ -12,13 +12,17 @@ if [[ ! -f "$ENV_FILE" ]]; then
     echo "ERROR: $ENV_FILE not found. Copy matrix.env.example and fill in values."
     exit 1
 fi
+# Export sourced values so envsubst sees them.
+set -a
 # shellcheck source=/dev/null
 source "$ENV_FILE"
+set +a
 
 echo "==> Installing system packages"
-apt-get update -q
-apt-get install -y --no-install-recommends \
-    curl ca-certificates socat gettext-base ufw
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/dev/null
+apt-get install -y --no-install-recommends -qq \
+    curl ca-certificates socat gettext-base ufw iproute2 rustc cargo >/dev/null
 
 echo "==> Installing Caddy"
 if ! command -v caddy &>/dev/null; then
@@ -27,8 +31,8 @@ if ! command -v caddy &>/dev/null; then
     echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] \
 https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" \
         > /etc/apt/sources.list.d/caddy-stable.list
-    apt-get update -q
-    apt-get install -y caddy
+    apt-get update -qq >/dev/null
+    apt-get install -y -qq caddy >/dev/null
 fi
 
 echo "==> Checking proxy-rs binary"
@@ -49,14 +53,19 @@ systemctl enable --now caddy
 systemctl reload caddy || systemctl restart caddy
 
 echo "==> Waiting for Caddy to obtain TLS certificate (up to 120s)"
+CERT_READY=0
 for i in $(seq 1 24); do
     if caddy list-certificates 2>/dev/null | grep -q "$TEST_DOMAIN"; then
-        echo "Certificate obtained."
+        CERT_READY=1
         break
     fi
     sleep 5
-    echo "  ... waiting ($((i*5))s)"
 done
+if [[ "$CERT_READY" -eq 1 ]]; then
+    echo "Certificate obtained."
+else
+    echo "Certificate not reported yet; continuing with cert sync attempt."
+fi
 
 echo "==> Syncing certificates to /etc/proxy-rs/certs/"
 bash "$SCRIPT_DIR/cert-sync.sh" "$TEST_DOMAIN"
