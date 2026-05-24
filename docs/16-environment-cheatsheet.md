@@ -102,12 +102,12 @@ Use when:
 Commands:
 
 ```sh
-SSH_SERVER=<server-ip> SSH_CLIENT=<client-ip> make check-vps
-SSH_SERVER=<server-ip> SSH_CLIENT=<client-ip> make perf-vps
-SSH_SERVER=<server-ip> make -C labs/realistic vps-server-setup
-SSH_CLIENT=<client-ip> make -C labs/realistic vps-client-setup
-SSH_CLIENT=<client-ip> make -C labs/realistic vps-test
-SSH_SERVER=<server-ip> make -C labs/realistic vps-tun
+SSH_SERVER=<server-ip> SSH_CLIENT=<client-ip> SSH_KEY=~/.ssh/id_hetzner make check-vps
+SSH_SERVER=<server-ip> SSH_CLIENT=<client-ip> SSH_KEY=~/.ssh/id_hetzner make perf-vps
+SSH_SERVER=<server-ip> SSH_KEY=~/.ssh/id_hetzner make -C labs/realistic vps-server-setup
+SSH_CLIENT=<client-ip> SSH_KEY=~/.ssh/id_hetzner make -C labs/realistic vps-client-setup
+SSH_CLIENT=<client-ip> SSH_KEY=~/.ssh/id_hetzner make -C labs/realistic vps-test
+SSH_SERVER=<server-ip> SSH_KEY=~/.ssh/id_hetzner make -C labs/realistic vps-tun
 ```
 
 Notes:
@@ -116,6 +116,7 @@ Notes:
 - `make perf-vps` is the VPS benchmark entrypoint.
 - `vps-server-setup`, `vps-client-setup`, `vps-test`, and `vps-tun` are
   lower-level realistic-lab commands.
+- Optional overrides: `SSH_USER`, `SSH_PORT`, `SSH_EXTRA_OPTS`.
 
 ## 5. Directly On A VPS
 

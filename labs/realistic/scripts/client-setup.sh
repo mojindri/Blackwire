@@ -12,12 +12,17 @@ if [[ ! -f "$ENV_FILE" ]]; then
     echo "ERROR: $ENV_FILE not found. Copy matrix.env.example and fill in values."
     exit 1
 fi
+# Export sourced values so envsubst sees them.
+set -a
 # shellcheck source=/dev/null
 source "$ENV_FILE"
+set +a
 
 echo "==> Installing system packages"
-apt-get update -q
-apt-get install -y --no-install-recommends curl ca-certificates gettext-base netcat-openbsd
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/dev/null
+apt-get install -y --no-install-recommends -qq \
+    curl ca-certificates gettext-base netcat-openbsd >/dev/null
 
 echo "==> Checking proxy-rs binary"
 if [[ ! -x /usr/local/bin/proxy-rs ]]; then
