@@ -1,0 +1,30 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    { "tag": "socks-in", "listen": "0.0.0.0", "port": 1080, "protocol": "socks", "settings": { "auth": "noauth" } }
+  ],
+  "outbounds": [
+    {
+      "tag": "proxy-out",
+      "protocol": "vmess",
+      "settings": {
+        "vnext": [
+          {
+            "address": "${EXTERNAL_SERVER_ADDRESS}",
+            "port": 8444,
+            "users": [
+              { "id": "${VMESS_UUID}", "alterId": 0, "security": "auto" }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "tls",
+        "tlsSettings": { "serverName": "${EXTERNAL_TLS_SERVER_NAME}", "allowInsecure": true },
+        "grpcSettings": { "serviceName": "lab.Gun" }
+      }
+    }
+  ]
+}
+

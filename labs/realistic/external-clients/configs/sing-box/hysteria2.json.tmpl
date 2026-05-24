@@ -1,0 +1,20 @@
+{
+  "log": { "level": "warn" },
+  "inbounds": [
+    { "type": "socks", "tag": "socks-in", "listen": "::", "listen_port": 1080 }
+  ],
+  "outbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "proxy-out",
+      "server": "${EXTERNAL_SERVER_ADDRESS}",
+      "server_port": 4433,
+      "password": "${HYSTERIA2_PASSWORD}",
+      "tls": { "enabled": true, "server_name": "${EXTERNAL_TLS_SERVER_NAME}", "insecure": true },
+      "up_mbps": 50,
+      "down_mbps": 50
+    }
+  ],
+  "route": { "final": "proxy-out" }
+}
+

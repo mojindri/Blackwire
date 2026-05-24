@@ -1,5 +1,5 @@
 {
-    email lab-admin@{$TEST_DOMAIN}
+    email lab-admin@${TEST_DOMAIN}
 }
 
 # HTTP: ACME HTTP-01 challenge + Trojan/VLESS fallback page.
@@ -11,6 +11,6 @@
 # HTTPS: Caddy owns cert acquisition for TEST_DOMAIN.
 # Certs land in Caddy's default storage; cert-sync.sh copies them out.
 # Caddy binds 443 here so proxy-rs uses other ports (10443, 8443, etc.).
-{$TEST_DOMAIN} {
+${TEST_DOMAIN} {
     respond "proxy-rs realistic lab" 200
 }

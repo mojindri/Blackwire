@@ -16,6 +16,9 @@ REPORT="$REPORT_DIR/bench-vps-$MODE-$TS.txt"
 SSH_SERVER="${SSH_SERVER:-}"
 SSH_CLIENT="${SSH_CLIENT:-}"
 SSH_USER="${SSH_USER:-root}"
+SSH_PORT="${SSH_PORT:-22}"
+SSH_KEY="${SSH_KEY:-}"
+SSH_EXTRA_OPTS="${SSH_EXTRA_OPTS:-}"
 REMOTE_DIR="${VPS_REMOTE_BENCH_DIR:-/tmp/proxy-rs-bench}"
 
 REQS_SMOKE="${BENCH_SMOKE_REQUESTS:-200}"
@@ -37,6 +40,16 @@ else
   CONC="$CONC_SMOKE"
 fi
 
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -p "$SSH_PORT")
+if [ -n "$SSH_KEY" ]; then
+  SSH_OPTS+=(-i "$SSH_KEY")
+fi
+if [ -n "$SSH_EXTRA_OPTS" ]; then
+  # shellcheck disable=SC2206
+  EXTRA_SSH_OPTS=($SSH_EXTRA_OPTS)
+  SSH_OPTS+=("${EXTRA_SSH_OPTS[@]}")
+fi
+
 {
   echo "bench-vps"
   echo "timestamp=$TS"
@@ -44,17 +57,19 @@ fi
   echo "server=$SSH_SERVER"
   echo "client=$SSH_CLIENT"
   echo "ssh_user=$SSH_USER"
+  echo "ssh_port=$SSH_PORT"
+  echo "ssh_key=$([ -n "$SSH_KEY" ] && echo "set" || echo "unset")"
   echo "requests=$REQS"
   echo "concurrency=$CONC"
   echo ""
 } | tee "$REPORT"
 
 echo "==> checking SSH" | tee -a "$REPORT"
-ssh -o BatchMode=yes -o ConnectTimeout=8 "$SSH_USER@$SSH_SERVER" 'echo server_ssh_ok'
-ssh -o BatchMode=yes -o ConnectTimeout=8 "$SSH_USER@$SSH_CLIENT" 'echo client_ssh_ok'
+ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_SERVER" 'echo server_ssh_ok'
+ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_CLIENT" 'echo client_ssh_ok'
 
 echo "==> preparing server" | tee -a "$REPORT"
-ssh "$SSH_USER@$SSH_SERVER" "bash -s" <<'REMOTE'
+ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_SERVER" "bash -s" <<'REMOTE'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update >/dev/null
@@ -87,7 +102,7 @@ sleep 1
 REMOTE
 
 echo "==> preparing client" | tee -a "$REPORT"
-ssh "$SSH_USER@$SSH_CLIENT" "bash -s" <<'REMOTE'
+ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_CLIENT" "bash -s" <<'REMOTE'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update >/dev/null
@@ -98,7 +113,7 @@ fi
 REMOTE
 
 echo "==> running client benchmark" | tee -a "$REPORT"
-ssh "$SSH_USER@$SSH_CLIENT" "bash -s" -- "$SSH_SERVER" "$MODE" "$REQS" "$CONC" <<'REMOTE' 2>&1 | tee -a "$REPORT"
+ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_CLIENT" "bash -s" -- "$SSH_SERVER" "$MODE" "$REQS" "$CONC" <<'REMOTE' 2>&1 | tee -a "$REPORT"
 set -euo pipefail
 
 SERVER="$1"

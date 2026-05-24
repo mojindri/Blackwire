@@ -50,6 +50,15 @@ These are invoked from the repository root on your own machine:
 | `make perf-vps` | local checkout | remote VPS machines over SSH | yes |
 | `make clean-generated` | local checkout | local checkout only | no |
 
+VPS SSH variables:
+
+- `SSH_SERVER=<server-ip>`
+- `SSH_CLIENT=<client-ip>`
+- `SSH_KEY=~/.ssh/id_hetzner`
+- optional: `SSH_USER=<user>`
+- optional: `SSH_PORT=<port>`
+- optional: `SSH_EXTRA_OPTS='-o StrictHostKeyChecking=no'`
+
 ### Run Directly On A Real VPS
 
 Usually not needed for the normal workflow. Do this only for debugging,
@@ -139,6 +148,14 @@ These still work, but they are not the preferred front-door names anymore:
 | Command | Purpose |
 | --- | --- |
 | `make vps` | VPS-only SSH/network gate |
+
+### Realistic external clients
+
+| Command | Purpose |
+| --- | --- |
+| `make -C labs/realistic external-clients-docker` | Run Xray/sing-box clients against `proxy-rs` server in Docker |
+| `make -C labs/realistic external-clients-vps` | Run Xray/sing-box clients from the client VPS against server VPS inbounds |
+| `make -C labs/realistic external-clients-report` | Print the concise external-client compatibility summary |
 | `make vps-total` | Non-fuzz local gates, then VPS |
 | `make vps-total-with-fuzz` | All local gates including fuzz, then VPS |
 | `make check-vps` | Alias for `vps-total` |

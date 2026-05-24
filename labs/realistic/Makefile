@@ -2,14 +2,20 @@ SHELL := /bin/bash
 
 ROOT := ../..
 REPORTS := reports
+SSH_USER ?= root
+SSH_PORT ?= 22
+SSH_KEY ?=
+SSH_EXTRA_OPTS ?=
 
-.PHONY: help build docker-up stable xray phase78 negative-auth restart-smoke stress report-summary realistic-all docker-full docker-down vm-pack vps-configs vps-server-setup vps-client-setup vps-test vps-tun vps-netem ci ci-full clean
+.PHONY: help build docker-up stable xray phase78 negative-auth restart-smoke stress report-summary realistic-all docker-full docker-down vm-pack vps-configs external-clients-docker external-clients-vps external-clients-report vps-server-setup vps-client-setup vps-preflight vps-test vps-tun vps-netem ci ci-full clean
 
 help:
-	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
+	@grep -h -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
 build: ## Build the proxy-rs Docker image used by the lab
-	docker build -f $(ROOT)/deploy/docker/Dockerfile -t proxy-rs:latest $(ROOT)
+	@mkdir -p $(REPORTS)
+	@docker build -q -f $(ROOT)/deploy/docker/Dockerfile -t proxy-rs:latest $(ROOT) > $(REPORTS)/docker-build-image.txt
+	@echo "Built proxy-rs:latest"
 
 docker-up: build ## Start deterministic target services
 	docker compose -f docker-compose.yml up -d target-http target-echo
@@ -101,52 +107,118 @@ vps-configs: ## Expand JSON templates locally using configs/matrix.env (requires
 	done
 	@echo "Expanded configs written to $(REPORTS)/generated-configs/"
 
+external-clients-docker: build ## Run Xray/sing-box clients against proxy-rs server in Docker
+	@mkdir -p $(REPORTS)/external-clients
+	@bash external-clients/scripts/run-docker-matrix.sh $(REPORTS)/external-clients configs/matrix.env
+
+external-clients-vps: ## Run Xray/sing-box clients from CLIENT VPS against SERVER VPS proxy-rs inbounds
+	@mkdir -p $(REPORTS)/external-clients-vps
+	@bash external-clients/scripts/run-vps-matrix.sh $(REPORTS)/external-clients-vps configs/matrix.env
+
+external-clients-report: ## Summarize latest external-client compatibility report
+	@bash external-clients/scripts/report.sh
+
 vps-server-setup: ## Print server provisioning command (run from dev machine with SSH_SERVER set)
 	@echo ""
 	@echo "Run on the SERVER VPS:"
-	@echo "  1. scp -r labs/realistic root@\$${SSH_SERVER}:/root/lab"
-	@echo "  2. ssh root@\$${SSH_SERVER} 'bash /root/lab/scripts/server-setup.sh /root/lab/configs/matrix.env'"
+	@echo "  1. scp -P $${SSH_PORT:-$(SSH_PORT)} $$(if [ -n "$${SSH_KEY:-$(SSH_KEY)}" ]; then printf -- '-i %s ' "$${SSH_KEY:-$(SSH_KEY)}"; fi)-r labs/realistic $${SSH_USER:-$(SSH_USER)}@\$${SSH_SERVER}:/root/lab"
+	@echo "  2. ssh -p $${SSH_PORT:-$(SSH_PORT)} $$(if [ -n "$${SSH_KEY:-$(SSH_KEY)}" ]; then printf -- '-i %s ' "$${SSH_KEY:-$(SSH_KEY)}"; fi)$${SSH_USER:-$(SSH_USER)}@\$${SSH_SERVER} 'bash /root/lab/scripts/server-setup.sh /root/lab/configs/matrix.env'"
 	@echo ""
 	@echo "Or if SSH_SERVER is set, run:"
-	@echo "  SSH_SERVER=1.2.3.4 make vps-server-setup"
+	@echo "  SSH_SERVER=1.2.3.4 SSH_KEY=~/.ssh/id_hetzner make vps-server-setup"
 	@if [ -n "$${SSH_SERVER:-}" ]; then \
-		rsync -av --exclude='reports' . root@$${SSH_SERVER}:/root/lab/; \
-		ssh root@$${SSH_SERVER} 'bash /root/lab/scripts/server-setup.sh /root/lab/configs/matrix.env'; \
+		KEY_OPT=""; PORT_OPT=""; SCP_PORT_OPT=""; EXTRA_OPTS="$${SSH_EXTRA_OPTS:-$(SSH_EXTRA_OPTS)}"; USER="$${SSH_USER:-$(SSH_USER)}"; \
+		if [ -n "$${SSH_KEY:-$(SSH_KEY)}" ]; then KEY_OPT="-i $${SSH_KEY:-$(SSH_KEY)}"; fi; \
+		if [ -n "$${SSH_PORT:-$(SSH_PORT)}" ]; then PORT_OPT="-p $${SSH_PORT:-$(SSH_PORT)}"; SCP_PORT_OPT="-p $${SSH_PORT:-$(SSH_PORT)}"; fi; \
+		rsync -av -e "ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS" --exclude='reports' . "$$USER@$${SSH_SERVER}:/root/lab/"; \
+		ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_SERVER}" 'bash /root/lab/scripts/server-setup.sh /root/lab/configs/matrix.env'; \
 	fi
 
 vps-client-setup: ## Print client provisioning command (run from dev machine with SSH_CLIENT set)
 	@echo ""
 	@echo "Run on the CLIENT VPS:"
-	@echo "  1. scp -r labs/realistic root@\$${SSH_CLIENT}:/root/lab"
-	@echo "  2. ssh root@\$${SSH_CLIENT} 'bash /root/lab/scripts/client-setup.sh /root/lab/configs/matrix.env'"
+	@echo "  1. scp -P $${SSH_PORT:-$(SSH_PORT)} $$(if [ -n "$${SSH_KEY:-$(SSH_KEY)}" ]; then printf -- '-i %s ' "$${SSH_KEY:-$(SSH_KEY)}"; fi)-r labs/realistic $${SSH_USER:-$(SSH_USER)}@\$${SSH_CLIENT}:/root/lab"
+	@echo "  2. ssh -p $${SSH_PORT:-$(SSH_PORT)} $$(if [ -n "$${SSH_KEY:-$(SSH_KEY)}" ]; then printf -- '-i %s ' "$${SSH_KEY:-$(SSH_KEY)}"; fi)$${SSH_USER:-$(SSH_USER)}@\$${SSH_CLIENT} 'bash /root/lab/scripts/client-setup.sh /root/lab/configs/matrix.env'"
 	@echo ""
 	@if [ -n "$${SSH_CLIENT:-}" ]; then \
-		rsync -av --exclude='reports' . root@$${SSH_CLIENT}:/root/lab/; \
-		ssh root@$${SSH_CLIENT} 'bash /root/lab/scripts/client-setup.sh /root/lab/configs/matrix.env'; \
+		KEY_OPT=""; PORT_OPT=""; EXTRA_OPTS="$${SSH_EXTRA_OPTS:-$(SSH_EXTRA_OPTS)}"; USER="$${SSH_USER:-$(SSH_USER)}"; \
+		if [ -n "$${SSH_KEY:-$(SSH_KEY)}" ]; then KEY_OPT="-i $${SSH_KEY:-$(SSH_KEY)}"; fi; \
+		if [ -n "$${SSH_PORT:-$(SSH_PORT)}" ]; then PORT_OPT="-p $${SSH_PORT:-$(SSH_PORT)}"; fi; \
+		rsync -av -e "ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS" --exclude='reports' . "$$USER@$${SSH_CLIENT}:/root/lab/"; \
+		ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_CLIENT}" 'bash /root/lab/scripts/client-setup.sh /root/lab/configs/matrix.env'; \
 	fi
+
+vps-preflight: ## Validate VPS connectivity and required remote artifacts before running VPS checks
+	@if [ -z "$${SSH_SERVER:-}" ] || [ -z "$${SSH_CLIENT:-}" ]; then \
+		echo "ERROR: SSH_SERVER and SSH_CLIENT must be set for VPS checks."; \
+		echo "Example: SSH_SERVER=1.2.3.4 SSH_CLIENT=5.6.7.8 make vps-preflight"; \
+		exit 1; \
+	fi
+	@set -euo pipefail; \
+	KEY_OPT=""; PORT_OPT=""; EXTRA_OPTS="$${SSH_EXTRA_OPTS:-$(SSH_EXTRA_OPTS)}"; USER="$${SSH_USER:-$(SSH_USER)}"; \
+	if [ -n "$${SSH_KEY:-$(SSH_KEY)}" ]; then KEY_OPT="-i $${SSH_KEY:-$(SSH_KEY)}"; fi; \
+	if [ -n "$${SSH_PORT:-$(SSH_PORT)}" ]; then PORT_OPT="-p $${SSH_PORT:-$(SSH_PORT)}"; fi; \
+	ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_CLIENT}" 'test -x /root/lab/scripts/run-matrix.sh && test -f /root/lab/configs/matrix.env && command -v /usr/local/bin/proxy-rs >/dev/null' || { \
+		echo "ERROR: CLIENT VPS is not ready (/root/lab, matrix.env, or /usr/local/bin/proxy-rs missing)."; \
+		echo "Run: SSH_CLIENT=$${SSH_CLIENT} SSH_KEY=$${SSH_KEY:-$(SSH_KEY)} make vps-client-setup"; \
+		exit 1; \
+	}; \
+	ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_SERVER}" 'test -x /root/lab/scripts/run-tun-priv.sh && test -x /root/lab/scripts/run-netem.sh && command -v /usr/local/bin/proxy-rs >/dev/null && command -v cargo >/dev/null && command -v tc >/dev/null' || { \
+		echo "ERROR: SERVER VPS is not ready (scripts, proxy-rs, cargo, or tc missing)."; \
+		echo "Run: SSH_SERVER=$${SSH_SERVER} SSH_KEY=$${SSH_KEY:-$(SSH_KEY)} make vps-server-setup"; \
+		exit 1; \
+	}; \
+	echo "VPS preflight passed."
 
 vps-test: ## Run protocol matrix from the CLIENT VPS (SSH_CLIENT must be set)
 	@if [ -z "$${SSH_CLIENT:-}" ]; then \
 		echo "ERROR: SSH_CLIENT not set. Example: SSH_CLIENT=5.6.7.8 make vps-test"; exit 1; fi
 	@mkdir -p $(REPORTS)
-	ssh root@$${SSH_CLIENT} 'bash /root/lab/scripts/run-matrix.sh /root/lab/configs/matrix.env'
-	scp root@$${SSH_CLIENT}:/root/lab/reports/vps-matrix-\*.log $(REPORTS)/ 2>/dev/null || true
+	@set -euo pipefail; \
+	KEY_OPT=""; PORT_OPT=""; SCP_PORT_OPT=""; EXTRA_OPTS="$${SSH_EXTRA_OPTS:-$(SSH_EXTRA_OPTS)}"; USER="$${SSH_USER:-$(SSH_USER)}"; \
+	if [ -n "$${SSH_KEY:-$(SSH_KEY)}" ]; then KEY_OPT="-i $${SSH_KEY:-$(SSH_KEY)}"; fi; \
+	if [ -n "$${SSH_PORT:-$(SSH_PORT)}" ]; then PORT_OPT="-p $${SSH_PORT:-$(SSH_PORT)}"; SCP_PORT_OPT="-P $${SSH_PORT:-$(SSH_PORT)}"; fi; \
+	ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_CLIENT}" 'test -x /root/lab/scripts/run-matrix.sh' || { \
+		echo "ERROR: /root/lab/scripts/run-matrix.sh missing on CLIENT VPS."; \
+		echo "Run: SSH_CLIENT=$${SSH_CLIENT} SSH_KEY=$${SSH_KEY:-$(SSH_KEY)} make vps-client-setup"; \
+		exit 1; \
+	}; \
+	ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_CLIENT}" 'bash /root/lab/scripts/run-matrix.sh /root/lab/configs/matrix.env'; \
+	scp $$SCP_PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_CLIENT}:/root/lab/reports/vps-matrix-\*.log" $(REPORTS)/ 2>/dev/null || true
 	@echo "Results copied to $(REPORTS)/"
 
 vps-netem: ## Run tc netem network-condition tests on the SERVER VPS (SSH_SERVER must be set, Linux+root+iproute2)
 	@if [ -z "$${SSH_SERVER:-}" ]; then \
 		echo "ERROR: SSH_SERVER not set. Example: SSH_SERVER=1.2.3.4 make vps-netem"; exit 1; fi
 	@mkdir -p $(REPORTS)
-	ssh root@$${SSH_SERVER} 'sudo bash /root/lab/scripts/run-netem.sh /root/lab/reports'
-	scp "root@$${SSH_SERVER}:/root/lab/reports/vps-netem-*.log" $(REPORTS)/ 2>/dev/null || true
+	@set -euo pipefail; \
+	KEY_OPT=""; PORT_OPT=""; SCP_PORT_OPT=""; EXTRA_OPTS="$${SSH_EXTRA_OPTS:-$(SSH_EXTRA_OPTS)}"; USER="$${SSH_USER:-$(SSH_USER)}"; \
+	if [ -n "$${SSH_KEY:-$(SSH_KEY)}" ]; then KEY_OPT="-i $${SSH_KEY:-$(SSH_KEY)}"; fi; \
+	if [ -n "$${SSH_PORT:-$(SSH_PORT)}" ]; then PORT_OPT="-p $${SSH_PORT:-$(SSH_PORT)}"; SCP_PORT_OPT="-P $${SSH_PORT:-$(SSH_PORT)}"; fi; \
+	ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_SERVER}" 'command -v cargo >/dev/null && command -v tc >/dev/null && test -x /root/lab/scripts/run-netem.sh' || { \
+		echo "ERROR: SERVER VPS missing prerequisites for netem (cargo/tc/script)."; \
+		echo "Run: SSH_SERVER=$${SSH_SERVER} SSH_KEY=$${SSH_KEY:-$(SSH_KEY)} make vps-server-setup"; \
+		exit 1; \
+	}; \
+	ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_SERVER}" 'sudo bash /root/lab/scripts/run-netem.sh /root/lab/reports'; \
+	scp $$SCP_PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_SERVER}:/root/lab/reports/vps-netem-*.log" $(REPORTS)/ 2>/dev/null || true
 	@echo "netem results copied to $(REPORTS)/"
 
 vps-tun: ## Run TUN privileged tests on the SERVER VPS (SSH_SERVER must be set, Linux+root)
 	@if [ -z "$${SSH_SERVER:-}" ]; then \
 		echo "ERROR: SSH_SERVER not set. Example: SSH_SERVER=1.2.3.4 make vps-tun"; exit 1; fi
 	@mkdir -p $(REPORTS)
-	ssh root@$${SSH_SERVER} 'cd /root && sudo -E bash /root/lab/scripts/run-tun-priv.sh'
-	scp root@$${SSH_SERVER}:/root/lab/reports/vps-tun-\*.log $(REPORTS)/ 2>/dev/null || true
+	@set -euo pipefail; \
+	KEY_OPT=""; PORT_OPT=""; SCP_PORT_OPT=""; EXTRA_OPTS="$${SSH_EXTRA_OPTS:-$(SSH_EXTRA_OPTS)}"; USER="$${SSH_USER:-$(SSH_USER)}"; \
+	if [ -n "$${SSH_KEY:-$(SSH_KEY)}" ]; then KEY_OPT="-i $${SSH_KEY:-$(SSH_KEY)}"; fi; \
+	if [ -n "$${SSH_PORT:-$(SSH_PORT)}" ]; then PORT_OPT="-p $${SSH_PORT:-$(SSH_PORT)}"; SCP_PORT_OPT="-P $${SSH_PORT:-$(SSH_PORT)}"; fi; \
+	ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_SERVER}" 'command -v cargo >/dev/null && test -x /root/lab/scripts/run-tun-priv.sh' || { \
+		echo "ERROR: SERVER VPS missing prerequisites for TUN tests (cargo/script)."; \
+		echo "Run: SSH_SERVER=$${SSH_SERVER} SSH_KEY=$${SSH_KEY:-$(SSH_KEY)} make vps-server-setup"; \
+		exit 1; \
+	}; \
+	ssh $$PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_SERVER}" 'cd /root && sudo -E bash /root/lab/scripts/run-tun-priv.sh'; \
+	scp $$SCP_PORT_OPT $$KEY_OPT $$EXTRA_OPTS "$$USER@$${SSH_SERVER}:/root/lab/reports/vps-tun-\*.log" $(REPORTS)/ 2>/dev/null || true
 	@echo "TUN test results copied to $(REPORTS)/"
 
 ci: ## Run EVERYTHING local: unit, integration, prod-readiness, Docker, Xray d0+d1, phase78, stress, negative-auth, restart-smoke
@@ -179,11 +251,9 @@ ci: ## Run EVERYTHING local: unit, integration, prod-readiness, Docker, Xray d0+
 	@echo "==> ci complete. Check $(REPORTS)/ci.log and $(REPORTS)/summary.txt" | tee -a $(REPORTS)/ci.log
 	@grep -c "FAILED\|^error" $(REPORTS)/ci.log && echo "FAILURES DETECTED" && exit 1 || echo "All tiers passed."
 
-ci-full: ci ## Run ci + VPS matrix + TUN (requires SSH_SERVER and SSH_CLIENT)
-	@if [ -z "$${SSH_SERVER:-}" ] || [ -z "$${SSH_CLIENT:-}" ]; then \
-		echo "ERROR: SSH_SERVER and SSH_CLIENT must be set for ci-full."; \
-		echo "Example: SSH_SERVER=1.2.3.4 SSH_CLIENT=5.6.7.8 make ci-full"; \
-		exit 1; fi
+ci-full: ## Run ci + VPS matrix + TUN (requires SSH_SERVER and SSH_CLIENT)
+	$(MAKE) vps-preflight
+	$(MAKE) ci
 	@echo "=== [VPS] protocol matrix ===" | tee -a $(REPORTS)/ci.log
 	$(MAKE) vps-test
 	@echo "=== [VPS] TUN privileged tests ===" | tee -a $(REPORTS)/ci.log

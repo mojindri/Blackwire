@@ -34,6 +34,7 @@ Use this split:
 | `cargo test -p integration-tests` | local checkout | local machine | no |
 | production-readiness tests | local checkout | local machine | no |
 | `make -C labs/realistic docker-full` | local checkout | local machine + Docker | no |
+| `make -C labs/realistic external-clients-docker` | local checkout | local machine + Docker | no |
 | `make -C labs/realistic phase78` | local checkout | local machine | no |
 | `make -C labs/realistic stress` | local checkout | local machine | no |
 | `cargo test -p proxy-transport --test interop d0 -- --ignored --nocapture` | local checkout | local machine | no |
@@ -45,13 +46,19 @@ Use this split:
 | `make -C labs/realistic vps-server-setup` | local checkout | server VPS over SSH | yes |
 | `make -C labs/realistic vps-client-setup` | local checkout | client VPS over SSH | yes |
 | `make -C labs/realistic vps-test` | local checkout | client VPS over SSH | yes |
+| `make -C labs/realistic external-clients-vps` | local checkout | both VPS machines over SSH | yes |
 | `make -C labs/realistic vps-tun` | local checkout | server VPS over SSH | yes |
 
 Important:
 
 - For normal usage, you invoke commands from your local repo checkout.
 - VPS commands are still launched locally; they SSH into the VPS machines and run there.
+- If you use an SSH key file, pass `SSH_KEY=~/.ssh/id_hetzner` to the VPS commands.
 - SSH directly into a VPS only for debugging, service inspection, or manual recovery.
+
+The external-client Docker lab is the first gate for GUI/app compatibility:
+Xray and sing-box connect to `proxy-rs` server inbounds, then Hiddify profiles
+are generated for manual macOS validation.
 
 ---
 
