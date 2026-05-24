@@ -1,0 +1,59 @@
+# blackwire.service — systemd unit for the blackwire process.
+#
+# Installation:
+#   cp deploy/systemd/blackwire.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now blackwire
+#
+# Configuration:
+#   Edit /etc/blackwire/config.json to configure the proxy.
+#   Run `systemctl reload blackwire` after changes (sends SIGHUP for hot-reload).
+#
+# Logs:
+#   journalctl -u blackwire -f
+
+[Unit]
+Description=blackwire — v2ray-compatible proxy platform
+Documentation=https://github.com/mojindri/v2ray
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Run as an unprivileged user.
+User=nobody
+Group=nobody
+
+# The binary and config file paths.
+ExecStart=/usr/local/bin/blackwire run -c /etc/blackwire/config.json
+
+# Send SIGHUP to trigger a hot config reload (reload users, routing rules, etc.)
+# without stopping the process or dropping existing connections.
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Working directory (for relative paths in config).
+WorkingDirectory=/var/lib/blackwire
+
+# Restart automatically if the process crashes (but not if we stopped it).
+Restart=on-failure
+RestartSec=5s
+
+# Capabilities: only bind to privileged ports (< 1024).
+# Drop all other capabilities for a minimal attack surface.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Filesystem hardening: only allow writes to /var/lib/blackwire and /run/blackwire.
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/blackwire /run/blackwire
+PrivateTmp=true
+
+# Prevent privilege escalation.
+NoNewPrivileges=true
+
+# Log output as JSON for structured log ingestion (e.g. Loki, Elasticsearch).
+# Remove RUST_LOG=info to get the default log level from config.
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
