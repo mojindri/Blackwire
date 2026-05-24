@@ -36,13 +36,13 @@ See also: [test-workflows.md](test-workflows.md), [make-target-inventory.md](mak
 
 | Command | Purpose |
 | --- | --- |
-| `make verify-lab-docker` | Docker stable + Xray + external clients + advanced-features-smoke |
+| `make verify-lab-docker` | Docker stable + Xray + configured external-client checks + advanced-features-smoke |
 | `make verify-lab-lima` | Lima browser TLS fingerprint baseline |
 | `make lab-docker-preflight` / `lab-docker-down` | Docker preflight / teardown |
 | `make lab-lima-preflight` / `lab-lima-down` | Lima preflight / stop VM |
 | `make remote-preflight` / `remote-deploy` | VPS SSH checks / rsync + setup |
 | `make remote-test-protocols` | Full protocol matrix from client VPS |
-| `make remote-test-fingerprint` | Xray/sing-box external clients on VPS |
+| `make remote-test-fingerprint` | Configured external-client checks on VPS |
 
 ## Environment Separation
 
@@ -72,7 +72,7 @@ SSH_SERVER=1.2.3.4 SSH_CLIENT=5.6.7.8 SSH_KEY=~/.ssh/id_ed25519 make verify-remo
 | Environment | Typical command | Notes |
 | --- | --- | --- |
 | Host Rust | `make verify-local` | fastest feedback |
-| Docker lab | `make verify-lab-docker` | Xray/sing-box external clients |
+| Docker lab | `make verify-lab-docker` | Xray REALITY + configured external-client checks |
 | Lima VM | `make verify-lab-lima` | browser TLS fingerprint |
 | Real VPS | `make verify-remote` | protocol matrix, TUN, netem |
 
@@ -133,8 +133,8 @@ Full mapping: `make help-compat`.
 
 | Command | Purpose |
 | --- | --- |
-| `make -C labs/realistic external-clients-docker` | Xray/sing-box vs proxy-rs in Docker |
-| `make -C labs/realistic external-clients-vps` | same from client VPS |
+| `make -C labs/realistic external-clients-docker` | Run the scenarios listed in `external-clients/scenarios.env` in Docker |
+| `make -C labs/realistic external-clients-vps` | Run the same configured scenarios from the client VPS |
 | `make -C labs/realistic external-clients-report` | print summary |
 
 ### Cleanup

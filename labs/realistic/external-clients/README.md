@@ -7,8 +7,8 @@ Xray or sing-box client -> proxy-rs server -> target-http
 ```
 
 It is intentionally separate from `vps-test`, which checks `proxy-rs` client to
-`proxy-rs` server. Passing this lab is the signal that real apps built on
-Xray/sing-box behavior are compatible with the server side.
+`proxy-rs` server. Passing this lab is evidence that the currently configured
+external-client scenarios are compatible with the server side.
 
 ## Commands
 
@@ -37,21 +37,19 @@ The runner keeps console output compact and writes full logs under:
 labs/realistic/reports/external-clients/
 ```
 
-## Matrix Order
+## Scenario Set
 
-The matrix runs inbound compatibility in this order:
+The automated matrix is driven by `external-clients/scenarios.env`.
 
-1. Trojan over TLS
-2. VLESS TCP
-3. VLESS over WebSocket
-4. VMess over gRPC
-5. Shadowsocks 2022
-6. Hysteria2
-7. VLESS REALITY
+At the moment that file contains one scenario:
 
-Xray and sing-box are both mandatory where the client supports the protocol
-cleanly. Hiddify remains a manual validation target using generated import
-artifacts after the automated clients pass.
+1. VLESS REALITY
+
+As more scenarios are added to `scenarios.env`, the same runner will pick them
+up automatically for both Docker and VPS execution.
+
+Hiddify remains a manual validation target using generated import artifacts
+after the automated scenarios pass.
 
 For every supported positive case, the lab also renders a negative-auth variant
 with the wrong UUID/password/shortId. Those cases must fail to fetch the target;
