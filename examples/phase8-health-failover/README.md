@@ -16,11 +16,10 @@ one path dead, new connections should fail over to the other path. If both paths
 are dead, the balancer falls back to the first configured outbound so failures
 stay explicit instead of disappearing silently.
 
-Current caveat: the balancer and health-check modules are present in
-`proxy-app`, and the config schema accepts `routing.balancers`, but the main
-instance still needs runtime registration of balancer handlers and health-check
-tasks before this becomes a fully live failover setup. Treat this as the config
-template for that wiring.
+Current caveat: balancer registration and background health-check tasks are now
+wired into the main instance, but this example is still a narrow config/template
+exercise rather than full failover proof under real load or multi-outbound fault
+injection. Treat it as a starting point, not a production claim.
 
 Validate:
 
