@@ -1,0 +1,18 @@
+[Unit]
+Description=blackwire client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=blackwire
+Group=blackwire
+ExecStart=/usr/local/bin/blackwire run -c /etc/blackwire/client.json
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/blackwire
+
+[Install]
+WantedBy=multi-user.target
