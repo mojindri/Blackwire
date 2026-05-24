@@ -19,7 +19,7 @@ VPS hosts — not mock peers alone.
 
 | Area | Status | Notes |
 |---|---|---|
-| Xray / sing-box **wire interop** (server) | Supported | External-client matrix for REALITY, VLESS, Trojan, SS2022, etc. |
+| Xray / sing-box **wire interop** (server) | Supported | Wire-level interop exists; automated external-client scenarios currently start with REALITY and can be expanded via `labs/realistic/external-clients/scenarios.env`. |
 | Native config schema | Supported | Own JSON schema — not Xray JSON paste-compatible |
 | V2Ray JSON config compatibility | Unsupported | Not a goal |
 | Xray JSON config compatibility | Partial | Interop is wire-level; config must be translated to native schema |

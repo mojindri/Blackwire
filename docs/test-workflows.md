@@ -33,7 +33,8 @@ make verify-local
 make verify-lab
 ```
 
-`verify-lab` runs Docker matrix (stable tests, Xray REALITY, external Xray/sing-box clients) and Lima browser/fingerprint checks.
+`verify-lab` runs the Docker matrix (stable tests, Xray REALITY, configured
+external-client checks) and Lima browser/fingerprint checks.
 
 Subtargets:
 
