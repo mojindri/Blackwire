@@ -105,6 +105,7 @@ Environment rule:
 - Docker work: still run from your local checkout
 - Lima VM work: still run from your local checkout; the scripts drive the VM
 - VPS work: still run from your local checkout; the scripts SSH into the VPS machines
+- if you use a key file, pass `SSH_KEY=~/.ssh/id_hetzner` (and optionally `SSH_USER` / `SSH_PORT`)
 
 If you need a strict command-by-command separation, use:
 

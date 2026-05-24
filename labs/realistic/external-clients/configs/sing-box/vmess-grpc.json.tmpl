@@ -1,0 +1,20 @@
+{
+  "log": { "level": "warn" },
+  "inbounds": [
+    { "type": "socks", "tag": "socks-in", "listen": "::", "listen_port": 1080 }
+  ],
+  "outbounds": [
+    {
+      "type": "vmess",
+      "tag": "proxy-out",
+      "server": "${EXTERNAL_SERVER_ADDRESS}",
+      "server_port": 8444,
+      "uuid": "${VMESS_UUID}",
+      "security": "auto",
+      "tls": { "enabled": true, "server_name": "${EXTERNAL_TLS_SERVER_NAME}", "insecure": true },
+      "transport": { "type": "grpc", "service_name": "lab.Gun" }
+    }
+  ],
+  "route": { "final": "proxy-out" }
+}
+

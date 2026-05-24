@@ -93,6 +93,30 @@ Clean up:
 make -C labs/realistic docker-down
 ```
 
+## External Client Compatibility
+
+The external-client lab checks real Xray and sing-box clients against a
+`proxy-rs` server inbound. This is different from `vps-test`, which checks
+`proxy-rs` client to `proxy-rs` server.
+
+```sh
+make -C labs/realistic external-clients-docker
+make -C labs/realistic external-clients-report
+```
+
+After Docker passes, promote the same external-client check to the two-VPS lab:
+
+```sh
+SSH_SERVER=1.2.3.4 SSH_CLIENT=5.6.7.8 SSH_KEY=~/.ssh/id_hetzner make -C labs/realistic external-clients-vps
+```
+
+Generated configs and Hiddify import artifacts are written under
+`labs/realistic/external-clients/generated/`. Reports are written under
+`labs/realistic/reports/external-clients/`.
+
+Run this before claiming GUI-client compatibility. A passing `proxy-rs` client
+matrix does not prove Xray, sing-box, or Hiddify inbound compatibility.
+
 ## Two-VPS Gate
 
 The closest-to-production gate uses two Ubuntu 24.04 VPS machines:
@@ -109,17 +133,23 @@ Quick start:
 cp configs/matrix.env.example configs/matrix.env
 
 # Provision server VPS
-SSH_SERVER=1.2.3.4 make vps-server-setup
+SSH_SERVER=1.2.3.4 SSH_KEY=~/.ssh/id_hetzner make vps-server-setup
 
 # Provision client VPS
-SSH_CLIENT=5.6.7.8 make vps-client-setup
+SSH_CLIENT=5.6.7.8 SSH_KEY=~/.ssh/id_hetzner make vps-client-setup
 
 # Run the 7-protocol matrix from the client
-SSH_CLIENT=5.6.7.8 make vps-test
+SSH_CLIENT=5.6.7.8 SSH_KEY=~/.ssh/id_hetzner make vps-test
 
 # Run TUN privileged tests on the server (Linux + root)
-SSH_SERVER=1.2.3.4 make vps-tun
+SSH_SERVER=1.2.3.4 SSH_KEY=~/.ssh/id_hetzner make vps-tun
 ```
+
+Optional SSH overrides:
+
+- `SSH_USER`
+- `SSH_PORT`
+- `SSH_EXTRA_OPTS`
 
 Or pack everything into a tarball and transfer manually:
 

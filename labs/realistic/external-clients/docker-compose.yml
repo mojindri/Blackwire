@@ -1,0 +1,31 @@
+services:
+  target-http:
+    image: hashicorp/http-echo:1.0
+    command:
+      - "-listen=:8080"
+      - "-text=proxy-rs external client target"
+
+  proxy-rs-server:
+    image: proxy-rs:latest
+    volumes:
+      - ./generated/proxy-rs:/generated/proxy-rs:ro
+      - ./generated/certs:/etc/proxy-rs/certs:ro
+    command: ["run", "-c", "/generated/proxy-rs/server-vless-tcp.json"]
+    depends_on:
+      - target-http
+
+  xray-client:
+    image: ghcr.io/xtls/xray-core:latest
+    volumes:
+      - ./generated:/generated:ro
+    command: ["run", "-c", "/generated/xray/vless-tcp.json"]
+    depends_on:
+      - proxy-rs-server
+
+  sing-box-client:
+    image: ghcr.io/sagernet/sing-box:latest
+    volumes:
+      - ./generated:/generated:ro
+    command: ["run", "-c", "/generated/sing-box/vless-tcp.json"]
+    depends_on:
+      - proxy-rs-server
