@@ -368,11 +368,12 @@ It is an operating-system-level traffic capture/redirect mechanism.
 
 ### Repo Status
 
-The repo can parse top-level `tun` config and has low-level Linux helpers for
-device creation, route installation, cleanup, IP packet parsing, UDP response
-packet synthesis, and flow/NAT session tracking. `proxy-core` still rejects
-`tun` at startup because the privileged device loop and TCP stream reassembly
-are not implemented. Starting routes without that runtime would break traffic.
+The repo can start a top-level `tun` runtime and has Linux helpers for device
+creation, route installation, cleanup, IP packet parsing, UDP response packet
+synthesis, and flow/NAT session tracking. The current runtime is still
+Linux/root-oriented and focused on the existing privileged packet loop, UDP NAT,
+and REDIRECT-based TCP handoff, so treat it as an advanced path rather than a
+general cross-platform feature.
 
 ## ShadowTLS
 

@@ -10,8 +10,9 @@ This repository is organized around two goals:
   Docker labs, Lima fingerprint checks, and two-VPS production-style runs
 
 Supported paths are validated against original clients, not only in-process Rust
-tests. External-client gates include Xray/sing-box REALITY, Trojan, SS2022, and
-related matrix scenarios under `labs/realistic/`.
+tests. External-client automation lives under `labs/realistic/` and currently
+starts with a VLESS REALITY scenario that can be expanded through
+`labs/realistic/external-clients/scenarios.env`.
 
 The project uses its **own JSON config schema** (not a byte-for-byte Xray config
 drop-in). Wire behavior and client interop are the compatibility contract. For
@@ -30,20 +31,45 @@ The full beginner-oriented doc index is at [docs/README.md](docs/README.md).
 
 ## Interop validation
 
-Compatibility is enforced against **real clients**:
+One **public gate** per environment. Sub-steps inside a gate are implementation
+detail — you normally run the gate, not each sub-step.
 
-| Client | How it is tested |
+| Environment | Run this | What it checks |
+| --- | --- | --- |
+| **Docker (local)** | `make verify-lab-docker` | Xray REALITY interop plus the configured external-client scenarios against your server |
+| **Lima VM (local)** | `make verify-lab-lima` | Browser-like TLS fingerprint (Chrome baseline) |
+| **Two VPS (remote)** | `make verify-remote` | Full protocol matrix plus the configured external-client scenarios over real public network |
+
+**Both** in one shot (no VPS):
+
+```sh
+make verify-lab    # verify-lab-docker + verify-lab-lima
+```
+
+### What runs inside `verify-lab-docker`
+
+You normally do **not** need to run sub-steps separately:
+
+| Step (internal) | Client tested |
 | --- | --- |
-| **Xray-core** | Docker lab (`make verify-lab-docker`), live REALITY d1 interop |
-| **sing-box** | Docker + VPS external-client matrix (`external-clients-docker` / `-vps`) |
-| **Browsers / TLS peers** | Lima VM fingerprint baseline (`verify-lab-lima`) |
+| `stable` | In-process Rust integration matrix |
+| `xray` | **Xray-core** REALITY d1 (live binary in Docker) |
+| `external-clients-docker` | The scenarios currently listed in `external-clients/scenarios.env` |
+| `advanced-features-smoke` | ShadowTLS, mKCP, health, DNS guards |
+| `negative-auth` | Wrong creds rejected / REALITY fallback |
+
+Sub-steps exist for debugging only, e.g.
+`make -C labs/realistic xray` or `make -C labs/realistic external-clients-docker`.
+
+On VPS, `verify-remote` also runs `external-clients-vps` for the same configured
+scenario set.
 
 Details: [tests/interop/README.md](tests/interop/README.md),
 [labs/realistic/external-clients/README.md](labs/realistic/external-clients/README.md).
 
 ## Current Status
 
-**Production-tested server paths** (Xray/sing-box interop + lab gates):
+**Best-covered server paths today** (Xray/sing-box interop + lab gates):
 
 - VLESS over TCP, REALITY, WebSocket
 - VMess over gRPC
@@ -59,7 +85,7 @@ Details: [tests/interop/README.md](tests/interop/README.md),
 | **GeoIP / GeoSite + FakeIP routing** | Config, DNS pool, routing rules load and run in tests | Edge cases in long-running production traffic |
 | **ShadowTLS v3** | Local end-to-end tests (VLESS over ShadowTLS) | Interop against external sing-box / shadow-tls deployments |
 | **mKCP** | Local multi-session tests | Loss, jitter, and hostile-network lab validation |
-| **TUN mode** | Linux helpers, config parsing, unit tests | Full OS packet capture loop — **do not use in production yet** |
+| **TUN mode** | Linux TUN runtime, route setup/cleanup, UDP NAT, privileged tests | Broad production validation and cross-platform support — **do not use in production yet** |
 
 See [docs/feature-matrix.md](docs/feature-matrix.md) for the full support table.
 

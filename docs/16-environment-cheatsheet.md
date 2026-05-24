@@ -28,7 +28,7 @@ cargo test -p proxy-core --test production_readiness --all-features
 
 ## 2. Local + Docker
 
-Use when you need Xray interop, external Xray/sing-box clients, or containerized targets.
+Use when you need Xray interop, configured external-client checks, or containerized targets.
 
 ```sh
 make verify-lab-docker
