@@ -1,0 +1,21 @@
+[Unit]
+Description=blackwire server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=blackwire
+Group=blackwire
+ExecStart=/usr/local/bin/blackwire run -c /etc/blackwire/server.json
+Restart=on-failure
+RestartSec=3
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/blackwire
+ReadWritePaths=/var/lib/blackwire
+
+[Install]
+WantedBy=multi-user.target
