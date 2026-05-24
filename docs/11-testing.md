@@ -61,9 +61,11 @@ Important:
 - Pass `SSH_KEY=~/.ssh/id_ed25519` (and optionally `SSH_USER` / `SSH_PORT`) for VPS work.
 - SSH directly into a VPS only for debugging, service inspection, or manual recovery.
 
-The external-client Docker lab is the first gate for GUI/app compatibility:
-Xray and sing-box connect to `proxy-rs` server inbounds, then Hiddify profiles
-are generated for manual macOS validation.
+The external-client Docker lab is the first gate for GUI/app compatibility.
+The exact automated scenario set is defined by
+`labs/realistic/external-clients/scenarios.env`; today that matrix starts with
+VLESS REALITY, and Hiddify profiles are still generated for manual macOS
+validation.
 
 ---
 
@@ -121,7 +123,8 @@ cargo test -p proxy-protocol --test production_readiness --all-features
 cargo test -p proxy-transport --test production_readiness --all-features
 ```
 
-These are the mandatory-green gate before any release.
+These are part of the fast local confidence gate before broader lab and VPS
+validation.
 
 ---
 
