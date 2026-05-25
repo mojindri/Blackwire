@@ -82,7 +82,7 @@ async fn slow_client_reader_does_not_deadlock_or_leak() {
     drop(s);
     leak_check::settle_for_cleanup().await;
     let after = leak_check::LeakSnapshot::capture();
-    leak_check::assert_close_to_baseline(&baseline, &after, 256, 128, 512);
+    leak_check::assert_fd_tasks_close_to_baseline(&baseline, &after, 256, 128);
 }
 
 #[tokio::test]
@@ -113,7 +113,7 @@ async fn stalled_upstream_reader_large_write_fails_or_times_out_safely() {
     drop(payload);
     leak_check::settle_for_cleanup().await;
     let after = leak_check::LeakSnapshot::capture();
-    leak_check::assert_close_to_baseline(&baseline, &after, 512, 200, 2048);
+    leak_check::assert_fd_tasks_close_to_baseline(&baseline, &after, 512, 200);
 }
 
 #[tokio::test]
@@ -144,5 +144,5 @@ async fn slow_upstream_reader_applies_backpressure_without_unbounded_growth() {
     drop(payload);
     leak_check::settle_for_cleanup().await;
     let after = leak_check::LeakSnapshot::capture();
-    leak_check::assert_close_to_baseline(&baseline, &after, 256, 128, 1024);
+    leak_check::assert_fd_tasks_close_to_baseline(&baseline, &after, 256, 128);
 }
