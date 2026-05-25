@@ -23,6 +23,15 @@ pub async fn settle_for_cleanup() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 }
 
+/// Capture a leak baseline after listeners/tasks are already running.
+///
+/// RSS taken before `Instance::from_config` is misleading (the proxy allocates
+/// several MB at startup). Call this only once the instance and peers have warmed up.
+pub async fn steady_state_baseline() -> LeakSnapshot {
+    settle_for_cleanup().await;
+    LeakSnapshot::capture()
+}
+
 /// Assert that process resources remain close to baseline.
 pub fn assert_close_to_baseline(
     before: &LeakSnapshot,

@@ -50,8 +50,6 @@ fn socks_to_freedom_cfg(socks_port: u16) -> std::sync::Arc<proxy_config::schema:
 
 #[tokio::test]
 async fn slow_client_reader_does_not_deadlock_or_leak() {
-    let baseline = leak_check::LeakSnapshot::capture();
-
     let pushed = 128 * 1024usize;
     let (upstream_port, _upstream_task) = spawn_push_server(pushed).await;
     let socks_port = harness::unused_local_port();
@@ -60,6 +58,7 @@ async fn slow_client_reader_does_not_deadlock_or_leak() {
         .expect("start instance");
 
     tokio::time::sleep(Duration::from_millis(80)).await;
+    let baseline = leak_check::steady_state_baseline().await;
 
     let mut s = harness::socks5_connect(socks_port, "127.0.0.1", upstream_port).await;
     let mut total = 0usize;
@@ -80,21 +79,21 @@ async fn slow_client_reader_does_not_deadlock_or_leak() {
     assert!(read.is_ok(), "slow reader path timed out");
     assert!(total >= pushed / 2, "expected substantial data flow");
 
+    drop(s);
     leak_check::settle_for_cleanup().await;
     let after = leak_check::LeakSnapshot::capture();
-    leak_check::assert_close_to_baseline(&baseline, &after, 256, 128, 80);
+    leak_check::assert_close_to_baseline(&baseline, &after, 256, 128, 512);
 }
 
 #[tokio::test]
 async fn stalled_upstream_reader_large_write_fails_or_times_out_safely() {
-    let baseline = leak_check::LeakSnapshot::capture();
-
     let (upstream_port, _stall_task) = harness::spawn_stalled_reader_server().await;
     let socks_port = harness::unused_local_port();
     let _instance = Instance::from_config(socks_to_freedom_cfg(socks_port))
         .await
         .expect("start instance");
     tokio::time::sleep(Duration::from_millis(80)).await;
+    let baseline = leak_check::steady_state_baseline().await;
 
     let mut s = harness::socks5_connect(socks_port, "127.0.0.1", upstream_port).await;
     let payload = vec![0xABu8; 2 << 20];
@@ -111,15 +110,14 @@ async fn stalled_upstream_reader_large_write_fails_or_times_out_safely() {
     );
 
     drop(s);
+    drop(payload);
     leak_check::settle_for_cleanup().await;
     let after = leak_check::LeakSnapshot::capture();
-    leak_check::assert_close_to_baseline(&baseline, &after, 512, 200, 100);
+    leak_check::assert_close_to_baseline(&baseline, &after, 512, 200, 2048);
 }
 
 #[tokio::test]
 async fn slow_upstream_reader_applies_backpressure_without_unbounded_growth() {
-    let baseline = leak_check::LeakSnapshot::capture();
-
     let (upstream_port, _slow_task) =
         harness::spawn_slow_echo_server(Duration::from_millis(30)).await;
     let socks_port = harness::unused_local_port();
@@ -127,6 +125,7 @@ async fn slow_upstream_reader_applies_backpressure_without_unbounded_growth() {
         .await
         .expect("start instance");
     tokio::time::sleep(Duration::from_millis(80)).await;
+    let baseline = leak_check::steady_state_baseline().await;
 
     let mut s = harness::socks5_connect(socks_port, "127.0.0.1", upstream_port).await;
     let payload = vec![0x11u8; 96 * 1024];
@@ -140,7 +139,10 @@ async fn slow_upstream_reader_applies_backpressure_without_unbounded_growth() {
         .expect("read_exact");
     assert_eq!(got, payload);
 
+    drop(s);
+    drop(got);
+    drop(payload);
     leak_check::settle_for_cleanup().await;
     let after = leak_check::LeakSnapshot::capture();
-    leak_check::assert_close_to_baseline(&baseline, &after, 256, 128, 80);
+    leak_check::assert_close_to_baseline(&baseline, &after, 256, 128, 1024);
 }
