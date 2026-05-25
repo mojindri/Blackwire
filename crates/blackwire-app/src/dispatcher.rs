@@ -38,8 +38,8 @@ use crate::context::Context;
 use crate::dns::DnsModule;
 use crate::features::OutboundHandler;
 use crate::metrics::{record_connection_accepted, record_connection_closed};
-use crate::runtime_stats;
 use crate::router::{normalize_routing_domain_strategy, Router, RoutingDomainStrategy};
+use crate::runtime_stats;
 
 /// The dispatcher connects inbounds to outbounds by consulting the router
 /// and relaying bytes.
@@ -160,10 +160,7 @@ impl Dispatcher for DefaultDispatcher {
 
         let dest = self.restore_fakeip_destination(dest);
 
-        let protocol_label = ctx
-            .sniffed_protocol
-            .as_deref()
-            .unwrap_or("tcp");
+        let protocol_label = ctx.sniffed_protocol.as_deref().unwrap_or("tcp");
         record_connection_accepted(&ctx.inbound_tag, protocol_label);
 
         // Step 1: Route per Xray `routing.domainStrategy` (AsIs / IPIfNonMatch / IPOnDemand).
@@ -262,8 +259,7 @@ impl DefaultDispatcher {
         sniffed_protocol: Option<&str>,
         sniffed_domain: Option<&str>,
     ) -> Result<crate::router::Route, ProxyError> {
-        let strategy =
-            normalize_routing_domain_strategy(self.router.domain_strategy().as_deref());
+        let strategy = normalize_routing_domain_strategy(self.router.domain_strategy().as_deref());
 
         if strategy == RoutingDomainStrategy::IpOnDemand
             && matches!(dest, Address::Domain(..))
@@ -357,7 +353,11 @@ impl DefaultDispatcher {
                 }
             }
         }
-        if ips.is_empty() { None } else { Some(ips) }
+        if ips.is_empty() {
+            None
+        } else {
+            Some(ips)
+        }
     }
 
     fn restore_fakeip_destination(&self, dest: Address) -> Address {

@@ -23,8 +23,8 @@ use blackwire_app::features::{ConnectionHandler, InboundHandler};
 use blackwire_common::{with_handshake_timeout, BoxedStream, ProxyError};
 use blackwire_config::schema::{NetworkType, SecurityType, StreamSettingsConfig};
 use blackwire_transport::{
-    accept_httpupgrade, grpc_accept, httpupgrade_listen_path, shadowtls_accept, tls_accept,
-    splithttp_accept, splithttp_listen_params, ws_accept,
+    accept_httpupgrade, grpc_accept, httpupgrade_listen_path, shadowtls_accept, splithttp_accept,
+    splithttp_listen_params, tls_accept, ws_accept,
 };
 
 // ── Query helpers ─────────────────────────────────────────────────────────────
@@ -153,11 +153,9 @@ impl ConnectionHandler for HttpUpgradeConnectionHandler {
         source: SocketAddr,
     ) -> Result<(), ProxyError> {
         let path = self.expected_path.as_deref();
-        let upgraded = with_handshake_timeout(
-            self.handshake_timeout,
-            accept_httpupgrade(stream, path),
-        )
-        .await?;
+        let upgraded =
+            with_handshake_timeout(self.handshake_timeout, accept_httpupgrade(stream, path))
+                .await?;
         self.inner.handle_connection(upgraded, source).await
     }
 }
@@ -369,9 +367,7 @@ pub(crate) fn build_conn_handler(
 
     // Add HTTPUpgrade layer if requested (mutually exclusive with WS/gRPC).
     if uses_httpupgrade(stream_settings) {
-        let expected_path = stream_settings
-            .as_ref()
-            .and_then(httpupgrade_listen_path);
+        let expected_path = stream_settings.as_ref().and_then(httpupgrade_listen_path);
         handler = HttpUpgradeConnectionHandler::new(expected_path, handshake_timeout, handler);
     }
 

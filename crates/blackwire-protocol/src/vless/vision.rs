@@ -78,7 +78,10 @@ impl UnpaddingState {
                 self.remaining_padding -= skip as i32;
             }
 
-            if self.remaining_command <= 0 && self.remaining_content <= 0 && self.remaining_padding <= 0 {
+            if self.remaining_command <= 0
+                && self.remaining_content <= 0
+                && self.remaining_padding <= 0
+            {
                 if self.current_command == COMMAND_PADDING_CONTINUE {
                     self.remaining_command = 5;
                 } else {
@@ -111,6 +114,7 @@ pub struct VisionStream<S> {
 }
 
 impl<S> VisionStream<S> {
+    /// Wrap `inner` with XTLS Vision padding/unpadding for the given VLESS UUID.
     pub fn new(inner: S, uuid: [u8; 16]) -> Self {
         Self {
             inner,
@@ -123,6 +127,7 @@ impl<S> VisionStream<S> {
         }
     }
 
+    /// Unwrap the underlying stream after Vision processing.
     pub fn into_inner(self) -> S {
         self.inner
     }
@@ -274,16 +279,7 @@ mod tests {
     fn switches_to_direct_copy_after_direct_command() {
         let uuid = [7u8; 16];
         let mut frame = uuid.to_vec();
-        frame.extend_from_slice(&[
-            COMMAND_PADDING_DIRECT as u8,
-            0,
-            3,
-            0,
-            0,
-            b'a',
-            b'b',
-            b'c',
-        ]);
+        frame.extend_from_slice(&[COMMAND_PADDING_DIRECT as u8, 0, 3, 0, 0, b'a', b'b', b'c']);
         frame.extend_from_slice(b"tail");
 
         let mut st = UnpaddingState::new();
@@ -295,8 +291,7 @@ mod tests {
     #[test]
     fn detects_complete_tls_records() {
         let tls_record = [
-            0x17, 0x03, 0x03, 0x00, 0x03, b'a', b'b', b'c', 0x17, 0x03, 0x03, 0x00, 0x01,
-            b'z',
+            0x17, 0x03, 0x03, 0x00, 0x03, b'a', b'b', b'c', 0x17, 0x03, 0x03, 0x00, 0x01, b'z',
         ];
         assert!(looks_like_tls_application_data(&tls_record));
         assert!(is_complete_tls_record(&tls_record));

@@ -52,6 +52,7 @@ pub mod v2rayquic;
 pub mod shadowtls;
 
 pub use grpc::{decode_grpc_frame, encode_grpc_frame, grpc_accept, grpc_connect, GrpcStream};
+pub use httpupgrade::{accept_httpupgrade, dial_httpupgrade, httpupgrade_listen_path};
 pub use hysteria2::{
     Hysteria2Client, Hysteria2ClientConfig, Hysteria2OutboundHandler, Hysteria2Server,
     Hysteria2ServerConfig,
@@ -73,6 +74,7 @@ pub use shadowtls::{
     compute_marker, shadowtls_accept, shadowtls_connect, shadowtls_marker_accept,
     shadowtls_marker_connect, shadowtls_v3_connect, write_marker_record,
 };
+pub use splithttp::{splithttp_accept, splithttp_connect, splithttp_listen_params};
 pub use tcp::{TcpClientTransport, TcpServerTransport};
 pub use tls::{
     build_server_config as tls_build_server_config, tls_accept, tls_accept_tls13, tls_connect,
@@ -80,8 +82,6 @@ pub use tls::{
 pub use tun::{
     build_tcp_rst, create_tun, IpPacket, TransportProtocol, TunConfig, TunRuntime, UdpNatTable,
 };
-pub use httpupgrade::{accept_httpupgrade, dial_httpupgrade, httpupgrade_listen_path};
-pub use splithttp::{splithttp_accept, splithttp_connect, splithttp_listen_params};
 pub use v2rayquic::{accepted_quic_stream, quic_connect, quic_server_endpoint, QuicStream};
 pub use ws::{ws_accept, ws_connect, WsConnectConfig};
 
