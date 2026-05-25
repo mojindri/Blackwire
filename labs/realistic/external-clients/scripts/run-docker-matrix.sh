@@ -11,13 +11,21 @@ TARGET_URL="http://target-http:8080"
 NETWORK_NAME="${PROJECT_NAME}_default"
 
 mkdir -p "$REPORT_DIR/logs"
+
+# Only one matrix run at a time (no parallel Xray/sing-box or overlapping makes).
+LOCKDIR="$REPORT_DIR/.matrix.lock.d"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+    echo "ERROR: external-client matrix already running (lock: $LOCKDIR)" >&2
+    exit 1
+fi
+
 bash "$LAB_DIR/scripts/render-configs.sh" "$ENV_FILE" "$LAB_DIR/generated" > "$REPORT_DIR/render.log" 2>&1
 
 "${COMPOSE[@]}" up -d target-http > "$REPORT_DIR/compose.log" 2>&1
 
 cleanup_case() {
-    "${COMPOSE[@]}" stop blackwire-server >/dev/null 2>&1 || true
-    docker rm -f blackwire-server xray-client sing-box-client >/dev/null 2>&1 || true
+    "${COMPOSE[@]}" stop blackwire-server xray-client sing-box-client >/dev/null 2>&1 || true
+    docker rm -f blackwire-server xray-client sing-box-client 2>/dev/null || true
     # Remove stale one-off server containers from prior matrix rows.
     while read -r cid; do
         [[ -n "$cid" ]] && docker rm -f "$cid" >/dev/null 2>&1 || true
@@ -27,8 +35,55 @@ cleanup_case() {
 cleanup_all() {
     cleanup_case
     "${COMPOSE[@]}" down -v >> "$REPORT_DIR/compose.log" 2>&1 || true
+    rmdir "$LOCKDIR" 2>/dev/null || true
 }
 trap cleanup_all EXIT
+
+# Ensure at most one external client container is running (never Xray + sing-box together).
+assert_single_client() {
+    local n
+    n="$(docker ps -q --filter "name=xray-client" --filter "name=sing-box-client" 2>/dev/null | wc -l | tr -d ' ')"
+    if [[ "${n:-0}" -gt 1 ]]; then
+        echo "ERROR: multiple external clients running; sequential matrix violated" >&2
+        exit 1
+    fi
+}
+
+port_for_protocol() {
+    case "$1" in
+        trojan-tls) echo 8445 ;;
+        vless-tcp) echo 10080 ;;
+        vless-udp) echo 10081 ;;
+        vless-ws) echo 8443 ;;
+        vmess-grpc) echo 8444 ;;
+        ss2022) echo 8388 ;;
+        hysteria2) echo 4433 ;;
+        vless-reality) echo 10443 ;;
+        *) echo "" ;;
+    esac
+}
+
+wait_for_server_port() {
+    local protocol="$1"
+    local port
+    port="$(port_for_protocol "$protocol")"
+    [[ -z "$port" ]] && return 0
+    # Hysteria2 binds QUIC/UDP; TCP nc -z never succeeds (same as run-vps-matrix.sh).
+    if [[ "$protocol" == "hysteria2" ]]; then
+        sleep 3
+        return 0
+    fi
+    local i
+    for i in $(seq 1 20); do
+        if docker run --rm --network "$NETWORK_NAME" busybox:1.36 \
+            nc -z blackwire-server "$port" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "server port $port not open for $protocol" >&2
+    return 1
+}
 
 wait_for_socks() {
     local client="$1"
@@ -56,22 +111,28 @@ run_one() {
     fi
 
     cleanup_case
+    assert_single_client
 
-    "${COMPOSE[@]}" run -d --no-deps --name blackwire-server blackwire-server \
+    # --use-aliases: required so freedom outbound can resolve compose service "target-http".
+    "${COMPOSE[@]}" run -d --no-deps --use-aliases --name blackwire-server blackwire-server \
         run -c "/generated/blackwire/${server_cfg}" >> "$log" 2>&1
 
-    # Hysteria2 binds UDP after process start; wait before the client connects.
-    if [[ "$protocol" == "hysteria2" || "$protocol" == "vless-reality" ]]; then
-        sleep 2
+    if ! wait_for_server_port "$protocol"; then
+        echo "FAIL ${label} (server not listening)" | tee -a "$REPORT_DIR/summary.txt"
+        docker logs blackwire-server >> "$log" 2>&1 || true
+        echo "  triage: docs/external-client-failure-triage.md" >> "$log"
+        return 1
     fi
 
+    # One client only — never start Xray and sing-box concurrently.
     if [[ "$client" == "xray" ]]; then
-        "${COMPOSE[@]}" run -d --no-deps --name xray-client xray-client \
+        "${COMPOSE[@]}" run -d --no-deps --use-aliases --name xray-client xray-client \
             run -c "/generated/${config_root}/${client_cfg}" >> "$log" 2>&1
     else
-        "${COMPOSE[@]}" run -d --no-deps --name sing-box-client sing-box-client \
+        "${COMPOSE[@]}" run -d --no-deps --use-aliases --name sing-box-client sing-box-client \
             run -c "/generated/${config_root}/${client_cfg}" >> "$log" 2>&1
     fi
+    assert_single_client
 
     if wait_for_socks "${client}-client"; then
         echo "PASS ${label}" | tee -a "$REPORT_DIR/summary.txt"
@@ -81,6 +142,12 @@ run_one() {
     echo "FAIL ${label}" | tee -a "$REPORT_DIR/summary.txt"
     docker logs blackwire-server >> "$log" 2>&1 || true
     docker logs "${client}-client" >> "$log" 2>&1 || true
+    {
+        echo "--- triage ---"
+        echo "See docs/external-client-failure-triage.md"
+        echo "Xray VLESS: github.com/XTLS/Xray-core/tree/main/proxy/vless"
+        echo "sing-box VLESS: sing-box.sagernet.org/configuration/outbound/vless/"
+    } >> "$log"
     return 1
 }
 
@@ -102,21 +169,26 @@ run_negative() {
     fi
 
     cleanup_case
+    assert_single_client
 
-    "${COMPOSE[@]}" run -d --no-deps --name blackwire-server blackwire-server \
+    # --use-aliases: required so freedom outbound can resolve compose service "target-http".
+    "${COMPOSE[@]}" run -d --no-deps --use-aliases --name blackwire-server blackwire-server \
         run -c "/generated/blackwire/${server_cfg}" >> "$log" 2>&1
 
-    if [[ "$protocol" == "hysteria2" || "$protocol" == "vless-reality" ]]; then
-        sleep 2
+    if ! wait_for_server_port "$protocol"; then
+        echo "FAIL ${label} (server not listening)" | tee -a "$REPORT_DIR/summary.txt"
+        docker logs blackwire-server >> "$log" 2>&1 || true
+        return 1
     fi
 
     if [[ "$client" == "xray" ]]; then
-        "${COMPOSE[@]}" run -d --no-deps --name xray-client xray-client \
+        "${COMPOSE[@]}" run -d --no-deps --use-aliases --name xray-client xray-client \
             run -c "/generated/${root}/${client_cfg}" >> "$log" 2>&1
     else
-        "${COMPOSE[@]}" run -d --no-deps --name sing-box-client sing-box-client \
+        "${COMPOSE[@]}" run -d --no-deps --use-aliases --name sing-box-client sing-box-client \
             run -c "/generated/${root}/${client_cfg}" >> "$log" 2>&1
     fi
+    assert_single_client
 
     if wait_for_socks "${client}-client"; then
         echo "FAIL ${label} accepted" | tee -a "$REPORT_DIR/summary.txt"

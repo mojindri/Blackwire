@@ -19,10 +19,11 @@ The mandatory matrix is limited to paths that are wired end-to-end today:
 - Shadowsocks 2022
 - Hysteria2
 - Xray REALITY interop
+- ShadowTLS v3 (integration smoke)
+- mKCP (integration smoke)
 
-**Advanced features** (ShadowTLS, mKCP, health/failover, DNS/geo routing) have local smoke
-tests via `make -C labs/realistic advanced-features-smoke` but are not mandatory green yet.
-See the table above and [labs/realistic/README.md](labs/realistic/README.md).
+Health/failover and DNS/geo routing guards run in `advanced-features-smoke` alongside the above.
+Source of truth: [docs/xray-parity-source-of-truth.md](../../docs/xray-parity-source-of-truth.md).
 
 ## Local Docker Baseline
 

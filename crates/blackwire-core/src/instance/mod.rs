@@ -51,7 +51,7 @@ use crate::http::build_http_inbound;
 use crate::hysteria2::{build_hysteria2_outbound, start_hysteria2_inbound};
 mod helpers;
 
-pub(crate) use helpers::{build_rules, load_geo_data, populate_vless_registry};
+pub(crate) use helpers::{build_rules, build_sniffing_map, load_geo_data, populate_vless_registry};
 
 use crate::reality::{build_reality_server, uses_reality, RealityConnectionHandler};
 use crate::reload::ReloadState;
@@ -143,6 +143,7 @@ impl Instance {
             reject_unfinished_transport_settings(
                 "outbound",
                 &out_cfg.tag,
+                out_cfg.protocol.clone(),
                 &out_cfg.stream_settings,
             )?;
             let handler: Arc<dyn OutboundHandler> = match out_cfg.protocol {
@@ -212,25 +213,40 @@ impl Instance {
         };
 
         let (geoip, geosite) = load_geo_data(config.routing.as_ref());
-        let router = LiveRouter::new(rules, default_tag, geoip, geosite);
+        let domain_strategy = config
+            .routing
+            .as_ref()
+            .and_then(|r| r.domain_strategy.clone());
+        let router = LiveRouter::new(rules, default_tag, geoip, geosite, domain_strategy.clone());
+        let sniffing_shared = Arc::new(std::sync::RwLock::new(build_sniffing_map(&config.inbounds)));
         // Shared with the config watcher: router swap + VLESS registry refresh on reload.
         let reload = ReloadState {
             router: Arc::clone(&router),
             vless_registries: Arc::new(DashMap::new()),
+            sniffing: Arc::clone(&sniffing_shared),
         };
         let vless_registries = Arc::clone(&reload.vless_registries);
 
         // ── Step 3: Create dispatcher ────────────────────────────────────────
         let dns = build_dns_module(config.dns.as_ref()).await?;
-        let dispatcher = if let Some(dns) = dns {
-            DefaultDispatcher::new_with_dns(router, outbound_map, dns)
-        } else {
-            DefaultDispatcher::new(router, outbound_map)
+        let dispatcher = match dns {
+            Some(dns) => DefaultDispatcher::new_with_dns_and_sniffing(
+                router,
+                outbound_map,
+                dns,
+                Arc::clone(&sniffing_shared),
+            ),
+            None => DefaultDispatcher::new_with_sniffing(router, outbound_map, sniffing_shared),
         };
 
         // ── Step 4 & 5: Build inbounds and start listeners ───────────────────
         for in_cfg in &config.inbounds {
-            reject_unfinished_transport_settings("inbound", &in_cfg.tag, &in_cfg.stream_settings)?;
+            reject_unfinished_transport_settings(
+                "inbound",
+                &in_cfg.tag,
+                in_cfg.protocol.clone(),
+                &in_cfg.stream_settings,
+            )?;
             let addr: SocketAddr = format!("{}:{}", in_cfg.listen, in_cfg.port)
                 .parse()
                 .with_context(|| format!("invalid listen address for inbound '{}'", in_cfg.tag))?;

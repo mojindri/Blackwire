@@ -28,6 +28,9 @@ pub mod quic;
 pub mod tls;
 pub mod ws;
 
+/// HTTPUpgrade transport (Xray `httpupgrade` network).
+pub mod httpupgrade;
+
 // Phase 4+
 /// TUN transport runtime and packet helpers for full-device proxying.
 pub mod tun;
@@ -70,6 +73,7 @@ pub use tls::{
 pub use tun::{
     build_tcp_rst, create_tun, IpPacket, TransportProtocol, TunConfig, TunRuntime, UdpNatTable,
 };
+pub use httpupgrade::dial_httpupgrade;
 pub use ws::{ws_accept, ws_connect, WsConnectConfig};
 
 // Re-export quinn's congestion module so downstream crates can implement

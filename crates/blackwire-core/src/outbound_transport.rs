@@ -21,11 +21,12 @@ use blackwire_app::features::OutboundHandler;
 use blackwire_common::{tcp_connect, Address, BoxedStream, ProxyError};
 use blackwire_config::schema::{NetworkType, SecurityType, StreamSettingsConfig};
 use blackwire_protocol::trojan::{compute_token, connect_trojan_on_stream};
+use blackwire_protocol::vless::codec::Command;
 use blackwire_protocol::vless::connect_vless_on_stream;
 use blackwire_protocol::vmess::{auth::cmd_key, connect_vmess_on_stream};
 use blackwire_transport::{
-    grpc_connect, mkcp_connect, shadowtls_v3_connect, tls_connect, ws_connect, MkcpClientConfig,
-    WsConnectConfig,
+    dial_httpupgrade, grpc_connect, mkcp_connect, shadowtls_v3_connect, tls_connect, ws_connect,
+    MkcpClientConfig, WsConnectConfig,
 };
 
 /// VLESS outbound that honors `streamSettings.network = "ws"` and
@@ -65,7 +66,7 @@ impl OutboundHandler for TransportVlessOutbound {
     async fn connect(&self, _ctx: &Context, dest: &Address) -> Result<BoxedStream, ProxyError> {
         debug!(server = %self.server, dest = %dest, "VLESS transport outbound connecting");
         let stream = connect_transport(self.server, &self.stream_settings).await?;
-        connect_vless_on_stream(stream, &self.uuid, &self.flow, dest).await
+        connect_vless_on_stream(stream, &self.uuid, &self.flow, Command::Tcp, dest).await
     }
 }
 
@@ -158,6 +159,21 @@ async fn connect_transport(
             .await
             .map_err(|e| ProxyError::Transport(format!("mKCP connect failed: {e}")))?;
         return Ok(Box::new(stream));
+    }
+
+    if uses_httpupgrade(stream_settings) {
+        let Some(settings) = stream_settings.as_ref() else {
+            return Err(ProxyError::Protocol(
+                "network=httpupgrade requested without streamSettings".into(),
+            ));
+        };
+        let host = settings
+            .tls_settings
+            .as_ref()
+            .map(|t| t.server_name.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("localhost");
+        return dial_httpupgrade(server, host, settings).await;
     }
 
     let tcp = tcp_connect(server).await?;
@@ -284,8 +300,15 @@ pub(crate) fn uses_outbound_transport(stream_settings: &Option<StreamSettingsCon
     uses_tls(stream_settings)
         || uses_shadowtls(stream_settings)
         || uses_kcp(stream_settings)
+        || uses_httpupgrade(stream_settings)
         || uses_ws(stream_settings)
         || uses_grpc(stream_settings)
+}
+
+fn uses_httpupgrade(stream_settings: &Option<StreamSettingsConfig>) -> bool {
+    stream_settings
+        .as_ref()
+        .is_some_and(|s| s.network == NetworkType::HttpUpgrade)
 }
 
 fn uses_grpc(stream_settings: &Option<StreamSettingsConfig>) -> bool {

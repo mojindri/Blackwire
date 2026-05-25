@@ -3,6 +3,8 @@
 Last updated against the `blackwire-*` workspace crates, `tests/tests/` e2e
 suite, `labs/realistic/` interop lab, and GitHub Actions (CI + cross-platform).
 
+**Source of truth:** Wire behavior and “Supported” labels follow [Xray-core](https://github.com/XTLS/Xray-core) and [sing-box](https://github.com/SagerNet/sing-box) implementations plus real clients in the realistic lab — not blackwire’s schema or this table alone. See [xray-parity-source-of-truth.md](xray-parity-source-of-truth.md).
+
 Status labels:
 
 | Label | Meaning |
@@ -46,11 +48,11 @@ Outbound handlers: `Freedom`, `Vless`, `Hysteria2`, `Trojan`, `Vmess`, `Shadowso
 | Protocol | Inbound | Outbound | Status | Evidence / notes |
 |---|---:|---:|---|---|
 | SOCKS5 (TCP CONNECT) | Yes | No | **Supported** | `blackwire-protocol/socks.rs`; e2e `e2e_socks5_vless.rs` |
-| SOCKS5 UDP ASSOCIATE | No | No | **Unsupported** | Explicitly not implemented (`socks.rs`) |
+| SOCKS5 UDP ASSOCIATE | Yes | Partial | **Partial** | `socks5_udp.rs` + TCP control channel; lab scenario `vless-udp` for VLESS path |
 | HTTP CONNECT | Yes | No | **Supported** | `http_connect.rs`, `blackwire-core/http.rs`; e2e `e2e_http_connect.rs` |
 | Freedom / direct | No | Yes | **Supported** | `freedom.rs` — default direct outbound |
 | VLESS (TCP) | Yes | Yes | **Supported** | `vless/`; golden + e2e matrix |
-| VLESS UDP command | No | No | **Unsupported** | `vless/codec.rs` — UDP command not handled |
+| VLESS UDP command | Yes | Partial | **Partial** | `vless/udp.rs` inbound relay; lab scenario pending |
 | VLESS flow `xtls-rprx-vision` | Partial | Partial | **Partial** | Encoded on wire; inbound logs and continues without Vision splice (`vless/inbound.rs` TODO) |
 | VMess AEAD | Yes | Yes | **Supported** | `vmess/`; legacy **alterId unsupported** |
 | Trojan (TCP) | Yes | Yes | **Supported** | `trojan/`; e2e `e2e_trojan/` |
@@ -80,7 +82,7 @@ TCP accept in `instance/mod.rs`. Hysteria2 uses its own QUIC listener.
 | QUIC (`network: quic` for VLESS/VMess) | **Unsupported** | `NetworkType::Quic` in schema only; QUIC used inside Hysteria2, not generic stream stack |
 | Hysteria2 (QUIC + HTTP/3 auth) | **Experimental** | `hysteria2/` — TCP stream proxy + UDP datagram path |
 | TUN transparent proxy | **Partial** | `transport/tun/` when `config.tun` set; privileged tests `tun_priv.rs` (`#[ignore]` without root / `priv-test`) |
-| HTTPUpgrade | **Unsupported** | No runtime handler |
+| HTTPUpgrade | **Partial** | `blackwire-transport/httpupgrade.rs` outbound dial; interop lab pending |
 | SplitHTTP / xHTTP | **Unsupported** | `NetworkType::SplitHttp` in schema only; no transport implementation |
 
 ---
@@ -91,11 +93,11 @@ TCP accept in `instance/mod.rs`. Hysteria2 uses its own QUIC listener.
 |---|---|---|
 | System resolver (empty `servers`) | **Supported** | `dns/resolver.rs` — hickory system config |
 | Custom upstream (plain IP, UDP 53) | **Supported** | Parsed into hickory `NameServerConfig` |
-| DoH / DoT upstream URLs | **Unsupported** | Skipped with warning at build (`resolver.rs`) |
+| DoH / DoT upstream URLs | **Supported** | `https://` / `tls://` parsed in `dns/resolver.rs` (hickory) |
 | FakeIP pool + restore on dispatch | **Supported** | `dns/fakeip.rs`, dispatcher; startup rejects invalid pool (`production_readiness`) |
 | DNS response cache | **Supported** | `dns/cache.rs` |
-| `domain_strategy` (routing) | **Unsupported** | Field in schema; not used in `router.rs` |
-| Sniffing (`http` / `tls` / `fakedns`) | **Unsupported** | `SniffingConfig` in schema; `Context.sniffed_protocol` never populated from core |
+| `domain_strategy` (routing) | **Partial** | `UseIP`/`UseIpv4`/`UseIpv6` resolve domain before routing in dispatcher; `IPIfNonMatch` not yet |
+| Sniffing (`http` / `tls` / `fakedns`) | **Partial** | `blackwire-app/sniff.rs` + dispatcher destOverride; protocol routing rules; needs external-client lab |
 
 ---
 
@@ -131,7 +133,7 @@ TCP accept in `instance/mod.rs`. Hysteria2 uses its own QUIC listener.
 | Hot-reload listeners / new tags / TLS keys | **Unsupported** | Documented in `reload.rs` — requires restart |
 | Per-inbound / global `max_connections` | **Partial** | TCP accept path in `transport/tcp.rs` + config limits; not all protocols share the same limit surface |
 | Prometheus HTTP (`metricsAddr`) | **Supported** | `metrics.rs` — `/metrics`, `/healthz`, `/readyz`, `/version` |
-| Per-connection Prometheus counters | **Partial** | `record_connection_*` exists; **not** called from dispatcher/TCP hot path (only tests / `tests/observability`) |
+| Per-connection Prometheus counters | **Supported** | `record_connection_*` called from `dispatcher` after each relay |
 | v2ray gRPC Stats / Handler API | **Unsupported** | `blackwire-api` is a Phase 6 stub; `stats` / `api` config keys unused in core |
 
 ---
