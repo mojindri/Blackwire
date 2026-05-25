@@ -32,6 +32,8 @@ COPY crates/blackwire-app/Cargo.toml    crates/blackwire-app/
 COPY crates/blackwire-tls/Cargo.toml    crates/blackwire-tls/
 COPY crates/blackwire-api/Cargo.toml    crates/blackwire-api/
 COPY tests/Cargo.toml               tests/
+COPY benches/Cargo.toml             benches/
+COPY benches/benches/               benches/benches/
 
 # Create stub lib/main.rs files so cargo can resolve dependencies.
 # These will be replaced by the full source copy below.
@@ -46,6 +48,7 @@ RUN cargo fetch
 # Copy the full source.
 COPY crates/ crates/
 COPY tests/ tests/
+COPY benches/ benches/
 COPY fingerprints/ fingerprints/
 
 # Build the release binary with maximum optimisations.

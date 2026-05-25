@@ -332,6 +332,73 @@ pub fn encode_request(
     Ok(buf.freeze())
 }
 
+/// Encode port + address for a VLESS UDP packet (Xray `EncodeUDPPacket` address section).
+pub fn encode_address_port(dest: &Address) -> Result<Vec<u8>, ProxyError> {
+    let mut buf = BytesMut::with_capacity(64);
+    buf.put_u16(dest.port());
+    match dest {
+        Address::Ipv4(ip, _) => {
+            buf.put_u8(ATYP_IPV4);
+            buf.put_slice(&ip.octets());
+        }
+        Address::Ipv6(ip, _) => {
+            buf.put_u8(ATYP_IPV6);
+            buf.put_slice(&ip.octets());
+        }
+        Address::Domain(name, _) => {
+            buf.put_u8(ATYP_DOMAIN);
+            buf.put_u8(domain_wire_len(name)?);
+            buf.put_slice(name.as_bytes());
+        }
+    }
+    Ok(buf.to_vec())
+}
+
+/// Decode port + address from a VLESS UDP packet address section.
+pub fn decode_address_port(data: &[u8]) -> Result<Address, ProxyError> {
+    if data.len() < 4 {
+        return Err(ProxyError::Protocol("VLESS UDP address too short".into()));
+    }
+    let port = u16::from_be_bytes([data[0], data[1]]);
+    let atyp = data[2];
+    let mut cursor = std::io::Cursor::new(&data[3..]);
+    decode_address_sync(&mut cursor, atyp, port)
+}
+
+fn decode_address_sync(
+    cursor: &mut std::io::Cursor<&[u8]>,
+    atyp: u8,
+    port: u16,
+) -> Result<Address, ProxyError> {
+    use std::io::Read;
+    let read_err = |e: std::io::Error| ProxyError::Protocol(e.to_string());
+    match atyp {
+        ATYP_IPV4 => {
+            let mut buf = [0u8; 4];
+            Read::read_exact(cursor, &mut buf).map_err(read_err)?;
+            Ok(Address::Ipv4(std::net::Ipv4Addr::from(buf), port))
+        }
+        ATYP_IPV6 => {
+            let mut buf = [0u8; 16];
+            Read::read_exact(cursor, &mut buf).map_err(read_err)?;
+            Ok(Address::Ipv6(std::net::Ipv6Addr::from(buf), port))
+        }
+        ATYP_DOMAIN => {
+            let mut len = [0u8; 1];
+            Read::read_exact(cursor, &mut len).map_err(read_err)?;
+            let len = len[0] as usize;
+            let mut name = vec![0u8; len];
+            Read::read_exact(cursor, &mut name).map_err(read_err)?;
+            let domain = String::from_utf8(name)
+                .map_err(|_| ProxyError::Protocol("domain name is not valid UTF-8".into()))?;
+            Ok(Address::Domain(domain, port))
+        }
+        other => Err(ProxyError::Protocol(format!(
+            "unknown VLESS ATYP {other:#x}"
+        ))),
+    }
+}
+
 /// Encode a VLESS response header (server → client).
 ///
 /// The response header is minimal: just version (0) and addons length (0).
