@@ -32,6 +32,12 @@ SUMMARY="$REPORT_DIR/summary.txt"
 mkdir -p "$REPORT_DIR/logs"
 : > "$SUMMARY"
 
+LOCKDIR="$REPORT_DIR/.matrix.lock.d"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+    echo "ERROR: external-client VPS matrix already running (lock: $LOCKDIR)" >&2
+    exit 1
+fi
+
 SSH_OPTS=(-p "$SSH_PORT")
 SCP_OPTS=(-P "$SSH_PORT")
 if [[ -n "$SSH_KEY" ]]; then
@@ -67,6 +73,7 @@ port_for_protocol() {
     case "$1" in
         trojan-tls) echo 8445 ;;
         vless-tcp) echo 10080 ;;
+        vless-udp) echo 10081 ;;
         vless-ws) echo 8443 ;;
         vmess-grpc) echo 8444 ;;
         ss2022) echo 8388 ;;
@@ -89,8 +96,18 @@ cleanup_server() {
 cleanup_all() {
     cleanup_client
     cleanup_server
+    rmdir "$LOCKDIR" 2>/dev/null || true
 }
 trap cleanup_all EXIT
+
+assert_single_client() {
+    local n
+    n="$(ssh_client 'docker ps -q --filter name=external-xray-client --filter name=external-sing-box-client 2>/dev/null | wc -l' 2>/dev/null | tr -d ' ')"
+    if [[ "${n:-0}" -gt 1 ]]; then
+        echo "ERROR: multiple external clients on VPS; sequential matrix violated" >&2
+        exit 1
+    fi
+}
 
 echo "==> Rendering external-client VPS configs" > "$REPORT_DIR/render.log"
 EXTERNAL_SERVER_ADDRESS="$SERVER_HOST" \
@@ -124,6 +141,7 @@ run_one() {
     fi
 
     cleanup_all
+    assert_single_client
 
     ssh_server "nohup /usr/local/bin/blackwire run -c '/etc/blackwire/generated/${server_cfg}' > '/tmp/blackwire-external-${protocol}.log' 2>&1 & echo \$! > /tmp/blackwire-external.pid" \
         >> "$log" 2>&1
@@ -144,6 +162,7 @@ run_one() {
         ssh_client "docker run -d --rm --name external-sing-box-client --network host -v '${REMOTE_DIR}/generated/sing-box:/generated/sing-box:ro' ghcr.io/sagernet/sing-box:latest run -c '/generated/sing-box/${client_cfg}'" \
             >> "$log" 2>&1
     fi
+    assert_single_client
 
     if ssh_client "for i in \$(seq 1 20); do curl -fsS --max-time 3 --socks5-hostname 127.0.0.1:1080 '${TARGET_URL}' >/dev/null && exit 0; sleep 1; done; exit 1" \
         >> "$log" 2>&1; then
@@ -176,6 +195,7 @@ run_negative() {
     fi
 
     cleanup_all
+    assert_single_client
 
     ssh_server "nohup /usr/local/bin/blackwire run -c '/etc/blackwire/generated/${server_cfg}' > '/tmp/blackwire-external-${protocol}.log' 2>&1 & echo \$! > /tmp/blackwire-external.pid" \
         >> "$log" 2>&1
@@ -196,6 +216,7 @@ run_negative() {
         ssh_client "docker run -d --rm --name external-sing-box-client --network host -v '${REMOTE_DIR}/generated:/generated:ro' ghcr.io/sagernet/sing-box:latest run -c '/generated/${root}/${client_cfg}'" \
             >> "$log" 2>&1
     fi
+    assert_single_client
 
     if ssh_client "for i in \$(seq 1 20); do curl -fsS --max-time 3 --socks5-hostname 127.0.0.1:1080 '${TARGET_URL}' >/dev/null && exit 0; sleep 1; done; exit 1" \
         >> "$log" 2>&1; then
