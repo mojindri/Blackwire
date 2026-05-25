@@ -12,7 +12,9 @@ const MAX_SNIFF: usize = 8192;
 /// Result of sniffing the start of a connection.
 #[derive(Debug, Clone, Default)]
 pub struct SniffResult {
+    /// Sniffed protocol label (`http`, `tls`, …).
     pub protocol: Option<String>,
+    /// Sniffed host / SNI when detected.
     pub domain: Option<String>,
 }
 
@@ -37,6 +39,7 @@ pub async fn sniff_stream(
     Ok((stream, result))
 }
 
+/// Analyze buffered bytes without consuming the stream.
 pub fn analyze_peek(peek: &[u8], config: &SniffingConfig) -> SniffResult {
     let want_http = config.dest_override.iter().any(|p| p == "http");
     let want_tls = config.dest_override.iter().any(|p| p == "tls");
@@ -63,11 +66,7 @@ pub fn analyze_peek(peek: &[u8], config: &SniffingConfig) -> SniffResult {
 }
 
 /// Apply destOverride: replace IP destination with sniffed domain when configured.
-pub fn apply_dest_override(
-    dest: Address,
-    sniff: &SniffResult,
-    config: &SniffingConfig,
-) -> Address {
+pub fn apply_dest_override(dest: Address, sniff: &SniffResult, config: &SniffingConfig) -> Address {
     if !config.enabled {
         return dest;
     }
@@ -76,7 +75,11 @@ pub fn apply_dest_override(
     };
     match dest {
         Address::Ipv4(_, port) | Address::Ipv6(_, port) => {
-            if config.dest_override.iter().any(|p| p == "http" || p == "tls") {
+            if config
+                .dest_override
+                .iter()
+                .any(|p| p == "http" || p == "tls")
+            {
                 Address::Domain(domain.clone(), port)
             } else {
                 dest

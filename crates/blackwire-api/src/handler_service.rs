@@ -1,3 +1,5 @@
+//! Xray `HandlerService` gRPC (inbound/outbound tags and VLESS user ops).
+
 use prost::Message;
 use tonic::{Request, Response, Status};
 
@@ -17,11 +19,13 @@ use crate::vless_account_proto::Account;
 const ADD_USER_TYPE: &str = "xray.app.proxyman.command.AddUserOperation";
 const REMOVE_USER_TYPE: &str = "xray.app.proxyman.command.RemoveUserOperation";
 
+/// HandlerService backed by [`ManagementHandle`].
 pub struct HandlerServiceImpl {
     management: ManagementHandle,
 }
 
 impl HandlerServiceImpl {
+    /// Create a service using the shared runtime management handle.
     pub fn new(management: ManagementHandle) -> Self {
         Self { management }
     }
@@ -82,7 +86,7 @@ impl HandlerService for HandlerServiceImpl {
         let records = self
             .management
             .list_vless_users(&req.tag, &req.email)
-            .map_err(|e| Status::failed_precondition(e))?;
+            .map_err(Status::failed_precondition)?;
         let users = records
             .into_iter()
             .map(|r| {
@@ -128,11 +132,10 @@ impl HandlerService for HandlerServiceImpl {
                 .and_then(|a| Account::decode(a.value.as_slice()).ok())
                 .map(|a| a.flow)
                 .unwrap_or_default();
-            let uuid = parse_vless_uuid_from_user(&user)
-                .map_err(|e| Status::invalid_argument(e))?;
+            let uuid = parse_vless_uuid_from_user(&user).map_err(Status::invalid_argument)?;
             self.management
                 .add_vless_user(&tag, &email, &uuid, &flow)
-                .map_err(|e| Status::failed_precondition(e))?;
+                .map_err(Status::failed_precondition)?;
             return Ok(Response::new(AlterInboundResponse {}));
         }
 
@@ -142,7 +145,7 @@ impl HandlerService for HandlerServiceImpl {
             })?;
             self.management
                 .remove_vless_user(&tag, &remove.email)
-                .map_err(|e| Status::not_found(e))?;
+                .map_err(Status::not_found)?;
             return Ok(Response::new(AlterInboundResponse {}));
         }
 
@@ -178,21 +181,27 @@ impl HandlerService for HandlerServiceImpl {
         &self,
         _request: Request<RemoveInboundRequest>,
     ) -> Result<Response<RemoveInboundResponse>, Status> {
-        Err(Status::unimplemented("RemoveInbound requires instance restart"))
+        Err(Status::unimplemented(
+            "RemoveInbound requires instance restart",
+        ))
     }
 
     async fn add_outbound(
         &self,
         _request: Request<AddOutboundRequest>,
     ) -> Result<Response<AddOutboundResponse>, Status> {
-        Err(Status::unimplemented("AddOutbound requires instance restart"))
+        Err(Status::unimplemented(
+            "AddOutbound requires instance restart",
+        ))
     }
 
     async fn remove_outbound(
         &self,
         _request: Request<RemoveOutboundRequest>,
     ) -> Result<Response<RemoveOutboundResponse>, Status> {
-        Err(Status::unimplemented("RemoveOutbound requires instance restart"))
+        Err(Status::unimplemented(
+            "RemoveOutbound requires instance restart",
+        ))
     }
 
     async fn alter_outbound(

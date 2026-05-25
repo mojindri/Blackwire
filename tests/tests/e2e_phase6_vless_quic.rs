@@ -80,7 +80,11 @@ fn write_temp_tls_files() -> (PathBuf, PathBuf) {
     (cert_path, key_path)
 }
 
-fn server_config(vless_port: u16, cert_path: &Path, key_path: &Path) -> Arc<blackwire_config::schema::Config> {
+fn server_config(
+    vless_port: u16,
+    cert_path: &Path,
+    key_path: &Path,
+) -> Arc<blackwire_config::schema::Config> {
     parse_config(format!(
         r#"{{
             "inbounds": [{{
@@ -144,9 +148,10 @@ async fn phase6_vless_quic_echo() {
     let vless_port = unused_local_port();
     let socks_port = unused_local_port();
 
-    let _server = blackwire_core::Instance::from_config(server_config(vless_port, &cert_path, &key_path))
-        .await
-        .expect("server start failed");
+    let _server =
+        blackwire_core::Instance::from_config(server_config(vless_port, &cert_path, &key_path))
+            .await
+            .expect("server start failed");
     let _client = blackwire_core::Instance::from_config(client_config(socks_port, vless_port))
         .await
         .expect("client start failed");
