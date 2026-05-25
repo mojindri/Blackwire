@@ -150,9 +150,10 @@ impl Router for LiveRouter {
 
     fn has_ip_rules(&self) -> bool {
         let inner = self.inner.load();
-        inner.rules.iter().any(|r| {
-            r.ip_matcher.is_some() || !r.geoip_codes.is_empty()
-        })
+        inner
+            .rules
+            .iter()
+            .any(|r| r.ip_matcher.is_some() || !r.geoip_codes.is_empty())
     }
 
     fn pick_route_match(&self, ctx: &RoutingContext<'_>) -> (Route, bool) {
@@ -178,7 +179,11 @@ impl Router for LiveRouter {
 
 /// Normalize Xray `routing.domainStrategy` spelling.
 pub fn normalize_routing_domain_strategy(strategy: Option<&str>) -> RoutingDomainStrategy {
-    match strategy.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+    match strategy
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("ipifnonmatch") => RoutingDomainStrategy::IpIfNonMatch,
         Some("ipondemand") => RoutingDomainStrategy::IpOnDemand,
         _ => RoutingDomainStrategy::AsIs,
@@ -188,8 +193,11 @@ pub fn normalize_routing_domain_strategy(strategy: Option<&str>) -> RoutingDomai
 /// Xray [`routing.domainStrategy`](https://xtls.github.io/en/config/routing.html).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoutingDomainStrategy {
+    /// Route using the destination as given (no extra DNS for routing).
     AsIs,
+    /// Resolve domain when no domain rule matches, then retry IP rules.
     IpIfNonMatch,
+    /// Resolve domain before the first route attempt.
     IpOnDemand,
 }
 
@@ -487,9 +495,7 @@ mod tests {
             outbound_tag: Arc::from("direct"),
             domain_matcher: None,
             geosite_codes: vec![],
-            ip_matcher: Some(
-                IpMatcher::new(vec!["203.0.113.0/24".into()]).expect("cidr"),
-            ),
+            ip_matcher: Some(IpMatcher::new(vec!["203.0.113.0/24".into()]).expect("cidr")),
             geoip_codes: vec![],
             port_ranges: vec![],
             inbound_tags: vec![],
