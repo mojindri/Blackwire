@@ -1,4 +1,5 @@
 SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
 
 ROOT := ../..
 REPORTS := reports
@@ -72,22 +73,25 @@ xray: ## Deprecated: use make interop-client-reality
 	$(MAKE) interop-client-reality
 
 advanced-features-smoke: ## Smoke tests: ShadowTLS, mKCP, QUIC/SplitHTTP VLESS, health/failover, DNS/geo routing guards
-	@mkdir -p $(REPORTS)
-	@echo "=== [advanced-features-smoke] VLESS QUIC ===" | tee $(REPORTS)/advanced-features-smoke.log
-	cd $(ROOT) && cargo test -p integration-tests phase6_vless_quic_echo 2>&1 | tee -a $(REPORTS)/advanced-features-smoke.log
-	@echo "=== [advanced-features-smoke] VLESS SplitHTTP ===" | tee -a $(REPORTS)/advanced-features-smoke.log
-	cd $(ROOT) && cargo test -p integration-tests phase6_vless_splithttp_echo 2>&1 | tee -a $(REPORTS)/advanced-features-smoke.log
-	@echo "=== [advanced-features-smoke] ShadowTLS v3 ===" | tee -a $(REPORTS)/advanced-features-smoke.log
-	cd $(ROOT) && cargo test -p integration-tests phase7_vless_over_shadowtls_v3_transfers_data 2>&1 | tee -a $(REPORTS)/advanced-features-smoke.log
-	@echo "=== [advanced-features-smoke] mKCP ===" | tee -a $(REPORTS)/advanced-features-smoke.log
-	cd $(ROOT) && cargo test -p integration-tests phase8_vless_over_mkcp 2>&1 | tee -a $(REPORTS)/advanced-features-smoke.log
-	@echo "=== [advanced-features-smoke] health / failover guards ===" | tee -a $(REPORTS)/advanced-features-smoke.log
-	cd $(ROOT) && cargo test -p blackwire-core --test production_readiness balancer_rejects_missing_selector_outbound 2>&1 | tee -a $(REPORTS)/advanced-features-smoke.log
-	cd $(ROOT) && cargo test -p blackwire-core --test production_readiness balancer_rejects_unsupported_health_check_scheme 2>&1 | tee -a $(REPORTS)/advanced-features-smoke.log
-	cd $(ROOT) && cargo test -p blackwire-core --test production_readiness routing_rule_can_target_registered_balancer 2>&1 | tee -a $(REPORTS)/advanced-features-smoke.log
-	@echo "=== [advanced-features-smoke] DNS / geo / FakeIP guards ===" | tee -a $(REPORTS)/advanced-features-smoke.log
-	cd $(ROOT) && cargo test -p blackwire-core --test production_readiness routing_geo_database_paths_are_loaded_nonfatally_when_missing 2>&1 | tee -a $(REPORTS)/advanced-features-smoke.log
-	cd $(ROOT) && cargo test -p blackwire-core --test production_readiness dns_fakeip_rejects_invalid_pool_at_startup 2>&1 | tee -a $(REPORTS)/advanced-features-smoke.log
+	@set -euo pipefail; \
+	log="$(CURDIR)/$(REPORTS)/advanced-features-smoke.log"; \
+	mkdir -p "$(CURDIR)/$(REPORTS)"; \
+	: > "$$log"; \
+	cd "$(ROOT)"; \
+	run() { \
+	  echo "=== [advanced-features-smoke] $$1 ===" | tee -a "$$log"; \
+	  shift; \
+	  cargo test --locked "$$@" 2>&1 | tee -a "$$log"; \
+	}; \
+	run "VLESS QUIC" -p integration-tests --test e2e_phase6_vless_quic phase6_vless_quic_echo; \
+	run "VLESS SplitHTTP" -p integration-tests --test e2e_phase6_vless_splithttp phase6_vless_splithttp_echo; \
+	run "ShadowTLS v3" -p integration-tests --test e2e_phase7_shadowtls phase7_vless_over_shadowtls_v3_transfers_data; \
+	run "mKCP" -p integration-tests --test e2e_phase8_mkcp phase8_vless_over_mkcp; \
+	run "health / failover guards" -p blackwire-core --test production_readiness balancer_rejects_missing_selector_outbound; \
+	run "health / failover guards" -p blackwire-core --test production_readiness balancer_rejects_unsupported_health_check_scheme; \
+	run "health / failover guards" -p blackwire-core --test production_readiness routing_rule_can_target_registered_balancer; \
+	run "DNS / geo / FakeIP guards" -p blackwire-core --test production_readiness routing_geo_database_paths_are_loaded_nonfatally_when_missing; \
+	run "DNS / geo / FakeIP guards" -p blackwire-core --test production_readiness dns_fakeip_rejects_invalid_pool_at_startup
 
 negative-auth: ## Run negative-auth scenarios that should be rejected/fallback
 	@mkdir -p $(REPORTS)
