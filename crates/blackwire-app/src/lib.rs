@@ -21,6 +21,7 @@ pub mod health;
 pub mod metrics;
 mod relay;
 pub mod router;
+pub mod sniff;
 
 pub use balancer::Balancer;
 pub use context::Context;

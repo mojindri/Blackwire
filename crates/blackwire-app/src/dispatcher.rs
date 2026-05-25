@@ -23,17 +23,21 @@
 //! kernel pipes without copying them into userspace. Non-Linux builds and
 //! non-raw streams keep using `copy_bidirectional`.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use async_trait::async_trait;
 use tracing::{debug, info, instrument, warn};
 
+use std::collections::HashMap;
+
 use blackwire_common::{Address, BoxedStream, ProxyError};
+use blackwire_config::schema::SniffingConfig;
 
 use crate::context::Context;
 use crate::dns::DnsModule;
 use crate::features::OutboundHandler;
+use crate::metrics::{record_connection_accepted, record_connection_closed};
 use crate::router::Router;
 
 /// The dispatcher connects inbounds to outbounds by consulting the router
@@ -62,6 +66,7 @@ pub struct DefaultDispatcher {
     router: Arc<dyn Router>,
     outbounds: std::collections::HashMap<String, Arc<dyn OutboundHandler>>,
     dns: Option<Arc<DnsModule>>,
+    sniffing: Arc<RwLock<HashMap<String, SniffingConfig>>>,
 }
 
 impl DefaultDispatcher {
@@ -78,6 +83,21 @@ impl DefaultDispatcher {
             router,
             outbounds,
             dns: None,
+            sniffing: Arc::new(RwLock::new(HashMap::new())),
+        })
+    }
+
+    /// Create a dispatcher with per-inbound sniffing settings (Xray `sniffing`).
+    pub fn new_with_sniffing(
+        router: Arc<dyn Router>,
+        outbounds: std::collections::HashMap<String, Arc<dyn OutboundHandler>>,
+        sniffing: Arc<RwLock<HashMap<String, SniffingConfig>>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            router,
+            outbounds,
+            dns: None,
+            sniffing,
         })
     }
 
@@ -94,6 +114,22 @@ impl DefaultDispatcher {
             router,
             outbounds,
             dns: Some(dns),
+            sniffing: Arc::new(RwLock::new(HashMap::new())),
+        })
+    }
+
+    /// Dispatcher with DNS and sniffing.
+    pub fn new_with_dns_and_sniffing(
+        router: Arc<dyn Router>,
+        outbounds: std::collections::HashMap<String, Arc<dyn OutboundHandler>>,
+        dns: Arc<DnsModule>,
+        sniffing: Arc<RwLock<HashMap<String, SniffingConfig>>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            router,
+            outbounds,
+            dns: Some(dns),
+            sniffing,
         })
     }
 }
@@ -103,11 +139,32 @@ impl Dispatcher for DefaultDispatcher {
     #[instrument(skip(self, inbound_stream), fields(dest = %dest, inbound = %ctx.inbound_tag))]
     async fn dispatch(
         &self,
-        ctx: Context,
-        dest: Address,
-        inbound_stream: BoxedStream,
+        mut ctx: Context,
+        mut dest: Address,
+        mut inbound_stream: BoxedStream,
     ) -> Result<(), ProxyError> {
+        let sniff_cfg = self
+            .sniffing
+            .read()
+            .ok()
+            .and_then(|g| g.get(&ctx.inbound_tag).cloned());
+        if let Some(cfg) = sniff_cfg {
+            if cfg.enabled && matches!(dest, Address::Ipv4(..) | Address::Ipv6(..)) {
+                let (stream, sniff) = crate::sniff::sniff_stream(inbound_stream, &cfg).await?;
+                inbound_stream = stream;
+                dest = crate::sniff::apply_dest_override(dest, &sniff, &cfg);
+                ctx = ctx.with_sniff(sniff.protocol, sniff.domain);
+            }
+        }
+
         let dest = self.restore_fakeip_destination(dest);
+        let dest = self.apply_domain_strategy(dest).await;
+
+        let protocol_label = ctx
+            .sniffed_protocol
+            .as_deref()
+            .unwrap_or("tcp");
+        record_connection_accepted(&ctx.inbound_tag, protocol_label);
 
         // Step 1: Ask the router which outbound to use.
         let routing_ctx = crate::router::RoutingContext {
@@ -115,6 +172,8 @@ impl Dispatcher for DefaultDispatcher {
             network: blackwire_common::Network::Tcp,
             inbound_tag: &ctx.inbound_tag,
             user: ctx.user.as_deref(),
+            sniffed_protocol: ctx.sniffed_protocol.as_deref(),
+            sniffed_domain: ctx.sniffed_domain.as_deref(),
         };
         let route = self.router.pick_route(&routing_ctx)?;
 
@@ -160,7 +219,7 @@ impl Dispatcher for DefaultDispatcher {
 
         let elapsed = start.elapsed();
 
-        match result {
+        match &result {
             Ok((up, down)) => {
                 info!(
                     outbound = %route.outbound_tag,
@@ -183,11 +242,48 @@ impl Dispatcher for DefaultDispatcher {
             }
         }
 
+        let (rx_bytes, tx_bytes) = result.unwrap_or((0, 0));
+        record_connection_closed(&ctx.inbound_tag, rx_bytes, tx_bytes, elapsed);
+
         Ok(())
     }
 }
 
 impl DefaultDispatcher {
+    async fn apply_domain_strategy(&self, dest: Address) -> Address {
+        let strategy = self.router.domain_strategy();
+        let use_ip = strategy.as_deref().is_some_and(|s| {
+            s.eq_ignore_ascii_case("useip")
+                || s.eq_ignore_ascii_case("useipv4")
+                || s.eq_ignore_ascii_case("useipv6")
+        });
+        if !use_ip {
+            return dest;
+        }
+        let Address::Domain(name, port) = dest else {
+            return dest;
+        };
+        if let Some(dns) = &self.dns {
+            if let Ok(ips) = dns.resolve(&name).await {
+                if let Some(ip) = ips.first() {
+                    return match ip {
+                        std::net::IpAddr::V4(v4) => Address::Ipv4(*v4, port),
+                        std::net::IpAddr::V6(v6) => Address::Ipv6(*v6, port),
+                    };
+                }
+            }
+        }
+        if let Ok(mut addrs) = tokio::net::lookup_host((name.as_str(), port)).await {
+            if let Some(addr) = addrs.next() {
+                return match addr {
+                    std::net::SocketAddr::V4(v4) => Address::Ipv4(*v4.ip(), port),
+                    std::net::SocketAddr::V6(v6) => Address::Ipv6(*v6.ip(), port),
+                };
+            }
+        }
+        Address::Domain(name, port)
+    }
+
     fn restore_fakeip_destination(&self, dest: Address) -> Address {
         let Some(dns) = &self.dns else {
             return dest;

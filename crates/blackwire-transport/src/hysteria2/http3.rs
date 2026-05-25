@@ -70,6 +70,7 @@ pub async fn serve_connection(
 
             let stream: BoxedStream = Box::new(ReunionStream::new(recv, send));
             let ctx = Context {
+                sniffed_domain: None,
                 source: None,
                 inbound_tag: tag,
                 user: None,

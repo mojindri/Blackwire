@@ -39,7 +39,7 @@ use blackwire_app::router::LiveRouter;
 use blackwire_config::schema::{Config, Protocol};
 use blackwire_protocol::vless::VlessUserRegistry;
 
-use crate::instance::{build_rules, load_geo_data, populate_vless_registry};
+use crate::instance::{build_rules, build_sniffing_map, load_geo_data, populate_vless_registry};
 
 /// Shared reload handles created at startup and updated on each config reload.
 ///
@@ -50,6 +50,8 @@ pub struct ReloadState {
     pub router: Arc<LiveRouter>,
     /// One VLESS user registry per inbound tag (key = inbound `tag`).
     pub vless_registries: Arc<DashMap<String, Arc<VlessUserRegistry>>>,
+    /// Per-inbound sniffing map (hot-swapped on reload).
+    pub sniffing: Arc<std::sync::RwLock<std::collections::HashMap<String, blackwire_config::schema::SniffingConfig>>>,
 }
 
 impl ReloadState {
@@ -72,8 +74,18 @@ impl ReloadState {
         };
 
         let (geoip, geosite) = load_geo_data(config.routing.as_ref());
-        self.router.swap(rules, default_tag, geoip, geosite);
+        let domain_strategy = config
+            .routing
+            .as_ref()
+            .and_then(|r| r.domain_strategy.clone());
+        self.router
+            .swap(rules, default_tag, geoip, geosite, domain_strategy);
         info!("routing rules hot-swapped");
+
+        if let Ok(mut guard) = self.sniffing.write() {
+            *guard = build_sniffing_map(&config.inbounds);
+            info!(count = guard.len(), "sniffing map hot-swapped");
+        }
 
         for in_cfg in &config.inbounds {
             if in_cfg.protocol != Protocol::Vless {
@@ -87,6 +99,29 @@ impl ReloadState {
 
         Ok(())
     }
+
+}
+
+/// Returns inbound tags whose listen address/port changed (requires process restart).
+///
+/// Matches Xray behavior: listener sockets are not recreated on `reload`.
+pub fn inbound_listener_changes(old: &Config, new: &Config) -> Vec<String> {
+    let mut changed = Vec::new();
+    for new_in in &new.inbounds {
+        let Some(old_in) = old.inbounds.iter().find(|i| i.tag == new_in.tag) else {
+            changed.push(new_in.tag.clone());
+            continue;
+        };
+        if old_in.listen != new_in.listen || old_in.port != new_in.port {
+            changed.push(new_in.tag.clone());
+        }
+    }
+    for new_in in &new.inbounds {
+        if !old.inbounds.iter().any(|i| i.tag == new_in.tag) {
+            changed.push(new_in.tag.clone());
+        }
+    }
+    changed
 }
 
 /// Collect every outbound tag referenced in the config so routing rules can be validated.

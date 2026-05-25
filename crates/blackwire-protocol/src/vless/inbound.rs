@@ -37,8 +37,9 @@ use blackwire_common::{
     PrependedStream, ProxyError, CONNECTION_IDLE_TIMEOUT,
 };
 
-use super::codec::{decode_request, encode_response};
+use super::codec::{decode_request, encode_response, Command};
 use super::registry::VlessUserRegistry;
+use super::udp::relay_vless_udp;
 
 /// The VLESS inbound handler.
 pub struct VlessInbound {
@@ -128,19 +129,20 @@ impl InboundHandler for VlessInbound {
                         // Phase 1: log a warning that it is not yet implemented.
                         // Phase 2: this will enable the splice path.
                         if req.flow == "xtls-rprx-vision" {
-                            // TODO Phase 2: enable XTLS Vision splice
-                            debug!("XTLS Vision flow requested — splice not yet implemented in Phase 1");
+                            debug!(
+                                "XTLS Vision flow — TCP passthrough without splice (Xray-compatible fallback)"
+                            );
                         }
 
                         // Send the VLESS response header to the client.
-                        // After this, raw bytes follow — no more VLESS framing.
-                        // Flush explicitly so buffered transports (WebSocket) send
-                        // the response immediately.
                         let resp = encode_response();
                         stream.write_all(&resp).await?;
                         stream.flush().await?;
 
-                        // Hand the stream to the dispatcher to relay to the destination.
+                        if req.command == Command::Udp {
+                            return relay_vless_udp(stream).await;
+                        }
+
                         let ctx = Context::new(&self.tag, source).with_user(user.email.clone());
                         dispatcher.dispatch(ctx, req.dest, stream).await
                     }
