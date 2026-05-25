@@ -156,7 +156,7 @@ async fn phase6_vless_quic_echo() {
         .await
         .expect("client start failed");
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     let mut stream = socks5_connect(socks_port, "127.0.0.1", echo_port).await;
     let payload = b"HELLO QUIC";
