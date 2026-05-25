@@ -41,6 +41,7 @@ stable: ## Run the stable Rust integration matrix
 	@mkdir -p $(REPORTS)
 	cd $(ROOT) && cargo test -p integration-tests 2>&1 | tee labs/realistic/$(REPORTS)/stable-matrix.log
 
+# External-client matrix: sequential only (one client at a time; see external-clients/README.md).
 interop-server-docker: build ## Server-compat: Xray/sing-box clients -> our server (Docker)
 	@mkdir -p $(REPORTS)/external-clients
 	@bash external-clients/scripts/run-docker-matrix.sh $(REPORTS)/external-clients configs/matrix.env
@@ -118,7 +119,7 @@ report-summary: ## Build a compact summary from report logs
 
 realistic-all: docker-full advanced-features-smoke negative-auth restart-smoke stress report-summary ## Full local baseline + advanced-feature smoke tests
 
-docker-full: docker-up stable interop-docker ## Run stable matrix + full Docker interop (server + client legs)
+docker-full: docker-up stable advanced-features-smoke interop-docker ## Stable matrix + ShadowTLS/mKCP smoke + Docker interop
 
 docker-down: ## Stop lab and interop containers
 	-docker compose -f docker-compose.yml down -v
