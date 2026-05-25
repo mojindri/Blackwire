@@ -224,7 +224,8 @@ impl Instance {
             .as_ref()
             .and_then(|r| r.domain_strategy.clone());
         let router = LiveRouter::new(rules, default_tag, geoip, geosite, domain_strategy.clone());
-        let sniffing_shared = Arc::new(std::sync::RwLock::new(build_sniffing_map(&config.inbounds)));
+        let sniffing_shared =
+            Arc::new(std::sync::RwLock::new(build_sniffing_map(&config.inbounds)));
         // Shared with the config watcher: router swap + VLESS registry refresh on reload.
         let inbound_tags: Arc<std::sync::RwLock<Vec<String>>> = Arc::new(std::sync::RwLock::new(
             config.inbounds.iter().map(|i| i.tag.clone()).collect(),
@@ -348,12 +349,12 @@ impl Instance {
                     );
                 }
 
-                let cert_pem = std::fs::read_to_string(&tls_cfg.certificate_file).with_context(|| {
-                    format!("cannot read QUIC cert file '{}'", tls_cfg.certificate_file)
-                })?;
-                let key_pem = std::fs::read_to_string(&tls_cfg.key_file).with_context(|| {
-                    format!("cannot read QUIC key file '{}'", tls_cfg.key_file)
-                })?;
+                let cert_pem =
+                    std::fs::read_to_string(&tls_cfg.certificate_file).with_context(|| {
+                        format!("cannot read QUIC cert file '{}'", tls_cfg.certificate_file)
+                    })?;
+                let key_pem = std::fs::read_to_string(&tls_cfg.key_file)
+                    .with_context(|| format!("cannot read QUIC key file '{}'", tls_cfg.key_file))?;
                 let endpoint = blackwire_transport::quic_server_endpoint(addr, &cert_pem, &key_pem)
                     .with_context(|| format!("binding QUIC inbound '{}'", in_cfg.tag))?;
                 let conn_handler = Arc::new(InboundConnectionHandler {
@@ -383,7 +384,9 @@ impl Instance {
                                             send,
                                         );
                                         tokio::spawn(async move {
-                                            if let Err(e) = conn_handler.handle_connection(stream, peer).await {
+                                            if let Err(e) =
+                                                conn_handler.handle_connection(stream, peer).await
+                                            {
                                                 error!(addr = %addr, error = %e, "QUIC inbound stream failed");
                                             }
                                         });
@@ -483,8 +486,7 @@ impl Instance {
             .as_ref()
             .and_then(blackwire_api::server::api_listen_addr)
         {
-            let management: blackwire_api::management::ManagementHandle =
-                Arc::new(reload.clone());
+            let management: blackwire_api::management::ManagementHandle = Arc::new(reload.clone());
             let handle = blackwire_api::server::start_api_server(&api_addr, management)
                 .with_context(|| format!("starting blackwire-api gRPC server on '{api_addr}'"))?;
             info!(addr = %api_addr, "blackwire-api gRPC server started");

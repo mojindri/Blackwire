@@ -38,7 +38,9 @@ use tracing::debug;
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::InboundHandler;
-use blackwire_common::{read_socks5_address, write_socks5_address, Address, BoxedStream, Network, ProxyError};
+use blackwire_common::{
+    read_socks5_address, write_socks5_address, Address, BoxedStream, Network, ProxyError,
+};
 use bytes::BytesMut;
 
 // ── SOCKS5 protocol constants ─────────────────────────────────────────────────
@@ -118,9 +120,9 @@ impl InboundHandler for Socks5Inbound {
                 let udp = tokio::net::UdpSocket::bind("0.0.0.0:0")
                     .await
                     .map_err(|e| ProxyError::Transport(format!("SOCKS5 UDP bind: {e}")))?;
-                let bind_addr = udp.local_addr().map_err(|e| {
-                    ProxyError::Transport(format!("SOCKS5 UDP local_addr: {e}"))
-                })?;
+                let bind_addr = udp
+                    .local_addr()
+                    .map_err(|e| ProxyError::Transport(format!("SOCKS5 UDP local_addr: {e}")))?;
                 send_bind_reply(&mut stream, REP_SUCCESS, bind_addr).await?;
                 crate::socks5_udp::relay_socks5_udp(stream, udp, source.ip()).await
             }
@@ -217,12 +219,7 @@ async fn socks5_handshake(stream: &mut BoxedStream) -> Result<Socks5Request, Pro
 /// The bound address is always 0.0.0.0:0 — we tell the client we succeeded
 /// (or failed) but do not bind a real address on its behalf.
 async fn send_reply(stream: &mut BoxedStream, rep: u8) -> Result<(), ProxyError> {
-    send_bind_reply(
-        stream,
-        rep,
-        SocketAddr::from(([0, 0, 0, 0], 0)),
-    )
-    .await
+    send_bind_reply(stream, rep, SocketAddr::from(([0, 0, 0, 0], 0))).await
 }
 
 async fn send_bind_reply(
