@@ -326,7 +326,10 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct KcpConfig {
     /// Packet obfuscation header type (`"none"`, `"srtp"`, `"wechat-video"`, etc.).
-    #[serde(default = "default_kcp_header", deserialize_with = "deserialize_kcp_header")]
+    #[serde(
+        default = "default_kcp_header",
+        deserialize_with = "deserialize_kcp_header"
+    )]
     pub header: String,
     /// Maximum transmission unit for KCP segments.
     #[serde(default = "default_kcp_mtu")]

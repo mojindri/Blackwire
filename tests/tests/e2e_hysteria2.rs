@@ -11,9 +11,9 @@ use blackwire_transport::hysteria2::proto::{
 };
 use blackwire_transport::hysteria2::tcp::{address_to_hysteria, hysteria_to_address};
 use blackwire_transport::BrutalCCFactory;
-use std::time::Duration;
 use http::header::{HeaderName, HeaderValue};
 use http::HeaderMap;
+use std::time::Duration;
 
 #[test]
 fn auth_headers_accept_valid_password() {
@@ -132,7 +132,11 @@ fn hysteria2_brutal_cc_window_stable_under_rapid_congestion_events() {
         let t = start + Duration::from_millis(i * 10);
         ctrl.on_congestion_event(t, t, i % 2 == 0, 500_000 + i);
     }
-    assert_eq!(base, ctrl.window(), "Brutal CC must ignore congestion (hostility)");
+    assert_eq!(
+        base,
+        ctrl.window(),
+        "Brutal CC must ignore congestion (hostility)"
+    );
 }
 
 #[test]
