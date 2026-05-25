@@ -52,7 +52,11 @@ pub struct ReloadState {
     /// One VLESS user registry per inbound tag (key = inbound `tag`).
     pub vless_registries: Arc<DashMap<String, Arc<VlessUserRegistry>>>,
     /// Per-inbound sniffing map (hot-swapped on reload).
-    pub sniffing: Arc<std::sync::RwLock<std::collections::HashMap<String, blackwire_config::schema::SniffingConfig>>>,
+    pub sniffing: Arc<
+        std::sync::RwLock<
+            std::collections::HashMap<String, blackwire_config::schema::SniffingConfig>,
+        >,
+    >,
     /// Inbound tags from the active config (HandlerService ListInbounds).
     pub inbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
     /// Outbound tags from the active config (HandlerService ListOutbounds).
@@ -129,11 +133,14 @@ impl blackwire_api::management::InboundManagement for ReloadState {
     }
 
     fn vless_user_count(&self, inbound_tag: &str) -> Option<i64> {
-        self.vless_registry(inbound_tag)
-            .map(|r| r.len() as i64)
+        self.vless_registry(inbound_tag).map(|r| r.len() as i64)
     }
 
-    fn list_vless_users(&self, inbound_tag: &str, email: &str) -> Result<Vec<blackwire_api::management::VlessUserRecord>, String> {
+    fn list_vless_users(
+        &self,
+        inbound_tag: &str,
+        email: &str,
+    ) -> Result<Vec<blackwire_api::management::VlessUserRecord>, String> {
         let registry = self
             .vless_registry(inbound_tag)
             .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))?;
@@ -175,7 +182,9 @@ impl blackwire_api::management::InboundManagement for ReloadState {
         if registry.remove_user_by_email(email) {
             Ok(())
         } else {
-            Err(format!("no VLESS user with email '{email}' on inbound '{inbound_tag}'"))
+            Err(format!(
+                "no VLESS user with email '{email}' on inbound '{inbound_tag}'"
+            ))
         }
     }
 }
@@ -232,7 +241,10 @@ pub fn requires_instance_restart(old: &Config, new: &Config) -> bool {
         return true;
     }
 
-    match (serde_json::to_value(&old.tun), serde_json::to_value(&new.tun)) {
+    match (
+        serde_json::to_value(&old.tun),
+        serde_json::to_value(&new.tun),
+    ) {
         (Ok(a), Ok(b)) if a != b => return true,
         (Err(_), _) | (_, Err(_)) => return true,
         _ => {}

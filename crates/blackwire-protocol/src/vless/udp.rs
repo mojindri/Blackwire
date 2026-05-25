@@ -11,9 +11,7 @@ use blackwire_common::{Address, ProxyError};
 use super::codec::{decode_address_port, encode_address_port};
 
 /// Read the address header of one VLESS UDP packet.
-pub async fn read_udp_header<R: AsyncRead + Unpin>(
-    reader: &mut R,
-) -> Result<Address, ProxyError> {
+pub async fn read_udp_header<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Address, ProxyError> {
     let addr_len = reader.read_u16().await? as usize;
     if addr_len == 0 || addr_len > 512 {
         return Err(ProxyError::Protocol(format!(
@@ -26,9 +24,7 @@ pub async fn read_udp_header<R: AsyncRead + Unpin>(
 }
 
 /// Read payload bytes for the current UDP packet (bounded read for one datagram).
-pub async fn read_udp_payload<R: AsyncRead + Unpin>(
-    reader: &mut R,
-) -> Result<Vec<u8>, ProxyError> {
+pub async fn read_udp_payload<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Vec<u8>, ProxyError> {
     let mut buf = vec![0u8; 65507];
     let n = tokio::time::timeout(Duration::from_millis(500), reader.read(&mut buf))
         .await
@@ -60,9 +56,9 @@ pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
 ) -> Result<(), ProxyError> {
     use tokio::net::UdpSocket;
 
-    let socket = UdpSocket::bind("0.0.0.0:0").await.map_err(|e| {
-        ProxyError::Transport(format!("VLESS UDP bind failed: {e}"))
-    })?;
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| ProxyError::Transport(format!("VLESS UDP bind failed: {e}")))?;
 
     loop {
         let dest = match read_udp_header(&mut client).await {
