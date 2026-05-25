@@ -15,6 +15,7 @@ use blackwire_config::schema::{SplitHttpConfig, StreamSettingsConfig};
 
 const MAX_HEADER_BYTES: usize = 16384;
 
+/// Dial SplitHTTP: send request headers and return a chunked full-duplex stream.
 pub async fn splithttp_connect(
     mut stream: BoxedStream,
     authority: &str,
@@ -53,6 +54,7 @@ pub async fn splithttp_connect(
     Ok(Box::new(SplitHttpStream::new(stream)))
 }
 
+/// Accept SplitHTTP: validate request line and return a chunked tunnel stream.
 pub async fn splithttp_accept(
     mut stream: BoxedStream,
     expected_path: Option<&str>,
@@ -91,6 +93,7 @@ pub async fn splithttp_accept(
     Ok(Box::new(SplitHttpStream::new(stream)))
 }
 
+/// Path and method expected on the server for this inbound's stream settings.
 pub fn splithttp_listen_params(
     stream_settings: &StreamSettingsConfig,
 ) -> (Option<String>, Option<String>) {

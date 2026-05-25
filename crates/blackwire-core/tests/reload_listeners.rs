@@ -1,6 +1,8 @@
 use std::net::IpAddr;
 
-use blackwire_config::schema::{Config, InboundConfig, LimitsConfig, LogConfig, OutboundConfig, Protocol};
+use blackwire_config::schema::{
+    Config, InboundConfig, LimitsConfig, LogConfig, OutboundConfig, Protocol,
+};
 use blackwire_core::{inbound_listener_changes, requires_instance_restart};
 
 fn minimal_config(port: u16) -> Config {

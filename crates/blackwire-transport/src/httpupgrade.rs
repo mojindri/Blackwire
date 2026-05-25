@@ -83,7 +83,9 @@ pub async fn accept_httpupgrade(
         }
         total_bytes += n;
         if total_bytes > MAX_HEADER_BYTES {
-            return Err(ProxyError::Protocol("HTTPUpgrade: headers too large".into()));
+            return Err(ProxyError::Protocol(
+                "HTTPUpgrade: headers too large".into(),
+            ));
         }
         if line == "\r\n" || line == "\n" {
             break;
@@ -130,9 +132,9 @@ fn parse_get_line(line: &str) -> Result<(String, String), ProxyError> {
         .filter(|p| !p.is_empty())
         .ok_or_else(|| ProxyError::Protocol("HTTPUpgrade: missing path".into()))?
         .to_string();
-    let _version = parts.next().ok_or_else(|| {
-        ProxyError::Protocol("HTTPUpgrade: missing HTTP version".into())
-    })?;
+    let _version = parts
+        .next()
+        .ok_or_else(|| ProxyError::Protocol("HTTPUpgrade: missing HTTP version".into()))?;
     Ok((method, path))
 }
 

@@ -5,7 +5,13 @@ use blackwire_common::{Address, Network};
 
 #[test]
 fn live_router_exposes_domain_strategy() {
-    let router = LiveRouter::new(vec![], "direct", Default::default(), Default::default(), Some("UseIP".into()));
+    let router = LiveRouter::new(
+        vec![],
+        "direct",
+        Default::default(),
+        Default::default(),
+        Some("UseIP".into()),
+    );
     let ctx = RoutingContext {
         dest: &Address::Domain("example.com".into(), 443),
         network: Network::Tcp,

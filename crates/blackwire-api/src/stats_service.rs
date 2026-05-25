@@ -1,3 +1,5 @@
+//! Xray `StatsService` gRPC implementation.
+
 use std::collections::BTreeMap;
 
 use blackwire_app::runtime_stats;
@@ -11,6 +13,7 @@ use crate::proto::{
     TrafficUserStat, UserStat,
 };
 
+/// Xray `StatsService` backed by [`blackwire_app::runtime_stats`].
 #[derive(Default)]
 pub struct StatsServiceImpl;
 
