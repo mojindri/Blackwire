@@ -164,7 +164,7 @@ impl UdpNatTable {
             .context("bind bypass UDP socket")?;
 
         #[cfg(target_os = "linux")]
-        {
+        if self.bypass_mark != 0 {
             use nix::sys::socket::{setsockopt, sockopt::Mark};
             setsockopt(&socket, Mark, &self.bypass_mark).context("SO_MARK on bypass socket")?;
         }
