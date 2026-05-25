@@ -25,8 +25,10 @@
 //! It exists now so the workspace compiles and the dependency graph is
 //! established without code changes later.
 
-// Phase 6 will add:
-//   mod gen;                // prost-generated gRPC stubs
-//   pub mod stats_service;  // StatsService implementation
+pub mod stats;
+
+// Phase 7 will add:
+//   mod gen;                 // prost-generated gRPC stubs from Xray .proto files
+//   pub mod stats_service;   // StatsService implementation
 //   pub mod handler_service; // HandlerService implementation
-//   pub mod server;         // gRPC server start/stop
+//   pub mod server;          // gRPC server start/stop (driven by config `api` / `stats`)
