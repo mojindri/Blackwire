@@ -126,18 +126,10 @@ impl BodyCipher {
     fn decrypt_in_place(&self, nonce: &[u8; 12], buf: &mut Vec<u8>) -> Result<(), ()> {
         match self {
             Self::Aes128Gcm(cipher) => cipher
-                .decrypt_in_place(
-                    GenericArray::from_slice(nonce),
-                    &[],
-                    buf,
-                )
+                .decrypt_in_place(GenericArray::from_slice(nonce), &[], buf)
                 .map_err(|_| ()),
             Self::ChaCha20Poly1305(cipher) => cipher
-                .decrypt_in_place(
-                    GenericArray::from_slice(nonce),
-                    &[],
-                    buf,
-                )
+                .decrypt_in_place(GenericArray::from_slice(nonce), &[], buf)
                 .map_err(|_| ()),
             Self::None => Ok(()),
         }
@@ -333,8 +325,10 @@ impl VmessStream {
         self.read_counter = self.read_counter.wrapping_add(1);
 
         // Empty plaintext signals EOF (matches Xray body reader).
-        let plaintext =
-            Bytes::from(std::mem::replace(&mut self.decrypt_scratch, Vec::with_capacity(MAX_CHUNK_SIZE + 32)));
+        let plaintext = Bytes::from(std::mem::replace(
+            &mut self.decrypt_scratch,
+            Vec::with_capacity(MAX_CHUNK_SIZE + 32),
+        ));
         Some(Ok(plaintext))
     }
 
@@ -416,24 +410,21 @@ impl AsyncRead for VmessStream {
                     self.read_raw_buf.extend_from_slice(&tmp[..filled]);
 
                     let mut raw = std::mem::take(&mut self.read_raw_buf);
-                    loop {
-                        match self.try_decrypt_chunk(&mut raw) {
-                            Some(Ok(pt)) => {
-                                if pt.is_empty() {
-                                    self.read_raw_buf = raw;
-                                    return Poll::Ready(Ok(()));
-                                }
-                                self.read_buf = pt;
-                                // Emit one decrypted chunk per poll_read. Keep any
-                                // remaining ciphertext in read_raw_buf for subsequent polls.
-                                break;
-                            }
-                            Some(Err(e)) => {
+                    match self.try_decrypt_chunk(&mut raw) {
+                        Some(Ok(pt)) => {
+                            if pt.is_empty() {
                                 self.read_raw_buf = raw;
-                                return Poll::Ready(Err(e));
+                                return Poll::Ready(Ok(()));
                             }
-                            None => break,
+                            self.read_buf = pt;
+                            // Emit one decrypted chunk per poll_read. Keep any
+                            // remaining ciphertext in read_raw_buf for subsequent polls.
                         }
+                        Some(Err(e)) => {
+                            self.read_raw_buf = raw;
+                            return Poll::Ready(Err(e));
+                        }
+                        None => {}
                     }
                     self.read_raw_buf = raw;
                 }

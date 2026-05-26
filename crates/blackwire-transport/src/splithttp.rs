@@ -818,6 +818,7 @@ impl AsyncWrite for PrependStream {
     }
 }
 
+#[allow(dead_code)]
 struct PrependedChunkStream {
     inner: SplitHttpStream<BoxedStream>,
     prepended: Vec<u8>,
@@ -825,6 +826,7 @@ struct PrependedChunkStream {
 }
 
 impl PrependedChunkStream {
+    #[allow(dead_code)]
     fn new(stream: BoxedStream, prepended: Vec<u8>) -> Self {
         Self {
             inner: SplitHttpStream::new(stream),
@@ -979,6 +981,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use bytes::Bytes;

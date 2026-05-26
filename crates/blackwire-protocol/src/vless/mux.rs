@@ -764,10 +764,7 @@ mod tests {
                 };
                 tokio::spawn(async move {
                     let mut b = [0u8; 4096];
-                    loop {
-                        let Ok(n) = s.read(&mut b).await else {
-                            break;
-                        };
+                    while let Ok(n) = s.read(&mut b).await {
                         if n == 0 {
                             break;
                         }
