@@ -17,6 +17,7 @@ include make/aliases.mk
 .PHONY: all build dev test fmt fmt-check lint lint-strict audit deny update-geoip fuzz-build \
 	fmt fmt-check lint audit audit-optional deny-optional fuzz-smoke \
 	clean clean-generated clean-all-generated clean-reports clean-pcaps clean-lima-artifacts clean-bench \
+	bench-protocol bench-protocol-quick bench-flamegraph \
 	help help-compat help-internal bench-vm-smoke bench-vm-total bench-vps-smoke bench-vps-total \
 	perf perf-vps lima-stop lima-browser-baseline lima-fingerprint-total \
 	local-load local-slowloris local-pcap local-fingerprint-compare local-netem local-hostility \
@@ -120,6 +121,7 @@ help:
 	@echo "  make security        - audit/deny + lab security helpers"
 	@echo "  make fuzz-smoke      - short nightly fuzz pass"
 	@echo "  make advanced-features-smoke - lab: ShadowTLS, mKCP, QUIC/SplitHTTP e2e (host only)"
+	@echo "  make health-failover       - lab: balancer failover e2e (+ Docker when available)"
 	@echo "  make finalize        - lab: stable + advanced smoke + Docker external-client matrix"
 	@echo "  make interop-server-docker   - lab: Xray/sing-box clients -> our server (Docker)"
 	@echo "  make perf            - Lima VM benchmark"
@@ -199,7 +201,20 @@ perf: bench-vm-total ## Lima VM performance benchmark.
 perf-vps: bench-vps-total ## VPS performance benchmark (needs SSH_SERVER/SSH_CLIENT).
 
 clean-bench:
-	rm -rf labs/realistic/reports/production/bench
+	rm -rf labs/realistic/reports/production/bench benches/reports
+
+## bench-protocol: Run full e2e protocol bench matrix (Criterion).
+bench-protocol:
+	bash benches/scripts/run-protocol-matrix.sh
+
+## bench-protocol-quick: Smaller payloads + all five protocol paths.
+bench-protocol-quick:
+	BENCH_QUICK=1 bash benches/scripts/run-protocol-matrix.sh
+
+## bench-flamegraph: Profile one path (PROTO=vless_tcp SCENARIO=bulk).
+bench-flamegraph:
+	bash benches/scripts/flamegraph-protocol.sh "$(PROTO)" "$(SCENARIO)"
+
 
 # lab / VM convenience wrappers (internal; see make help-internal)
 

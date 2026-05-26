@@ -84,8 +84,8 @@ impl RealityServer {
 
     /// Accept a connection without replaying the ClientHello.
     ///
-    /// Phase 2 uses this direct mode because full TLS completion is not wired
-    /// yet. After authentication, the next readable byte is the VLESS header.
+    /// Direct mode skips ClientHello replay. After authentication, the next
+    /// readable byte is the VLESS header (no TLS 1.3 completion on this path).
     pub async fn accept_direct(&self, stream: BoxedStream) -> Result<BoxedStream, ProxyError> {
         Ok(self
             .accept_inner(stream, ReplayMode::ConsumeClientHello)
