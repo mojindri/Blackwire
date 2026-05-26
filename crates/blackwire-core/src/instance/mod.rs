@@ -12,7 +12,7 @@
 //! 3. The instance holds `JoinHandle`s for all tasks. If any task panics,
 //!    the error is logged but the other tasks keep running.
 //!
-//! # Transport layering (Phase 4)
+//! # Transport layering
 //!
 //! Each inbound now goes through a layered handler stack:
 //!
@@ -46,6 +46,7 @@ use blackwire_config::schema::{Config, Protocol};
 use blackwire_protocol::freedom::FreedomOutbound;
 use blackwire_protocol::socks::Socks5Inbound;
 use blackwire_transport::{mkcp_accept_sessions, TunRuntime};
+use tokio::net::UdpSocket as TokioUdpSocket;
 
 use crate::http::build_http_inbound;
 use crate::hysteria2::{build_hysteria2_outbound, start_hysteria2_inbound};
@@ -142,7 +143,10 @@ impl Instance {
             info!("TUN runtime started");
         }
 
-        // ── Step 1: Build outbound handlers ─────────────────────────────────
+        // ── Step 1: DNS module (shared by dispatcher + freedom outbounds) ─────
+        let dns = build_dns_module(config.dns.as_ref()).await?;
+
+        // ── Step 2: Build outbound handlers ─────────────────────────────────
         let mut outbound_map: HashMap<String, Arc<dyn OutboundHandler>> = HashMap::new();
 
         for out_cfg in &config.outbounds {
@@ -153,7 +157,10 @@ impl Instance {
                 &out_cfg.stream_settings,
             )?;
             let handler: Arc<dyn OutboundHandler> = match out_cfg.protocol {
-                Protocol::Freedom => FreedomOutbound::new(&out_cfg.tag),
+                Protocol::Freedom => match &dns {
+                    Some(module) => FreedomOutbound::new_with_dns(&out_cfg.tag, Arc::clone(module)),
+                    None => FreedomOutbound::new(&out_cfg.tag),
+                },
                 Protocol::Vless => build_vless_outbound(out_cfg)
                     .with_context(|| format!("building VLESS outbound '{}'", out_cfg.tag))?,
                 Protocol::Hysteria2 => build_hysteria2_outbound(out_cfg)
@@ -242,13 +249,12 @@ impl Instance {
         };
         let vless_registries = Arc::clone(&reload.vless_registries);
 
-        // ── Step 3: Create dispatcher ────────────────────────────────────────
-        let dns = build_dns_module(config.dns.as_ref()).await?;
-        let dispatcher = match dns {
+        // ── Step 4: Create dispatcher ────────────────────────────────────────
+        let dispatcher = match &dns {
             Some(dns) => DefaultDispatcher::new_with_dns_and_sniffing(
                 router,
                 outbound_map,
-                dns,
+                Arc::clone(dns),
                 Arc::clone(&sniffing_shared),
             ),
             None => DefaultDispatcher::new_with_sniffing(router, outbound_map, sniffing_shared),
@@ -274,6 +280,41 @@ impl Instance {
                     .with_context(|| format!("starting Hysteria2 inbound '{}'", in_cfg.tag))?;
                 tasks.push(task);
                 continue;
+            }
+
+            // SS-2022 UDP: standalone UDP listener (SIP022).
+            if in_cfg.protocol == Protocol::Shadowsocks {
+                let net = in_cfg
+                    .settings
+                    .get("network")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("tcp");
+                if net == "udp" || net == "tcp,udp" || net == "udp,tcp" {
+                    let password = in_cfg
+                        .settings
+                        .get("password")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "SS-2022 UDP inbound '{}' missing 'password'",
+                                in_cfg.tag
+                            )
+                        })?
+                        .to_string();
+                    let psk = blackwire_protocol::ss2022::password_to_psk(&password);
+                    let socket = TokioUdpSocket::bind(addr).await.with_context(|| {
+                        format!("binding SS-2022 UDP inbound '{}' on {}", in_cfg.tag, addr)
+                    })?;
+                    let socket = std::sync::Arc::new(socket);
+                    info!(tag = %in_cfg.tag, addr = %addr, "starting SS-2022 UDP inbound");
+                    let task = tokio::spawn(async move {
+                        blackwire_protocol::ss2022::udp::relay_ss2022_udp(socket, psk).await;
+                    });
+                    tasks.push(task);
+                    if net == "udp" {
+                        continue; // UDP-only: skip TCP listener below
+                    }
+                }
             }
 
             let handshake_timeout = handshake_timeout_for(in_cfg, &config.limits);
@@ -436,7 +477,7 @@ impl Instance {
                 || uses_splithttp(&in_cfg.stream_settings)
                 || uses_httpupgrade(&in_cfg.stream_settings)
             {
-                // Phase 4/5: TLS, WebSocket, HTTPUpgrade, and/or gRPC layering.
+                // Layered transports: TLS, WebSocket, HTTPUpgrade, and/or gRPC.
                 build_conn_handler(
                     handler,
                     dispatcher_for_handler,

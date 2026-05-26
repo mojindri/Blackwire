@@ -2,6 +2,8 @@
 
 Current status for wire parity with [Xray-core](https://github.com/XTLS/Xray-core) and [sing-box](https://github.com/SagerNet/sing-box). Evidence: [feature-matrix.md](feature-matrix.md), [xray-parity-source-of-truth.md](xray-parity-source-of-truth.md).
 
+**Strict rule:** In-tree or uncommitted code does **not** move a feature to **Supported** without step **4** in the [priority ladder](xray-parity-roadmap.md) (external-client matrix PASS), unless listed under intentional deviations.
+
 ## Local gates
 
 ```bash
@@ -15,60 +17,62 @@ VPS promotion (`SSH_SERVER`, `SSH_CLIENT`):
 make -C labs/realistic interop-server-vps
 ```
 
-## Shipped in tree
+## Strict priority queue (work order)
+
+See [xray-parity-roadmap.md](xray-parity-roadmap.md). Summary:
+
+| Priority | Item | Matrix / proof today |
+|----------|------|----------------------|
+| **P0** | Trojan UDP (`CMD 0x03`, 8192 B frames) | `trojan-udp` Xray+sing-box **PASS** (`udp-socks-probe.sh` Python SOCKS5 UDP ASSOCIATE) |
+| **P0** | Mux.Cool TCP (`v1.mux.cool`) | `vless-mux` Xray **PASS**; sing-box SKIP (smux ≠ Mux.Cool) |
+| **P1** | XUDP (GlobalID, session 0) | `vless-udp` Xray **PASS** (Mux.Cool session 0 + GlobalID); sing-box **PASS** (VLESS CMD UDP + xudp) |
+| **P1** | SplitHTTP stream-one (HTTP/2 via ALPN h2) | `vless-splithttp` Xray+sing-box **PASS** |
+| ~~**P2**~~ | ~~SplitHTTP packet-up (seq; H2 GET/POST)~~ | `vless-splithttp-packet-up` Xray **PASS**; sing-box **SKIP** (upstream has no packet-up) |
+| ~~**P2**~~ | ~~SS2022 SIP022 UDP~~ | `ss2022-udp` Xray+sing-box **PASS** |
+
+## Shipped with upstream client proof (matrix or documented SKIP)
 
 | Area | Evidence |
 |------|----------|
-| External-client Docker matrix | `run-docker-matrix.sh` — 15 protocol rows, sequential clients |
-| VPS matrix script parity | `run-vps-matrix.sh` — same `scenarios.env`, one server start per row |
-| VLESS UDP, sniffing, DNS DoH/DoT | `blackwire-app`, lab rows where listed in feature matrix |
-| HTTPUpgrade, QUIC, SplitHTTP (minimal server) | Transports + e2e; SplitHTTP clients not in matrix |
-| Vision, hot-reload, Stats gRPC | `vision.rs`, `reload.rs`, `blackwire-api` StatsService |
+| External-client Docker matrix | `run-docker-matrix.sh` — 16 protocol rows (incl. `vless-splithttp-packet-up` Xray PASS; sing-box SKIP) |
+| VLESS UDP command `0x02`, sniffing, DNS DoH/DoT | Lab rows per feature matrix |
+| HTTPUpgrade, QUIC, SplitHTTP **stream-one** (HTTP/2) | Transports + e2e + `vless-splithttp` Xray+sing-box **PASS** |
+| Vision, hot-reload, Stats gRPC | `vision.rs`, `reload.rs`, `blackwire-api` |
 | Routing `IPIfNonMatch` / `IPOnDemand` | `router.rs`, `dispatcher.rs` |
-| VLESS MUX `0x03` decode | Relayed as TCP (not full Mux.Cool) |
-| Sniffing lab row | `vless-sniff` on port `8452`, dedicated client configs |
-| ShadowTLS / mKCP server configs | Lab rows + `advanced-features-smoke` e2e (clients skipped — see below) |
-| Handler gRPC (VLESS user ops) | `ListInbounds`, `ListOutbounds`, `GetInboundUsersCount`, `GetInboundUsers`, `AlterInbound` add/remove VLESS user on API listener |
-
-**Docker matrix (latest green run):** 15 protocols × 4 cases = 60 lines → **52 PASS, 8 SKIP, 0 FAIL** (`labs/realistic/reports/external-clients/summary.txt`).
+| Trojan TCP, VMess, SS2022 TCP/UDP, REALITY, WS, gRPC | Matrix rows + e2e |
+| Handler gRPC (VLESS user ops) | API listener user add/remove |
 
 ## External-client matrix SKIPs (not “unsupported in blackwire”)
 
-Matrix **SKIP** means no Xray/sing-box **client** config is run for that case. It does **not** mean the blackwire **server** lacks the transport.
-
 | Lab row | blackwire server | Xray client | sing-box client | Why SKIP |
 |---------|------------------|-------------|-----------------|----------|
-| `vless-quic` | Yes | SKIP | PASS | Xray 26+ removed legacy QUIC transport; sing-box proves the row |
-| `vless-splithttp` | Minimal PUT tunnel | SKIP | SKIP | Full xHTTP client framing not in matrix; e2e covers minimal server path |
-| `vless-shadowtls` | Yes (v3) | SKIP | SKIP | Xray 26+ dropped `security: shadowtls` on VLESS outbound; sing-box uses a separate inbound model — server proven in integration e2e |
-| `vless-mkcp` | Yes | SKIP | SKIP | sing-box has no mKCP V2Ray transport; Xray 26 uses `finalmask` — server proven in integration e2e |
+| `vless-quic` | Yes | SKIP | PASS | Xray 26+ removed legacy QUIC transport |
+| `vless-shadowtls` | Yes | SKIP | SKIP | Xray 26+ / sing-box model mismatch — server e2e |
+| `vless-mkcp` | Yes | SKIP | SKIP | sing-box no mKCP; Xray 26 finalmask |
+| `vless-splithttp-packet-up` | Yes | PASS | SKIP | Upstream [sing-box](https://github.com/SagerNet/sing-box) has no xHTTP `packet-up`; Xray proves row |
 
-Negative-auth cases for these rows still run where client configs exist (or skip when client is `-`).
+`vless-splithttp` uses **stream-one** only (both clients). `vless-splithttp-packet-up` is a separate row: **Xray PASS** is the matrix gate; stock sing-box is **SKIP** by design (same pattern as `vless-mux`).
 
 ## Accepted limits (not matrix blockers)
-
-These match intentional Xray/sing-box deltas documented in [feature-matrix.md](feature-matrix.md). They are not open parity todos for the external-client gate.
 
 | Item | Notes |
 |------|--------|
 | Vision TLS splice | Direct-copy on TLS records; not kernel splice |
-| SplitHTTP / xHTTP | Minimal server tunnel; full client xHTTP not in matrix |
-| VLESS MUX | `CMD 0x03` decoded; relayed as TCP until full Mux.Cool demux |
-| Hot-reload listeners | Structural changes rebuild `Instance`; `AddInbound`/`RemoveInbound` RPCs return UNIMPLEMENTED |
-| Handler listener RPCs | Add/remove inbound/outbound tags require config edit + reload (same as Xray panels that rewrite config) |
+| Trojan UDP outbound | `connect_trojan_on_stream_udp()`; in-process e2e PASS; no external-client lab row |
+| XUDP vs Mux.Cool UDP | XUDP: session `0` + GlobalID; Mux.Cool UDP: non-zero session id |
+| Hot-reload listeners | `AddInbound`/`RemoveInbound` listener rebind UNIMPLEMENTED |
+| Native JSON only | Xray/sing-box JSON not imported |
 
-## Backlog (post-merge)
+## Backlog (post–P0/P1)
 
 | Item | Work |
 |------|------|
-| Kernel TLS splice audit | Match Xray relay splice behavior |
-| Full Mux.Cool demux | Beyond TCP relay for `CMD 0x03` |
-| In-place listener rebind | Without full `Instance` rebuild |
-| Hysteria2 / REALITY hostility | Hostile-network tests; promote to **Supported** in matrix |
-| Handler listener rebind | In-place `AddInbound`/`RemoveInbound` without `Instance` rebuild |
+| SplitHTTP packet-up extras (Xmux, padding, `downloadSettings`) | Optional; hiddify-sing-box manual |
+| Kernel TLS (`SO_KTLS`) | Experimental opt-in via `BLACKWIRE_ENABLE_KTLS=1`; default TLS path stays on rustls after large-payload reset issues in CI |
+| In-place listener rebind | P4 |
 
 ## Related
 
-- [xray-parity-roadmap.md](xray-parity-roadmap.md) — gap tracker (no numbered rollout)
+- [xray-parity-roadmap.md](xray-parity-roadmap.md)
 - [labs/realistic/external-clients/README.md](../labs/realistic/external-clients/README.md)
 - [external-client-failure-triage.md](external-client-failure-triage.md)

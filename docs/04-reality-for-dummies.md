@@ -44,7 +44,7 @@ In the current codebase, REALITY success means:
 - TLS 1.3 handshake completes
 - application bytes flow after handshake
 
-That is the important Phase 3 contract.
+That is the important TLS 1.3 completion contract.
 
 ## The Two Sides
 

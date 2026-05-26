@@ -189,8 +189,12 @@ async fn vmess_header_decodes_with_every_boundary_fragmentation() {
 #[tokio::test]
 async fn trojan_header_decodes_with_every_boundary_fragmentation() {
     let token = trojan_codec::compute_token("fragmented-password");
-    let encoded =
-        trojan_codec::encode_request(&token, &Address::Domain("example.com".into(), 443)).unwrap();
+    let encoded = trojan_codec::encode_request(
+        &token,
+        trojan_codec::CMD_CONNECT,
+        &Address::Domain("example.com".into(), 443),
+    )
+    .unwrap();
     for split in 1..encoded.len() {
         let (mut left, right) = tokio::io::duplex(4096);
         let payload = encoded.clone();

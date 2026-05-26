@@ -23,8 +23,9 @@ use blackwire_app::features::{ConnectionHandler, InboundHandler};
 use blackwire_common::{with_handshake_timeout, BoxedStream, ProxyError};
 use blackwire_config::schema::{NetworkType, SecurityType, StreamSettingsConfig};
 use blackwire_transport::{
-    accept_httpupgrade, grpc_accept, httpupgrade_listen_path, shadowtls_accept, splithttp_accept,
-    splithttp_listen_params, tls_accept, ws_accept,
+    accept_httpupgrade, grpc_accept, httpupgrade_listen_path, normalize_splithttp_mode,
+    shadowtls_accept, splithttp_accept, splithttp_listen_params, tls_accept, ws_accept,
+    SplitHttpAcceptResult,
 };
 
 // ── Query helpers ─────────────────────────────────────────────────────────────
@@ -198,6 +199,7 @@ impl ConnectionHandler for WsConnectionHandler {
 pub(crate) struct SplitHttpConnectionHandler {
     expected_path: Option<String>,
     expected_method: Option<String>,
+    mode: blackwire_transport::SplitHttpMode,
     handshake_timeout: Option<Duration>,
     inner: Arc<dyn ConnectionHandler>,
 }
@@ -206,12 +208,14 @@ impl SplitHttpConnectionHandler {
     pub(crate) fn new(
         expected_path: Option<String>,
         expected_method: Option<String>,
+        mode: blackwire_transport::SplitHttpMode,
         handshake_timeout: Option<Duration>,
         inner: Arc<dyn ConnectionHandler>,
     ) -> Arc<Self> {
         Arc::new(Self {
             expected_path,
             expected_method,
+            mode,
             handshake_timeout,
             inner,
         })
@@ -227,12 +231,32 @@ impl ConnectionHandler for SplitHttpConnectionHandler {
     ) -> Result<(), ProxyError> {
         let path = self.expected_path.as_deref();
         let method = self.expected_method.as_deref();
-        let stream = with_handshake_timeout(
+        let packet_up_h2 = if self.mode == blackwire_transport::SplitHttpMode::PacketUp {
+            let inner = self.inner.clone();
+            Some(Arc::new(move |accepted| {
+                if let SplitHttpAcceptResult::Tunnel(stream) = accepted {
+                    let inner = inner.clone();
+                    tokio::spawn(async move {
+                        let _ = inner.handle_connection(stream, source).await;
+                    });
+                }
+            }) as blackwire_transport::PacketUpH2TunnelFn)
+        } else {
+            None
+        };
+        let accepted = with_handshake_timeout(
             self.handshake_timeout,
-            splithttp_accept(stream, path, method),
+            splithttp_accept(stream, path, method, self.mode, packet_up_h2),
         )
         .await?;
-        self.inner.handle_connection(stream, source).await
+        match accepted {
+            SplitHttpAcceptResult::Tunnel(stream) => {
+                self.inner.handle_connection(stream, source).await
+            }
+            SplitHttpAcceptResult::UploadOnly
+            | SplitHttpAcceptResult::Preflight
+            | SplitHttpAcceptResult::H2PacketUpManaged => Ok(()),
+        }
     }
 }
 
@@ -372,13 +396,14 @@ pub(crate) fn build_conn_handler(
     }
 
     if uses_splithttp(stream_settings) {
-        let (expected_path, expected_method) = stream_settings
+        let (expected_path, expected_method, mode) = stream_settings
             .as_ref()
             .map(splithttp_listen_params)
-            .unwrap_or((None, None));
+            .unwrap_or((None, None, normalize_splithttp_mode("")));
         handler = SplitHttpConnectionHandler::new(
             expected_path,
             expected_method,
+            mode,
             handshake_timeout,
             handler,
         );
@@ -416,8 +441,16 @@ pub(crate) fn build_conn_handler(
         let key_pem = std::fs::read_to_string(key_path)
             .map_err(|e| anyhow::anyhow!("cannot read key file '{key_path}': {e}"))?;
 
-        // gRPC runs over HTTP/2, which requires the "h2" ALPN token during TLS negotiation.
-        let alpn = if uses_grpc(stream_settings) {
+        // Select ALPN to advertise:
+        // - gRPC requires "h2" (HTTP/2 multiplexing).
+        // - SplitHTTP (xHTTP): both Xray 26.x and sing-box negotiate h2 for
+        //   xHTTP over TLS. Advertise "h2" so ALPN negotiation succeeds;
+        //   the SplitHTTP handler then accepts the HTTP/2 connection.
+        // - Explicit tlsSettings.alpn overrides both defaults.
+        // - Everything else: no ALPN (accept any client choice).
+        let alpn = if !tls_cfg.alpn.is_empty() {
+            tls_cfg.alpn.clone()
+        } else if uses_grpc(stream_settings) || uses_splithttp(stream_settings) {
             vec!["h2".to_string()]
         } else {
             vec![]
