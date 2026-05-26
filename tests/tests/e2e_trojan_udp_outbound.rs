@@ -71,10 +71,9 @@ async fn trojan_udp_outbound_client_roundtrip() {
         .await
         .unwrap();
     let initial_dest = Address::Ipv4(std::net::Ipv4Addr::UNSPECIFIED, 0);
-    let mut stream =
-        connect_trojan_on_stream_udp(Box::new(tcp), &token, &initial_dest)
-            .await
-            .unwrap();
+    let mut stream = connect_trojan_on_stream_udp(Box::new(tcp), &token, &initial_dest)
+        .await
+        .unwrap();
 
     let echo_dest = Address::Ipv4(std::net::Ipv4Addr::LOCALHOST, echo_port);
     let payload = b"trojan-udp-outbound-ping";
@@ -85,13 +84,10 @@ async fn trojan_udp_outbound_client_roundtrip() {
     let mut acc = Vec::new();
     let mut buf = [0u8; 4096];
     for _ in 0..20 {
-        let n = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            stream.read(&mut buf),
-        )
-        .await
-        .expect("timed out waiting for datagram reply")
-        .expect("read error");
+        let n = tokio::time::timeout(std::time::Duration::from_secs(2), stream.read(&mut buf))
+            .await
+            .expect("timed out waiting for datagram reply")
+            .expect("read error");
         if n == 0 {
             break;
         }

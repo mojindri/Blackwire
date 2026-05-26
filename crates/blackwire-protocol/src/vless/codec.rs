@@ -561,7 +561,9 @@ mod tests {
         let uuid = [0xABu8; 16];
         let dest = Address::Domain(MUX_COOL_DOMAIN.into(), 0);
         let encoded = encode_request(&uuid, "", Command::Mux, &dest).unwrap();
-        let tcp_len = encode_request(&uuid, "", Command::Tcp, &dest).unwrap().len();
+        let tcp_len = encode_request(&uuid, "", Command::Tcp, &dest)
+            .unwrap()
+            .len();
         assert!(encoded.len() < tcp_len);
         let decoded = decode_from_bytes(&encoded).await.unwrap();
         assert_eq!(decoded.command, Command::Mux);

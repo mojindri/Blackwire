@@ -290,15 +290,16 @@ impl Instance {
                         .get("password")
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| {
-                            anyhow::anyhow!("SS-2022 UDP inbound '{}' missing 'password'", in_cfg.tag)
+                            anyhow::anyhow!(
+                                "SS-2022 UDP inbound '{}' missing 'password'",
+                                in_cfg.tag
+                            )
                         })?
                         .to_string();
                     let psk = blackwire_protocol::ss2022::password_to_psk(&password);
-                    let socket = TokioUdpSocket::bind(addr)
-                        .await
-                        .with_context(|| {
-                            format!("binding SS-2022 UDP inbound '{}' on {}", in_cfg.tag, addr)
-                        })?;
+                    let socket = TokioUdpSocket::bind(addr).await.with_context(|| {
+                        format!("binding SS-2022 UDP inbound '{}' on {}", in_cfg.tag, addr)
+                    })?;
                     let socket = std::sync::Arc::new(socket);
                     info!(tag = %in_cfg.tag, addr = %addr, "starting SS-2022 UDP inbound");
                     let task = tokio::spawn(async move {
