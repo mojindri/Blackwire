@@ -78,13 +78,10 @@ async fn ss2022_udp_relay_roundtrip() {
         .unwrap();
 
     let mut buf = [0u8; 65535];
-    let n = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        client.recv(&mut buf),
-    )
-    .await
-    .expect("timed out waiting for SS2022 UDP reply")
-    .expect("recv error");
+    let n = tokio::time::timeout(std::time::Duration::from_secs(3), client.recv(&mut buf))
+        .await
+        .expect("timed out waiting for SS2022 UDP reply")
+        .expect("recv error");
 
     let plain = decode_server_packet(&buf[..n], &psk).expect("failed to decrypt server reply");
 

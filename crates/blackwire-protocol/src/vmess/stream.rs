@@ -426,7 +426,7 @@ impl AsyncWrite for VmessStream {
         self.write_buf = staged;
         match result {
             Ok(()) => Poll::Ready(Ok(chunk.len())),
-            Err(e) => return Poll::Ready(Err(e)),
+            Err(e) => Poll::Ready(Err(e)),
         }
     }
 
