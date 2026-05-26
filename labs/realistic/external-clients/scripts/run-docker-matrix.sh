@@ -61,9 +61,23 @@ matrix_bootstrap() {
     docker rm -f blackwire-server xray-client 2>/dev/null || true
     "${COMPOSE[@]}" down -v >> "$REPORT_DIR/compose.log" 2>&1 || true
     # xray-client is defined for compose run only (distroless image).
-    "${COMPOSE[@]}" up -d target-http tls-cover matrix-probe blackwire-server sing-box-client \
-        hiddify-sing-box-client \
-        >> "$REPORT_DIR/compose.log" 2>&1
+    local include_hiddify=1
+    if [[ "${MATRIX_SKIP_HIDDIFY:-}" == "1" ]]; then
+        include_hiddify=0
+    fi
+    if (( include_hiddify )); then
+        if ! "${COMPOSE[@]}" up -d target-http tls-cover matrix-probe blackwire-server sing-box-client \
+            hiddify-sing-box-client \
+            >> "$REPORT_DIR/compose.log" 2>&1; then
+            echo "WARN: failed to start hiddify-sing-box-client; retrying without it" | tee -a "$REPORT_DIR/compose.log" >&2
+            "${COMPOSE[@]}" down -v >> "$REPORT_DIR/compose.log" 2>&1 || true
+            include_hiddify=0
+        fi
+    fi
+    if (( ! include_hiddify )); then
+        "${COMPOSE[@]}" up -d target-http tls-cover matrix-probe blackwire-server sing-box-client \
+            >> "$REPORT_DIR/compose.log" 2>&1
+    fi
 
     "${COMPOSE[@]}" exec -T matrix-probe sh -c \
         'command -v python3 >/dev/null 2>&1 || apk add --no-cache curl netcat-openbsd bind-tools python3 >/dev/null' \
