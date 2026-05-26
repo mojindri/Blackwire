@@ -1,0 +1,49 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "inbounds": [
+    {
+      "tag": "vless-splithttp-in",
+      "protocol": "vless",
+      "listen": "0.0.0.0",
+      "port": 8448,
+      "settings": {
+        "clients": [
+          {
+            "id": "1791A4CD-09E3-4A29-A36D-FEA98300C845",
+            "email": "vps-user@lab",
+            "flow": ""
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "splithttp",
+        "security": "tls",
+        "tlsSettings": {
+          "certificateFile": "/etc/blackwire/certs/cert.pem",
+          "keyFile": "/etc/blackwire/certs/key.pem"
+        },
+        "splithttpSettings": {
+          "path": "/split",
+          "host": [
+            "blackwire.local"
+          ],
+          "mode": "stream-one",
+          "method": "PUT"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "freedom",
+      "protocol": "freedom"
+    }
+  ],
+  "dns": {
+    "servers": [
+      "udp://127.0.0.11:53"
+    ]
+  }
+}

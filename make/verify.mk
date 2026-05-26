@@ -10,7 +10,7 @@
 	remote-preflight remote-deploy remote-test-smoke remote-test-protocols \
 	remote-test-fingerprint remote-test-fallback remote-collect remote-clean \
 	security fuzz-long perf-remote soak \
-	advanced-features-smoke finalize ship interop-server-docker interop-server-vps stable
+	advanced-features-smoke finalize ship interop-server-docker interop-server-vps stable health-failover verify-health-failover health-failover
 
 LAB_DIR := labs/realistic
 REPORT_DOCKER := $(LAB_DIR)/reports/external-clients/summary.txt
@@ -28,7 +28,7 @@ verify-local:
 	@echo "==> [verify-local 4/5] rustdoc (strict)"
 	RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links -D rustdoc::bare_urls" cargo doc --workspace --no-deps
 	@echo "==> [verify-local 5/5] tests"
-	cargo test --workspace --all-targets
+	BENCH_IO_TIMEOUT_MS=30000 cargo test --workspace --all-targets
 	@echo "==> verify-local complete"
 
 # Compatibility shape for the old `make check` (local-total, no Lima/VPS).
@@ -186,8 +186,11 @@ verify-release:
 
 # ── Lab targets (root aliases → labs/realistic/Makefile) ─────────────────────
 
-advanced-features-smoke finalize ship interop-server-docker interop-server-vps stable:
+advanced-features-smoke finalize ship interop-server-docker interop-server-vps stable health-failover:
 	$(MAKE) -C $(LAB_DIR) $@
+
+verify-health-failover:
+	$(MAKE) -C $(LAB_DIR) health-failover
 
 # ── Support targets ───────────────────────────────────────────────────────────
 

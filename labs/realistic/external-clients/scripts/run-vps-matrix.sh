@@ -78,16 +78,17 @@ copy_to_client() {
 
 port_for_protocol() {
     case "$1" in
-        trojan-tls) echo 8445 ;;
-        vless-tcp) echo 10080 ;;
+        trojan-tls|trojan-udp) echo 8445 ;;
+        vless-tcp|vless-mux) echo 10080 ;;
         vless-vision) echo 10082 ;;
         vless-udp) echo 10081 ;;
         vless-ws) echo 8443 ;;
         vless-httpupgrade) echo 8446 ;;
         vless-quic) echo 8447 ;;
-        vless-splithttp) echo 8448 ;;
+        vless-splithttp|vless-splithttp-packet-up) echo 8448 ;;
         vmess-grpc) echo 8444 ;;
         ss2022) echo 8388 ;;
+        ss2022-udp) echo 8389 ;;
         hysteria2) echo 4433 ;;
         vless-reality) echo 10443 ;;
         vless-shadowtls) echo 8450 ;;
@@ -150,6 +151,12 @@ wait_for_server_port() {
         return 0
     fi
     [[ -z "$port" ]] && return 0
+    if [[ "$protocol" == "ss2022-udp" ]]; then
+        ssh_server "for i in \$(seq 1 ${PORT_WAIT_TRIES}); do \
+            ss -H -uln 2>/dev/null | grep -qE ':${port}\\b' && exit 0; \
+            sleep ${PORT_WAIT_SLEEP}; done; exit 1" || return 1
+        return 0
+    fi
     ssh_client "for i in \$(seq 1 ${PORT_WAIT_TRIES}); do \
         nc -z '${SERVER_HOST}' '${port}' && exit 0; sleep ${PORT_WAIT_SLEEP}; done; exit 1"
 }
@@ -161,10 +168,35 @@ start_server() {
         > '/tmp/blackwire-external-${protocol}.log' 2>&1 & echo \$! > /tmp/blackwire-external.pid"
 }
 
+requires_udp_probe() {
+    case "$1" in
+        trojan-udp|ss2022-udp) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+udp_only_protocol() {
+    case "$1" in
+        ss2022-udp) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 wait_for_socks() {
     ssh_client "for i in \$(seq 1 ${SOCKS_WAIT_TRIES}); do \
         curl -fsS --max-time 3 --socks5-hostname 127.0.0.1:1080 '${TARGET_URL}' >/dev/null && exit 0; \
         sleep ${SOCKS_WAIT_SLEEP}; done; exit 1"
+}
+
+wait_for_socks_udp() {
+    ssh_client "cat > /tmp/udp-socks-probe.sh && chmod +x /tmp/udp-socks-probe.sh" \
+        <"$LAB_DIR/scripts/udp-socks-probe.sh"
+    ssh_client "command -v dig >/dev/null 2>&1 || \
+        (apk add --no-cache bind-tools proxychains-ng 2>/dev/null || \
+         (apt-get update && apt-get install -y dnsutils proxychains4)); \
+        for i in \$(seq 1 ${SOCKS_WAIT_TRIES}); do \
+          /tmp/udp-socks-probe.sh 127.0.0.1 1080 && exit 0; \
+          sleep ${SOCKS_WAIT_SLEEP}; done; exit 1"
 }
 
 start_client() {
@@ -197,12 +229,17 @@ run_client_case() {
     local expect_pass="$1" label="$2" client="$3" client_cfg="$4" log="$5" protocol="$6"
     local neg_root=""
 
-    if [[ "$client_cfg" == "-" ]]; then
+    if [[ "$client_cfg" == "-" && "$label" != negative-* ]]; then
         echo "SKIP ${label}" | tee -a "$SUMMARY"
         return 0
     fi
 
+    local cfg="$client_cfg"
+    local neg_root=""
     if [[ "$label" == negative-* ]]; then
+        if [[ "$client_cfg" == "-" ]]; then
+            cfg="${protocol}.json"
+        fi
         if [[ "$client" == "xray" ]]; then
             neg_root="xray-negative"
         else
@@ -211,11 +248,40 @@ run_client_case() {
     fi
 
     assert_single_client
-    start_client "$client" "$client_cfg" "$neg_root"
+    start_client "$client" "$cfg" "$neg_root"
     assert_single_client
+
+    if udp_only_protocol "$protocol"; then
+        if wait_for_socks_udp >>"$log" 2>&1; then
+            if [[ "$expect_pass" == "pass" ]]; then
+                echo "PASS ${label}" | tee -a "$SUMMARY"
+                stop_client
+                return 0
+            fi
+            echo "FAIL ${label} accepted" | tee -a "$SUMMARY"
+            append_logs "$log" "$protocol" "$client"
+            stop_client
+            return 1
+        fi
+        if [[ "$expect_pass" == "pass" ]]; then
+            echo "FAIL ${label} (udp socks probe)" | tee -a "$SUMMARY"
+            append_logs "$log" "$protocol" "$client"
+            stop_client
+            return 1
+        fi
+        echo "PASS ${label} rejected" | tee -a "$SUMMARY"
+        stop_client
+        return 0
+    fi
 
     if wait_for_socks >>"$log" 2>&1; then
         if [[ "$expect_pass" == "pass" ]]; then
+            if requires_udp_probe "$protocol" && ! wait_for_socks_udp >>"$log" 2>&1; then
+                echo "FAIL ${label} (udp socks probe)" | tee -a "$SUMMARY"
+                append_logs "$log" "$protocol" "$client"
+                stop_client
+                return 1
+            fi
             echo "PASS ${label}" | tee -a "$SUMMARY"
             stop_client
             return 0
