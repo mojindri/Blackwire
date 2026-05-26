@@ -93,12 +93,22 @@ pub async fn socks5_connect(socks_port: u16, host: &str, port: u16) -> TcpStream
 pub async fn echo_transfer(stream: &mut TcpStream, payload: &[u8]) {
     tokio::time::timeout(io_timeout(), stream.write_all(payload))
         .await
-        .unwrap_or_else(|_| panic!("bench stage timeout: echo_transfer/write len={}", payload.len()))
+        .unwrap_or_else(|_| {
+            panic!(
+                "bench stage timeout: echo_transfer/write len={}",
+                payload.len()
+            )
+        })
         .expect("write");
     let mut buf = vec![0u8; payload.len()];
     tokio::time::timeout(io_timeout(), stream.read_exact(&mut buf))
         .await
-        .unwrap_or_else(|_| panic!("bench stage timeout: echo_transfer/read len={}", payload.len()))
+        .unwrap_or_else(|_| {
+            panic!(
+                "bench stage timeout: echo_transfer/read len={}",
+                payload.len()
+            )
+        })
         .expect("read");
 }
 
@@ -574,7 +584,9 @@ pub async fn relay_bulk(stream: &mut TcpStream, total_bytes: usize, chunk_size: 
         tokio::time::timeout(io_timeout(), stream.write_all(&chunk[..n]))
             .await
             .unwrap_or_else(|_| {
-                panic!("bench stage timeout: relay_bulk/write n={n} done={done} total={total_bytes}")
+                panic!(
+                    "bench stage timeout: relay_bulk/write n={n} done={done} total={total_bytes}"
+                )
             })
             .expect("bulk write");
         let mut got = 0usize;
@@ -613,12 +625,16 @@ pub async fn mixed_small_writes(stream: &mut TcpStream, chunk_size: usize, round
     for _ in 0..rounds {
         tokio::time::timeout(io_timeout(), stream.write_all(&chunk))
             .await
-            .unwrap_or_else(|_| panic!("bench stage timeout: mixed_small_writes/write chunk={chunk_size}"))
+            .unwrap_or_else(|_| {
+                panic!("bench stage timeout: mixed_small_writes/write chunk={chunk_size}")
+            })
             .expect("mixed write");
         let mut echoed = vec![0u8; chunk_size];
         tokio::time::timeout(io_timeout(), stream.read_exact(&mut echoed))
             .await
-            .unwrap_or_else(|_| panic!("bench stage timeout: mixed_small_writes/read chunk={chunk_size}"))
+            .unwrap_or_else(|_| {
+                panic!("bench stage timeout: mixed_small_writes/read chunk={chunk_size}")
+            })
             .expect("mixed read");
         total += echoed.len();
     }

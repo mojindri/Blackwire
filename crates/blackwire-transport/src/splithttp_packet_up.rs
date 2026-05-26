@@ -93,6 +93,7 @@ impl UploadQueue {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn close(self: &Arc<Self>) {
         let mut st = self.state.lock().await;
         st.closed = true;

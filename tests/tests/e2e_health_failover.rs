@@ -65,10 +65,7 @@ async fn spawn_echo_server() -> (u16, tokio::task::JoinHandle<()>) {
             };
             tokio::spawn(async move {
                 let mut buf = [0u8; 4096];
-                loop {
-                    let Ok(n) = stream.read(&mut buf).await else {
-                        break;
-                    };
+                while let Ok(n) = stream.read(&mut buf).await {
                     if n == 0 {
                         break;
                     }

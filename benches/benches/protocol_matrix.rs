@@ -3,8 +3,8 @@
 use std::time::{Duration, Instant};
 
 use bench_harness::{
-    alloc_reset, alloc_snapshot, bench_runtime, concurrent_short_lived, log_alloc, mixed_small_writes,
-    relay_bulk, short_lived_session, ProtocolPath,
+    alloc_reset, alloc_snapshot, bench_runtime, concurrent_short_lived, log_alloc,
+    mixed_small_writes, relay_bulk, short_lived_session, ProtocolPath,
 };
 use bench_harness::{
     bulk_chunk_sizes, bulk_transfer_sizes, concurrency_levels, mixed_write_chunk_sizes,
@@ -58,10 +58,9 @@ fn capped_connect_sample_time(
 
 pub fn register_protocol_benches(c: &mut Criterion, path: ProtocolPath) {
     let name = path.bench_name();
-    let bulk_only = std::env::var("BENCH_BULK_ONLY").is_ok()
-        || std::env::var("BENCH_BULK_SWEEP").is_ok();
-    let skip_handshake = std::env::var("BENCH_SKIP_HANDSHAKE").is_ok()
-        || bulk_only;
+    let bulk_only =
+        std::env::var("BENCH_BULK_ONLY").is_ok() || std::env::var("BENCH_BULK_SWEEP").is_ok();
+    let skip_handshake = std::env::var("BENCH_SKIP_HANDSHAKE").is_ok() || bulk_only;
     if !skip_handshake {
         register_handshake(c, path, name);
     }
