@@ -1,0 +1,16 @@
+{
+  "log": { "level": "warn" },
+  "inbounds": [
+    { "type": "socks", "tag": "socks-in", "listen": "::", "listen_port": 1080 }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "blackwire-out",
+      "server": "blackwire-server",
+      "server_port": 10081,
+      "uuid": "00000000-0000-4000-8000-000000000001",
+      "packet_encoding": "xudp"
+    }
+  ]
+}

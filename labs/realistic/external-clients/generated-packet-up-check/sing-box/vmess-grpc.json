@@ -1,0 +1,20 @@
+{
+  "log": { "level": "warn" },
+  "inbounds": [
+    { "type": "socks", "tag": "socks-in", "listen": "::", "listen_port": 1080 }
+  ],
+  "outbounds": [
+    {
+      "type": "vmess",
+      "tag": "blackwire-out",
+      "server": "blackwire-server",
+      "server_port": 8444,
+      "uuid": "AE32D659-1F3D-48E5-8FD0-3F7754BA33F1",
+      "security": "aes-128-gcm",
+      "tls": { "enabled": true, "server_name": "blackwire.local", "insecure": true },
+      "transport": { "type": "grpc", "service_name": "lab.Gun" }
+    }
+  ],
+  "route": { "final": "blackwire-out" }
+}
+

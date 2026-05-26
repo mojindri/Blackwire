@@ -6,12 +6,26 @@ license.workspace = true
 authors.workspace = true
 publish = false
 
+[lib]
+name = "bench_harness"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Enable counting global allocator for local perf runs: cargo bench -p blackwire-benches --features bench-alloc
+bench-alloc = []
+
 [dependencies]
-bytes.workspace = true
+blackwire-core   = { path = "../crates/blackwire-core" }
+blackwire-config = { path = "../crates/blackwire-config" }
+
 tokio.workspace = true
+serde_json.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
+bytes.workspace = true
 
 [[bench]]
 name = "tcp_relay_throughput"
@@ -22,9 +36,29 @@ name = "protocol_handshake_latency"
 harness = false
 
 [[bench]]
+name = "framing_overhead"
+harness = false
+
+[[bench]]
 name = "routing_dns_fakeip"
 harness = false
 
 [[bench]]
-name = "framing_overhead"
+name = "e2e_vless_tcp"
+harness = false
+
+[[bench]]
+name = "e2e_vless_ws"
+harness = false
+
+[[bench]]
+name = "e2e_vmess_grpc"
+harness = false
+
+[[bench]]
+name = "e2e_ss2022"
+harness = false
+
+[[bench]]
+name = "e2e_trojan_tcp"
 harness = false

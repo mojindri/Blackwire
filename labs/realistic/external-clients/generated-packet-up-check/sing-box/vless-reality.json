@@ -1,0 +1,27 @@
+{
+  "log": { "level": "warn" },
+  "inbounds": [
+    { "type": "socks", "tag": "socks-in", "listen": "::", "listen_port": 1080 }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "blackwire-out",
+      "server": "blackwire-server",
+      "server_port": 10443,
+      "uuid": "1791A4CD-09E3-4A29-A36D-FEA98300C845",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.microsoft.com",
+        "utls": { "enabled": true, "fingerprint": "chrome" },
+        "reality": {
+          "enabled": true,
+          "public_key": "loYSsUliNDpTJ_ISdh6Q3A3fMc7TnaQfuDlpS-K46Wo",
+          "short_id": "aabbccdd00000001"
+        }
+      }
+    }
+  ],
+  "route": { "final": "blackwire-out" }
+}
+

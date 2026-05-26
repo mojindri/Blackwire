@@ -1,0 +1,37 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "inbounds": [
+    {
+      "tag": "hysteria2-in",
+      "protocol": "hysteria2",
+      "listen": "0.0.0.0",
+      "port": 4433,
+      "settings": {
+        "auth": "hysteria2-pass-hetzner",
+        "upMbps": 100,
+        "downMbps": 100
+      },
+      "streamSettings": {
+        "network": "quic",
+        "security": "tls",
+        "tlsSettings": {
+          "certificateFile": "/etc/blackwire/certs/cert.pem",
+          "keyFile": "/etc/blackwire/certs/key.pem"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "freedom",
+      "protocol": "freedom"
+    }
+  ],
+  "dns": {
+    "servers": [
+      "udp://127.0.0.11:53"
+    ]
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "inbounds": [
+    {
+      "tag": "vless-udp-in",
+      "protocol": "vless",
+      "listen": "0.0.0.0",
+      "port": 10081,
+      "settings": {
+        "clients": [
+          {
+            "id": "1791A4CD-09E3-4A29-A36D-FEA98300C845",
+            "email": "vps-user@lab"
+          }
+        ],
+        "fallback": {
+          "dest": "127.0.0.1:80"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "freedom",
+      "protocol": "freedom"
+    }
+  ],
+  "dns": {
+    "servers": [
+      "udp://127.0.0.11:53"
+    ]
+  }
+}

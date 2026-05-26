@@ -1,0 +1,39 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "socks-in",
+      "listen": "0.0.0.0",
+      "port": 1080,
+      "protocol": "socks",
+      "settings": { "auth": "noauth", "udp": true }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "blackwire-out",
+      "protocol": "hysteria",
+      "settings": {
+        "version": 2,
+        "address": "blackwire-server",
+        "port": 4433
+      },
+      "streamSettings": {
+        "network": "hysteria",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "blackwire.local",
+          "allowInsecure": true,
+          "alpn": ["h3"]
+        },
+        "hysteriaSettings": {
+          "version": 2,
+          "auth": "hysteria2-pass-hetzner",
+          "congestion": "brutal",
+          "up": "50mbps",
+          "down": "50mbps"
+        }
+      }
+    }
+  ]
+}

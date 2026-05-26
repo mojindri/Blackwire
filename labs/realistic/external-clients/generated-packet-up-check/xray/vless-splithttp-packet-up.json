@@ -1,0 +1,34 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    { "tag": "socks-in", "listen": "0.0.0.0", "port": 1080, "protocol": "socks", "settings": { "auth": "noauth" } }
+  ],
+  "outbounds": [
+    {
+      "tag": "blackwire-out",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "blackwire-server",
+            "port": 8448,
+            "users": [
+              { "id": "1791A4CD-09E3-4A29-A36D-FEA98300C845", "encryption": "none", "flow": "" }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "splithttp",
+        "security": "tls",
+        "tlsSettings": { "serverName": "blackwire.local", "allowInsecure": true },
+        "splithttpSettings": {
+          "path": "/split",
+          "host": "blackwire.local",
+          "mode": "packet-up",
+          "uplinkHTTPMethod": "POST"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "inbounds": [
+    {
+      "tag": "ss-in",
+      "protocol": "shadowsocks",
+      "listen": "0.0.0.0",
+      "port": 8388,
+      "settings": {
+        "method": "2022-blake3-aes-256-gcm",
+        "password": "LpqyTVh2/wbP2B8TQPKCYMnjtMuymFehzsGgYMLi3ag="
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "freedom",
+      "protocol": "freedom"
+    }
+  ],
+  "dns": {
+    "servers": [
+      "udp://127.0.0.11:53"
+    ]
+  }
+}
