@@ -23,9 +23,9 @@ use blackwire_app::features::{ConnectionHandler, InboundHandler};
 use blackwire_common::{with_handshake_timeout, BoxedStream, ProxyError};
 use blackwire_config::schema::{NetworkType, SecurityType, StreamSettingsConfig};
 use blackwire_transport::{
-    accept_httpupgrade, grpc_accept, httpupgrade_listen_path, shadowtls_accept, splithttp_accept,
-    splithttp_listen_params, normalize_splithttp_mode, SplitHttpAcceptResult,
-    tls_accept, ws_accept,
+    accept_httpupgrade, grpc_accept, httpupgrade_listen_path, normalize_splithttp_mode,
+    shadowtls_accept, splithttp_accept, splithttp_listen_params, tls_accept, ws_accept,
+    SplitHttpAcceptResult,
 };
 
 // ── Query helpers ─────────────────────────────────────────────────────────────

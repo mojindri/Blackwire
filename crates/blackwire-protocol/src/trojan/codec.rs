@@ -132,13 +132,19 @@ pub fn parse_udp_datagram(buf: &[u8]) -> Result<(Address, &[u8], usize), ProxyEr
         )));
     }
     if buf[pos + 2] != b'\r' || buf[pos + 3] != b'\n' {
-        return Err(ProxyError::Protocol("Trojan UDP missing CRLF after length".into()));
+        return Err(ProxyError::Protocol(
+            "Trojan UDP missing CRLF after length".into(),
+        ));
     }
     let data_off = pos + 4;
     if data_off + payload_len > buf.len() {
         return Err(ProxyError::Protocol("Trojan UDP truncated payload".into()));
     }
-    Ok((dest, &buf[data_off..data_off + payload_len], data_off + payload_len))
+    Ok((
+        dest,
+        &buf[data_off..data_off + payload_len],
+        data_off + payload_len,
+    ))
 }
 
 /// Encode a Trojan UDP datagram.

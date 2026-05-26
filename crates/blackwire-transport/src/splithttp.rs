@@ -104,7 +104,8 @@ pub async fn splithttp_connect(
     Ok(Box::new(SplitHttpStream::new(stream)))
 }
 
-static PACKET_UP_SESSIONS: LazyLock<DashMap<String, Arc<UploadQueue>>> = LazyLock::new(DashMap::new);
+static PACKET_UP_SESSIONS: LazyLock<DashMap<String, Arc<UploadQueue>>> =
+    LazyLock::new(DashMap::new);
 
 fn upsert_packet_up_session(session_id: &str) -> Arc<UploadQueue> {
     PACKET_UP_SESSIONS
@@ -207,7 +208,9 @@ pub async fn splithttp_accept(
         stream.flush().await?;
     }
 
-    Ok(SplitHttpAcceptResult::Tunnel(Box::new(SplitHttpStream::new(stream))))
+    Ok(SplitHttpAcceptResult::Tunnel(Box::new(
+        SplitHttpStream::new(stream),
+    )))
 }
 
 /// Path, uplink method, and mode for an inbound's stream settings.
@@ -219,7 +222,11 @@ pub fn splithttp_listen_params(
 ) -> (Option<String>, Option<String>, SplitHttpMode) {
     let cfg = split_http_config(stream_settings);
     let mode = normalize_splithttp_mode(&cfg.mode);
-    let method = if cfg.method.is_empty() { None } else { Some(cfg.method.clone()) };
+    let method = if cfg.method.is_empty() {
+        None
+    } else {
+        Some(cfg.method.clone())
+    };
     (Some(cfg.path.clone()), method, mode)
 }
 
@@ -641,9 +648,9 @@ async fn packet_up_accept(
                 "packet-up POST requires session id in path".into(),
             ));
         }
-        let seq_num: u64 = seq.parse().map_err(|_| {
-            ProxyError::Protocol(format!("packet-up invalid seq '{seq}'"))
-        })?;
+        let seq_num: u64 = seq
+            .parse()
+            .map_err(|_| ProxyError::Protocol(format!("packet-up invalid seq '{seq}'")))?;
         let body = read_request_body(&mut stream, request).await?;
         let queue = upsert_packet_up_session(&session);
         queue
@@ -737,10 +744,7 @@ fn parse_http_headers(request: &str) -> HashMap<String, String> {
     map
 }
 
-async fn read_request_body(
-    stream: &mut BoxedStream,
-    request: &str,
-) -> Result<Vec<u8>, ProxyError> {
+async fn read_request_body(stream: &mut BoxedStream, request: &str) -> Result<Vec<u8>, ProxyError> {
     let headers = parse_http_headers(request);
     if headers
         .get("transfer-encoding")
@@ -772,7 +776,11 @@ struct PrependStream {
 
 impl PrependStream {
     fn new(inner: BoxedStream, prepended: Vec<u8>) -> Self {
-        Self { inner, prepended, prep_offset: 0 }
+        Self {
+            inner,
+            prepended,
+            prep_offset: 0,
+        }
     }
 }
 
@@ -783,9 +791,7 @@ impl AsyncRead for PrependStream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         if self.prep_offset < self.prepended.len() {
-            let n = buf
-                .remaining()
-                .min(self.prepended.len() - self.prep_offset);
+            let n = buf.remaining().min(self.prepended.len() - self.prep_offset);
             buf.put_slice(&self.prepended[self.prep_offset..self.prep_offset + n]);
             self.prep_offset += n;
             return Poll::Ready(Ok(()));
@@ -835,9 +841,7 @@ impl AsyncRead for PrependedChunkStream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         if self.prep_offset < self.prepended.len() {
-            let n = buf
-                .remaining()
-                .min(self.prepended.len() - self.prep_offset);
+            let n = buf.remaining().min(self.prepended.len() - self.prep_offset);
             buf.put_slice(&self.prepended[self.prep_offset..self.prep_offset + n]);
             self.prep_offset += n;
             return Poll::Ready(Ok(()));
@@ -1075,7 +1079,9 @@ mod tests {
             .body(())
             .unwrap();
         let (post_resp_fut, mut send_post) = client.send_request(post_req, false).unwrap();
-        send_post.send_data(Bytes::from_static(b"hello"), true).unwrap();
+        send_post
+            .send_data(Bytes::from_static(b"hello"), true)
+            .unwrap();
 
         let post_resp = post_resp_fut.await.unwrap();
         assert_eq!(post_resp.status(), http::StatusCode::OK);

@@ -75,10 +75,9 @@ async fn vless_udp_outbound_client_roundtrip() {
         .await
         .unwrap();
     let echo_dest = Address::Ipv4(std::net::Ipv4Addr::LOCALHOST, echo_port);
-    let mut stream =
-        connect_vless_on_stream(Box::new(tcp), &uuid, "", Command::Udp, &echo_dest)
-            .await
-            .unwrap();
+    let mut stream = connect_vless_on_stream(Box::new(tcp), &uuid, "", Command::Udp, &echo_dest)
+        .await
+        .unwrap();
 
     let payload = b"vless-udp-outbound-ping";
 
