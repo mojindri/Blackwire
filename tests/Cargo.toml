@@ -33,10 +33,13 @@ x25519-dalek.workspace = true
 rand.workspace         = true
 uuid.workspace         = true
 http.workspace         = true
+h2.workspace           = true
 loom = "0.7"
 async-trait.workspace = true
 bytes.workspace = true
 socket2.workspace = true
+blake3.workspace = true
+aes-gcm.workspace = true
 
 [lib]
 name = "integration_tests"

@@ -28,7 +28,7 @@ Docker labs with real upstream clients — not mock peers alone.
 
 | Area | Status | Notes |
 |---|---|---|
-| Xray / sing-box **wire interop** (as server) | **Experimental** | REALITY d1 interop in `blackwire-transport/tests/interop.rs` (`#[ignore]` without `tests/interop`); Docker matrix **52 PASS / 8 SKIP** on 15 rows — see [parity-status.md](parity-status.md) |
+| Xray / sing-box **wire interop** (as server) | **Experimental** | REALITY d1 interop in `blackwire-transport/tests/interop.rs` (`#[ignore]` without `tests/interop`); Docker matrix **56 PASS / 8 SKIP** on 16 rows (+ `vless-splithttp-packet-up` Xray+hiddify wired, pending PASS) — see [parity-status.md](parity-status.md) |
 | Native JSON config schema | **Supported** | `blackwire-config` — validated at load; fail-closed schema tests |
 | V2Ray JSON config | **Unsupported** | Not a goal |
 | Xray JSON config | **Unsupported** | Interop is wire-level only; configs must be translated |
@@ -52,15 +52,15 @@ Outbound handlers: `Freedom`, `Vless`, `Hysteria2`, `Trojan`, `Vmess`, `Shadowso
 | HTTP CONNECT | Yes | No | **Supported** | `http_connect.rs`, `blackwire-core/http.rs`; e2e `e2e_http_connect.rs` |
 | Freedom / direct | No | Yes | **Supported** | `freedom.rs` — default direct outbound |
 | VLESS (TCP) | Yes | Yes | **Supported** | `vless/`; golden + e2e matrix |
-| VLESS UDP command | Yes | Partial | **Partial** | `vless/udp.rs` inbound relay; lab row `vless-udp` |
-| VLESS MUX command (0x03) | Partial | Partial | **Partial** | Decoded per Xray; relayed as TCP until full Mux.Cool demux |
+| VLESS UDP command | Yes | Yes | **Supported** | `vless/udp.rs` inbound relay; matrix `vless-udp` Xray+sing-box **PASS**; outbound `Command::Udp`; e2e `e2e_vless_udp_outbound.rs` PASS |
+| VLESS MUX command (0x03) | Partial | Partial | **Supported** | Mux.Cool + XUDP in `vless/mux.rs`; matrix `vless-mux` Xray **PASS**; `vless-udp` Xray XUDP **PASS** |
 | VLESS flow `xtls-rprx-vision` | Partial | Partial | **Experimental** | `vless/vision.rs` unpadding + direct-copy; lab row `vless-vision` green |
 | VMess AEAD | Yes | Yes | **Supported** | `vmess/`; legacy **alterId unsupported** |
 | Trojan (TCP) | Yes | Yes | **Supported** | `trojan/`; e2e `e2e_trojan/` |
-| Trojan UDP | No | No | **Unsupported** | No UDP associate path in trojan module |
-| Shadowsocks 2022 | Yes | Yes | **Supported** | `ss2022/`; e2e `e2e_ss2022.rs`, `e2e_phase6_ss2022_local.rs` |
-| SS2022 UDP relay | No | No | **Unsupported** | TCP stream cipher path only in crate |
-| Hysteria2 | Yes | Yes | **Experimental** | `blackwire-transport/hysteria2/`, `blackwire-core/hysteria2.rs`; e2e `e2e_phase3_hysteria2.rs`; lab mandatory path; QUIC/UDP needs more hostility testing |
+| Trojan UDP | Yes | Yes | **Supported** | Xray `CMD 0x03`; inbound: matrix `trojan-udp` Xray+sing-box **PASS**; outbound: `connect_trojan_on_stream_udp()`; e2e `e2e_trojan_udp_outbound.rs` PASS |
+| Shadowsocks 2022 | Yes | Yes | **Supported** | `ss2022/`; e2e `e2e_ss2022.rs`, `e2e_ss2022_local.rs` |
+| SS2022 UDP relay (SIP022) | Yes | Yes | **Supported** | `ss2022/udp.rs` (sing-box SIP022 wire); e2e `e2e_ss2022_udp.rs` PASS; matrix `ss2022-udp` Xray+sing-box **PASS** |
+| Hysteria2 | Yes | Yes | **Experimental** | `blackwire-transport/hysteria2/`, `blackwire-core/hysteria2.rs`; e2e `e2e_hysteria2_vless.rs`; lab mandatory path; QUIC/UDP needs more hostility testing |
 | ShadowTLS as `protocol` enum | No | No | **Unsupported** | Only `security: shadowtls` on TCP inbounds/outbounds |
 | DNS / dokodemo / tun inbound protocol | No | No | **Unsupported** | Not in `Protocol` enum |
 
@@ -75,16 +75,16 @@ TCP accept in `instance/mod.rs`. Hysteria2 uses its own QUIC listener.
 |---|---|---|
 | TCP | **Supported** | `blackwire-transport/tcp.rs` |
 | TLS (rustls) | **Supported** | `transport/tls.rs` |
-| WebSocket | **Supported** | `transport/ws.rs`; e2e `e2e_phase4_vless_ws.rs` |
-| gRPC (Gun-style) | **Supported** | `transport/grpc.rs`; e2e `e2e_phase5_http_vmess_grpc.rs` |
-| REALITY | **Experimental** | `transport/reality/`, `blackwire-core/reality.rs`; e2e `e2e_phase2_reality.rs`; transport-only tests `e2e_reality.rs`; Xray d1 interop ignored test |
+| WebSocket | **Supported** | `transport/ws.rs`; e2e `e2e_vless_ws.rs` |
+| gRPC (Gun-style) | **Supported** | `transport/grpc.rs`; e2e `e2e_http_vmess_grpc.rs` |
+| REALITY | **Experimental** | `transport/reality/`, `blackwire-core/reality.rs`; e2e `e2e_reality_vless.rs`; transport-only tests `e2e_reality.rs`; Xray d1 interop ignored test |
 | ShadowTLS v3 | **Experimental** | Server: `transport/shadowtls/` + e2e. Matrix: both clients **SKIP** (Xray 26+ outbound model; sing-box inbound model) — not “unsupported on server” |
 | mKCP | **Experimental** | Server: `transport/mkcp/` + e2e. Matrix: both clients **SKIP** (sing-box no mKCP; Xray 26 finalmask) — not “unsupported on server” |
 | QUIC (`network: quic` for VLESS/VMess) | **Experimental** | Server: `v2rayquic.rs` + e2e. Matrix: **sing-box PASS**, Xray **SKIP** (Xray 26+ removed legacy QUIC client transport) |
 | Hysteria2 (QUIC + HTTP/3 auth) | **Experimental** | `hysteria2/` — TCP stream proxy + UDP datagram path |
 | TUN transparent proxy | **Partial** | `transport/tun/` when `config.tun` set; privileged tests `tun_priv.rs` (`#[ignore]` without root / `priv-test`) |
 | HTTPUpgrade | **Supported** | Inbound/outbound + lab row `vless-httpupgrade` (Docker external-client matrix) |
-| SplitHTTP / xHTTP | **Experimental** | Server: minimal PUT tunnel + e2e. Matrix: both clients **SKIP** (full xHTTP framing TBD) |
+| SplitHTTP / xHTTP | **Supported** | **stream-one** (ALPN h2): matrix `vless-splithttp` Xray+sing-box **PASS**. **packet-up** (seq reorder, H2 `GET /split/<uuid>` + `POST /split/<uuid>/<seq>`): matrix `vless-splithttp-packet-up` **Xray PASS**; sing-box **SKIP** (upstream has no packet-up); in-process e2e `vless_splithttp_packet_up_h2_echo` **PASS**. Xmux/padding/`downloadSettings` remain backlog. |
 
 ---
 
@@ -94,8 +94,9 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 
 | Row | Server in blackwire | Client proof in matrix |
 |-----|---------------------|-------------------------|
-| `vless-quic` | Yes | sing-box only |
-| `vless-splithttp` | Minimal | None (e2e only) |
+| `vless-quic` | Yes | sing-box only (Xray 26+ removed legacy QUIC client) |
+| `vless-splithttp` | Yes | Xray+sing-box **PASS** (HTTP/2 stream-one) |
+| `vless-splithttp-packet-up` | Yes | PASS | SKIP (upstream sing-box lacks packet-up) |
 | `vless-shadowtls` | Yes | None (e2e only) |
 | `vless-mkcp` | Yes | None (e2e only) |
 
@@ -129,7 +130,8 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 | `inboundTag` | **Supported** | |
 | `protocol` / sniffed domain rules | **Partial** | Requires inbound sniffing + `sniffed_protocol` on routing context; lab row `vless-sniff` |
 | GeoIP / geosite (`geoip:`, `geosite:`) | **Supported** | `geo/`; missing data files → empty matchers + warn |
-| Balancers (random / roundRobin / latency) | **Supported** | `balancer.rs`; latency uses HTTP 204 health checks |
+| Balancers (random / roundRobin / latency) | **Supported** | `balancer.rs`; HTTP health probes; in-process failover e2e `e2e_health_failover.rs` |
+| Health-check failover under fault | **Supported** | In-process e2e `e2e_health_failover.rs` + Docker lab (`make -C labs/realistic health-failover`) both **PASS** |
 | Route to balancer tag | **Supported** | `production_readiness` tests |
 
 ---
@@ -218,8 +220,9 @@ production certification on all Experimental rows.
 | Gate | Command | What it proves |
 |------|---------|----------------|
 | Stable integration | `make -C labs/realistic stable` | In-process protocol matrix |
-| Advanced smoke | `make -C labs/realistic advanced-features-smoke` | ShadowTLS, mKCP, QUIC/SplitHTTP e2e, health/DNS guards |
-| External clients | `make -C labs/realistic interop-server-docker` | Xray/sing-box → blackwire (**52 PASS / 8 SKIP** on 15 rows) |
+| Advanced smoke | `make -C labs/realistic advanced-features-smoke` | ShadowTLS, mKCP, QUIC/SplitHTTP e2e, health guards + failover runtime |
+| Health failover lab | `make -C labs/realistic health-failover` | In-process failover e2e + optional Docker probe/echo services |
+| External clients | `make -C labs/realistic interop-server-docker` | Xray/sing-box/hiddify → blackwire (**56 PASS / 8 SKIP** on 16 rows + packet-up wired) |
 | Full finalize | `make -C labs/realistic finalize` | All of the above |
 
 See [labs/realistic/README.md](../labs/realistic/README.md) and [parity-status.md](parity-status.md).

@@ -1,0 +1,48 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "inbounds": [
+    {
+      "tag": "vless-reality-in",
+      "protocol": "vless",
+      "listen": "0.0.0.0",
+      "port": 10443,
+      "settings": {
+        "clients": [
+          {
+            "id": "1791A4CD-09E3-4A29-A36D-FEA98300C845",
+            "email": "vps-user@lab",
+            "flow": ""
+          }
+        ],
+        "fallback": {
+          "dest": "127.0.0.1:80"
+        }
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "dest": "127.0.0.1:80",
+          "serverName": "www.microsoft.com",
+          "privateKey": "6f4850ca51ced64b4acfd90c73fd60392c0c2f92744933b28b1bc0f7b8683d79",
+          "shortIds": [
+            "aabbccdd00000001"
+          ]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "freedom",
+      "protocol": "freedom"
+    }
+  ],
+  "dns": {
+    "servers": [
+      "udp://127.0.0.11:53"
+    ]
+  }
+}

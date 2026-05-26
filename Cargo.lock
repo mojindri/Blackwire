@@ -503,9 +503,13 @@ dependencies = [
 name = "blackwire-benches"
 version = "0.1.0"
 dependencies = [
+ "blackwire-config",
+ "blackwire-core",
  "bytes",
  "criterion",
+ "serde_json",
  "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -568,6 +572,7 @@ dependencies = [
 name = "blackwire-protocol"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "aes-gcm",
  "anyhow",
  "async-trait",
@@ -579,6 +584,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chacha20poly1305",
+ "cipher",
  "crc32fast",
  "dashmap",
  "hex",
@@ -2253,6 +2259,7 @@ dependencies = [
 name = "integration-tests"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "async-trait",
  "blackwire-app",
@@ -2261,7 +2268,9 @@ dependencies = [
  "blackwire-core",
  "blackwire-protocol",
  "blackwire-transport",
+ "blake3",
  "bytes",
+ "h2",
  "hex",
  "http",
  "loom",

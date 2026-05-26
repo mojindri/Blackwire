@@ -1,0 +1,24 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    { "tag": "socks-in", "listen": "0.0.0.0", "port": 1080, "protocol": "socks", "settings": { "auth": "noauth" } }
+  ],
+  "outbounds": [
+    {
+      "tag": "blackwire-out",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "blackwire-server",
+            "port": 10080,
+            "users": [
+              { "id": "00000000-0000-4000-8000-000000000001", "encryption": "none", "flow": "" }
+            ]
+          }
+        ]
+      },
+      "mux": { "enabled": true, "concurrency": 8 }
+    }
+  ]
+}

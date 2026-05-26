@@ -13,7 +13,7 @@ SSH_KEY ?=
 SSH_EXTRA_OPTS ?=
 
 .PHONY: help build build-amd64 build-linux-bin docker-up stable ship finalize interop-docker interop-server-docker interop-client-reality interop-server-vps \
-	xray advanced-features-smoke negative-auth restart-smoke stress report-summary realistic-all docker-full docker-down \
+	xray advanced-features-smoke health-failover negative-auth restart-smoke stress report-summary realistic-all docker-full docker-down \
 	vm-pack vps-configs external-clients-docker external-clients-vps external-clients-report \
 	vps-server-setup vps-client-setup vps-preflight vps-test vps-tun vps-netem ci ci-full clean
 
@@ -83,15 +83,30 @@ advanced-features-smoke: ## Smoke tests: ShadowTLS, mKCP, QUIC/SplitHTTP VLESS, 
 	  shift; \
 	  cargo test --locked "$$@" 2>&1 | tee -a "$$log"; \
 	}; \
-	run "VLESS QUIC" -p integration-tests --test e2e_phase6_vless_quic phase6_vless_quic_echo; \
-	run "VLESS SplitHTTP" -p integration-tests --test e2e_phase6_vless_splithttp phase6_vless_splithttp_echo; \
-	run "ShadowTLS v3" -p integration-tests --test e2e_phase7_shadowtls phase7_vless_over_shadowtls_v3_transfers_data; \
-	run "mKCP" -p integration-tests --test e2e_phase8_mkcp phase8_vless_over_mkcp; \
+	run "VLESS QUIC" -p integration-tests --test e2e_vless_quic vless_quic_echo; \
+	run "VLESS SplitHTTP" -p integration-tests --test e2e_vless_splithttp vless_splithttp_echo; \
+	run "ShadowTLS v3" -p integration-tests --test e2e_vless_shadowtls vless_over_shadowtls_v3_transfers_data; \
+	run "mKCP" -p integration-tests --test e2e_vless_mkcp vless_over_mkcp; \
 	run "health / failover guards" -p blackwire-core --test production_readiness balancer_rejects_missing_selector_outbound; \
 	run "health / failover guards" -p blackwire-core --test production_readiness balancer_rejects_unsupported_health_check_scheme; \
 	run "health / failover guards" -p blackwire-core --test production_readiness routing_rule_can_target_registered_balancer; \
+	run "health / failover runtime" -p integration-tests --test e2e_health_failover health_failover_routes_to_backup_when_primary_unhealthy; \
 	run "DNS / geo / FakeIP guards" -p blackwire-core --test production_readiness routing_geo_database_paths_are_loaded_nonfatally_when_missing; \
 	run "DNS / geo / FakeIP guards" -p blackwire-core --test production_readiness dns_fakeip_rejects_invalid_pool_at_startup
+
+health-failover: ## Health-check balancer failover (in-process e2e + optional Docker probe/echo services)
+	@set -euo pipefail; \
+	log="$(CURDIR)/$(REPORTS)/health-failover.log"; \
+	mkdir -p "$(CURDIR)/$(REPORTS)"; \
+	: > "$$log"; \
+	echo "=== [health-failover] in-process failover e2e ===" | tee -a "$$log"; \
+	cd "$(ROOT)" && cargo test --locked -p integration-tests --test e2e_health_failover health_failover_routes_to_backup_when_primary_unhealthy -- --nocapture 2>&1 | tee -a "$$log"; \
+	if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
+	  echo "=== [health-failover] Docker lab ===" | tee -a "$$log"; \
+	  bash "$(CURDIR)/health-failover/run.sh" 2>&1 | tee -a "$$log"; \
+	else \
+	  echo "=== [health-failover] skipping Docker lab (docker unavailable) ===" | tee -a "$$log"; \
+	fi
 
 negative-auth: ## Run negative-auth scenarios that should be rejected/fallback
 	@mkdir -p $(REPORTS)
@@ -108,7 +123,7 @@ restart-smoke: ## Restart target services and re-run smoke e2e checks
 	docker compose -f docker-compose.yml down -v
 	docker compose -f docker-compose.yml up -d target-http target-echo
 	cd $(ROOT) && cargo test -p integration-tests e2e_socks5_to_vless_to_freedom_transfers_http 2>&1 | tee -a labs/realistic/$(REPORTS)/restart-smoke.log
-	cd $(ROOT) && cargo test -p integration-tests phase5_http_connect_vmess_grpc_transfers_data 2>&1 | tee -a labs/realistic/$(REPORTS)/restart-smoke.log
+	cd $(ROOT) && cargo test -p integration-tests http_connect_vmess_grpc_transfers_data 2>&1 | tee -a labs/realistic/$(REPORTS)/restart-smoke.log
 	docker compose -f docker-compose.yml down -v
 
 stress: ## Repeat high-signal data-plane tests to catch flaky behavior
@@ -116,8 +131,8 @@ stress: ## Repeat high-signal data-plane tests to catch flaky behavior
 	cd $(ROOT) && bash -lc 'set -euo pipefail; \
 		for i in 1 2 3 4 5; do \
 			echo "=== stress iteration $$i ==="; \
-			cargo test -p integration-tests phase8_vless_over_mkcp_transfers_data; \
-			cargo test -p integration-tests phase7_vless_over_shadowtls_v3_transfers_data; \
+			cargo test -p integration-tests vless_over_mkcp_transfers_data; \
+			cargo test -p integration-tests vless_over_shadowtls_v3_transfers_data; \
 			cargo test -p integration-tests e2e_socks5_to_vless_to_freedom_transfers_data; \
 		done' 2>&1 | tee labs/realistic/$(REPORTS)/stress.log
 
