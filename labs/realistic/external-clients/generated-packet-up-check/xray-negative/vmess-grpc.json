@@ -1,0 +1,30 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    { "tag": "socks-in", "listen": "0.0.0.0", "port": 1080, "protocol": "socks", "settings": { "auth": "noauth" } }
+  ],
+  "outbounds": [
+    {
+      "tag": "blackwire-out",
+      "protocol": "vmess",
+      "settings": {
+        "vnext": [
+          {
+            "address": "blackwire-server",
+            "port": 8444,
+            "users": [
+              { "id": "00000000-0000-4000-8000-000000000002", "alterId": 0, "security": "auto" }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "tls",
+        "tlsSettings": { "serverName": "blackwire.local", "allowInsecure": true },
+        "grpcSettings": { "serviceName": "lab.Gun" }
+      }
+    }
+  ]
+}
+

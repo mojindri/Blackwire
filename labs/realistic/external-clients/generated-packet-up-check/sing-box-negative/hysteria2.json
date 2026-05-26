@@ -1,0 +1,20 @@
+{
+  "log": { "level": "warn" },
+  "inbounds": [
+    { "type": "socks", "tag": "socks-in", "listen": "::", "listen_port": 1080 }
+  ],
+  "outbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "blackwire-out",
+      "server": "blackwire-server",
+      "server_port": 4433,
+      "password": "wrong-hysteria2-pass-hetzner",
+      "tls": { "enabled": true, "server_name": "blackwire.local", "insecure": true },
+      "up_mbps": 50,
+      "down_mbps": 50
+    }
+  ],
+  "route": { "final": "blackwire-out" }
+}
+
