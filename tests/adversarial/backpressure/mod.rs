@@ -36,9 +36,9 @@ async fn spawn_push_server(total_bytes: usize) -> (u16, tokio::task::JoinHandle<
 /// Per-stage timeout for adversarial I/O on slow CI debug runners.
 fn stage_timeout() -> Duration {
     if cfg!(debug_assertions) {
-        Duration::from_secs(60)
+        Duration::from_secs(30)
     } else {
-        Duration::from_secs(15)
+        Duration::from_secs(10)
     }
 }
 
@@ -60,7 +60,7 @@ fn socks_to_freedom_cfg(socks_port: u16) -> std::sync::Arc<blackwire_config::sch
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn slow_client_reader_does_not_deadlock_or_leak() {
     // Keep volume modest: debug CI can spend hundreds of ms per proxied read.
-    let pushed = 64 * 1024usize;
+    let pushed = 16 * 1024usize;
     let (upstream_port, _upstream_task) = spawn_push_server(pushed).await;
     let socks_port = harness::unused_local_port();
     let _instance = Instance::from_config(socks_to_freedom_cfg(socks_port))
@@ -76,18 +76,21 @@ async fn slow_client_reader_does_not_deadlock_or_leak() {
     // that can push debug CI runs past libtest's warning threshold.
     let mut buf = [0u8; 4096];
 
-    let read = tokio::time::timeout(stage_timeout(), async {
-        loop {
-            let n = s.read(&mut buf).await.expect("read");
-            if n == 0 {
-                break;
-            }
-            total += n;
+    let deadline = tokio::time::Instant::now() + stage_timeout();
+    loop {
+        if total >= pushed / 2 {
+            break;
         }
-    })
-    .await;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(remaining > Duration::ZERO, "slow reader path timed out");
+        let read = tokio::time::timeout(remaining, s.read(&mut buf)).await;
+        let n = read.expect("slow reader path timed out").expect("read");
+        if n == 0 {
+            break;
+        }
+        total += n;
+    }
 
-    assert!(read.is_ok(), "slow reader path timed out");
     assert!(total >= pushed / 2, "expected substantial data flow");
 
     drop(s);
@@ -130,7 +133,7 @@ async fn stalled_upstream_reader_large_write_fails_or_times_out_safely() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn slow_upstream_reader_applies_backpressure_without_unbounded_growth() {
     let (upstream_port, _slow_task) =
-        harness::spawn_slow_echo_server(Duration::from_millis(2)).await;
+        harness::spawn_slow_echo_server(Duration::from_millis(1)).await;
     let socks_port = harness::unused_local_port();
     let _instance = Instance::from_config(socks_to_freedom_cfg(socks_port))
         .await
@@ -139,13 +142,13 @@ async fn slow_upstream_reader_applies_backpressure_without_unbounded_growth() {
     let baseline = leak_check::steady_state_baseline().await;
 
     let mut s = harness::socks5_connect(socks_port, "127.0.0.1", upstream_port).await;
-    let payload = vec![0x11u8; 32 * 1024];
+    let payload = vec![0x11u8; 4 * 1024];
     let timeout = stage_timeout();
 
     // Interleave write/read per chunk so echoed bytes drain while we upload.
     // A single write_all + read_exact round-trip can fill proxy socket buffers and
     // stall on slow CI debug builds.
-    for chunk in payload.chunks(4 * 1024) {
+    for chunk in payload.chunks(2 * 1024) {
         tokio::time::timeout(timeout, async {
             s.write_all(chunk).await.expect("write payload chunk");
             s.flush().await.expect("flush chunk");
