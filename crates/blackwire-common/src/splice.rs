@@ -206,10 +206,41 @@ mod linux {
     ///   - `a → b` (client data going to server)
     ///   - `b → a` (server data coming back to client)
     ///
-    /// Returns `(a_to_b_bytes, b_to_a_bytes)` when both directions finish.
-    /// Each direction sends a TCP half-close when its source reaches EOF.
+    /// Returns `(a_to_b_bytes, b_to_a_bytes)` when relay ends.
+    ///
+    /// Each direction sends a TCP half-close when its source reaches EOF. If one
+    /// direction finishes while the other is idle (common for download-only or
+    /// upload-only flows), the idle task is aborted so the relay does not hang
+    /// waiting for data that will never arrive on that half.
     pub async fn splice_bidirectional(a: &TcpStream, b: &TcpStream) -> std::io::Result<(u64, u64)> {
-        tokio::try_join!(splice_one_direction(a, b), splice_one_direction(b, a),)
+        let a_ab = a.clone();
+        let b_ab = b.clone();
+        let b_ba = b.clone();
+        let a_ba = a.clone();
+
+        let mut ab = tokio::spawn(async move { splice_one_direction(&a_ab, &b_ab).await });
+        let mut ba = tokio::spawn(async move { splice_one_direction(&b_ba, &a_ba).await });
+
+        tokio::select! {
+            res = &mut ab => {
+                ba.abort();
+                let up = res??;
+                let down = match ba.await {
+                    Ok(Ok(n)) => n,
+                    _ => 0,
+                };
+                Ok((up, down))
+            }
+            res = &mut ba => {
+                ab.abort();
+                let down = res??;
+                let up = match ab.await {
+                    Ok(Ok(n)) => n,
+                    _ => 0,
+                };
+                Ok((up, down))
+            }
+        }
     }
 }
 
