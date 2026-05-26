@@ -168,7 +168,11 @@ mod ktls {
         }
     }
 
-    fn setsockopt_tls<T: Sized>(fd: libc::c_int, direction: libc::c_int, info: &T) -> io::Result<()> {
+    fn setsockopt_tls<T: Sized>(
+        fd: libc::c_int,
+        direction: libc::c_int,
+        info: &T,
+    ) -> io::Result<()> {
         // SAFETY: `info` is a repr(C) struct whose layout matches the kernel struct.
         let rc = unsafe {
             libc::setsockopt(
@@ -285,8 +289,8 @@ pub async fn tls_accept(
     // Either phase failing falls through to the normal TlsStream path.
     #[cfg(target_os = "linux")]
     {
-        use std::os::unix::io::AsRawFd;
         use blackwire_common::AsyncReadWrite;
+        use std::os::unix::io::AsRawFd;
         use tokio::net::TcpStream;
 
         // Phase 1 — probe (scoped so the borrow of tls_stream ends before
@@ -313,7 +317,11 @@ pub async fn tls_accept(
                         (ulp.len() - 1) as libc::socklen_t,
                     ) == 0
                 };
-                if ok { Some(fd) } else { None }
+                if ok {
+                    Some(fd)
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -338,17 +346,15 @@ pub async fn tls_accept(
                         }
                         Err(e) => {
                             tracing::warn!("kTLS key install failed: {e}; dropping connection");
-                            return Err(ProxyError::Tls(
-                                format!("kTLS key install failed: {e}"),
-                            ));
+                            return Err(ProxyError::Tls(format!("kTLS key install failed: {e}")));
                         }
                     }
                 }
                 Err(e) => {
                     tracing::warn!("kTLS secret extraction failed: {e}; dropping connection");
-                    return Err(ProxyError::Tls(
-                        format!("kTLS secret extraction failed: {e}"),
-                    ));
+                    return Err(ProxyError::Tls(format!(
+                        "kTLS secret extraction failed: {e}"
+                    )));
                 }
             }
         }
