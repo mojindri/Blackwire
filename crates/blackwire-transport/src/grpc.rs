@@ -61,6 +61,10 @@ const MAX_MESSAGE_SIZE: u32 = 16 * 1024 * 1024;
 const FRAME_HEADER_LEN: usize = 5;
 /// IO bridge read chunk to reduce per-read overhead on bulk relay paths.
 const BRIDGE_READ_CHUNK: usize = 64 * 1024;
+/// Coalescing target for a single gRPC Hunk payload on bulk paths.
+const COALESCE_TARGET_BYTES: usize = 16 * 1024;
+/// Larger h2 flow-control windows reduce update churn during bulk relay.
+const H2_INITIAL_WINDOW_SIZE: u32 = 2 * 1024 * 1024;
 
 fn grpc_buffer_pool() -> &'static Arc<BufferPool> {
     static POOL: OnceLock<Arc<BufferPool>> = OnceLock::new();
@@ -212,6 +216,7 @@ pub struct GrpcStream {
     inner: GrpcInner,
     recv_buf: BytesMut,
     read_buf: Bytes,
+    pending_plain: BytesMut,
     write_buf: BytesMut,
 }
 
@@ -230,6 +235,7 @@ impl GrpcStream {
             inner,
             recv_buf: grpc_buffer_pool().acquire(16 * 1024),
             read_buf: Bytes::new(),
+            pending_plain: grpc_buffer_pool().acquire(16 * 1024),
             write_buf: grpc_buffer_pool().acquire(16 * 1024),
         }
     }
@@ -276,37 +282,54 @@ impl GrpcStream {
 
         while !self.write_buf.is_empty() {
             send.reserve_capacity(self.write_buf.len());
-            loop {
-                match send.poll_capacity(cx) {
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(None) => {
-                        return Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::WriteZero,
-                            "gRPC send stream closed",
-                        )));
-                    }
-                    Poll::Ready(Some(Err(e))) => {
-                        return Poll::Ready(Err(io::Error::other(e)));
-                    }
-                    Poll::Ready(Some(Ok(0))) => {
-                        return Poll::Pending;
-                    }
-                    Poll::Ready(Some(Ok(cap))) => {
-                        let n = cap.min(self.write_buf.len());
-                        let chunk = self.write_buf.split_to(n).freeze();
-                        send.send_data(chunk, false).map_err(io::Error::other)?;
-                        break;
-                    }
+            match send.poll_capacity(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => {
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "gRPC send stream closed",
+                    )));
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Err(io::Error::other(e)));
+                }
+                Poll::Ready(Some(Ok(0))) => {
+                    return Poll::Pending;
+                }
+                Poll::Ready(Some(Ok(cap))) => {
+                    let n = cap.min(self.write_buf.len());
+                    let chunk = self.write_buf.split_to(n).freeze();
+                    send.send_data(chunk, false).map_err(io::Error::other)?;
                 }
             }
         }
         Poll::Ready(Ok(()))
+    }
+
+    fn encode_pending_plain_into_frames(&mut self, force: bool) {
+        while !self.pending_plain.is_empty()
+            && (force || self.pending_plain.len() >= COALESCE_TARGET_BYTES)
+        {
+            let payload_len = self.pending_plain.len().min(MAX_MESSAGE_SIZE as usize);
+            let payload = self.pending_plain.split_to(payload_len);
+            let mut varint_len = 1usize;
+            let mut remaining = payload_len as u64;
+            while remaining >= 0x80 {
+                remaining >>= 7;
+                varint_len += 1;
+            }
+            let hunk_len = 1 + varint_len + payload_len;
+            self.write_buf.reserve(FRAME_HEADER_LEN + hunk_len);
+            append_grpc_frame_prefix(&mut self.write_buf, hunk_len);
+            append_hunk(&mut self.write_buf, &payload);
+        }
     }
 }
 
 impl Drop for GrpcStream {
     fn drop(&mut self) {
         grpc_buffer_pool().release(std::mem::take(&mut self.recv_buf));
+        grpc_buffer_pool().release(std::mem::take(&mut self.pending_plain));
         grpc_buffer_pool().release(std::mem::take(&mut self.write_buf));
     }
 }
@@ -357,28 +380,44 @@ impl AsyncRead for GrpcStream {
 impl AsyncWrite for GrpcStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        // Encode each write immediately as a bounded gRPC frame (xray pattern).
-        // This prevents unbounded write_buf growth when flush is delayed.
+        // Coalesce small writes into larger Hunks to reduce h2/gRPC framing cost.
         let n = buf.len().min(MAX_MESSAGE_SIZE as usize);
-        let data = &buf[..n];
-        let mut varint_len = 1usize;
-        let mut remaining = data.len() as u64;
-        while remaining >= 0x80 {
-            remaining >>= 7;
-            varint_len += 1;
+        self.pending_plain.extend_from_slice(&buf[..n]);
+        self.encode_pending_plain_into_frames(false);
+        // Keep write-side progress without forcing a full flush on every call.
+        let this = self.as_mut().get_mut();
+        match &mut this.inner {
+            GrpcInner::Io(inner) => {
+                while !this.write_buf.is_empty() {
+                    match Pin::new(inner.as_mut()).poll_write(cx, &this.write_buf) {
+                        Poll::Pending => break,
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                        Poll::Ready(Ok(0)) => {
+                            return Poll::Ready(Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                "gRPC frame write returned zero bytes",
+                            )));
+                        }
+                        Poll::Ready(Ok(written)) => {
+                            let _ = this.write_buf.split_to(written);
+                        }
+                    }
+                }
+            }
+            GrpcInner::H2 { .. } => match this.flush_h2_send(cx) {
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Ready(Ok(())) | Poll::Pending => {}
+            },
         }
-        let hunk_len = 1 + varint_len + data.len();
-        self.write_buf.reserve(FRAME_HEADER_LEN + hunk_len);
-        append_grpc_frame_prefix(&mut self.write_buf, hunk_len);
-        append_hunk(&mut self.write_buf, data);
         Poll::Ready(Ok(n))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.as_mut().get_mut();
+        this.encode_pending_plain_into_frames(true);
         match &mut this.inner {
             GrpcInner::Io(inner) => {
                 while !this.write_buf.is_empty() {
@@ -404,6 +443,7 @@ impl AsyncWrite for GrpcStream {
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.as_mut().get_mut();
+        this.encode_pending_plain_into_frames(true);
         if let GrpcInner::Io(inner) = &mut this.inner {
             return Pin::new(inner.as_mut()).poll_shutdown(cx);
         }
@@ -413,7 +453,8 @@ impl AsyncWrite for GrpcStream {
             Poll::Ready(Ok(())) => {}
         }
         if let GrpcInner::H2 { send, .. } = &mut this.inner {
-            send.send_data(Bytes::new(), true).map_err(io::Error::other)?;
+            send.send_data(Bytes::new(), true)
+                .map_err(io::Error::other)?;
         }
         Poll::Ready(Ok(()))
     }
@@ -436,6 +477,8 @@ pub async fn grpc_connect(
     use h2::client;
 
     let (h2, conn) = client::Builder::new()
+        .initial_window_size(H2_INITIAL_WINDOW_SIZE)
+        .initial_connection_window_size(H2_INITIAL_WINDOW_SIZE)
         .handshake(tcp_stream)
         .await
         .map_err(|e| ProxyError::Transport(format!("gRPC h2 handshake failed: {e}")))?;
@@ -489,6 +532,8 @@ pub async fn grpc_accept(
     use h2::server;
 
     let mut conn = server::Builder::new()
+        .initial_window_size(H2_INITIAL_WINDOW_SIZE)
+        .initial_connection_window_size(H2_INITIAL_WINDOW_SIZE)
         .handshake(tcp_stream)
         .await
         .map_err(|e| ProxyError::Transport(format!("gRPC h2 server handshake failed: {e}")))?;
