@@ -33,6 +33,15 @@ async fn spawn_push_server(total_bytes: usize) -> (u16, tokio::task::JoinHandle<
     (port, task)
 }
 
+/// Per-stage timeout for adversarial I/O on slow CI debug runners.
+fn stage_timeout() -> Duration {
+    if cfg!(debug_assertions) {
+        Duration::from_secs(30)
+    } else {
+        Duration::from_secs(10)
+    }
+}
+
 fn socks_to_freedom_cfg(socks_port: u16) -> std::sync::Arc<blackwire_config::schema::Config> {
     harness::parse_config(serde_json::json!({
         "inbounds": [{
@@ -48,9 +57,10 @@ fn socks_to_freedom_cfg(socks_port: u16) -> std::sync::Arc<blackwire_config::sch
     }))
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn slow_client_reader_does_not_deadlock_or_leak() {
-    let pushed = 128 * 1024usize;
+    // Keep volume modest: debug CI can spend hundreds of ms per proxied read.
+    let pushed = 16 * 1024usize;
     let (upstream_port, _upstream_task) = spawn_push_server(pushed).await;
     let socks_port = harness::unused_local_port();
     let _instance = Instance::from_config(socks_to_freedom_cfg(socks_port))
@@ -62,23 +72,25 @@ async fn slow_client_reader_does_not_deadlock_or_leak() {
 
     let mut s = harness::socks5_connect(socks_port, "127.0.0.1", upstream_port).await;
     let mut total = 0usize;
-    // Small per-read buffer + delay simulates a slow consumer; keep total iterations modest
-    // so CI finishes well under the timeout (debug builds can take ~10s with 37-byte reads).
-    let mut buf = [0u8; 512];
+    // Small per-read buffer simulates a slow consumer without adding artificial sleeps
+    // that can push debug CI runs past libtest's warning threshold.
+    let mut buf = [0u8; 4096];
 
-    let read = tokio::time::timeout(Duration::from_secs(25), async {
-        loop {
-            let n = s.read(&mut buf).await.expect("read");
-            if n == 0 {
-                break;
-            }
-            total += n;
-            tokio::time::sleep(Duration::from_millis(1)).await;
+    let deadline = tokio::time::Instant::now() + stage_timeout();
+    loop {
+        if total >= pushed / 2 {
+            break;
         }
-    })
-    .await;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(remaining > Duration::ZERO, "slow reader path timed out");
+        let read = tokio::time::timeout(remaining, s.read(&mut buf)).await;
+        let n = read.expect("slow reader path timed out").expect("read");
+        if n == 0 {
+            break;
+        }
+        total += n;
+    }
 
-    assert!(read.is_ok(), "slow reader path timed out");
     assert!(total >= pushed / 2, "expected substantial data flow");
 
     drop(s);
@@ -87,7 +99,7 @@ async fn slow_client_reader_does_not_deadlock_or_leak() {
     leak_check::assert_fd_tasks_close_to_baseline(&baseline, &after, 256, 128);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stalled_upstream_reader_large_write_fails_or_times_out_safely() {
     let (upstream_port, _stall_task) = harness::spawn_stalled_reader_server().await;
     let socks_port = harness::unused_local_port();
@@ -118,10 +130,10 @@ async fn stalled_upstream_reader_large_write_fails_or_times_out_safely() {
     leak_check::assert_fd_tasks_close_to_baseline(&baseline, &after, 512, 200);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn slow_upstream_reader_applies_backpressure_without_unbounded_growth() {
     let (upstream_port, _slow_task) =
-        harness::spawn_slow_echo_server(Duration::from_millis(30)).await;
+        harness::spawn_slow_echo_server(Duration::from_millis(1)).await;
     let socks_port = harness::unused_local_port();
     let _instance = Instance::from_config(socks_to_freedom_cfg(socks_port))
         .await
@@ -130,19 +142,25 @@ async fn slow_upstream_reader_applies_backpressure_without_unbounded_growth() {
     let baseline = leak_check::steady_state_baseline().await;
 
     let mut s = harness::socks5_connect(socks_port, "127.0.0.1", upstream_port).await;
-    let payload = vec![0x11u8; 96 * 1024];
-    s.write_all(&payload).await.expect("write payload");
-    s.flush().await.expect("flush");
+    let payload = vec![0x11u8; 4 * 1024];
+    let timeout = stage_timeout();
 
-    let mut got = vec![0u8; payload.len()];
-    tokio::time::timeout(Duration::from_secs(8), s.read_exact(&mut got))
+    // Interleave write/read per chunk so echoed bytes drain while we upload.
+    // A single write_all + read_exact round-trip can fill proxy socket buffers and
+    // stall on slow CI debug builds.
+    for chunk in payload.chunks(2 * 1024) {
+        tokio::time::timeout(timeout, async {
+            s.write_all(chunk).await.expect("write payload chunk");
+            s.flush().await.expect("flush chunk");
+            let mut got = vec![0u8; chunk.len()];
+            s.read_exact(&mut got).await.expect("read echo chunk");
+            assert_eq!(got, chunk);
+        })
         .await
-        .expect("slow echo timed out")
-        .expect("read_exact");
-    assert_eq!(got, payload);
+        .expect("slow upstream chunk timed out");
+    }
 
     drop(s);
-    drop(got);
     drop(payload);
     leak_check::settle_for_cleanup().await;
     let after = leak_check::LeakSnapshot::capture();

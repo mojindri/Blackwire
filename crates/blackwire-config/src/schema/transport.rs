@@ -197,9 +197,17 @@ pub struct SplitHttpConfig {
     #[serde(default)]
     pub host: Vec<String>,
 
-    /// HTTP method to use for the upload request.
+    /// HTTP method to use for the upload request (legacy field; Xray uses `uplinkHTTPMethod`).
     #[serde(default = "default_splithttp_method")]
     pub method: String,
+
+    /// XHTTP mode: `stream-one`, `packet-up`, `stream-up`, or `auto` (empty = `stream-one` on server).
+    #[serde(default)]
+    pub mode: String,
+
+    /// Uplink HTTP method for XHTTP (`POST` in Xray when unset).
+    #[serde(default, rename = "uplinkHTTPMethod")]
+    pub uplink_http_method: String,
 
     /// Extra HTTP headers.
     #[serde(default)]
@@ -207,7 +215,7 @@ pub struct SplitHttpConfig {
 }
 
 fn default_splithttp_method() -> String {
-    "PUT".to_string()
+    String::new()
 }
 
 /// gRPC transport settings.
@@ -235,6 +243,14 @@ pub struct SniffingConfig {
     /// Protocols to sniff for: "http", "tls", or "fakedns".
     #[serde(default, rename = "destOverride")]
     pub dest_override: Vec<String>,
+
+    /// When true, only sniff connection metadata (no payload peek). Xray `metadataOnly`.
+    #[serde(default, rename = "metadataOnly")]
+    pub metadata_only: bool,
+
+    /// When true, use sniffed domain for routing but keep the original dial target (IP). Xray `routeOnly`.
+    #[serde(default, rename = "routeOnly")]
+    pub route_only: bool,
 }
 
 /// Hysteria2 protocol configuration.
