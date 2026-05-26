@@ -36,10 +36,9 @@ use blackwire_common::{BoxedStream, ProxyError};
 //   1. The underlying transport is a raw TcpStream.
 //   2. The kernel supports SO_KTLS (Linux 4.13+ for TLS 1.2,  4.17+ for TLS 1.3).
 //
-// …we transfer TLS record encryption/decryption into the kernel so that the
-// relay layer can use splice(2) on the resulting fd.  From the kernel's point
-// of view the fd is a regular TCP socket; reads/writes are automatically
-// en/decrypted without touching user-space buffers.
+// …we transfer TLS record encryption/decryption into the kernel. The resulting
+// fd still needs normal read/write relay semantics: kTLS sockets are not quite
+// equivalent to plain TCP for splice(2), especially on receive.
 //
 // Fallback: if TCP_ULP "tls" is rejected (old kernel, unsupported cipher, or
 // non-TCP transport) we silently keep the normal tokio-rustls TlsStream path.
@@ -191,6 +190,45 @@ mod ktls {
     }
 }
 
+#[cfg(target_os = "linux")]
+struct KtlsTcpStream(tokio::net::TcpStream);
+
+#[cfg(target_os = "linux")]
+impl tokio::io::AsyncRead for KtlsTcpStream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl tokio::io::AsyncWrite for KtlsTcpStream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
+    }
+}
+
 // ── Client ────────────────────────────────────────────────────────────────────
 
 /// Perform a TLS client handshake over an existing stream.
@@ -250,9 +288,9 @@ fn build_client_config(alpn: &[&str], skip_verify: bool) -> Result<ClientConfig,
 ///
 /// On Linux, when the underlying transport is a raw `TcpStream`, the handshake
 /// result is upgraded to kernel TLS (kTLS) by calling `setsockopt TCP_ULP "tls"`
-/// and installing the traffic keys.  The returned `BoxedStream` is then a plain
-/// `TcpStream` whose encryption is handled transparently by the kernel, which
-/// lets the relay layer use `splice(2)` for zero-copy forwarding.
+/// and installing the traffic keys. The returned `BoxedStream` uses normal
+/// read/write relay semantics because kTLS sockets are not equivalent to plain
+/// TCP for `splice(2)` on all kernels.
 ///
 /// If the kernel rejects kTLS (old kernel, non-TCP transport, unsupported
 /// cipher) the function falls back to the normal tokio-rustls `TlsStream`.
@@ -341,7 +379,7 @@ pub async fn tls_accept(
                                 .downcast::<TcpStream>()
                                 .expect("confirmed TcpStream in phase 1");
                             tracing::debug!("kTLS enabled on inbound TLS connection");
-                            return Ok(Box::new(tcp));
+                            return Ok(Box::new(KtlsTcpStream(tcp)));
                         }
                         Err(e) => {
                             tracing::warn!("kTLS key install failed: {e}; dropping connection");
