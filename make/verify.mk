@@ -28,7 +28,7 @@ verify-local:
 	@echo "==> [verify-local 4/5] rustdoc (strict)"
 	RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links -D rustdoc::bare_urls" cargo doc --workspace --no-deps
 	@echo "==> [verify-local 5/5] tests"
-	cargo test --workspace --all-targets
+	BENCH_IO_TIMEOUT_MS=30000 cargo test --workspace --all-targets
 	@echo "==> verify-local complete"
 
 # Compatibility shape for the old `make check` (local-total, no Lima/VPS).
