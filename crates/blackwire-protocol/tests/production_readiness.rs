@@ -300,13 +300,12 @@ fn trojan_token_is_lowercase_hex_only() {
 #[tokio::test]
 async fn trojan_rejects_bad_crlf_and_truncations_without_panic() {
     let token = trojan_codec::compute_token("pw");
-    let good =
-        trojan_codec::encode_request(
-            &token,
-            trojan_codec::CMD_CONNECT,
-            &Address::Ipv4("1.2.3.4".parse().unwrap(), 443),
-        )
-            .unwrap();
+    let good = trojan_codec::encode_request(
+        &token,
+        trojan_codec::CMD_CONNECT,
+        &Address::Ipv4("1.2.3.4".parse().unwrap(), 443),
+    )
+    .unwrap();
 
     for cut in 0..good.len() {
         let _ = trojan_decode(&good[..cut]).await;
@@ -320,13 +319,12 @@ async fn trojan_rejects_bad_crlf_and_truncations_without_panic() {
 #[test]
 fn trojan_encoder_must_reject_invalid_token_length_in_production_api() {
     let bad = "short";
-    let encoded =
-        trojan_codec::encode_request(
-            bad,
-            trojan_codec::CMD_CONNECT,
-            &Address::Domain("example.com".to_string(), 443),
-        )
-            .unwrap();
+    let encoded = trojan_codec::encode_request(
+        bad,
+        trojan_codec::CMD_CONNECT,
+        &Address::Domain("example.com".to_string(), 443),
+    )
+    .unwrap();
 
     assert_ne!(
         encoded.len(),

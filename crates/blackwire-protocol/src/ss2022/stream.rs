@@ -63,7 +63,7 @@ pub struct Ss2022Stream {
 
     // Read state
     read_counter: u64,
-    read_buf: Bytes, // decrypted plaintext waiting to be consumed
+    read_buf: Bytes,    // decrypted plaintext waiting to be consumed
     read_raw: BytesMut, // raw ciphertext accumulated from inner
 
     // Write state
@@ -323,7 +323,7 @@ impl AsyncWrite for Ss2022Stream {
         self.write_buf = staged;
         match result {
             Ok(()) => Poll::Ready(Ok(chunk.len())),
-            Err(e) => return Poll::Ready(Err(e)),
+            Err(e) => Poll::Ready(Err(e)),
         }
     }
 

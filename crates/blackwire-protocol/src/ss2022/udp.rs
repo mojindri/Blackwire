@@ -22,9 +22,7 @@ use rand::RngExt;
 use tokio::net::UdpSocket;
 use tracing::{debug, warn};
 
-use blackwire_common::{
-    decode_socks5_address, write_socks5_address, Address, ProxyError,
-};
+use blackwire_common::{decode_socks5_address, write_socks5_address, Address, ProxyError};
 
 const TYPE_CLIENT: u8 = 0x00;
 const TYPE_SERVER: u8 = 0x01;
@@ -46,7 +44,10 @@ fn block_cipher(psk: &[u8; 32]) -> Aes256 {
     Aes256::new(GenericArray::from_slice(psk))
 }
 
-fn decrypt_separate_header(psk: &[u8; 32], wire: &[u8]) -> Result<[u8; SEPARATE_HEADER_LEN], ProxyError> {
+fn decrypt_separate_header(
+    psk: &[u8; 32],
+    wire: &[u8],
+) -> Result<[u8; SEPARATE_HEADER_LEN], ProxyError> {
     if wire.len() < SEPARATE_HEADER_LEN {
         return Err(ProxyError::Protocol("SS2022 UDP packet too short".into()));
     }
@@ -55,7 +56,10 @@ fn decrypt_separate_header(psk: &[u8; 32], wire: &[u8]) -> Result<[u8; SEPARATE_
     Ok(block.into())
 }
 
-fn encrypt_separate_header(psk: &[u8; 32], plain: &[u8; SEPARATE_HEADER_LEN]) -> [u8; SEPARATE_HEADER_LEN] {
+fn encrypt_separate_header(
+    psk: &[u8; 32],
+    plain: &[u8; SEPARATE_HEADER_LEN],
+) -> [u8; SEPARATE_HEADER_LEN] {
     let mut block = GenericArray::clone_from_slice(plain);
     block_cipher(psk).encrypt_block(&mut block);
     block.into()
@@ -113,17 +117,16 @@ pub fn decode_client_packet(
     let client_session_id = u64::from_be_bytes(header[..8].try_into().unwrap());
     let packet_id = u64::from_be_bytes(header[8..16].try_into().unwrap());
     if buf.len() < SEPARATE_HEADER_LEN + AEAD_TAG_LEN + 1 {
-        return Err(ProxyError::Protocol("SS2022 UDP ciphertext too short".into()));
+        return Err(ProxyError::Protocol(
+            "SS2022 UDP ciphertext too short".into(),
+        ));
     }
     let ciphertext = &buf[SEPARATE_HEADER_LEN..];
 
     let session_key = derive_session_key(psk, header[..8].try_into().unwrap());
     let cipher = session_cipher(&session_key);
     let plaintext = cipher
-        .decrypt(
-            GenericArray::from_slice(&aead_nonce(&header)),
-            ciphertext,
-        )
+        .decrypt(GenericArray::from_slice(&aead_nonce(&header)), ciphertext)
         .map_err(|_| ProxyError::Protocol("SS2022 UDP decrypt failed".into()))?;
 
     if plaintext.is_empty() || plaintext[0] != TYPE_CLIENT {
@@ -133,7 +136,9 @@ pub fn decode_client_packet(
         )));
     }
     if plaintext.len() < 11 {
-        return Err(ProxyError::Protocol("SS2022 UDP plaintext too short".into()));
+        return Err(ProxyError::Protocol(
+            "SS2022 UDP plaintext too short".into(),
+        ));
     }
     let ts = u64::from_be_bytes(plaintext[1..9].try_into().unwrap());
     let now = SystemTime::now()
@@ -146,7 +151,9 @@ pub fn decode_client_packet(
     let pad_len = u16::from_be_bytes([plaintext[9], plaintext[10]]) as usize;
     let mut pos = 11 + pad_len;
     if pos >= plaintext.len() {
-        return Err(ProxyError::Protocol("SS2022 UDP truncated after padding".into()));
+        return Err(ProxyError::Protocol(
+            "SS2022 UDP truncated after padding".into(),
+        ));
     }
     let atyp = plaintext[pos];
     pos += 1;
@@ -204,7 +211,9 @@ pub fn encode_server_packet(
 pub fn decode_server_packet(buf: &[u8], psk: &[u8; 32]) -> Result<Vec<u8>, ProxyError> {
     let header = decrypt_separate_header(psk, buf)?;
     if buf.len() < SEPARATE_HEADER_LEN + AEAD_TAG_LEN {
-        return Err(ProxyError::Protocol("SS2022 UDP server packet too short".into()));
+        return Err(ProxyError::Protocol(
+            "SS2022 UDP server packet too short".into(),
+        ));
     }
     let server_session_id = &header[..8];
     let session_key = derive_session_key(psk, server_session_id.try_into().unwrap());
@@ -276,7 +285,8 @@ pub async fn relay_ss2022_udp(socket: Arc<UdpSocket>, psk: [u8; 32]) {
         };
 
         let pkt = buf[..n].to_vec();
-        let (client_session_id, _packet_id, dest, payload) = match decode_client_packet(&pkt, &psk) {
+        let (client_session_id, _packet_id, dest, payload) = match decode_client_packet(&pkt, &psk)
+        {
             Ok(v) => v,
             Err(e) => {
                 debug!(source = %client_addr, error = %e, "SS2022 UDP decode failed");
@@ -389,14 +399,8 @@ mod tests {
         let client_session_id = 0x0123_4567_89ab_cdef_u64;
         let client_packet_id = 1u64;
 
-        let pkt = encode_client_packet(
-            &psk,
-            client_session_id,
-            client_packet_id,
-            &dest,
-            payload,
-        )
-        .unwrap();
+        let pkt = encode_client_packet(&psk, client_session_id, client_packet_id, &dest, payload)
+            .unwrap();
 
         let (sid, pid, d, p) = decode_client_packet(&pkt, &psk).unwrap();
         assert_eq!(sid, client_session_id);
@@ -405,8 +409,7 @@ mod tests {
         assert_eq!(p, payload);
 
         let session = ServerUdpSession::new(&psk, client_session_id);
-        let reply =
-            encode_server_packet(&psk, &session, 0, &dest, b"pong").unwrap();
+        let reply = encode_server_packet(&psk, &session, 0, &dest, b"pong").unwrap();
         assert!(reply.len() > SEPARATE_HEADER_LEN + AEAD_TAG_LEN);
         let header = decrypt_separate_header(&psk, &reply).unwrap();
         let server_session_id = u64::from_be_bytes(header[..8].try_into().unwrap());

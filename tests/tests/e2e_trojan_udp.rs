@@ -3,9 +3,7 @@
 use std::sync::Arc;
 
 use blackwire_common::Address;
-use blackwire_protocol::trojan::codec::{
-    encode_request, encode_udp_datagram, CMD_UDP_ASSOCIATE,
-};
+use blackwire_protocol::trojan::codec::{encode_request, encode_udp_datagram, CMD_UDP_ASSOCIATE};
 use blackwire_protocol::trojan::compute_token;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;

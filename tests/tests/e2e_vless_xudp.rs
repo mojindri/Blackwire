@@ -6,7 +6,7 @@ use std::sync::Arc;
 use blackwire_common::Address;
 use blackwire_protocol::vless::codec::{encode_request, Command};
 use blackwire_protocol::vless::mux::{
-    encode_frame, encode_new_metadata_xudp, parse_frame, MUX_DOMAIN, OPT_DATA, SessionStatus,
+    encode_frame, encode_new_metadata_xudp, parse_frame, SessionStatus, MUX_DOMAIN, OPT_DATA,
     XUDP_SESSION_ID,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

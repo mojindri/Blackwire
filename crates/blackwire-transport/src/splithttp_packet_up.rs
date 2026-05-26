@@ -35,8 +35,7 @@ impl QueueState {
                 }
                 Some(Reverse((seq, payload))) if seq > self.next_seq => {
                     if self.heap.len() >= self.max_buffered {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
+                        return Err(io::Error::other(
                             "packet-up reorder buffer exceeded",
                         ));
                     }

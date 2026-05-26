@@ -230,8 +230,8 @@ async fn phase6_vless_splithttp_packet_up_h2_echo() {
     let dest = Address::Ipv4("127.0.0.1".parse().unwrap(), echo_port);
     let uuid = parse_uuid(TEST_UUID);
     let mut upload = encode_request(&uuid, "", Command::Tcp, &dest)
-    .expect("encode vless request")
-    .to_vec();
+        .expect("encode vless request")
+        .to_vec();
     upload.extend_from_slice(payload);
 
     let post_req = http::Request::builder()
