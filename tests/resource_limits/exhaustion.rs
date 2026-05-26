@@ -1,12 +1,11 @@
 #![cfg(feature = "heavy-tests")]
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use blackwire_core::Instance;
 use blackwire_protocol::vless::codec as vless_codec;
 use blackwire_transport::{grpc_accept, grpc_connect, ws_accept, ws_connect, WsConnectConfig};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 #[path = "../common/harness.rs"]
