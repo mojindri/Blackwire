@@ -67,12 +67,9 @@ pub async fn relay_trojan_udp(stream: BoxedStream) -> Result<(), ProxyError> {
                             exchange_udp_datagram(&udp, upstream, &data).await?
                         {
                             let reply = encode_udp_datagram(&dest, &reply_payload)?;
-                            reply_tx
-                                .send(reply)
-                                .await
-                                .map_err(|_| {
-                                    ProxyError::Transport("Trojan UDP reply channel closed".into())
-                                })?;
+                            reply_tx.send(reply).await.map_err(|_| {
+                                ProxyError::Transport("Trojan UDP reply channel closed".into())
+                            })?;
                         }
                     }
                     Err(ProxyError::Protocol(_)) if acc.len() > 65507 => {

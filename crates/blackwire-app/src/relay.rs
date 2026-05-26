@@ -61,7 +61,8 @@ pub async fn relay_bidirectional(
             inbound.write_all(&outbound_prefix).await?;
         }
 
-        if let Ok((up, down)) = blackwire_common::splice::splice_bidirectional(&inbound, &outbound).await
+        if let Ok((up, down)) =
+            blackwire_common::splice::splice_bidirectional(&inbound, &outbound).await
         {
             return Ok((up + prefix_up, down + prefix_down));
         }

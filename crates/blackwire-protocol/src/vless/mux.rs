@@ -102,7 +102,11 @@ pub fn is_mux_cool_dest(dest: &Address) -> bool {
 }
 
 /// Build metadata bytes for a New sub-connection (TCP target only).
-pub fn encode_new_metadata(session_id: u16, dest: &Address, opt: u8) -> Result<Vec<u8>, ProxyError> {
+pub fn encode_new_metadata(
+    session_id: u16,
+    dest: &Address,
+    opt: u8,
+) -> Result<Vec<u8>, ProxyError> {
     let mut meta = BytesMut::with_capacity(64);
     meta.put_u16(session_id);
     meta.put_u8(SessionStatus::New as u8);
@@ -166,7 +170,8 @@ pub fn encode_frame(metadata: &[u8], payload: Option<&[u8]>) -> Result<Vec<u8>, 
     if metadata.len() > MAX_META_LEN {
         return Err(ProxyError::Protocol("mux: metadata too long".into()));
     }
-    let mut out = BytesMut::with_capacity(4 + metadata.len() + payload.map(|p| p.len() + 2).unwrap_or(0));
+    let mut out =
+        BytesMut::with_capacity(4 + metadata.len() + payload.map(|p| p.len() + 2).unwrap_or(0));
     out.put_u16(metadata.len() as u16);
     out.extend_from_slice(metadata);
     if let Some(data) = payload {
@@ -221,10 +226,7 @@ pub fn parse_metadata(meta: &[u8]) -> Result<FrameMetadata, ProxyError> {
         if network == TargetNetwork::Tcp {
             rest = skip_mux_inbound_extensions(rest)?;
         }
-        if network == TargetNetwork::Udp
-            && option & OPT_DATA != 0
-            && rest.len() >= 8
-        {
+        if network == TargetNetwork::Udp && option & OPT_DATA != 0 && rest.len() >= 8 {
             let mut gid = [0u8; 8];
             gid.copy_from_slice(&rest[..8]);
             global_id = Some(gid);
@@ -489,11 +491,10 @@ pub async fn relay_mux_cool(
                             %dest,
                             "mux: new UDP sub-connection"
                         );
-                        let socket = Arc::new(
-                            UdpSocket::bind("0.0.0.0:0")
-                                .await
-                                .map_err(|e| ProxyError::Transport(format!("mux UDP bind: {e}")))?,
-                        );
+                        let socket =
+                            Arc::new(UdpSocket::bind("0.0.0.0:0").await.map_err(|e| {
+                                ProxyError::Transport(format!("mux UDP bind: {e}"))
+                            })?);
                         if let Some(ref data) = payload {
                             if !data.is_empty() {
                                 let upstream = resolve_udp_dest(&dest).await?;
@@ -547,9 +548,9 @@ pub async fn relay_mux_cool(
                             if let Some(ref data) = payload {
                                 if !data.is_empty() {
                                     let upstream = resolve_udp_dest(&dest).await?;
-                                    session.socket.send_to(data, upstream).await.map_err(
-                                        |e| ProxyError::Transport(format!("mux UDP send: {e}")),
-                                    )?;
+                                    session.socket.send_to(data, upstream).await.map_err(|e| {
+                                        ProxyError::Transport(format!("mux UDP send: {e}"))
+                                    })?;
                                 }
                             }
                         }
@@ -567,13 +568,18 @@ pub async fn relay_mux_cool(
                     if let Some(ref data) = payload {
                         if !data.is_empty() {
                             let upstream = resolve_udp_dest(&session.dest).await?;
-                            session.socket.send_to(data, upstream).await.map_err(|e| {
-                                ProxyError::Transport(format!("mux UDP send: {e}"))
-                            })?;
+                            session
+                                .socket
+                                .send_to(data, upstream)
+                                .await
+                                .map_err(|e| ProxyError::Transport(format!("mux UDP send: {e}")))?;
                         }
                     }
                 } else {
-                    debug!(session_id = meta.session_id, "mux: Keep for unknown session");
+                    debug!(
+                        session_id = meta.session_id,
+                        "mux: Keep for unknown session"
+                    );
                 }
             }
             SessionStatus::End => {

@@ -126,7 +126,7 @@ async fn trojan_header_fragmented_at_every_byte_boundary() {
         trojan_codec::CMD_CONNECT,
         &Address::Domain("frag.example".into(), 443),
     )
-        .expect("encode");
+    .expect("encode");
     for split in 1..msg.len() {
         let (mut w, r) = tokio::io::duplex(4096);
         let m = msg.clone();
