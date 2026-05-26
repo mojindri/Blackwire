@@ -1,0 +1,23 @@
+{
+  "log": { "level": "warn" },
+  "inbounds": [
+    { "type": "socks", "tag": "socks-in", "listen": "::", "listen_port": 1080 }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "blackwire-out",
+      "server": "blackwire-server",
+      "server_port": 8448,
+      "uuid": "1791A4CD-09E3-4A29-A36D-FEA98300C845",
+      "tls": { "enabled": true, "server_name": "blackwire.local", "insecure": true },
+      "transport": {
+        "type": "http",
+        "path": "/split",
+        "method": "PUT",
+        "host": ["blackwire.local"]
+      }
+    }
+  ],
+  "route": { "final": "blackwire-out" }
+}
