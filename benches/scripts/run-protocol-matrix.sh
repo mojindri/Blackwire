@@ -32,7 +32,8 @@ fi
 
 IFS=',' read -r -a PROTO_LIST <<< "$PROTOCOLS"
 for proto in "${PROTO_LIST[@]}"; do
-  bench="e2e_${proto}"
+  proto_norm="${proto//-/_}"
+  bench="e2e_${proto_norm}"
   echo "==> cargo bench -p blackwire-benches --bench $bench ${FEATURE_ARGS[*]-}" | tee -a "$LOG"
   (
     cd "$PROJECT_ROOT"
