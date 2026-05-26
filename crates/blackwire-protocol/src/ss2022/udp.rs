@@ -164,7 +164,7 @@ pub fn decode_client_packet(
 }
 
 /// Encode a SIP022 server → client UDP packet.
-pub fn encode_server_packet(
+fn encode_server_packet(
     psk: &[u8; 32],
     session: &ServerUdpSession,
     server_packet_id: u64,

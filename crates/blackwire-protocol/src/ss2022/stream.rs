@@ -313,24 +313,21 @@ impl AsyncRead for Ss2022Stream {
                     self.read_raw.extend_from_slice(&tmp[..filled]);
 
                     let mut raw = std::mem::take(&mut self.read_raw);
-                    loop {
-                        match self.try_decrypt_chunk(&mut raw) {
-                            Some(Ok(plaintext)) => {
-                                if plaintext.is_empty() {
-                                    self.read_raw = raw;
-                                    return Poll::Ready(Ok(())); // stream end
-                                }
-                                self.read_buf = plaintext;
-                                // Emit one decrypted chunk per poll_read. Keep any
-                                // remaining ciphertext in read_raw for subsequent polls.
-                                break;
-                            }
-                            Some(Err(e)) => {
+                    match self.try_decrypt_chunk(&mut raw) {
+                        Some(Ok(plaintext)) => {
+                            if plaintext.is_empty() {
                                 self.read_raw = raw;
-                                return Poll::Ready(Err(e));
+                                return Poll::Ready(Ok(())); // stream end
                             }
-                            None => break,
+                            self.read_buf = plaintext;
+                            // Emit one decrypted chunk per poll_read. Keep any
+                            // remaining ciphertext in read_raw for subsequent polls.
                         }
+                        Some(Err(e)) => {
+                            self.read_raw = raw;
+                            return Poll::Ready(Err(e));
+                        }
+                        None => {}
                     }
                     self.read_raw = raw;
                 }
