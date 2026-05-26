@@ -21,11 +21,12 @@
 
 use std::io;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use aes_gcm::{
-    aead::{generic_array::GenericArray, Aead, AeadInPlace, Payload},
+    aead::{generic_array::GenericArray, AeadInPlace},
     Aes128Gcm, KeyInit,
 };
 use bytes::{BufMut, Bytes, BytesMut};
@@ -43,6 +44,8 @@ use blackwire_common::{BoxedStream, BufferPool};
 use super::codec::Security;
 
 const MAX_CHUNK_SIZE: usize = 16 * 1024;
+const READ_CHUNK_SIZE: usize = 64 * 1024;
+const BENCH_TRACE_ENV: &str = "BENCH_TRACE_PROTOCOL";
 /// VMess request option bit that enables SHAKE-based chunk size masking.
 pub const REQUEST_OPTION_CHUNK_MASKING: u8 = 0x04;
 /// VMess request option bit that enables random global padding bytes per chunk.
@@ -52,6 +55,20 @@ fn vmess_buffer_pool() -> &'static Arc<BufferPool> {
     static POOL: OnceLock<Arc<BufferPool>> = OnceLock::new();
     POOL.get_or_init(BufferPool::new)
 }
+
+fn trace_enabled() -> bool {
+    std::env::var(BENCH_TRACE_ENV).is_ok()
+}
+
+fn trace_once(flag: &AtomicBool, msg: impl FnOnce() -> String) {
+    if trace_enabled() && !flag.swap(true, Ordering::Relaxed) {
+        eprintln!("{}", msg());
+    }
+}
+
+static TRACE_VMESS_WRITE: AtomicBool = AtomicBool::new(false);
+static TRACE_VMESS_INNER_READ: AtomicBool = AtomicBool::new(false);
+static TRACE_VMESS_DECRYPTED: AtomicBool = AtomicBool::new(false);
 
 fn chunk_nonce(counter: u16, iv: &[u8; 16]) -> [u8; 12] {
     let mut nonce = [0u8; 12];
@@ -121,27 +138,24 @@ impl BodyCipher {
         }
     }
 
-    fn decrypt(&self, nonce: &[u8; 12], data: &[u8]) -> Result<Vec<u8>, ()> {
+    /// Decrypt ciphertext in place (buffer holds ciphertext || tag on input).
+    fn decrypt_in_place(&self, nonce: &[u8; 12], buf: &mut Vec<u8>) -> Result<(), ()> {
         match self {
             Self::Aes128Gcm(cipher) => cipher
-                .decrypt(
+                .decrypt_in_place(
                     GenericArray::from_slice(nonce),
-                    Payload {
-                        msg: data,
-                        aad: &[],
-                    },
+                    &[],
+                    buf,
                 )
                 .map_err(|_| ()),
             Self::ChaCha20Poly1305(cipher) => cipher
-                .decrypt(
+                .decrypt_in_place(
                     GenericArray::from_slice(nonce),
-                    Payload {
-                        msg: data,
-                        aad: &[],
-                    },
+                    &[],
+                    buf,
                 )
                 .map_err(|_| ()),
-            Self::None => Ok(data.to_vec()),
+            Self::None => Ok(()),
         }
     }
 }
@@ -189,6 +203,8 @@ pub struct VmessStream {
     read_global_padding: bool,
     read_buf: Bytes,
     read_raw_buf: BytesMut,
+    /// Reused AEAD decrypt buffer (avoids per-chunk `Vec` from `Aead::decrypt`).
+    decrypt_scratch: Vec<u8>,
     /// Decoded (size, padding_len) from a previous partial read of the chunk header.
     /// Prevents re-advancing the SizeMask when the chunk body has not yet arrived.
     read_pending: Option<(usize, usize)>,
@@ -230,6 +246,7 @@ impl VmessStream {
             read_global_padding: options & REQUEST_OPTION_GLOBAL_PADDING != 0,
             read_buf: Bytes::new(),
             read_raw_buf: vmess_buffer_pool().acquire(MAX_CHUNK_SIZE + 256),
+            decrypt_scratch: Vec::with_capacity(MAX_CHUNK_SIZE + 32),
             read_pending: None,
             write_cipher: BodyCipher::new(security, write_key),
             write_iv: *write_iv,
@@ -317,25 +334,40 @@ impl VmessStream {
         }
         let data_nonce = chunk_nonce(self.read_counter, &self.read_iv);
 
-        // Decrypt. An empty plaintext signals EOF (the peer sent an empty encrypted chunk).
-        // This matches Xray's body reader: no special EOF branch; empty plaintext == EOF.
-        let plaintext = match self.read_cipher.decrypt(&data_nonce, &data_ct) {
-            Ok(pt) => pt,
-            Err(_) => {
-                return Some(Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "VMess: data chunk decryption failed",
-                )));
-            }
-        };
+        self.decrypt_scratch.clear();
+        self.decrypt_scratch.extend_from_slice(&data_ct);
+        if self
+            .read_cipher
+            .decrypt_in_place(&data_nonce, &mut self.decrypt_scratch)
+            .is_err()
+        {
+            return Some(Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "VMess: data chunk decryption failed",
+            )));
+        }
         self.read_counter = self.read_counter.wrapping_add(1);
 
-        Some(Ok(Bytes::from(plaintext)))
+        // Empty plaintext signals EOF (matches Xray body reader).
+        let plaintext =
+            Bytes::from(std::mem::replace(&mut self.decrypt_scratch, Vec::with_capacity(MAX_CHUNK_SIZE + 32)));
+        trace_once(&TRACE_VMESS_DECRYPTED, || {
+            format!("[bench-trace][vmess] decrypted chunk bytes={}", plaintext.len())
+        });
+        Some(Ok(plaintext))
     }
 
     fn append_encrypted_chunk(&mut self, dst: &mut BytesMut, data: &[u8]) -> io::Result<()> {
         let nonce_arr = chunk_nonce(self.write_counter, &self.write_iv);
         let padding_len = self.next_write_padding_len();
+        trace_once(&TRACE_VMESS_WRITE, || {
+            format!(
+                "[bench-trace][vmess] encrypt chunk plain={} padding={} overhead={}",
+                data.len(),
+                padding_len,
+                self.write_cipher.overhead()
+            )
+        });
         let size = self.encode_size(data.len() + self.write_cipher.overhead() + padding_len);
         dst.reserve(size.len() + data.len() + self.write_cipher.overhead() + padding_len);
         dst.put_slice(&size);
@@ -378,7 +410,27 @@ impl AsyncRead for VmessStream {
                 return Poll::Ready(Ok(()));
             }
 
-            let mut tmp = [0u8; 4096];
+            // Consume any fully-buffered ciphertext before polling the socket.
+            let mut raw = std::mem::take(&mut self.read_raw_buf);
+            match self.try_decrypt_chunk(&mut raw) {
+                Some(Ok(pt)) => {
+                    self.read_raw_buf = raw;
+                    if pt.is_empty() {
+                        return Poll::Ready(Ok(()));
+                    }
+                    self.read_buf = pt;
+                    continue;
+                }
+                Some(Err(e)) => {
+                    self.read_raw_buf = raw;
+                    return Poll::Ready(Err(e));
+                }
+                None => {
+                    self.read_raw_buf = raw;
+                }
+            }
+
+            let mut tmp = [0u8; READ_CHUNK_SIZE];
             let mut tmp_buf = ReadBuf::new(&mut tmp);
             match Pin::new(self.inner.as_mut()).poll_read(cx, &mut tmp_buf) {
                 Poll::Pending => return Poll::Pending,
@@ -388,6 +440,9 @@ impl AsyncRead for VmessStream {
                     if filled == 0 {
                         return Poll::Ready(Ok(()));
                     }
+                    trace_once(&TRACE_VMESS_INNER_READ, || {
+                        format!("[bench-trace][vmess] inner read bytes={filled}")
+                    });
                     self.read_raw_buf.extend_from_slice(&tmp[..filled]);
 
                     let mut raw = std::mem::take(&mut self.read_raw_buf);
@@ -399,6 +454,9 @@ impl AsyncRead for VmessStream {
                                     return Poll::Ready(Ok(()));
                                 }
                                 self.read_buf = pt;
+                                // Emit one decrypted chunk per poll_read. Keep any
+                                // remaining ciphertext in read_raw_buf for subsequent polls.
+                                break;
                             }
                             Some(Err(e)) => {
                                 self.read_raw_buf = raw;
@@ -417,17 +475,54 @@ impl AsyncRead for VmessStream {
 impl AsyncWrite for VmessStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
+        // If previous ciphertext is still queued, drain it before accepting more
+        // plaintext so we propagate backpressure to callers.
+        while !self.write_buf.is_empty() {
+            let this = self.as_mut().get_mut();
+            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Ready(Ok(0)) => {
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "VMess: inner write returned 0",
+                    )));
+                }
+                Poll::Ready(Ok(n)) => {
+                    let _ = this.write_buf.split_to(n);
+                }
+            }
+        }
+
         let chunk = &buf[..buf.len().min(MAX_CHUNK_SIZE)];
         let mut staged = std::mem::take(&mut self.write_buf);
         let result = self.append_encrypted_chunk(&mut staged, chunk);
         self.write_buf = staged;
-        match result {
-            Ok(()) => Poll::Ready(Ok(chunk.len())),
-            Err(e) => Poll::Ready(Err(e)),
+        if let Err(e) = result {
+            return Poll::Ready(Err(e));
         }
+
+        // Opportunistically drain newly-buffered ciphertext too.
+        while !self.write_buf.is_empty() {
+            let this = self.as_mut().get_mut();
+            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf) {
+                Poll::Pending => break,
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Ready(Ok(0)) => {
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "VMess: inner write returned 0",
+                    )));
+                }
+                Poll::Ready(Ok(n)) => {
+                    let _ = this.write_buf.split_to(n);
+                }
+            }
+        }
+        Poll::Ready(Ok(chunk.len()))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
