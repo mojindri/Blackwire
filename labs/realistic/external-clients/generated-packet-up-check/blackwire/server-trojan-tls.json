@@ -1,0 +1,39 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "inbounds": [
+    {
+      "tag": "trojan-in",
+      "protocol": "trojan",
+      "listen": "0.0.0.0",
+      "port": 8445,
+      "settings": {
+        "clients": [
+          {
+            "password": "trojan-pass-hetzner"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "certificateFile": "/etc/blackwire/certs/cert.pem",
+          "keyFile": "/etc/blackwire/certs/key.pem"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "freedom",
+      "protocol": "freedom"
+    }
+  ],
+  "dns": {
+    "servers": [
+      "udp://127.0.0.11:53"
+    ]
+  }
+}

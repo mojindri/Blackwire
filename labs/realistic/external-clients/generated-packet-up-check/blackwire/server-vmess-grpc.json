@@ -1,0 +1,43 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "inbounds": [
+    {
+      "tag": "vmess-grpc-in",
+      "protocol": "vmess",
+      "listen": "0.0.0.0",
+      "port": 8444,
+      "settings": {
+        "clients": [
+          {
+            "id": "AE32D659-1F3D-48E5-8FD0-3F7754BA33F1",
+            "email": "vps-user@lab"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "tls",
+        "tlsSettings": {
+          "certificateFile": "/etc/blackwire/certs/cert.pem",
+          "keyFile": "/etc/blackwire/certs/key.pem"
+        },
+        "grpcSettings": {
+          "serviceName": "lab.Gun"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "freedom",
+      "protocol": "freedom"
+    }
+  ],
+  "dns": {
+    "servers": [
+      "udp://127.0.0.11:53"
+    ]
+  }
+}
