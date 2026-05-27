@@ -39,11 +39,13 @@
 pub mod codec;
 pub mod inbound;
 pub mod mux;
+pub mod mux_client;
 pub mod outbound;
 pub mod registry;
 pub mod udp;
 pub mod vision;
 
 pub use inbound::VlessInbound;
+pub use mux_client::{MuxCoolSession, MuxStream};
 pub use outbound::{connect_vless_on_stream, VlessOutbound, VlessOutboundConfig};
 pub use registry::{VlessUser, VlessUserRegistry};

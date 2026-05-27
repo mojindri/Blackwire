@@ -43,6 +43,24 @@ pub struct InboundConfig {
     pub sniffing: Option<SniffingConfig>,
 }
 
+/// Mux.Cool multiplexing settings for VLESS outbounds.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MuxConfig {
+    /// Enable Mux.Cool client-side multiplexing.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Maximum concurrent logical streams per mux connection (default 8, max 1024).
+    #[serde(default = "MuxConfig::default_concurrency")]
+    pub concurrency: usize,
+}
+
+impl MuxConfig {
+    fn default_concurrency() -> usize {
+        8
+    }
+}
+
 /// An outbound handler: a protocol used to forward traffic to the destination.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundConfig {
@@ -64,6 +82,10 @@ pub struct OutboundConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub stream_settings: Option<StreamSettingsConfig>,
+
+    /// Mux.Cool multiplexing (VLESS only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mux: Option<MuxConfig>,
 }
 
 impl Validate for OutboundConfig {

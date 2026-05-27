@@ -305,7 +305,7 @@ pub fn parse_frame(buf: &[u8]) -> Result<(FrameMetadata, Option<Vec<u8>>, usize)
     Ok((meta, payload, consumed))
 }
 
-async fn read_mux_frame<R: AsyncReadExt + Unpin>(
+pub(super) async fn read_mux_frame<R: AsyncReadExt + Unpin>(
     reader: &mut R,
 ) -> Result<(FrameMetadata, Option<Vec<u8>>), ProxyError> {
     let meta_len = reader.read_u16().await? as usize;

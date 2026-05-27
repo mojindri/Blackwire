@@ -20,7 +20,9 @@ use blackwire_protocol::vless::{
 use blackwire_transport::MkcpServerConfig;
 use dashmap::DashMap;
 
-use crate::outbound_transport::{uses_outbound_transport, TransportVlessOutbound};
+use crate::outbound_transport::{
+    uses_outbound_transport, MuxVlessOutbound, TransportVlessOutbound,
+};
 use crate::reality::{build_reality_client, uses_reality, RealityVlessOutbound};
 
 pub(crate) fn select_balancer_outbounds(
@@ -219,9 +221,20 @@ pub(crate) fn build_vless_outbound(
         .unwrap_or("")
         .to_string();
 
+    let mux = cfg.mux.as_ref().filter(|m| m.enabled);
+
     if uses_reality(&cfg.stream_settings) {
         let reality = build_reality_client(cfg, server)?;
         Ok(RealityVlessOutbound::new(&cfg.tag, reality, uuid, flow))
+    } else if mux.is_some() {
+        let concurrency = mux.map(|m| m.concurrency).unwrap_or(8);
+        Ok(MuxVlessOutbound::new(
+            &cfg.tag,
+            server,
+            uuid,
+            cfg.stream_settings.clone(),
+            concurrency,
+        ))
     } else if uses_outbound_transport(&cfg.stream_settings) {
         Ok(TransportVlessOutbound::new(
             &cfg.tag,

@@ -23,6 +23,8 @@ use blackwire_config::schema::{NetworkType, SecurityType, StreamSettingsConfig};
 use blackwire_protocol::trojan::{compute_token, connect_trojan_on_stream};
 use blackwire_protocol::vless::codec::Command;
 use blackwire_protocol::vless::connect_vless_on_stream;
+use blackwire_protocol::vless::mux::MUX_DOMAIN as MUX_COOL_DOMAIN;
+use blackwire_protocol::vless::mux_client::MuxCoolSession;
 use blackwire_protocol::vmess::{auth::cmd_key, connect_vmess_on_stream};
 use blackwire_transport::{
     dial_httpupgrade, grpc_connect, mkcp_connect, quic_connect, shadowtls_v3_connect,
@@ -145,6 +147,76 @@ impl OutboundHandler for TransportVmessOutbound {
         debug!(server = %self.server, dest = %dest, "VMess transport outbound connecting");
         let stream = connect_transport(self.server, &self.stream_settings).await?;
         connect_vmess_on_stream(stream, &self.uuid, &self.cmd_key, dest).await
+    }
+}
+
+/// VLESS outbound with Mux.Cool client-side multiplexing.
+///
+/// Maintains a pool of VLESS mux sessions.  Each session is one outbound TLS
+/// connection that carries up to `max_concurrency` logical sub-streams.  When
+/// all sessions are at capacity a new VLESS connection is opened.  Dead sessions
+/// (underlying connection lost) are evicted on each call.
+pub(crate) struct MuxVlessOutbound {
+    tag: String,
+    server: SocketAddr,
+    uuid: [u8; 16],
+    stream_settings: Option<StreamSettingsConfig>,
+    max_concurrency: usize,
+    sessions: tokio::sync::Mutex<Vec<Arc<MuxCoolSession>>>,
+}
+
+impl MuxVlessOutbound {
+    pub(crate) fn new(
+        tag: impl Into<String>,
+        server: SocketAddr,
+        uuid: [u8; 16],
+        stream_settings: Option<StreamSettingsConfig>,
+        max_concurrency: usize,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            tag: tag.into(),
+            server,
+            uuid,
+            stream_settings,
+            max_concurrency: max_concurrency.clamp(1, 1024),
+            sessions: tokio::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    async fn get_or_open_session(&self) -> Result<Arc<MuxCoolSession>, ProxyError> {
+        let mut sessions = self.sessions.lock().await;
+        // Evict dead sessions.
+        sessions.retain(|s| !s.is_dead());
+        // Return first session with capacity.
+        if let Some(s) = sessions.iter().find(|s| s.has_capacity()) {
+            return Ok(Arc::clone(s));
+        }
+        // Open a fresh VLESS mux connection.
+        drop(sessions); // don't hold lock while dialing
+        let stream = connect_transport(self.server, &self.stream_settings).await?;
+        let mux_dest = Address::Domain(MUX_COOL_DOMAIN.to_string(), 0);
+        let mux_stream =
+            connect_vless_on_stream(stream, &self.uuid, "", Command::Mux, &mux_dest).await?;
+        let session = MuxCoolSession::new(mux_stream, self.max_concurrency);
+        let handle = Arc::clone(&session);
+        let mut sessions = self.sessions.lock().await;
+        sessions.retain(|s| !s.is_dead());
+        sessions.push(session);
+        Ok(handle)
+    }
+}
+
+#[async_trait]
+impl OutboundHandler for MuxVlessOutbound {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    async fn connect(&self, _ctx: &Context, dest: &Address) -> Result<BoxedStream, ProxyError> {
+        debug!(server = %self.server, %dest, "Mux.Cool VLESS outbound connecting");
+        let session = self.get_or_open_session().await?;
+        let stream = session.open_stream(dest)?;
+        Ok(Box::new(stream) as BoxedStream)
     }
 }
 
