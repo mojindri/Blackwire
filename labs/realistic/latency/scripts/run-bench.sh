@@ -169,20 +169,23 @@ echo "$RAW"
 # ── Parse hey output → JSON ───────────────────────────────────────────────────
 
 parse_secs() {
-    # Extract "X.XXXX secs" after a label
-    echo "$RAW" | grep -E "$1" | grep -oE '[0-9]+\.[0-9]+' | head -1
+    # Extract "X.XXXX secs" after a label; || true prevents set -e on no-match
+    echo "$RAW" | grep -E "$1" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true
 }
 
+# hey ≥0.1.5 prints "50%%" (double-%) in latency distribution; match both forms
+pct_grep() { echo "$RAW" | grep -E "${1}%%? in" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true; }
+
 TOTAL_SECS=$(parse_secs "Total:")
-RPS=$(echo "$RAW" | grep "Requests/sec:" | grep -oE '[0-9]+\.[0-9]+' | head -1)
-P50=$(echo "$RAW" | grep "50% in" | grep -oE '[0-9]+\.[0-9]+' | head -1)
-P90=$(echo "$RAW" | grep "90% in" | grep -oE '[0-9]+\.[0-9]+' | head -1)
-P95=$(echo "$RAW" | grep "95% in" | grep -oE '[0-9]+\.[0-9]+' | head -1)
-P99=$(echo "$RAW" | grep "99% in" | grep -oE '[0-9]+\.[0-9]+' | head -1)
+RPS=$(echo "$RAW" | grep "Requests/sec:" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)
+P50=$(pct_grep 50)
+P90=$(pct_grep 90)
+P95=$(pct_grep 95)
+P99=$(pct_grep 99)
 FASTEST=$(parse_secs "Fastest:")
 SLOWEST=$(parse_secs "Slowest:")
-SUCCESS=$(echo "$RAW" | grep -E '^\s+\[200\]' | grep -oE '[0-9]+' | head -1)
-ERRORS=$(echo "$RAW" | grep -E 'Error distribution:' -A 20 | grep -oE '\[([0-9]+)\]' | tr -d '[]' | paste -sd+ | bc 2>/dev/null || echo "0")
+SUCCESS=$(echo "$RAW" | grep -E '^\s+\[200\]' | grep -oE '[0-9]+' | head -1 || true)
+ERRORS=$(echo "$RAW" | grep -E 'Error distribution:' -A 20 | grep -oE '\[([0-9]+)\]' | tr -d '[]' | paste -sd+ 2>/dev/null | bc 2>/dev/null || echo "0")
 
 cat > "$REPORT_FILE" <<EOF
 {
