@@ -128,6 +128,7 @@ help:
 	@echo "  make bench           - Docker latency benchmark: xray + singbox + blackwire"
 	@echo "  make bench-xray      - Docker benchmark: xray series only"
 	@echo "  make bench-singbox   - Docker benchmark: singbox series only"
+	@echo "  make bench-remote VPS=root@1.2.3.4  - run bench on remote VPS over SSH"
 	@echo "  make perf            - Lima VM benchmark"
 	@echo "  make perf-remote     - VPS benchmark (needs SSH_SERVER/SSH_CLIENT)"
 	@echo "  make clean-generated - remove reports/logs/pcaps/bench outputs"
@@ -180,7 +181,7 @@ clean-all-generated: clean-generated ## Remove generated repo reports plus Rust 
 
 
 
-.PHONY: bench bench-build bench-xray bench-singbox bench-smoke \
+.PHONY: bench bench-build bench-xray bench-singbox bench-smoke bench-remote \
         bench-vm-smoke bench-vm-total bench-vps-smoke bench-vps-total check-perf-vm check-perf-vps check-perf-total clean-bench
 
 ## bench: Docker benchmark — build image + run full xray/singbox/blackwire comparison + print report
@@ -202,6 +203,10 @@ bench-singbox:
 ## bench-smoke: Docker benchmark — Blackwire only (direct / socks / vless loopback)
 bench-smoke:
 	$(MAKE) -C labs/realistic bench-smoke
+
+## bench-remote: Run make bench on a remote VPS over SSH (VPS=user@host required)
+bench-remote:
+	$(MAKE) -C labs/realistic bench-remote VPS="$(VPS)" SSH_KEY="$(SSH_KEY)" SSH_PORT="$(SSH_PORT)"
 
 bench-vm-smoke:
 	$(MAKE) -C labs/realistic bench-vm-smoke

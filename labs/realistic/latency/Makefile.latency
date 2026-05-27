@@ -36,7 +36,7 @@ CHAOS_IFACE    ?= lo
 .PHONY: latency-local latency-local-dry latency-report latency-report-html latency-check-tools \
         latency-lima latency-lima-build latency-chaos latency-profile \
         latency-compare latency-vps \
-        bench bench-build bench-xray bench-singbox bench-smoke
+        bench bench-build bench-xray bench-singbox bench-smoke bench-remote
 
 latency-check-tools: ## Check that tools required for latency benchmarks are installed
 	@echo "==> checking latency tools"
@@ -216,3 +216,15 @@ bench-smoke: bench-build ## Docker benchmark: Blackwire only — direct / socks 
 	    -e BENCH_DURATION="$(BENCH_DURATION)" \
 	    -e BENCH_CONC="$(BENCH_CONC)" \
 	    "$(BENCH_IMAGE)" local-smoke
+
+bench-remote: ## Run make bench on a remote VPS over SSH (VPS=user@host required)
+	@test -n "$(VPS)" || { \
+	    echo "ERROR: VPS is not set."; \
+	    echo "  Usage: make bench-remote VPS=root@1.2.3.4"; \
+	    echo "  Optional: SSH_KEY=~/.ssh/id_rsa  SSH_PORT=22  BENCH_DURATION=30  BENCH_CONC=32"; \
+	    exit 1; }
+	SSH_KEY="$(SSH_KEY)" \
+	SSH_PORT="$(SSH_PORT)" \
+	BENCH_DURATION="$(BENCH_DURATION)" \
+	BENCH_CONC="$(BENCH_CONC)" \
+	bash "$(LATENCY_SCRIPTS)/bench-remote.sh" "$(VPS)"
