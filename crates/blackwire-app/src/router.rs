@@ -370,6 +370,9 @@ pub struct DomainMatcher {
 
 impl DomainMatcher {
     /// Build a `DomainMatcher` from lists of patterns in each category.
+    ///
+    /// Patterns are stored lowercase; `matches()` normalises input lazily so
+    /// already-lowercase domains (the common case) require no allocation.
     pub fn new(
         full: Vec<String>,
         suffix: Vec<String>,
@@ -377,41 +380,52 @@ impl DomainMatcher {
         regexes: Vec<String>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            full: full.into_iter().map(|s| (s, ())).collect(),
-            suffix: suffix.into_iter().map(|s| (s, ())).collect(),
-            keyword: AhoCorasick::new(&keywords)?,
+            full: full.into_iter().map(|s| (s.to_lowercase(), ())).collect(),
+            suffix: suffix.into_iter().map(|s| (s.to_lowercase(), ())).collect(),
+            keyword: AhoCorasick::builder()
+                .ascii_case_insensitive(true)
+                .build(&keywords)?,
             regex: RegexSet::new(&regexes)?,
         })
     }
 
     /// Returns `true` if `domain` matches any pattern in this matcher.
     pub fn matches(&self, domain: &str) -> bool {
+        // Defer allocation: only lowercase if an uppercase byte is found.
+        let lower_buf;
+        let lower: &str = if domain.bytes().any(|b| b.is_ascii_uppercase()) {
+            lower_buf = domain.to_lowercase();
+            &lower_buf
+        } else {
+            domain
+        };
+
         // 1. Full exact match.
-        if self.full.contains_key(domain) {
+        if self.full.contains_key(lower) {
             return true;
         }
 
         // 2. Suffix match: walk domain labels without allocating.
         {
             let mut start = 0;
-            while start < domain.len() {
-                if self.suffix.contains_key(&domain[start..]) {
+            while start < lower.len() {
+                if self.suffix.contains_key(&lower[start..]) {
                     return true;
                 }
-                match domain[start..].find('.') {
+                match lower[start..].find('.') {
                     Some(dot) => start += dot + 1,
                     None => break,
                 }
             }
         }
 
-        // 3. Keyword match — does the domain contain any keyword?
-        if self.keyword.is_match(domain) {
+        // 3. Keyword match — AhoCorasick O(n) single-pass scan.
+        if self.keyword.is_match(lower) {
             return true;
         }
 
         // 4. Regex match.
-        if self.regex.is_match(domain) {
+        if self.regex.is_match(lower) {
             return true;
         }
 
@@ -617,5 +631,29 @@ mod tests {
     fn invalid_cidr_returns_error() {
         let result = IpMatcher::new(vec!["not-a-cidr".into()]);
         assert!(result.is_err());
+    }
+
+    // Checks that domain matching is case-insensitive for all match types.
+    #[test]
+    fn domain_case_insensitive() {
+        let matcher = DomainMatcher::new(
+            vec!["Example.COM".into()],
+            vec!["Suffix.NET".into()],
+            vec!["VPN".into()],
+            vec![],
+        )
+        .unwrap();
+
+        // Full match: stored lowercase, input mixed-case.
+        assert!(matcher.matches("example.com"));
+        assert!(matcher.matches("EXAMPLE.COM"));
+
+        // Suffix match: stored lowercase.
+        assert!(matcher.matches("sub.Suffix.NET"));
+        assert!(matcher.matches("SUB.SUFFIX.NET"));
+
+        // Keyword: AhoCorasick with ascii_case_insensitive.
+        assert!(matcher.matches("MyVPN.com"));
+        assert!(matcher.matches("vpn-service.io"));
     }
 }
