@@ -72,10 +72,12 @@ pub enum ProfileViolation {
 }
 
 impl ProfileViolation {
+    /// Returns `true` if this is a hard error that should abort startup.
     pub fn is_error(&self) -> bool {
         matches!(self, ProfileViolation::Error(_))
     }
 
+    /// The human-readable violation message, without the severity prefix.
     pub fn message(&self) -> &str {
         match self {
             ProfileViolation::Error(m) | ProfileViolation::Warning(m) => m,
