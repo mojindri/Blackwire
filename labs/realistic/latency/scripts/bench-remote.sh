@@ -22,7 +22,7 @@ BENCH_DURATION="${BENCH_DURATION:-30}"
 BENCH_CONC="${BENCH_CONC:-32}"
 
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPTS_DIR/../../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPTS_DIR/../../../.." && pwd)"
 REPORT_DIR="${REPORT_DIR:-$SCRIPTS_DIR/../reports}"
 
 SSH_OPTS=(-p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15)
