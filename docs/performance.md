@@ -104,7 +104,7 @@ Changes implemented to reduce per-connection cost on the VLESS→Freedom hot pat
 | 2 | Lazy tracing strings — no clone until log level active | `dispatcher.rs` | −35–170 B heap/conn |
 | 3 | Domain case normalised at config load, not per-request | `router.rs` | −1 heap alloc/match |
 | 4 | Skip `RecordingReader` when no fallback configured | `vless/inbound.rs` | −Vec alloc + per-byte copy |
-| 5 | `Arc<str>` for `VlessUser.email` | `registry.rs`, `context.rs` | −String alloc/conn |
+| 5 | `Arc<str>` for `VlessUser.email` and `VmessUser.email` | `vless/registry.rs`, `vmess/inbound.rs`, `context.rs` | −String alloc/conn (both protocols) |
 | 6 | `SmallVec<[Address;4]>` for DNS IP results | `dispatcher.rs` | stack alloc ≤4 IPs |
 | 7 | Reuse 8 KiB Vision read buffer across polls | `vision.rs` | −8–128 KB/REALITY+Vision conn |
 | 8 | TCP connection pool in `FreedomOutbound` | `freedom.rs` | ~0 µs connect (was 86 ms avg) |
