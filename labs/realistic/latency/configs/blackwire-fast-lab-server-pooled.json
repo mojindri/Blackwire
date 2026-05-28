@@ -1,6 +1,6 @@
 {
   "profile": "fast",
-  "fast": { "strictProduction": false },
+  "fast": { "strictProduction": false, "pool": "fixed", "splice": "always" },
   "log": { "level": "warn" },
   "metricsAddr": "127.0.0.1:9092",
   "inbounds": [
