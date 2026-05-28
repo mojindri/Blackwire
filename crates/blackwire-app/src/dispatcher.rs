@@ -47,6 +47,12 @@ macro_rules! relay_log {
 /// Slow DNS during routing would stall the entire connection dispatch, so we cap
 /// the budget well below the connection handshake timeout.
 const ROUTING_DNS_TIMEOUT: Duration = Duration::from_secs(3);
+/// Maximum time Fast Profile waits for client bytes before validating a pooled socket.
+///
+/// The first-use guard needs client bytes so it can retry with a fresh dial if
+/// a pooled socket is stale. Server-first protocols do not send client bytes
+/// immediately, so this guard must be bounded to avoid blocking the relay.
+const POOLED_FIRST_WRITE_GUARD_TIMEOUT: Duration = Duration::from_millis(5);
 
 use std::collections::HashMap;
 
@@ -331,10 +337,24 @@ impl DefaultDispatcher {
         let pool_label = pool_tag.as_deref().unwrap_or("unknown");
 
         let mut first = vec![0u8; 16 * 1024];
-        let n = inbound_stream
-            .read(&mut first)
-            .await
-            .map_err(ProxyError::Io)?;
+        let n = match tokio::time::timeout(
+            POOLED_FIRST_WRITE_GUARD_TIMEOUT,
+            inbound_stream.read(&mut first),
+        )
+        .await
+        {
+            Ok(read) => read.map_err(ProxyError::Io)?,
+            Err(_) => {
+                metrics::counter!(
+                    "freedom_pool_first_use_guard_skipped_total",
+                    "inbound" => ctx.inbound_tag.clone(),
+                    "outbound" => pool_label.to_owned(),
+                    "reason" => "client_first_timeout"
+                )
+                .increment(1);
+                return Ok((inbound_stream, Box::new(outbound), 0));
+            }
+        };
         if n == 0 {
             return Ok((inbound_stream, Box::new(outbound), 0));
         }
