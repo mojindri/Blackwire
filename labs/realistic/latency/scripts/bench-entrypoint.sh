@@ -16,25 +16,12 @@ echo "==> [bench] scenario: $SCENARIO"
 echo "==> [bench] blackwire: $(blackwire --version 2>&1 | head -1 || echo n/a)"
 echo "==> [bench] xray:      $(xray version 2>&1 | head -1 || echo n/a)"
 echo "==> [bench] sing-box:  $(sing-box version 2>&1 | head -1 || echo n/a)"
-echo "==> [bench] hey:       $(hey --version 2>&1 | head -1 || echo ok)"
+echo "==> [bench] hey:       $(hey 2>&1 | head -1 || echo ok)"
 echo ""
 
 # ── Upstream HTTP server ───────────────────────────────────────────────────────
 
-python3 - <<'PYEOF' &
-import http.server, socketserver
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        body = b"OK"
-        self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-    def log_message(self, *a): pass
-with socketserver.TCPServer(("127.0.0.1", 18080), H) as s:
-    s.allow_reuse_address = True
-    s.serve_forever()
-PYEOF
+python3 "$SCRIPTS_DIR/upstream_static.py" --host 127.0.0.1 --port 18080 &
 
 UPSTREAM_PID=$!
 trap "kill $UPSTREAM_PID 2>/dev/null || true" EXIT
@@ -53,11 +40,13 @@ mkdir -p "$REPORT_DIR"
 
 BENCH_DURATION="${BENCH_DURATION:-30}"
 BENCH_CONC="${BENCH_CONC:-32}"
+BENCH_PAYLOAD="${BENCH_PAYLOAD:-1k}"
+TARGET_URL="${TARGET_URL:-http://127.0.0.1:18080/{payload}}"
 
 export BW_BIN="${BW_BIN:-blackwire}"
 export XRAY_BIN="${XRAY_BIN:-xray}"
 export SINGBOX_BIN="${SINGBOX_BIN:-sing-box}"
-export REPORT_DIR BENCH_DURATION BENCH_CONC
+export REPORT_DIR BENCH_DURATION BENCH_CONC BENCH_PAYLOAD TARGET_URL
 
 bash "$SCRIPTS_DIR/compare.sh" "$SCENARIO"
 
