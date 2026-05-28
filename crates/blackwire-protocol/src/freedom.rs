@@ -185,6 +185,9 @@ impl DestPool {
     /// Returns `(stream, stale_count)` where `stale_count` is the number of
     /// slots discarded; caller must subtract that from `AdaptivePool::global_idle`.
     fn try_take(&self, idle_ttl: Duration) -> (Option<TcpStream>, usize) {
+        // Update LRU timestamp unconditionally so a destination with all-stale
+        // or empty idle slots isn't treated as cold by evict_lru().
+        self.last_used_ms.store(now_ms(), Ordering::Relaxed);
         let mut guard = self.idle.lock();
         let now = Instant::now();
         let mut stale = 0usize;
@@ -197,7 +200,6 @@ impl DestPool {
             let mut probe = [0u8; 1];
             match stream.try_read(&mut probe) {
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    self.last_used_ms.store(now_ms(), Ordering::Relaxed);
                     return (Some(stream), stale);
                 }
                 _ => {
@@ -241,10 +243,25 @@ impl DestPool {
             return;
         }
 
-        // Pre-reserve all `needed` slots atomically.
-        pool.global_idle.fetch_add(needed as i64, Ordering::Relaxed);
+        // Pre-reserve slots with a CAS loop so two concurrent replenish() calls
+        // can't both read the same global_idle and both claim the full budget.
+        let to_spawn = loop {
+            let cur = pool.global_idle.load(Ordering::Relaxed);
+            let budget = (pool.max_global_idle as i64 - cur).max(0) as usize;
+            let want = needed.min(budget);
+            if want == 0 {
+                return;
+            }
+            if pool
+                .global_idle
+                .compare_exchange(cur, cur + want as i64, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break want;
+            }
+        };
 
-        for _ in 0..needed {
+        for _ in 0..to_spawn {
             let dp = Arc::clone(&self);
             let p = Arc::clone(&pool);
             dp.in_flight.fetch_add(1, Ordering::Relaxed);
@@ -460,8 +477,8 @@ impl OutboundHandler for FreedomOutbound {
             Arc::clone(&dest_pool).replenish(Arc::clone(pool));
 
             if let Some(stream) = taken {
-                // taken also held one reservation; it's now "in use" (released by caller).
-                // Decrement global_idle since the socket left the pool.
+                // The socket was a real idle slot counted in global_idle; decrement
+                // now that it has left the pool.
                 pool.global_idle.fetch_sub(1, Ordering::Relaxed);
                 metrics::counter!(
                     "freedom_pool_hits_total",
