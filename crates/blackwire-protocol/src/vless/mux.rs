@@ -462,18 +462,19 @@ pub async fn relay_mux_cool(
                             %dest,
                             "mux: new TCP sub-connection"
                         );
-                        let mut upstream = dispatcher
-                            .connect_outbound(&ctx, &dest)
-                            .await
-                            .map_err(|e| {
-                                warn!(
-                                    session_id = meta.session_id,
-                                    %dest,
-                                    error = %e,
-                                    "mux: outbound connect failed"
-                                );
-                                e
-                            })?;
+                        let mut upstream =
+                            dispatcher
+                                .connect_outbound(&ctx, &dest)
+                                .await
+                                .map_err(|e| {
+                                    warn!(
+                                        session_id = meta.session_id,
+                                        %dest,
+                                        error = %e,
+                                        "mux: outbound connect failed"
+                                    );
+                                    e
+                                })?;
                         if let Some(ref data) = payload {
                             if !data.is_empty() {
                                 upstream.write_all(data).await?;
