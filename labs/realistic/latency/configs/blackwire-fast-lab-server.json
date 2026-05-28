@@ -1,6 +1,6 @@
 {
   "profile": "fast",
-  "fast": { "strictProduction": false },
+  "fast": { "strictProduction": false, "pool": "adaptive", "splice": "adaptive" },
   "log": { "level": "warn" },
   "metricsAddr": "127.0.0.1:9091",
   "inbounds": [
@@ -18,7 +18,7 @@
     {
       "tag": "freedom",
       "protocol": "freedom",
-      "settings": { "poolSize": 8 }
+      "settings": { "poolSize": "adaptive" }
     }
   ]
 }

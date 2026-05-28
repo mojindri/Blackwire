@@ -18,15 +18,32 @@
 use std::io;
 
 use blackwire_common::BoxedStream;
+use blackwire_config::schema::FastSplicePolicy;
 #[cfg(target_os = "linux")]
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[cfg(target_os = "linux")]
+pub const ADAPTIVE_SPLICE_MIN_BYTES: u64 = 64 * 1024;
+
+#[cfg(not(target_os = "linux"))]
+pub const ADAPTIVE_SPLICE_MIN_BYTES: u64 = 0;
 
 /// Relay bytes between two streams until either side closes.
 ///
 /// Returns `(bytes_client_to_server, bytes_server_to_client)`.
+#[allow(dead_code)]
 pub async fn relay_bidirectional(
     inbound: BoxedStream,
     outbound: BoxedStream,
+) -> io::Result<(u64, u64)> {
+    relay_bidirectional_with_splice_policy(inbound, outbound, FastSplicePolicy::Always).await
+}
+
+/// Relay bytes with an explicit Fast Profile splice policy.
+pub async fn relay_bidirectional_with_splice_policy(
+    inbound: BoxedStream,
+    outbound: BoxedStream,
+    splice_policy: FastSplicePolicy,
 ) -> io::Result<(u64, u64)> {
     #[cfg(target_os = "linux")]
     {
@@ -35,6 +52,11 @@ pub async fn relay_bidirectional(
         let (mut inbound, inbound_prefix) = match try_into_tcp_stream_with_prefix(inbound) {
             Ok(parts) => parts,
             Err(inbound) => {
+                metrics::counter!(
+                    "proxy_relay_splice_fallback_total",
+                    "reason" => "inbound_wrapped"
+                )
+                .increment(1);
                 return tokio_copy_bidirectional(inbound, outbound).await;
             }
         };
@@ -42,6 +64,11 @@ pub async fn relay_bidirectional(
         let (mut outbound, outbound_prefix) = match try_into_tcp_stream_with_prefix(outbound) {
             Ok(parts) => parts,
             Err(outbound) => {
+                metrics::counter!(
+                    "proxy_relay_splice_fallback_total",
+                    "reason" => "outbound_wrapped"
+                )
+                .increment(1);
                 let inbound: BoxedStream = if inbound_prefix.is_empty() {
                     Box::new(inbound)
                 } else {
@@ -61,20 +88,136 @@ pub async fn relay_bidirectional(
             inbound.write_all(&outbound_prefix).await?;
         }
 
+        if splice_policy == FastSplicePolicy::Disabled {
+            metrics::counter!(
+                "proxy_relay_splice_fallback_total",
+                "reason" => "policy_disabled"
+            )
+            .increment(1);
+            let (up, down) =
+                tokio_copy_bidirectional(Box::new(inbound), Box::new(outbound)).await?;
+            record_relay_path_bytes("copy", up + prefix_up, down + prefix_down);
+            return Ok((up + prefix_up, down + prefix_down));
+        }
+
+        if splice_policy == FastSplicePolicy::Adaptive {
+            return adaptive_copy_then_splice(inbound, outbound, prefix_up, prefix_down).await;
+        }
+
+        metrics::counter!("proxy_relay_splice_selected_total", "policy" => "always").increment(1);
+
         if let Ok((up, down)) =
             blackwire_common::splice::splice_bidirectional(&mut inbound, &mut outbound).await
         {
+            record_relay_path_bytes("splice", up + prefix_up, down + prefix_down);
             return Ok((up + prefix_up, down + prefix_down));
         }
         // splice can fail on exotic socket types — fall back safely.
+        metrics::counter!(
+            "proxy_relay_splice_fallback_total",
+            "reason" => "splice_error"
+        )
+        .increment(1);
         let (up, down) = tokio_copy_bidirectional(Box::new(inbound), Box::new(outbound)).await?;
+        record_relay_path_bytes("copy", up + prefix_up, down + prefix_down);
         Ok((up + prefix_up, down + prefix_down))
     }
 
     #[cfg(not(target_os = "linux"))]
     {
+        let _ = splice_policy;
         tokio_copy_bidirectional(inbound, outbound).await
     }
+}
+
+#[cfg(target_os = "linux")]
+async fn adaptive_copy_then_splice(
+    mut inbound: tokio::net::TcpStream,
+    mut outbound: tokio::net::TcpStream,
+    prefix_up: u64,
+    prefix_down: u64,
+) -> io::Result<(u64, u64)> {
+    let mut up = 0u64;
+    let mut down = 0u64;
+    let mut up_eof = false;
+    let mut down_eof = false;
+    let mut up_buf = vec![0u8; 16 * 1024];
+    let mut down_buf = vec![0u8; 16 * 1024];
+
+    loop {
+        if !up_eof && !down_eof && prefix_up + prefix_down + up + down >= ADAPTIVE_SPLICE_MIN_BYTES
+        {
+            metrics::counter!("proxy_relay_splice_selected_total", "policy" => "adaptive")
+                .increment(1);
+            match blackwire_common::splice::splice_bidirectional(&mut inbound, &mut outbound).await
+            {
+                Ok((more_up, more_down)) => {
+                    up += more_up;
+                    down += more_down;
+                    record_relay_path_bytes("adaptive_splice", up + prefix_up, down + prefix_down);
+                    return Ok((up + prefix_up, down + prefix_down));
+                }
+                Err(_) => {
+                    metrics::counter!(
+                        "proxy_relay_splice_fallback_total",
+                        "reason" => "adaptive_splice_error"
+                    )
+                    .increment(1);
+                    // Continue on the copy path. The streams are still owned and
+                    // usable here; splice failed before consuming user-space data.
+                }
+            }
+        }
+
+        if up_eof && down_eof {
+            metrics::counter!(
+                "proxy_relay_splice_fallback_total",
+                "reason" => "adaptive_below_threshold"
+            )
+            .increment(1);
+            record_relay_path_bytes("adaptive_copy", up + prefix_up, down + prefix_down);
+            return Ok((up + prefix_up, down + prefix_down));
+        }
+
+        tokio::select! {
+            read = inbound.read(&mut up_buf), if !up_eof => {
+                let n = read?;
+                if n == 0 {
+                    up_eof = true;
+                    outbound.shutdown().await?;
+                } else {
+                    outbound.write_all(&up_buf[..n]).await?;
+                    up += n as u64;
+                }
+            }
+            read = outbound.read(&mut down_buf), if !down_eof => {
+                let n = read?;
+                if n == 0 {
+                    down_eof = true;
+                    inbound.shutdown().await?;
+                } else {
+                    inbound.write_all(&down_buf[..n]).await?;
+                    down += n as u64;
+                }
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn record_relay_path_bytes(path: &'static str, up: u64, down: u64) {
+    metrics::counter!(
+        "proxy_relay_bytes_total",
+        "direction" => "up",
+        "path" => path
+    )
+    .increment(up);
+    metrics::counter!(
+        "proxy_relay_bytes_total",
+        "direction" => "down",
+        "path" => path
+    )
+    .increment(down);
 }
 
 async fn tokio_copy_bidirectional(
