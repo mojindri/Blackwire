@@ -42,8 +42,8 @@ use blackwire_app::dispatcher::{DefaultDispatcher, Dispatcher};
 use blackwire_app::features::{ConnectionHandler, InboundHandler, OutboundHandler};
 use blackwire_app::health::HealthChecker;
 use blackwire_app::router::LiveRouter;
-use blackwire_app::Balancer;
-use blackwire_config::schema::{Config, Protocol};
+use blackwire_app::{Balancer, ADAPTIVE_SPLICE_MIN_BYTES};
+use blackwire_config::schema::{Config, FastPoolPolicy, ProfileMode, Protocol};
 use blackwire_protocol::freedom::{FreedomOutbound, PoolConfig};
 use blackwire_protocol::socks::Socks5Inbound;
 use blackwire_transport::{mkcp_accept_sessions, TunRuntime};
@@ -68,6 +68,37 @@ use helpers::{
     handshake_timeout_for, initial_health_states, reject_unfinished_transport_settings,
     select_balancer_outbounds, InboundConnectionHandler,
 };
+
+fn freedom_pool_config(config: &Config, settings: &serde_json::Value) -> Option<PoolConfig> {
+    if let Some(value) = settings.get("poolSize") {
+        if value.is_null() {
+            return None;
+        }
+        {
+            if let Some(size) = value.as_u64() {
+                return (size > 0).then(|| PoolConfig::fixed(size as usize));
+            }
+            if let Some(policy) = value.as_str() {
+                return match policy.to_ascii_lowercase().as_str() {
+                    "adaptive" => Some(PoolConfig::default()),
+                    "disabled" | "off" | "none" => None,
+                    "fixed" => Some(PoolConfig::fixed(8)),
+                    _ => None,
+                };
+            }
+        }
+    }
+
+    if config.profile != ProfileMode::Fast {
+        return None;
+    }
+
+    match config.fast.as_ref().map(|f| f.pool).unwrap_or_default() {
+        FastPoolPolicy::Adaptive => Some(PoolConfig::default()),
+        FastPoolPolicy::Disabled => None,
+        FastPoolPolicy::Fixed => Some(PoolConfig::fixed(8)),
+    }
+}
 
 use crate::ws_tls::{
     build_conn_handler, uses_grpc, uses_httpupgrade, uses_shadowtls, uses_splithttp, uses_tls,
@@ -159,15 +190,8 @@ impl Instance {
             )?;
             let handler: Arc<dyn OutboundHandler> = match out_cfg.protocol {
                 Protocol::Freedom => {
-                    // poolSize = 0 (default) disables pooling (Compat mode).
-                    // poolSize > 0 enables adaptive pooling with that value as
-                    // the per-destination ceiling (Fast Profile).
-                    let max_per_dest = out_cfg.settings["poolSize"].as_u64().unwrap_or(0) as usize;
-                    if max_per_dest > 0 {
-                        let cfg = PoolConfig {
-                            max_per_dest,
-                            ..PoolConfig::default()
-                        };
+                    let pool_cfg = freedom_pool_config(config.as_ref(), &out_cfg.settings);
+                    if let Some(cfg) = pool_cfg {
                         match &dns {
                             Some(module) => FreedomOutbound::new_with_dns_pooled(
                                 &out_cfg.tag,
@@ -282,7 +306,22 @@ impl Instance {
             ),
             None => DefaultDispatcher::new_with_sniffing(router, outbound_map, sniffing_shared),
         }
-        .with_profile(config.profile);
+        .with_profile_and_fast(config.profile, config.fast.as_ref());
+
+        if config.profile == ProfileMode::Fast {
+            let fast = config.fast.as_ref().cloned().unwrap_or_default();
+            let adaptive_pool = PoolConfig::default();
+            info!(
+                pool_policy = ?fast.pool,
+                adaptive_pool_max_per_dest = adaptive_pool.max_per_dest,
+                adaptive_pool_min_hotness = adaptive_pool.min_hotness_for_pool,
+                adaptive_pool_idle_ttl_ms = adaptive_pool.idle_ttl.as_millis(),
+                splice_policy = ?fast.splice,
+                adaptive_splice_min_bytes = ADAPTIVE_SPLICE_MIN_BYTES,
+                strict_production = fast.strict_production,
+                "fast profile policy active"
+            );
+        }
 
         // ── Step 4 & 5: Build inbounds and start listeners ───────────────────
         for in_cfg in &config.inbounds {
