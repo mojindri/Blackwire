@@ -223,9 +223,12 @@ mod linux {
                     Err(e) => return Err(e),
                 }
             }
-            // Yield after each fully-drained chunk so relay tasks don't starve
-            // new-connection tasks waiting in the ready queue.
-            tokio::task::yield_now().await;
+            // Yield every 64 KiB so relay tasks don't starve new-connection tasks,
+            // but skip the yield for small payloads (e.g. HTTP keep-alive) where
+            // the mandatory readable().await in Phase A already yields the task.
+            if total % (64 * 1024) < in_bytes as u64 {
+                tokio::task::yield_now().await;
+            }
         }
     }
 
