@@ -217,6 +217,11 @@ fn describe_metrics() {
         "Pooled Freedom sockets discarded after failing the first client write"
     );
     metrics::describe_counter!(
+        "freedom_pool_first_use_guard_skipped_total",
+        metrics::Unit::Count,
+        "Pooled Freedom first-use guard skipped because client bytes were not immediately available"
+    );
+    metrics::describe_counter!(
         "freedom_pool_fresh_retry_success_total",
         metrics::Unit::Count,
         "Fresh Freedom retries that succeeded after a pooled socket failed first use"
