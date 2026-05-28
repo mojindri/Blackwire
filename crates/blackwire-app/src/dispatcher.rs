@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info, warn};
 
 macro_rules! relay_log {
@@ -49,9 +50,10 @@ const ROUTING_DNS_TIMEOUT: Duration = Duration::from_secs(3);
 
 use std::collections::HashMap;
 
-use blackwire_common::{Address, BoxedStream, ProxyError};
-use blackwire_config::schema::{ProfileMode, SniffingConfig};
+use blackwire_common::{tcp_connect, Address, BoxedStream, PooledStream, ProxyError};
+use blackwire_config::schema::{FastConfig, FastSplicePolicy, ProfileMode, SniffingConfig};
 use smallvec::SmallVec;
+use tokio::net::TcpStream;
 
 use crate::context::Context;
 use crate::dns::DnsModule;
@@ -100,6 +102,7 @@ pub struct DefaultDispatcher {
     /// Operating profile. Under `Fast`, per-connection relay logs are emitted at
     /// `debug` level rather than `info` to reduce log overhead on hot paths.
     profile: ProfileMode,
+    splice_policy: FastSplicePolicy,
 }
 
 impl DefaultDispatcher {
@@ -118,6 +121,7 @@ impl DefaultDispatcher {
             dns: None,
             sniffing: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             profile: ProfileMode::default(),
+            splice_policy: FastSplicePolicy::Always,
         })
     }
 
@@ -133,6 +137,7 @@ impl DefaultDispatcher {
             dns: None,
             sniffing,
             profile: ProfileMode::default(),
+            splice_policy: FastSplicePolicy::Always,
         })
     }
 
@@ -151,6 +156,7 @@ impl DefaultDispatcher {
             dns: Some(dns),
             sniffing: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             profile: ProfileMode::default(),
+            splice_policy: FastSplicePolicy::Always,
         })
     }
 
@@ -167,6 +173,7 @@ impl DefaultDispatcher {
             dns: Some(dns),
             sniffing,
             profile: ProfileMode::default(),
+            splice_policy: FastSplicePolicy::Always,
         })
     }
 
@@ -174,7 +181,20 @@ impl DefaultDispatcher {
     ///
     /// Call this after construction to apply a non-default profile from config.
     pub fn with_profile(self: Arc<Self>, profile: ProfileMode) -> Arc<Self> {
-        if self.profile == profile {
+        self.with_profile_and_fast(profile, None)
+    }
+
+    pub fn with_profile_and_fast(
+        self: Arc<Self>,
+        profile: ProfileMode,
+        fast: Option<&FastConfig>,
+    ) -> Arc<Self> {
+        let splice_policy = if profile == ProfileMode::Fast {
+            fast.map(|f| f.splice).unwrap_or_default()
+        } else {
+            FastSplicePolicy::Always
+        };
+        if self.profile == profile && self.splice_policy == splice_policy {
             return self;
         }
         // We own the only Arc reference here (just constructed), so unwrap is safe.
@@ -182,6 +202,7 @@ impl DefaultDispatcher {
         match Arc::try_unwrap(self) {
             Ok(mut inner) => {
                 inner.profile = profile;
+                inner.splice_policy = splice_policy;
                 Arc::new(inner)
             }
             Err(arc) => Arc::new(Self {
@@ -190,6 +211,7 @@ impl DefaultDispatcher {
                 dns: arc.dns.clone(),
                 sniffing: Arc::clone(&arc.sniffing),
                 profile,
+                splice_policy,
             }),
         }
     }
@@ -215,6 +237,9 @@ impl Dispatcher for DefaultDispatcher {
 
         let start = Instant::now();
         let outbound_stream = self.connect_outbound(&ctx, &dest).await?;
+        let (inbound_stream, outbound_stream, prewritten_up) = self
+            .guard_pooled_first_write(&ctx, &dest, inbound_stream, outbound_stream)
+            .await?;
 
         relay_log!(self.profile, dest = %dest, inbound = %ctx.inbound_tag, "relay started");
 
@@ -228,7 +253,13 @@ impl Dispatcher for DefaultDispatcher {
         //   outbound → inbound (server sending data back to the client)
         //
         // It returns the total bytes sent in each direction when finished.
-        let result = crate::relay::relay_bidirectional(inbound_stream, outbound_stream).await;
+        let result = crate::relay::relay_bidirectional_with_splice_policy(
+            inbound_stream,
+            outbound_stream,
+            self.splice_policy,
+        )
+        .await
+        .map(|(up, down)| (up + prewritten_up, down));
 
         let elapsed = start.elapsed();
 
@@ -245,6 +276,11 @@ impl Dispatcher for DefaultDispatcher {
                 );
             }
             Err(e) => {
+                metrics::counter!(
+                    "proxy_relay_first_byte_failures_total",
+                    "inbound" => ctx.inbound_tag.clone()
+                )
+                .increment(1);
                 debug!(
                     dest = %dest,
                     inbound = %ctx.inbound_tag,
@@ -274,6 +310,99 @@ impl Dispatcher for DefaultDispatcher {
 }
 
 impl DefaultDispatcher {
+    async fn guard_pooled_first_write(
+        &self,
+        ctx: &Context,
+        dest: &Address,
+        mut inbound_stream: BoxedStream,
+        outbound_stream: BoxedStream,
+    ) -> Result<(BoxedStream, BoxedStream, u64), ProxyError> {
+        if self.profile != ProfileMode::Fast
+            || !(*outbound_stream).as_any().is::<PooledStream<TcpStream>>()
+        {
+            return Ok((inbound_stream, outbound_stream, 0));
+        }
+
+        let any = outbound_stream.into_any();
+        let pooled = any
+            .downcast::<PooledStream<TcpStream>>()
+            .expect("stream type checked as PooledStream<TcpStream> before downcast");
+        let (mut outbound, pool_tag, peer_addr) = pooled.into_metadata_parts();
+        let pool_label = pool_tag.as_deref().unwrap_or("unknown");
+
+        let mut first = vec![0u8; 16 * 1024];
+        let n = inbound_stream
+            .read(&mut first)
+            .await
+            .map_err(ProxyError::Io)?;
+        if n == 0 {
+            return Ok((inbound_stream, Box::new(outbound), 0));
+        }
+
+        if outbound.write_all(&first[..n]).await.is_err() {
+            metrics::counter!(
+                "freedom_pool_first_use_retries_total",
+                "inbound" => ctx.inbound_tag.clone(),
+                "outbound" => pool_label.to_owned()
+            )
+            .increment(1);
+
+            let fresh_result: Result<BoxedStream, ProxyError> = if let Some(addr) = peer_addr {
+                match tcp_connect(addr).await {
+                    Ok(stream) => match stream.set_nodelay(true) {
+                        Ok(()) => Ok(Box::new(stream)),
+                        Err(e) => Err(ProxyError::Io(e)),
+                    },
+                    Err(e) => Err(e),
+                }
+            } else {
+                self.connect_outbound(ctx, dest).await
+            };
+
+            let mut fresh = match fresh_result {
+                Ok(stream) => stream,
+                Err(e) => {
+                    metrics::counter!(
+                        "freedom_pool_fresh_retry_failures_total",
+                        "inbound" => ctx.inbound_tag.clone(),
+                        "outbound" => pool_label.to_owned()
+                    )
+                    .increment(1);
+                    return Err(e);
+                }
+            };
+
+            match fresh.write_all(&first[..n]).await {
+                Ok(()) => {
+                    metrics::counter!(
+                        "freedom_pool_fresh_retry_success_total",
+                        "inbound" => ctx.inbound_tag.clone(),
+                        "outbound" => pool_label.to_owned()
+                    )
+                    .increment(1);
+                    return Ok((inbound_stream, fresh, n as u64));
+                }
+                Err(e) => {
+                    metrics::counter!(
+                        "freedom_pool_fresh_retry_failures_total",
+                        "inbound" => ctx.inbound_tag.clone(),
+                        "outbound" => pool_label.to_owned()
+                    )
+                    .increment(1);
+                    return Err(ProxyError::Io(e));
+                }
+            };
+        }
+
+        metrics::counter!(
+            "freedom_pool_hits_total",
+            "outbound" => pool_label.to_owned()
+        )
+        .increment(1);
+
+        Ok((inbound_stream, Box::new(outbound), n as u64))
+    }
+
     /// Route and dial the destination without starting a relay loop.
     pub async fn connect_outbound(
         &self,

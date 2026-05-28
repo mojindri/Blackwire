@@ -22,7 +22,7 @@ use tracing::debug;
 use blackwire_app::context::Context;
 use blackwire_app::dns::DnsModule;
 use blackwire_app::features::OutboundHandler;
-use blackwire_common::{tcp_connect, Address, BoxedStream, ProxyError};
+use blackwire_common::{tcp_connect, Address, BoxedStream, PooledStream, ProxyError};
 
 // ── Adaptive connection pool ─────────────────────────────────────────────────
 
@@ -45,16 +45,36 @@ pub struct PoolConfig {
     /// Traffic older than this fully decays; a destination with no traffic in
     /// 2× this window resets to cold (capacity 0).
     pub hotness_window: Duration,
+    /// Number of recent requests before this destination is allowed to keep
+    /// preconnected sockets. This keeps Fast Profile from paying pool overhead
+    /// on tiny one-shot flows.
+    pub min_hotness_for_pool: u64,
 }
 
 impl Default for PoolConfig {
     fn default() -> Self {
         Self {
-            max_per_dest: 32,
-            max_global_idle: 512,
+            max_per_dest: 4,
+            max_global_idle: 128,
             max_dests: 256,
-            idle_ttl: Duration::from_secs(30),
-            hotness_window: Duration::from_secs(60),
+            idle_ttl: Duration::from_secs(5),
+            hotness_window: Duration::from_secs(10),
+            min_hotness_for_pool: 32,
+        }
+    }
+}
+
+impl PoolConfig {
+    /// Explicit numeric `poolSize` override for lab/debug configs.
+    ///
+    /// Unlike adaptive defaults, this starts pooling immediately so controlled
+    /// benchmarks can compare a forced pool against adaptive behavior.
+    pub fn fixed(max_per_dest: usize) -> Self {
+        Self {
+            max_per_dest,
+            max_global_idle: max_per_dest.saturating_mul(64).max(max_per_dest),
+            min_hotness_for_pool: 1,
+            ..Self::default()
         }
     }
 }
@@ -120,7 +140,10 @@ impl HotnessMeter {
     }
 }
 
-fn tier_from_count(count: u64, max: usize) -> usize {
+fn tier_from_count(count: u64, max: usize, min_hotness_for_pool: u64) -> usize {
+    if count < min_hotness_for_pool {
+        return 0;
+    }
     let tier = match count {
         0 => 0,
         1..=3 => 1,
@@ -211,22 +234,22 @@ impl DestPool {
     }
 
     /// Record one connection and return the current effective pool capacity.
-    fn record_and_cap(&self, max: usize) -> usize {
+    fn record_and_cap(&self, max: usize, min_hotness_for_pool: u64) -> usize {
         let count = self.hotness.lock().record_and_get();
-        tier_from_count(count, max)
+        tier_from_count(count, max, min_hotness_for_pool)
     }
 
     /// Return the current effective capacity without recording a hit.
-    fn current_cap(&self, max: usize) -> usize {
+    fn current_cap(&self, max: usize, min_hotness_for_pool: u64) -> usize {
         let count = self.hotness.lock().estimate();
-        tier_from_count(count, max)
+        tier_from_count(count, max, min_hotness_for_pool)
     }
 
     /// Pop the next live, non-expired idle connection.
     ///
     /// Returns `(stream, stale_count)` where `stale_count` is the number of
     /// slots discarded; caller must subtract that from `AdaptivePool::global_idle`.
-    fn try_take(&self, idle_ttl: Duration) -> (Option<TcpStream>, usize) {
+    fn try_take(&self, idle_ttl: Duration) -> (Option<(TcpStream, Duration)>, usize) {
         // Update LRU timestamp unconditionally so a destination with all-stale
         // or empty idle slots isn't treated as cold by evict_lru().
         self.last_used_ms.store(now_ms(), Ordering::Relaxed);
@@ -255,7 +278,7 @@ impl DestPool {
                 _ => false, // EOF or error: definitely stale.
             };
             if alive {
-                return (Some(stream), stale);
+                return (Some((stream, now.duration_since(last_use))), stale);
             }
             stale += 1;
         }
@@ -274,7 +297,7 @@ impl DestPool {
     /// Including `in_flight` prevents duplicate spawning when earlier tasks
     /// are still connecting.
     fn replenish(self: Arc<Self>, pool: Arc<AdaptivePool>) {
-        let cap = self.current_cap(pool.max_per_dest);
+        let cap = self.current_cap(pool.max_per_dest, pool.min_hotness_for_pool);
         let (idle_len, in_flight) = {
             let guard = self.idle.lock();
             (guard.len(), self.in_flight.load(Ordering::Relaxed))
@@ -323,10 +346,21 @@ impl DestPool {
                             let mut guard = dp.idle.lock();
                             if guard.len() < p.max_per_dest {
                                 guard.push_back((stream, Instant::now()));
+                                metrics::counter!(
+                                    "freedom_pool_refill_success_total",
+                                    "outbound" => p.tag.clone()
+                                )
+                                .increment(1);
                                 // Reservation held — no extra global_idle increment.
                             } else {
                                 // Per-dest queue is full; release the reservation.
                                 p.global_idle.fetch_sub(1, Ordering::Relaxed);
+                                metrics::counter!(
+                                    "freedom_pool_refill_dropped_total",
+                                    "outbound" => p.tag.clone(),
+                                    "reason" => "destination_full"
+                                )
+                                .increment(1);
                                 // Stream drops here, closing the connection.
                             }
                         }
@@ -369,6 +403,7 @@ struct AdaptivePool {
     max_dests: usize,
     idle_ttl: Duration,
     hotness_window: Duration,
+    min_hotness_for_pool: u64,
     /// Committed slots: actual idle sockets + in-flight refill reservations.
     /// Signed to absorb transient races without wrapping.
     global_idle: AtomicI64,
@@ -384,6 +419,7 @@ impl AdaptivePool {
             max_dests: cfg.max_dests,
             idle_ttl: cfg.idle_ttl,
             hotness_window: cfg.hotness_window,
+            min_hotness_for_pool: cfg.min_hotness_for_pool,
             global_idle: AtomicI64::new(0),
         })
     }
@@ -525,7 +561,17 @@ impl OutboundHandler for FreedomOutbound {
             let dest_pool = pool.get_or_create(addr);
 
             // Record this connection, get current adaptive capacity tier.
-            let _cap = dest_pool.record_and_cap(pool.max_per_dest);
+            let cap = dest_pool.record_and_cap(pool.max_per_dest, pool.min_hotness_for_pool);
+            metrics::gauge!(
+                "freedom_pool_capacity",
+                "outbound" => pool.tag.clone()
+            )
+            .set(cap as f64);
+            metrics::gauge!(
+                "freedom_pool_hotness",
+                "outbound" => pool.tag.clone()
+            )
+            .set(dest_pool.hotness.lock().estimate() as f64);
 
             let (taken, stale) = dest_pool.try_take(pool.idle_ttl);
 
@@ -542,16 +588,25 @@ impl OutboundHandler for FreedomOutbound {
             // Trigger background refill regardless of hit/miss.
             Arc::clone(&dest_pool).replenish(Arc::clone(pool));
 
-            if let Some(stream) = taken {
+            if let Some((stream, age)) = taken {
                 // The socket was a real idle slot counted in global_idle; decrement
                 // now that it has left the pool.
                 pool.global_idle.fetch_sub(1, Ordering::Relaxed);
+                metrics::histogram!(
+                    "freedom_pool_idle_age_seconds",
+                    "outbound" => pool.tag.clone()
+                )
+                .record(age.as_secs_f64());
                 metrics::counter!(
-                    "freedom_pool_hits_total",
+                    "freedom_pool_leases_total",
                     "outbound" => pool.tag.clone()
                 )
                 .increment(1);
-                return Ok(Box::new(stream));
+                return Ok(Box::new(PooledStream::with_pool_metadata(
+                    stream,
+                    pool.tag.clone(),
+                    addr,
+                )));
             }
             metrics::counter!(
                 "freedom_pool_misses_total",
