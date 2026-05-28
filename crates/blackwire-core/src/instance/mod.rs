@@ -162,10 +162,12 @@ impl Instance {
                     // poolSize = 0 (default) disables pooling (Compat mode).
                     // poolSize > 0 enables adaptive pooling with that value as
                     // the per-destination ceiling (Fast Profile).
-                    let max_per_dest =
-                        out_cfg.settings["poolSize"].as_u64().unwrap_or(0) as usize;
+                    let max_per_dest = out_cfg.settings["poolSize"].as_u64().unwrap_or(0) as usize;
                     if max_per_dest > 0 {
-                        let cfg = PoolConfig { max_per_dest, ..PoolConfig::default() };
+                        let cfg = PoolConfig {
+                            max_per_dest,
+                            ..PoolConfig::default()
+                        };
                         match &dns {
                             Some(module) => FreedomOutbound::new_with_dns_pooled(
                                 &out_cfg.tag,
