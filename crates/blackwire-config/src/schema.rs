@@ -160,15 +160,15 @@ pub struct TunConfig {
     /// MTU for the TUN interface.
     #[serde(default = "default_tun_mtu")]
     pub mtu: u16,
-    /// iptables/nftables mark for packets that should bypass the TUN path.
+    /// Linux packet mark for packets that should bypass the TUN path.
     #[serde(default = "default_tun_bypass_mark")]
     pub bypass_mark: u32,
     /// Physical interface used by protected outbound sockets on macOS/Windows.
     ///
-    /// Examples: `"en0"` on macOS or `"Ethernet"` on Windows. When unset,
-    /// macOS full-device TUN remains gated to avoid routing Blackwire's own
-    /// outbound sockets back into utun; Windows cannot safely promote full
-    /// runtime until outbound bypass and TCP redirection are both available.
+    /// Examples: `"en0"` on macOS or `"Ethernet"` on Windows. macOS requires
+    /// this so Blackwire's own outbound sockets can bypass utun capture.
+    /// Windows uses it when set; otherwise it falls back to the OS route table
+    /// and the configured Wintun split routes.
     #[serde(
         default,
         rename = "outboundInterface",
