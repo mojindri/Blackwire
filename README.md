@@ -1,11 +1,11 @@
 # Blackwire
 
-Rust-native proxy **server** aimed at **wire compatibility** with the Xray and
-sing-box client ecosystem.
+Rust-native proxy **server** implementing **selected wire-compatible server paths**
+validated against Xray-core and sing-box clients.
 
 This repository is organized around two goals:
 
-- implement a practical protocol/transport matrix as an Xray/sing-box-compatible server
+- implement a practical protocol/transport matrix as a server compatible with Xray-core and sing-box clients
 - prove compatibility with **real upstream clients** — Xray-core and sing-box in
   Docker labs, Lima fingerprint checks, and two-VPS production-style runs
 
@@ -14,9 +14,48 @@ tests. External-client automation lives under `labs/realistic/` and currently
 starts with a VLESS REALITY scenario that can be expanded through
 `labs/realistic/external-clients/scenarios.env`.
 
-The project uses its **own JSON config schema** (not a byte-for-byte Xray config
+The project uses its **own JSON config schema** (not a byte-for-byte Xray/sing-box config
 drop-in). Wire behavior and client interop are the compatibility contract. For
 per-protocol status, see [docs/feature-matrix.md](docs/feature-matrix.md).
+
+## Release Status
+
+This is a pre-1.0 project. The support contract is explicit:
+
+**Release-supported** (CI + e2e + realistic lab):
+- VLESS over TCP, REALITY, WebSocket, HTTPUpgrade, SplitHTTP
+- VMess AEAD over TCP
+- Trojan over TLS
+- Shadowsocks 2022
+- DNS resolver (system, DoH/DoT), FakeIP, routing rules, GeoIP/geosite
+- Prometheus metrics, config hot-reload (routing rules, VLESS users, GeoIP)
+
+**Partial** (shipped with known gaps — read the notes in [docs/feature-matrix.md](docs/feature-matrix.md)):
+- gRPC transport — EOF/reset propagation gap when upstream closes (see `grpc_stream_reset` in `e2e_hostility.rs`)
+- TUN transparent proxy — Linux only, no production validation
+- Sniffing / protocol-based routing
+- Handler API (gRPC) — user add/remove only; structural ops unsupported
+- Structural hot-reload (listener/outbound changes require restart)
+- Resource-stress coverage
+- macOS artifacts
+
+**Experimental** (implemented, lacking hostile-network or soak proof):
+- REALITY
+- Hysteria2
+- ShadowTLS v3
+- mKCP, QUIC (V2Ray QUIC transport)
+- Stats API (gRPC)
+- SplitHTTP extras (Xmux, padding, `downloadSettings`)
+
+**Unsupported** (fail-closed or documented out of scope):
+- `protocol: shadowtls` — fails config validation; use `security: shadowtls` in `streamSettings`
+- V2Ray/Xray JSON config import
+- `AddInbound`, `RemoveInbound`, `AddOutbound`, `RemoveOutbound`, `AlterOutbound` Handler API calls
+- VMess legacy alterId / non-AEAD
+- DNS/dokodemo/tun as inbound `protocol` values
+- Byte-identical browser TLS fingerprinting
+- Windows, OpenWrt, Android, iOS
+- Standalone client app
 
 ## Start Here
 
