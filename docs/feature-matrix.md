@@ -136,7 +136,7 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 | DNS response cache                    | **Supported** | `dns/cache.rs`                                                                                                                             |
 | `domain_strategy` (routing)           | **Supported** | Xray `AsIs` / `IPIfNonMatch` / `IPOnDemand` in `dispatcher` + `router` (see [routing docs](https://xtls.github.io/en/config/routing.html)) |
 | Sniffing HTTP + TLS (`destOverride`, `routeOnly`, `metadataOnly`) | **Supported** | `blackwire-app/sniff.rs`; HTTP Host + TLS SNI detection; lab row `vless-sniff` green in Docker matrix |
-| Sniffing FakeDNS                      | **Experimental** | FakeDNS sniff path not yet wired in `analyze_peek()`; FakeIP pool and cache are **Supported** |
+| Sniffing FakeDNS                      | **Supported**    | `sniff_fakedns` wired in dispatcher; `"fakedns"` in `destOverride` reverses fake IP → domain, sets `sniffed_protocol = "fakedns"`; `apply_dest_override` handles `"fakedns"`; 4 unit tests PASS (`sniff::tests`) |
 
 
 ---
