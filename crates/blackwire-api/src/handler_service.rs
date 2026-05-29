@@ -1,4 +1,18 @@
-//! Xray `HandlerService` gRPC (inbound/outbound tags and VLESS user ops).
+//! `HandlerService` gRPC — inbound/outbound tag listing and VLESS user management.
+//!
+//! ## Supported operations
+//! - `ListInbounds` — returns inbound tags
+//! - `ListOutbounds` — returns outbound tags
+//! - `GetInboundUsersCount` — count of VLESS users on a named inbound
+//! - `GetInboundUsers` — list VLESS users on a named inbound
+//! - `AlterInbound` — add or remove a VLESS user via `AddUserOperation` / `RemoveUserOperation`
+//!
+//! ## Unsupported operations (return UNIMPLEMENTED)
+//! - `AddInbound` — requires a listener rebind; edit config and reload instead
+//! - `RemoveInbound` — requires an instance restart
+//! - `AddOutbound` — requires an instance restart
+//! - `RemoveOutbound` — requires an instance restart
+//! - `AlterOutbound` — not implemented
 
 use prost::Message;
 use tonic::{Request, Response, Status};

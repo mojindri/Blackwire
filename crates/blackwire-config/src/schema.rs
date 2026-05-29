@@ -275,4 +275,47 @@ mod tests {
         assert_eq!(s.network, NetworkType::Ws);
         assert_eq!(s.security, SecurityType::Reality);
     }
+
+    /// `protocol: shadowtls` on an inbound must be rejected with a clear error
+    /// pointing users to `security: shadowtls` instead.
+    #[test]
+    fn shadowtls_as_inbound_protocol_is_rejected() {
+        let json = r#"{
+            "inbounds": [{
+                "tag": "bad",
+                "protocol": "shadowtls",
+                "listen": "127.0.0.1",
+                "port": 8443
+            }],
+            "outbounds": [{"tag": "d", "protocol": "freedom"}]
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        let err = cfg.validate().expect_err("shadowtls inbound should fail validation");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("shadowtls") || msg.contains("streamSettings"),
+            "expected a message referencing shadowtls or streamSettings, got: {msg}"
+        );
+    }
+
+    /// `protocol: shadowtls` on an outbound must be rejected with a clear error.
+    #[test]
+    fn shadowtls_as_outbound_protocol_is_rejected() {
+        let json = r#"{
+            "inbounds": [{
+                "tag": "socks",
+                "protocol": "socks",
+                "listen": "127.0.0.1",
+                "port": 1080
+            }],
+            "outbounds": [{"tag": "bad", "protocol": "shadowtls"}]
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        let err = cfg.validate().expect_err("shadowtls outbound should fail validation");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("shadowtls") || msg.contains("streamSettings"),
+            "expected a message referencing shadowtls or streamSettings, got: {msg}"
+        );
+    }
 }
