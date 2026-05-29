@@ -16,7 +16,7 @@ Validated by CI, the e2e test suite, and the realistic lab mandatory matrix.
 - Shadowsocks 2022 (TCP + UDP SIP022)
 - SOCKS5 inbound (TCP CONNECT + UDP ASSOCIATE), HTTP CONNECT inbound, Freedom outbound
 - DNS resolver (system, DoH, DoT), FakeIP pool, DNS cache, `domain_strategy`
-- HTTP + TLS sniffing with `destOverride`, `routeOnly`, `metadataOnly`
+- HTTP + TLS + FakeDNS sniffing with `destOverride`, `routeOnly`, `metadataOnly`
 - Routing rules (domain, suffix, keyword, regex, IP/CIDR, port, source_ip, inboundTag, GeoIP/geosite)
 - Load balancer with health-check failover
 - Prometheus metrics (`/metrics`, `/healthz`, `/readyz`, `/version`)
@@ -31,7 +31,6 @@ Do not treat these as production-ready without reading the notes.
 | Area | Known gap |
 | ---- | --------- |
 | TUN transparent proxy | Linux-only, privileged tests only, no broad production validation. Do not use in production yet. |
-| FakeDNS sniffing | FakeDNS path not wired in `analyze_peek()`; HTTP + TLS sniffing are Supported. |
 | Handler API (gRPC) | Supported operations: `ListInbounds`, `ListOutbounds`, `GetInboundUsersCount`, `GetInboundUsers`, `AlterInbound` (VLESS add/remove). Unsupported (return UNIMPLEMENTED): `AddInbound`, `RemoveInbound`, `AddOutbound`, `RemoveOutbound`, `AlterOutbound`. |
 | Structural hot-reload | Listener add/remove, port change, outbound add/remove, TLS material reload require an instance restart. |
 | macOS | CI runs `macos-latest` tests; release artifacts are not certified. |
@@ -147,7 +146,6 @@ A feature moves from Experimental/Partial to Supported **only** when all items b
 | REALITY | Live external-client interop run archived (d1 test unignored) |
 | Hysteria2 | Hostile-network (loss/jitter), UDP relay, long-lived stream, and soak run |
 | TUN | Privileged Linux CI tests, route setup/cleanup, UDP NAT, rollback-on-failure |
-| FakeDNS sniffing | `analyze_peek()` wired for FakeDNS; lab row proof for FakeDNS routing |
 | Structural hot-reload | Listener add/remove, port change, outbound add/remove, TLS material reload, rollback on failed reload |
 | SplitHTTP extras | Xmux, padding, `downloadSettings` implemented and tested |
 | ShadowTLS v3 | External sing-box / shadow-tls interop matrix passing |

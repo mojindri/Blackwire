@@ -30,13 +30,12 @@ This is a pre-1.0 project. The support contract is explicit:
 - Shadowsocks 2022
 - SOCKS5 (TCP CONNECT + UDP ASSOCIATE), HTTP CONNECT
 - DNS resolver (system, DoH/DoT), FakeIP, routing rules, GeoIP/geosite
-- HTTP + TLS sniffing (`destOverride`, `routeOnly`, `metadataOnly`)
+- HTTP + TLS + FakeDNS sniffing (`destOverride`, `routeOnly`, `metadataOnly`)
 - Prometheus metrics, config hot-reload (routing rules, VLESS users, GeoIP)
 - Per-inbound / global `max_connections` limits (TCP, mKCP, QUIC, Hysteria2)
 
 **Partial** (shipped with known gaps — read the notes in [docs/feature-matrix.md](docs/feature-matrix.md)):
 - TUN transparent proxy — Linux only, no production validation
-- FakeDNS sniffing — not wired in `analyze_peek()`; HTTP + TLS are Supported
 - Handler API (gRPC) — user add/remove only; structural ops unsupported
 - Structural hot-reload (listener/outbound changes require restart)
 - macOS artifacts
