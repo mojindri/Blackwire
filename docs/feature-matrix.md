@@ -3,7 +3,16 @@
 Last updated against the `blackwire-*` workspace crates, `tests/tests/` e2e
 suite, `labs/realistic/` interop lab, and GitHub Actions (CI + cross-platform).
 
-**Source of truth:** Wire behavior and “Supported” labels follow [Xray-core](https://github.com/XTLS/Xray-core) and [sing-box](https://github.com/SagerNet/sing-box) implementations plus real clients in the realistic lab — not blackwire’s schema or this table alone. See [xray-parity-source-of-truth.md](xray-parity-source-of-truth.md) and [parity-status.md](parity-status.md) (matrix **SKIP** ≠ server unsupported).
+**Source of truth:** Wire behavior and “Supported” labels are validated against real Xray-core and sing-box clients in the realistic lab — not blackwire’s schema or this table alone. See [parity-status.md](parity-status.md) (matrix **SKIP** ≠ server unsupported).
+
+**Release posture** (see [release.md](release.md) for the full support contract):
+
+| Label | Release meaning |
+| ----- | --------------- |
+| **Supported** | Safe to rely on in production — tested by CI, e2e suite, and realistic lab |
+| **Partial** | Shipped but has a known gap; read the notes before production use |
+| **Experimental** | Implemented end-to-end; missing hostile-network, breadth, or soak coverage |
+| **Unsupported** | Not implemented or explicitly fail-closed |
 
 Status labels:
 
@@ -23,10 +32,13 @@ Evidence shorthand: crate paths use `blackwire-{common,config,app,core,protocol,
 
 ## Product scope
 
-**blackwire** is a Rust-native **proxy server** that targets **wire compatibility**
-with Xray-core and sing-box on selected protocol/transport pairs. Validation uses
-in-process e2e tests, per-crate `production_readiness` tests, and (optionally)
-Docker labs with real upstream clients — not mock peers alone.
+**blackwire** is a Rust-native **proxy server** that implements **selected wire-compatible
+server paths** validated against Xray-core and sing-box clients. Compatibility is
+proved by in-process e2e tests, per-crate `production_readiness` tests, and Docker
+labs with real upstream clients — not spec claims or mock peers alone.
+
+No claim of full Xray/sing-box feature parity is made. See the Unsupported rows and
+[release.md](release.md) for what is explicitly out of scope.
 
 
 | Area                                            | Status           | Notes                                                                                                                                                                                                                                                         |
@@ -83,7 +95,7 @@ TCP accept in `instance/mod.rs`. Hysteria2 uses its own QUIC listener.
 | TCP                                    | **Supported**    | `blackwire-transport/tcp.rs`                                                                                                                                                                                                                                                                                                                                               |
 | TLS (rustls)                           | **Supported**    | `transport/tls.rs`                                                                                                                                                                                                                                                                                                                                                         |
 | WebSocket                              | **Supported**    | `transport/ws.rs`; e2e `e2e_vless_ws.rs`                                                                                                                                                                                                                                                                                                                                   |
-| gRPC (Gun-style)                       | **Supported**    | `transport/grpc.rs`; e2e `e2e_http_vmess_grpc.rs`                                                                                                                                                                                                                                                                                                                          |
+| gRPC (Gun-style)                       | **Partial**      | `transport/grpc.rs`; e2e `e2e_http_vmess_grpc.rs`; **known gap**: when the upstream closes, H2 `END_STREAM` does not reliably reach the downstream SOCKS5 client — `grpc_stream_reset` in `e2e_hostility.rs` is `#[ignore]` pending fix |
 | REALITY                                | **Experimental** | `transport/reality/`, `blackwire-core/reality.rs`; e2e `e2e_reality_vless.rs`; transport-only tests `e2e_reality.rs`; Xray d1 interop ignored test                                                                                                                                                                                                                         |
 | ShadowTLS v3                           | **Experimental** | Server: `transport/shadowtls/` + e2e. Matrix: both clients **SKIP** (Xray 26+ outbound model; sing-box inbound model) — not “unsupported on server”                                                                                                                                                                                                                        |
 | mKCP                                   | **Experimental** | Server: `transport/mkcp/` + e2e. Matrix: both clients **SKIP** (sing-box no mKCP; Xray 26 finalmask) — not “unsupported on server”                                                                                                                                                                                                                                         |
@@ -165,8 +177,8 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 | Per-inbound / global `max_connections`     | **Partial**      | TCP accept path in `transport/tcp.rs` + config limits; not all protocols share the same limit surface                                                                                                             |
 | Prometheus HTTP (`metricsAddr`)            | **Supported**    | `metrics.rs` — `/metrics`, `/healthz`, `/readyz`, `/version`                                                                                                                                                      |
 | Per-connection Prometheus counters         | **Supported**    | `record_connection_`* called from `dispatcher` after each relay                                                                                                                                                   |
-| v2ray gRPC Stats API                       | **Experimental** | `blackwire-api` StatsService + `runtime_stats`; starts when `api` listen set                                                                                                                                      |
-| v2ray gRPC Handler API                     | **Partial**      | `ListInbounds`, `ListOutbounds`, `GetInboundUsersCount`, `GetInboundUsers`, `AlterInbound` VLESS add/remove; `AddInbound`/`RemoveInbound`/`AddOutbound`/`RemoveOutbound` return UNIMPLEMENTED (use config reload) |
+| Stats API (gRPC)                           | **Experimental** | `blackwire-api` StatsService + `runtime_stats`; starts when `api` listen set                                                                                                                                      |
+| Handler API (gRPC)                         | **Partial**      | Supported: `ListInbounds`, `ListOutbounds`, `GetInboundUsersCount`, `GetInboundUsers`, `AlterInbound` (VLESS add/remove). Unsupported (UNIMPLEMENTED): `AddInbound`, `RemoveInbound`, `AddOutbound`, `RemoveOutbound`, `AlterOutbound` — use config reload instead |
 
 
 ---
@@ -232,7 +244,7 @@ production certification on all Experimental rows.
 - VMess legacy non-AEAD / alterId — not implemented.
 - DoH/DoT DNS upstreams — skipped at resolver build.
 - XTLS Vision — flow recognized on wire; splice not implemented.
-- `blackwire-api` Handler RPCs — VLESS user add/remove via `AlterInbound`; listener/outbound tag RPCs require config reload.
+- Handler API (gRPC) — VLESS user add/remove via `AlterInbound` is supported; `AddInbound`, `RemoveInbound`, `AddOutbound`, `RemoveOutbound`, `AlterOutbound` return UNIMPLEMENTED and require a config reload or instance restart.
 - Full hot-reload of listeners, outbounds, and TLS material — requires process restart.
 
 ---
