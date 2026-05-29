@@ -64,19 +64,35 @@ where
     let mut buf = pool.acquire(BUF_SIZE);
     buf.resize(BUF_SIZE, 0);
     let mut total = 0u64;
+    let mut io_err: Option<io::Error> = None;
     loop {
-        let n = reader.read(&mut buf[..]).await?;
-        if n == 0 {
+        let n = match reader.read(&mut buf[..]).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                io_err = Some(e);
+                break;
+            }
+        };
+        if let Err(e) = writer.write_all(&buf[..n]).await {
+            io_err = Some(e);
             break;
         }
-        writer.write_all(&buf[..n]).await?;
-        writer.flush().await?;
+        if let Err(e) = writer.flush().await {
+            io_err = Some(e);
+            break;
+        }
         total += n as u64;
     }
-    // Propagate EOF: shut down the write half so the peer sees a clean close.
+    // Always propagate EOF to the peer, even when the reader side hit an error
+    // (e.g. ECONNRESET from a remote RST). Without this, the write half is left
+    // open and the far end stalls waiting for data that will never arrive.
     let _ = writer.shutdown().await;
     pool.release(buf);
-    Ok(total)
+    match io_err {
+        Some(e) => Err(e),
+        None => Ok(total),
+    }
 }
 
 /// Run an async handshake step with an optional wall-clock limit.
