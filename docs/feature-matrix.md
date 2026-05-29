@@ -190,7 +190,7 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 | Feature                                           | Status           | Notes                                                                               |
 | ------------------------------------------------- | ---------------- | ----------------------------------------------------------------------------------- |
 | `make verify-local` (fmt, check, clippy, test)    | **Supported**    | Required on PRs via **CI / Rust**                                                   |
-| Cross-platform tests/checks                       | **Supported**    | **Cross-platform** workflow: Linux/macOS full tests, Linux arm64 full tests, Windows all-target compile check on PRs |
+| Cross-platform tests/checks                       | **Supported**    | **Cross-platform** workflow: Linux/macOS/Windows full tests, Linux arm64 full tests, and focused TUN contract plus privileged smoke jobs |
 | Fuzz targets (`fuzz/`)                            | **Supported**    | REALITY, VMess, VLESS, Hysteria2, ShadowTLS, SS2022, stateful sequences             |
 | `make fuzz-smoke`                                 | **Supported**    | Short local smoke                                                                   |
 | `make fuzz-long`                                  | **Experimental** | Optional; not CI-gated                                                              |
