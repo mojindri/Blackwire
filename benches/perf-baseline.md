@@ -441,6 +441,54 @@ Decision:
   accept/dispatch/config path differences between Compat and Fast, connection
   setup instrumentation, and any Compat-only observability or wrapper cost.
 
+Accepted candidate: adaptive splice for Compat profile.
+
+Source change:
+
+- `DefaultDispatcher` now uses adaptive splice for Compat profile instead of
+  forcing splice immediately on every raw TCP relay.
+- Fast profile behavior is unchanged: it still honors `fast.splice`.
+- Rationale: the clean gap was small-response Compat TCP. Forcing splice before
+  enough bytes have accumulated adds avoidable syscall/pipe overhead.
+
+Validation:
+
+```bash
+cargo test -p blackwire-app dispatcher --quiet
+cargo test -p blackwire-app --quiet
+cargo test --workspace --all-targets
+```
+
+- All listed tests passed.
+- `cargo fmt --all --check` was not used as an acceptance signal because
+  unrelated pre-existing formatting drift exists outside this change; the
+  touched dispatcher file was formatted with the workspace edition.
+
+Config-only probe before source change (`1k`, keepalive on, 15s x 32):
+
+| Variant | req/s change | p99 change | Errors | Decision |
+|---|---:|---:|---:|---|
+| `xray-bw-compat-tcp-1k-ka` | +14.2% | -10.5% | 0 | promote to source test |
+| `singbox-bw-compat-tcp-1k-ka` | +43.3% | -24.4% | 0 | promote to source test |
+
+Source candidate repeat (`1k`, keepalive on, 15s x 32):
+
+| Variant | Baseline req/s | Candidate req/s | Repeat req/s | Baseline p99 | Candidate p99 | Repeat p99 | Decision |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `xray-bw-compat-tcp-1k-ka` | 16,543 | 19,670 | 19,603 | 3.80 ms | 3.50 ms | 3.40 ms | accepted |
+| `singbox-bw-compat-tcp-1k-ka` | 13,920 | 21,592 | 19,402 | 4.50 ms | 3.10 ms | 3.40 ms | accepted |
+
+Regression probe (`64k`, keepalive on):
+
+| Variant | Baseline | Candidate | Repeat | Decision |
+|---|---|---|---|---|
+| `xray-bw-compat-tcp-64k-ka` | 9,664 req/s, 6.40 ms p99 | 9,436 req/s, 7.10 ms p99 | 9,986 req/s, 6.70 ms p99 | neutral after repeat |
+| `singbox-bw-compat-tcp-64k-ka` | 9,674 req/s, 6.40 ms p99 | 10,664 req/s, 6.10 ms p99 | 11,331 req/s, 5.80 ms p99 | accepted win |
+
+Decision: accepted. This narrows the clean Compat TCP gap without errors or
+non-200s. Do not claim a WS improvement from this change; wrapped WS rows do
+not use raw TCP splice and observed WS movement is treated as run noise.
+
 ## Rejected WS Relay Buffer Growth Candidate (2026-05-30)
 
 Candidate: grow the shared pooled relay buffer from `16 KiB` to `64 KiB` after
