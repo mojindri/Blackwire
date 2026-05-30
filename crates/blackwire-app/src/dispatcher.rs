@@ -111,6 +111,14 @@ pub struct DefaultDispatcher {
     splice_policy: FastSplicePolicy,
 }
 
+fn splice_policy_for_profile(profile: ProfileMode, fast: Option<&FastConfig>) -> FastSplicePolicy {
+    if profile == ProfileMode::Fast {
+        fast.map(|f| f.splice).unwrap_or_default()
+    } else {
+        FastSplicePolicy::Adaptive
+    }
+}
+
 impl DefaultDispatcher {
     /// Create a new dispatcher with the given router and outbounds map.
     ///
@@ -127,7 +135,7 @@ impl DefaultDispatcher {
             dns: None,
             sniffing: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             profile: ProfileMode::default(),
-            splice_policy: FastSplicePolicy::Always,
+            splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
         })
     }
 
@@ -143,7 +151,7 @@ impl DefaultDispatcher {
             dns: None,
             sniffing,
             profile: ProfileMode::default(),
-            splice_policy: FastSplicePolicy::Always,
+            splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
         })
     }
 
@@ -162,7 +170,7 @@ impl DefaultDispatcher {
             dns: Some(dns),
             sniffing: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             profile: ProfileMode::default(),
-            splice_policy: FastSplicePolicy::Always,
+            splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
         })
     }
 
@@ -179,7 +187,7 @@ impl DefaultDispatcher {
             dns: Some(dns),
             sniffing,
             profile: ProfileMode::default(),
-            splice_policy: FastSplicePolicy::Always,
+            splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
         })
     }
 
@@ -196,11 +204,7 @@ impl DefaultDispatcher {
         profile: ProfileMode,
         fast: Option<&FastConfig>,
     ) -> Arc<Self> {
-        let splice_policy = if profile == ProfileMode::Fast {
-            fast.map(|f| f.splice).unwrap_or_default()
-        } else {
-            FastSplicePolicy::Always
-        };
+        let splice_policy = splice_policy_for_profile(profile, fast);
         if self.profile == profile && self.splice_policy == splice_policy {
             return self;
         }
@@ -695,6 +699,7 @@ mod tests {
     use super::*;
     use crate::dns::DnsModuleConfig;
     use crate::router::{Route, RoutingContext};
+    use blackwire_config::schema::{FastPoolPolicy, FastSplicePolicy};
 
     struct StaticRouter;
 
@@ -707,6 +712,27 @@ mod tests {
                 false,
             )
         }
+    }
+
+    #[test]
+    fn compat_profile_uses_adaptive_splice_by_default() {
+        assert_eq!(
+            splice_policy_for_profile(ProfileMode::Compat, None),
+            FastSplicePolicy::Adaptive
+        );
+    }
+
+    #[test]
+    fn fast_profile_honors_configured_splice_policy() {
+        let fast = FastConfig {
+            splice: FastSplicePolicy::Always,
+            pool: FastPoolPolicy::Disabled,
+            strict_production: false,
+        };
+        assert_eq!(
+            splice_policy_for_profile(ProfileMode::Fast, Some(&fast)),
+            FastSplicePolicy::Always
+        );
     }
 
     #[tokio::test]
