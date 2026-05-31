@@ -27,17 +27,25 @@ pub(crate) fn select_balancer_outbounds(
     cfg: &blackwire_config::schema::BalancerConfig,
     outbounds: &HashMap<String, Arc<dyn OutboundHandler>>,
 ) -> Result<Vec<(String, Arc<dyn OutboundHandler>)>> {
-    if cfg.selector.is_empty() {
-        anyhow::bail!("balancer '{}' selector must not be empty", cfg.tag);
+    let selected_tags: Vec<&str> = if cfg.profiles.is_empty() {
+        cfg.selector.iter().map(String::as_str).collect()
+    } else {
+        cfg.profiles
+            .iter()
+            .map(|profile| profile.outbound_tag.as_str())
+            .collect()
+    };
+    if selected_tags.is_empty() {
+        anyhow::bail!("balancer '{}' selector/profiles must not be empty", cfg.tag);
     }
 
-    cfg.selector
-        .iter()
+    selected_tags
+        .into_iter()
         .map(|tag| {
             let outbound = outbounds.get(tag).cloned().ok_or_else(|| {
                 anyhow::anyhow!("balancer '{}' references missing outbound '{tag}'", cfg.tag)
             })?;
-            Ok((tag.clone(), outbound))
+            Ok((tag.to_string(), outbound))
         })
         .collect()
 }
