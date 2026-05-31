@@ -16,6 +16,7 @@ This project is pre-1.0. The support contract is owned by
 - External-client matrix coverage driven by `labs/realistic/external-clients/scenarios.env`.
 - SplitHTTP packet-up, VLESS Vision, VLESS Mux/XUDP, Trojan UDP, SS2022 UDP, Hysteria2 TCP/UDP, QUIC, ShadowTLS v3 transport, and mKCP server-path coverage.
 - Docs ownership map so release status, feature evidence, test tiers, and lab details have clear sources of truth.
+- Release asset workflow for Linux, Linux arm64, macOS, and Windows binaries with SHA256 files.
 
 ### Changed
 
