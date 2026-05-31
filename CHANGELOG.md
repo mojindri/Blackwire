@@ -18,6 +18,7 @@ This project is pre-1.0. The support contract is owned by
 - Docs ownership map so release status, feature evidence, test tiers, and lab details have clear sources of truth.
 - Release asset workflow for Linux, Linux arm64, macOS, and Windows binaries with SHA256 files.
 - GHCR image publishing for Linux amd64/arm64 release tags, with rc tags kept separate from `latest`.
+- Linux install script for GitHub Release assets with checksum verification and optional systemd unit installation.
 
 ### Changed
 
