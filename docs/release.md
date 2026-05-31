@@ -140,6 +140,35 @@ The image is built for `linux/amd64` and `linux/arm64`, includes OCI labels,
 uses the GitHub Actions Docker build cache, and requests SBOM/provenance
 attestations from BuildKit.
 
+## Install Script
+
+`scripts/install.sh` installs Linux release assets from GitHub Releases. It
+supports `linux/amd64` and `linux/arm64`, verifies the release `.sha256`, installs
+the binary to `/usr/local/bin/blackwire`, creates `/etc/blackwire`, and installs
+a systemd unit when systemd is available.
+
+Prerelease install:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mojindri/v2ray/v0.1.0-rc.3/scripts/install.sh \
+  | VERSION=v0.1.0-rc.3 bash
+```
+
+Stable install, after a stable release is marked latest:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mojindri/v2ray/main/scripts/install.sh | bash
+```
+
+By default, the installer does not start the service. To start immediately after
+installing, create `/etc/blackwire/config.json` first and set `START_SERVICE=1`.
+
+## Package Repositories
+
+Debian/Ubuntu `.deb`, RPM, Arch, Homebrew, Winget, and Chocolatey publishing are
+not automated yet. Keep those for a stable post-`v0.1.0` packaging pass after
+config paths, service behavior, and upgrade policy are settled.
+
 ---
 
 ## Canary Plan

@@ -65,6 +65,20 @@ curl --socks5-hostname 127.0.0.1:10080 https://example.com/
 More examples live under [examples/](examples/), and command/environment details
 live in [docs/16-environment-cheatsheet.md](docs/16-environment-cheatsheet.md).
 
+## Install From Release
+
+Linux release candidates can be installed from GitHub Releases:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mojindri/v2ray/v0.1.0-rc.3/scripts/install.sh \
+  | VERSION=v0.1.0-rc.3 bash
+```
+
+The installer downloads the Linux release archive, verifies its `.sha256`, puts
+`blackwire` in `/usr/local/bin`, creates `/etc/blackwire`, and installs a
+systemd unit when systemd is available. It does not start the service unless
+`START_SERVICE=1` is set.
+
 ## Fast Profile
 
 Blackwire also has a latency-first `fast` operating profile for a narrower
