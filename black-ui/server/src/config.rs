@@ -178,7 +178,10 @@ pub fn vless_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
         params.push("security=reality".into());
         params.push("headerType=none".into());
         if let Some(value) = reality_value(inbound, "/realitySettings/publicKey") {
-            params.push(format!("pbk={}", util::url_escape(&value)));
+            params.push(format!(
+                "pbk={}",
+                util::url_escape(&reality_public_key_share_value(&value))
+            ));
         }
         if let Some(value) = reality_value(inbound, "/realitySettings/shortId").or_else(|| {
             serde_json::from_str::<Value>(&inbound.stream_settings)
@@ -201,6 +204,9 @@ pub fn vless_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
         } else {
             params.push("fp=chrome".into());
         }
+        let spider_x =
+            reality_value(inbound, "/realitySettings/spiderX").unwrap_or_else(|| "/".into());
+        params.push(format!("spx={}", url_escape_query_value(&spider_x)));
     } else if security == "tls" {
         params.push("security=tls".into());
         if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
@@ -262,6 +268,33 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
 
 fn reality_value(inbound: &Inbound, pointer: &str) -> Option<String> {
     stream_value(inbound, pointer)
+}
+
+fn reality_public_key_share_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() == 64 && trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if let Ok(bytes) = hex::decode(trimmed) {
+            if bytes.len() == 32 {
+                return base64::Engine::encode(
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                    bytes,
+                );
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
+fn url_escape_query_value(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![b as char]
+            }
+            _ => format!("%{b:02X}").chars().collect(),
+        })
+        .collect()
 }
 
 fn trojan_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Result<String> {
@@ -610,7 +643,7 @@ mod tests {
               "network": "tcp",
               "security": "reality",
               "realitySettings": {
-                "publicKey": "abc123",
+                "publicKey": "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
                 "shortId": "feedbeef",
                 "serverName": "www.microsoft.com",
                 "fingerprint": "chrome"
@@ -648,10 +681,11 @@ mod tests {
         assert!(link.contains("type=tcp"));
         assert!(link.contains("security=reality"));
         assert!(link.contains("headerType=none"));
-        assert!(link.contains("pbk=abc123"));
+        assert!(link.contains("pbk=4d-ciBK1zps7022lQolr6FatCmxubfnZEKQEDAcmgUI"));
         assert!(link.contains("sid=feedbeef"));
         assert!(link.contains("sni=www.microsoft.com"));
         assert!(link.contains("fp=chrome"));
+        assert!(link.contains("spx=%2F"));
         assert!(link.ends_with("#Mollah"));
     }
 }
