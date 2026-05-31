@@ -164,7 +164,7 @@ Other internal steps:
 | --- | --- |
 | `stable` | In-process Rust integration matrix |
 | `interop-docker` | Both interop legs above |
-| `health-failover` | Balancer failover e2e (+ Docker probe/echo when available) |
+| `health-failover` | Adaptive balancer failover e2e (+ Docker probe/echo when available) |
 | `negative-auth` | Wrong creds rejected / REALITY fallback |
 
 On VPS, `verify-remote` runs **`interop-server-vps`** (server-compat only — same scenarios over real network).

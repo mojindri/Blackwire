@@ -197,6 +197,7 @@ export default function App() {
         <SectionsPage
           sections={data.sections}
           capabilities={data.capabilities}
+          outbounds={data.outbounds}
           busy={busy}
           onSave={actions.saveSection}
         />

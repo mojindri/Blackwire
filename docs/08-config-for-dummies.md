@@ -492,6 +492,59 @@ You can also match:
 - ports in `port`
 - inbound tags in `inboundTag`
 
+## `routing.balancers`
+
+A balancer is an outbound-like tag that chooses between multiple real outbounds.
+Routing rules can target the balancer tag exactly like a normal outbound tag.
+
+Basic adaptive balancer shape:
+
+```json
+{
+  "routing": {
+    "balancers": [
+      {
+        "tag": "auto-proxy",
+        "selector": ["primary-vless", "backup-ss2022"],
+        "strategy": "adaptive",
+        "profiles": [
+          { "name": "stable", "outboundTag": "primary-vless" },
+          { "name": "backup", "outboundTag": "backup-ss2022" }
+        ],
+        "adaptive": {
+          "failureThreshold": 2,
+          "cooldownSecs": 30,
+          "ewmaAlpha": 0.2,
+          "switchMargin": 0.15
+        },
+        "health_check": {
+          "url": "http://www.gstatic.com/generate_204",
+          "interval_secs": 30,
+          "timeout_secs": 5,
+          "max_failures": 2
+        }
+      }
+    ],
+    "rules": [
+      { "outboundTag": "auto-proxy" }
+    ]
+  }
+}
+```
+
+Meaning:
+
+- `selector` lists the real outbound tags the balancer may use
+- `strategy: "adaptive"` scores paths by success rate, latency, and stability
+- `profiles` gives readable names for metrics; each profile still maps to an outbound tag
+- `failureThreshold` and `cooldownSecs` control conservative failover
+- `switchMargin` prevents switching for tiny latency changes
+- `health_check` lets the balancer detect broken paths before user traffic hits them
+
+If `profiles` is omitted, the selector tags are used as profile names. These
+balancer profiles are not the same thing as the top-level operating
+`profile: "fast"` setting.
+
 ## A Good Beginner Config Progression
 
 Do not start with the hardest config first.
@@ -601,4 +654,3 @@ Think of config like this:
 
 - `metricsAddr`
   optional monitoring server
-
