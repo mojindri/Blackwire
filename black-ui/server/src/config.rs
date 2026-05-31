@@ -151,6 +151,7 @@ pub fn subscription_link(
 ) -> Result<String> {
     match inbound.protocol.as_str() {
         "vless" => Ok(vless_link(settings, inbound, user)),
+        "vmess" => Ok(vmess_link(settings, inbound, user)),
         "trojan" => trojan_link(settings, inbound, user),
         "shadowsocks" => shadowsocks_link(settings, inbound, user),
         "hysteria2" => hysteria2_link(settings, inbound, user),
@@ -162,26 +163,20 @@ pub fn subscription_link(
 
 pub fn vless_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> String {
     let mut params = vec![
-        format!("type={}", inbound.transport),
+        format!("type={}", share_network(inbound)),
         "encryption=none".into(),
     ];
-    if inbound.transport == "ws" {
-        let path = if inbound.stream_settings.trim().is_empty() {
-            format!("/{}", inbound.tag)
+    append_transport_params(inbound, &mut params);
+    let security = stream_security(inbound).unwrap_or_else(|| {
+        if inbound.transport == "reality" {
+            "reality".into()
         } else {
-            serde_json::from_str::<Value>(&inbound.stream_settings)
-                .ok()
-                .and_then(|v| {
-                    v.pointer("/wsSettings/path")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .unwrap_or_else(|| format!("/{}", inbound.tag))
-        };
-        params.push(format!("path={}", util::url_escape(&path)));
-    }
-    if inbound.transport == "reality" {
+            "none".into()
+        }
+    });
+    if security == "reality" {
         params.push("security=reality".into());
+        params.push("headerType=none".into());
         if let Some(value) = reality_value(inbound, "/realitySettings/publicKey") {
             params.push(format!("pbk={}", util::url_escape(&value)));
         }
@@ -206,6 +201,14 @@ pub fn vless_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
         } else {
             params.push("fp=chrome".into());
         }
+    } else if security == "tls" {
+        params.push("security=tls".into());
+        if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
+            params.push(format!("sni={}", util::url_escape(&value)));
+        }
+        if let Some(value) = stream_value(inbound, "/tlsSettings/alpn") {
+            params.push(format!("alpn={}", util::url_escape(&value)));
+        }
     } else {
         params.push("security=none".into());
     }
@@ -222,22 +225,56 @@ pub fn vless_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
     )
 }
 
+fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> String {
+    let network = share_network(inbound);
+    let security = stream_security(inbound).unwrap_or_else(|| "none".into());
+    let host = stream_value(inbound, "/wsSettings/headers/Host")
+        .or_else(|| stream_value(inbound, "/httpupgradeSettings/host"))
+        .unwrap_or_default();
+    let path = stream_value(inbound, "/wsSettings/path")
+        .or_else(|| stream_value(inbound, "/httpupgradeSettings/path"))
+        .or_else(|| stream_value(inbound, "/splithttpSettings/path"))
+        .unwrap_or_default();
+    let sni = stream_value(inbound, "/tlsSettings/serverName").unwrap_or_default();
+    let alpn = stream_value(inbound, "/tlsSettings/alpn").unwrap_or_default();
+    let payload = json!({
+        "v": "2",
+        "ps": user.email,
+        "add": settings.subscription_host,
+        "port": inbound.port.to_string(),
+        "id": user.uuid,
+        "aid": "0",
+        "scy": "auto",
+        "net": network,
+        "type": "none",
+        "host": host,
+        "path": path,
+        "tls": if security == "tls" { "tls" } else { "" },
+        "sni": sni,
+        "alpn": alpn,
+    });
+    let encoded = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        serde_json::to_string(&payload).unwrap_or_default(),
+    );
+    format!("vmess://{encoded}")
+}
+
 fn reality_value(inbound: &Inbound, pointer: &str) -> Option<String> {
-    serde_json::from_str::<Value>(&inbound.stream_settings)
-        .ok()
-        .and_then(|v| {
-            v.pointer(pointer)
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .filter(|v| !v.is_empty())
+    stream_value(inbound, pointer)
 }
 
 fn trojan_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Result<String> {
     let password = credential_string(user, "password").unwrap_or_else(|| user.uuid.clone());
-    let mut params = vec![format!("type={}", inbound.transport)];
+    let mut params = vec![format!("type={}", share_network(inbound))];
+    append_transport_params(inbound, &mut params);
     let security = stream_security(inbound).unwrap_or_else(|| "tls".into());
     params.push(format!("security={security}"));
+    if security == "tls" {
+        if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
+            params.push(format!("sni={}", util::url_escape(&value)));
+        }
+    }
     Ok(format!(
         "trojan://{}@{}:{}?{}#{}",
         util::url_escape(&password),
@@ -270,13 +307,49 @@ fn hysteria2_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
     let auth = credential_string(user, "auth")
         .or_else(|| credential_string(user, "password"))
         .unwrap_or_else(|| user.uuid.clone());
+    let mut params = Vec::new();
+    if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
+        params.push(format!("sni={}", util::url_escape(&value)));
+    }
+    let query = if params.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", params.join("&"))
+    };
     Ok(format!(
-        "hysteria2://{}@{}:{}#{}",
+        "hysteria2://{}@{}:{}{}#{}",
         util::url_escape(&auth),
         settings.subscription_host,
         inbound.port,
+        query,
         util::url_escape(&user.email)
     ))
+}
+
+fn share_network(inbound: &Inbound) -> String {
+    let security = stream_security(inbound);
+    if inbound.transport == "reality" || security.as_deref() == Some("reality") {
+        "tcp".into()
+    } else {
+        stream_value(inbound, "/network").unwrap_or_else(|| inbound.transport.clone())
+    }
+}
+
+fn append_transport_params(inbound: &Inbound, params: &mut Vec<String>) {
+    if let Some(path) = stream_value(inbound, "/wsSettings/path")
+        .or_else(|| stream_value(inbound, "/httpupgradeSettings/path"))
+        .or_else(|| stream_value(inbound, "/splithttpSettings/path"))
+    {
+        params.push(format!("path={}", util::url_escape(&path)));
+    }
+    if let Some(host) = stream_value(inbound, "/wsSettings/headers/Host")
+        .or_else(|| stream_value(inbound, "/httpupgradeSettings/host"))
+    {
+        params.push(format!("host={}", util::url_escape(&host)));
+    }
+    if let Some(service_name) = stream_value(inbound, "/grpcSettings/serviceName") {
+        params.push(format!("serviceName={}", util::url_escape(&service_name)));
+    }
 }
 
 fn client_entry(protocol: &str, user: &ManagedUser) -> Value {
@@ -351,6 +424,28 @@ fn settings_value(raw: &str, key: &str) -> Option<String> {
     serde_json::from_str::<Value>(raw)
         .ok()
         .and_then(|v| v.get(key).and_then(Value::as_str).map(str::to_string))
+}
+
+fn stream_value(inbound: &Inbound, pointer: &str) -> Option<String> {
+    serde_json::from_str::<Value>(&inbound.stream_settings)
+        .ok()
+        .and_then(|v| {
+            let value = v.pointer(pointer)?;
+            if let Some(raw) = value.as_str() {
+                return Some(raw.to_string());
+            }
+            if let Some(items) = value.as_array() {
+                return Some(
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(","),
+                );
+            }
+            None
+        })
+        .filter(|v| !v.is_empty())
 }
 
 fn stream_security(inbound: &Inbound) -> Option<String> {
@@ -489,5 +584,74 @@ mod tests {
             value["routing"]["balancers"][0]["profiles"][0]["outboundTag"],
             "primary-vless"
         );
+    }
+
+    #[test]
+    fn vless_reality_subscription_uses_common_xray_uri_params() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "vless-reality-in".into(),
+            listen: "0.0.0.0".into(),
+            port: 443,
+            protocol: "vless".into(),
+            enabled: true,
+            transport: "reality".into(),
+            settings: "{}".into(),
+            stream_settings: r#"{
+              "network": "tcp",
+              "security": "reality",
+              "realitySettings": {
+                "publicKey": "abc123",
+                "shortId": "feedbeef",
+                "serverName": "www.microsoft.com",
+                "fingerprint": "chrome"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "Mollah".into(),
+            uuid: "459dc0c8-d891-4768-9234-faf11fd26b5d".into(),
+            flow: String::new(),
+            credential: json!({}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = vless_link(&settings, &inbound, &user);
+        assert!(
+            link.starts_with("vless://459dc0c8-d891-4768-9234-faf11fd26b5d@203.0.113.10:443?")
+        );
+        assert!(link.contains("type=tcp"));
+        assert!(link.contains("security=reality"));
+        assert!(link.contains("headerType=none"));
+        assert!(link.contains("pbk=abc123"));
+        assert!(link.contains("sid=feedbeef"));
+        assert!(link.contains("sni=www.microsoft.com"));
+        assert!(link.contains("fp=chrome"));
+        assert!(link.ends_with("#Mollah"));
     }
 }
