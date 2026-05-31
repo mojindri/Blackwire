@@ -387,4 +387,69 @@ mod tests {
             "alice@example.test"
         );
     }
+
+    #[test]
+    fn generated_adaptive_balancer_routing_config_validates() {
+        let state = test_state();
+        {
+            let conn = state.db.lock().unwrap();
+            let ts = util::now();
+            conn.execute(
+                "INSERT INTO inbounds (tag, listen, port, protocol, enabled, transport, settings, stream_settings, sniffing, limits, created_at, updated_at)
+                 VALUES ('socks', '127.0.0.1', 18080, 'socks', 1, 'tcp', '{}', '', '', '', ?1, ?1)",
+                params![ts],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE outbounds SET tag='primary-vless', protocol='freedom', enabled=1, settings='{}', stream_settings='', updated_at=?1 WHERE tag='freedom'",
+                params![ts],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO outbounds (tag, protocol, enabled, settings, stream_settings, created_at, updated_at)
+                 VALUES ('backup-ss2022', 'freedom', 1, '{}', '', ?1, ?1)",
+                params![ts],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE config_sections SET enabled=1, value=?1, updated_at=?2 WHERE name='routing'",
+                params![
+                    r#"{
+                      "balancers": [{
+                        "tag": "auto-proxy",
+                        "selector": ["primary-vless", "backup-ss2022"],
+                        "strategy": "adaptive",
+                        "profiles": [
+                          { "name": "stable", "outboundTag": "primary-vless" },
+                          { "name": "backup", "outboundTag": "backup-ss2022" }
+                        ],
+                        "adaptive": {
+                          "failureThreshold": 2,
+                          "cooldownSecs": 30,
+                          "ewmaAlpha": 0.2,
+                          "switchMargin": 0.15
+                        },
+                        "health_check": {
+                          "url": "http://www.gstatic.com/generate_204",
+                          "interval_secs": 30,
+                          "timeout_secs": 5,
+                          "max_failures": 2
+                        }
+                      }],
+                      "rules": [{ "outboundTag": "auto-proxy" }]
+                    }"#,
+                    ts
+                ],
+            )
+            .unwrap();
+        }
+
+        let value = build_value(&state).unwrap();
+        validate_value(&value).unwrap();
+        assert_eq!(value["routing"]["balancers"][0]["strategy"], "adaptive");
+        assert_eq!(
+            value["routing"]["balancers"][0]["profiles"][0]["outboundTag"],
+            "primary-vless"
+        );
+    }
 }

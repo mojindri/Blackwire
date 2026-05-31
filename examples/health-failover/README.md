@@ -6,15 +6,17 @@ This example shows the intended health-checking load balancer shape:
 local app
   -> SOCKS5 inbound
   -> routing rule selects auto-proxy balancer
-  -> health state filters dead outbounds
-  -> latency strategy chooses the fastest alive outbound
+  -> health state and adaptive scoring filter weak outbounds
+  -> adaptive strategy chooses the best scored profile
   -> target site
 ```
 
 The balancer watches `primary-vless` and `backup-ss2022`. When health checks mark
-one path dead, new connections should fail over to the other path. If both paths
-are dead, the balancer falls back to the first configured outbound so failures
-stay explicit instead of disappearing silently.
+one path dead, new connections should fail over to the other path. The named
+`profiles` in this example are balancer profiles mapped to outbound tags; they
+are separate from the top-level Blackwire operating profile such as
+`profile: "fast"`. If both paths are dead, the balancer falls back to the first
+configured outbound so failures stay explicit instead of disappearing silently.
 
 ## Validation
 
