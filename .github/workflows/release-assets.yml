@@ -207,7 +207,7 @@ jobs:
           <meta charset="utf-8">
           <title>Blackwire apt repository</title>
           <h1>Blackwire apt repository</h1>
-          <pre>deb [trusted=yes] https://mojindri.github.io/v2ray/apt stable main</pre>
+          <pre>deb [trusted=yes] https://mojindri.github.io/Blackwire/apt stable main</pre>
           HTML
           sed -i 's/^          //' index.html
           git config user.name "github-actions[bot]"
