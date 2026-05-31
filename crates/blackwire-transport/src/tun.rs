@@ -24,6 +24,8 @@ pub mod tcp;
 
 pub use backend::{current_tun_support, ensure_tun_runtime_supported, TunPlatformSupport};
 pub use device::{create_tun, TunConfig, TunDevice};
+#[cfg(target_os = "macos")]
+pub use device::tun_device_name;
 pub use nat::UdpNatTable;
 pub use packet::{
     build_tcp_packet, build_tcp_rst, build_udp_response_packet, parse_ip_packet, IpPacket,
