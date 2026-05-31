@@ -37,6 +37,8 @@ use tokio::time::timeout;
 
 use blackwire_transport::tun::{create_tun, TunConfig, TunRuntime};
 use blackwire_transport::tun::{parse_ip_packet, UdpNatTable};
+#[cfg(target_os = "macos")]
+use blackwire_transport::tun::tun_device_name;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -224,7 +226,7 @@ async fn macos_tun_runtime_privileged_smoke() {
     let outbound_interface = macos_default_interface()
         .await
         .expect("failed to detect macOS default interface");
-    let cfg = TunConfig {
+    let mut cfg = TunConfig {
         name: "blackwire-ci-utun".into(),
         address: "198.19.10.1".parse().unwrap(),
         netmask: "255.255.0.0".parse().unwrap(),
@@ -236,6 +238,9 @@ async fn macos_tun_runtime_privileged_smoke() {
         wintun_file: None,
     };
     let device = create_tun(&cfg).expect("macOS utun creation failed");
+    // macOS only assigns utun<N> names; the requested name may be ignored by the
+    // kernel, so read the actual assigned name before checking route state.
+    cfg.name = tun_device_name(&device).expect("could not read utun device name");
     run_macos_runtime_with_route_asserts(cfg, device).await;
 }
 
