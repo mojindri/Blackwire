@@ -5,6 +5,7 @@ REPO="${BLACKWIRE_REPO:-mojindri/v2ray}"
 VERSION="${VERSION:-latest}"
 DOWNLOAD_BASE="${BLACKWIRE_DOWNLOAD_BASE:-}"
 ACTION="${ACTION:-install}"
+SETUP="${SETUP:-}"
 PREFIX="${PREFIX:-/usr/local}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/blackwire}"
 STATE_DIR="${STATE_DIR:-/var/lib/blackwire}"
@@ -22,6 +23,10 @@ TLS_KEY_FILE="${TLS_KEY_FILE:-}"
 ACME_EMAIL="${ACME_EMAIL:-}"
 ACME_STAGING="${ACME_STAGING:-0}"
 INSTALL_CERTBOT="${INSTALL_CERTBOT:-0}"
+INSTALL_NGINX="${INSTALL_NGINX:-0}"
+WS_PATH="${WS_PATH:-/blackwire}"
+PROXY_PATH="${PROXY_PATH:-$WS_PATH}"
+INTERNAL_PORT="${INTERNAL_PORT:-10080}"
 REALITY_DEST="${REALITY_DEST:-www.microsoft.com:443}"
 REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-www.microsoft.com}"
 PUBLIC_HOST="${PUBLIC_HOST:-<server-ip-or-domain>}"
@@ -59,6 +64,12 @@ uninstall_blackwire() {
         sudo_cmd systemctl daemon-reload >/dev/null 2>&1 || true
     fi
     if [ "${REMOVE_CONFIG:-0}" = "1" ]; then
+        if [ -f "$CONFIG_DIR/nginx-site" ]; then
+            nginx_site="$(cat "$CONFIG_DIR/nginx-site" 2>/dev/null || true)"
+            if [ -n "$nginx_site" ]; then
+                sudo_cmd rm -f "/etc/nginx/sites-enabled/${nginx_site}" "/etc/nginx/sites-available/${nginx_site}"
+            fi
+        fi
         sudo_cmd rm -rf "$CONFIG_DIR" "$STATE_DIR" "$RUN_DIR"
         log "removed binary, systemd unit, config, state, and run directories"
     else
@@ -80,10 +91,28 @@ detect_asset() {
 }
 
 validate_port() {
-    case "$SERVER_PORT" in
-        ''|*[!0-9]*) die "SERVER_PORT must be numeric" ;;
+    port="$1"
+    name="$2"
+    case "$port" in
+        ''|*[!0-9]*) die "$name must be numeric" ;;
     esac
-    [ "$SERVER_PORT" -ge 1 ] && [ "$SERVER_PORT" -le 65535 ] || die "SERVER_PORT must be between 1 and 65535"
+    [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "$name must be between 1 and 65535"
+}
+
+validate_server_port() {
+    validate_port "$SERVER_PORT" SERVER_PORT
+}
+
+validate_ws_path() {
+    WS_PATH="$PROXY_PATH"
+    case "$WS_PATH" in
+        /*) ;;
+        *) die "WS_PATH must start with '/'" ;;
+    esac
+    [ "$WS_PATH" != "/" ] || die "WS_PATH must not be '/'"
+    case "$WS_PATH" in
+        *' '*|*'?'*|*'#'*|*'%'*) die "WS_PATH must not contain spaces, '?', '#', or '%'" ;;
+    esac
 }
 
 short_id() {
@@ -114,7 +143,7 @@ protect_config_for_service() {
 
 generate_server_config() {
     [ -z "$CONFIG_PATH" ] && [ -z "$CONFIG_URL" ] || die "INIT_SERVER cannot be combined with CONFIG_PATH or CONFIG_URL"
-    validate_port
+    validate_server_port
 
     uuid="$("$PREFIX/bin/blackwire" uuid)"
     info_file="$CONFIG_DIR/client-info.txt"
@@ -239,6 +268,68 @@ REALITY server name: $REALITY_SERVER_NAME
 REALITY destination: $REALITY_DEST
 INFO
             ;;
+        vless-ws-nginx)
+            validate_port "$INTERNAL_PORT" INTERNAL_PORT
+            validate_ws_path
+            [ -n "$DOMAIN" ] || die "INIT_SERVER=vless-ws-nginx requires DOMAIN"
+            sudo_cmd sh -c "cat > '$CONFIG_DIR/config.json'" <<JSON
+{
+  "log": {
+    "level": "info",
+    "json": false
+  },
+  "inbounds": [
+    {
+      "tag": "vless-ws-in",
+      "protocol": "vless",
+      "listen": "127.0.0.1",
+      "port": $INTERNAL_PORT,
+      "settings": {
+        "clients": [
+          {
+            "id": "$uuid",
+            "email": "ws@example.local"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "$WS_PATH"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "freedom",
+      "protocol": "freedom"
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "outboundTag": "freedom"
+      }
+    ]
+  }
+}
+JSON
+            protect_config_for_service "$CONFIG_DIR/config.json"
+            setup_nginx_ws_proxy
+            sudo_cmd sh -c "cat > '$info_file'" <<INFO
+Generated VLESS WebSocket over nginx TLS server config
+
+Address: $DOMAIN
+Port: 443
+UUID: $uuid
+Network: ws
+Security: tls
+WebSocket path: $WS_PATH
+Internal Blackwire listen: 127.0.0.1:$INTERNAL_PORT
+INFO
+            ;;
         trojan-tls)
             prepare_tls_certificate
             if [ "$SERVICE_USER" = "nobody" ] && [ "$SERVICE_GROUP" = "" ]; then
@@ -304,12 +395,59 @@ TLS certificate: $TLS_CERT_FILE
 TLS key: $TLS_KEY_FILE
 INFO
             ;;
-        *) die "unsupported INIT_SERVER value: $INIT_SERVER (use vless-tcp, vless-reality, or trojan-tls)" ;;
+        *) die "unsupported INIT_SERVER value: $INIT_SERVER (use vless-tcp, vless-reality, vless-ws-nginx, or trojan-tls)" ;;
     esac
 
     sudo_cmd chmod 0600 "$info_file"
     log "generated $INIT_SERVER config at $CONFIG_DIR/config.json"
     log "wrote client connection hints to $info_file"
+}
+
+resolve_setup() {
+    if [ -n "$SETUP" ] && [ -n "$INIT_SERVER" ]; then
+        die "set only one of SETUP or INIT_SERVER"
+    fi
+
+    case "$SETUP" in
+        "")
+            ;;
+        domain)
+            INIT_SERVER="vless-ws-nginx"
+            SERVER_PORT=443
+            INSTALL_NGINX="${INSTALL_NGINX:-1}"
+            INSTALL_CERTBOT="${INSTALL_CERTBOT:-1}"
+            ;;
+        reality)
+            INIT_SERVER="vless-reality"
+            ;;
+        direct)
+            INIT_SERVER="vless-tcp"
+            ;;
+        custom)
+            [ -n "$CONFIG_PATH" ] || [ -n "$CONFIG_URL" ] || die "SETUP=custom requires CONFIG_PATH or CONFIG_URL"
+            ;;
+        *) die "unsupported SETUP value: $SETUP (use domain, reality, direct, or custom)" ;;
+    esac
+}
+
+check_domain_preflight() {
+    [ "$SETUP" = "domain" ] || [ "$INIT_SERVER" = "vless-ws-nginx" ] || return 0
+    [ -n "$DOMAIN" ] || die "SETUP=domain requires DOMAIN"
+    validate_ws_path
+    validate_port "$INTERNAL_PORT" INTERNAL_PORT
+
+    if command -v ss >/dev/null 2>&1; then
+        for port in 80 443; do
+            if ss -ltnp 2>/dev/null | grep -Eq "[:.]${port}[[:space:]]"; then
+                if ! ss -ltnp 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | grep -q 'nginx'; then
+                    holder="$(ss -ltnp 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | head -n 1)"
+                    die "SETUP=domain needs tcp/${port} for nginx, but it is already in use: $holder"
+                fi
+            fi
+        done
+    else
+        log "ss not found; skipping tcp/80 and tcp/443 ownership preflight"
+    fi
 }
 
 install_package_if_possible() {
@@ -362,6 +500,125 @@ prepare_tls_certificate() {
     TLS_KEY_FILE="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
     [ -f "$TLS_CERT_FILE" ] || die "certbot did not create $TLS_CERT_FILE"
     [ -f "$TLS_KEY_FILE" ] || die "certbot did not create $TLS_KEY_FILE"
+}
+
+setup_nginx_ws_proxy() {
+    if ! command -v nginx >/dev/null 2>&1; then
+        if [ "$INSTALL_NGINX" = "1" ]; then
+            install_package_if_possible nginx
+        else
+            die "nginx not found; install nginx or set INSTALL_NGINX=1"
+        fi
+    fi
+
+    for port in 80 443; do
+        if ss -ltnp 2>/dev/null | grep -Eq "[:.]${port}[[:space:]]"; then
+            if ! ss -ltnp 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | grep -q 'nginx'; then
+                holder="$(ss -ltnp 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | head -n 1)"
+                die "tcp/${port} is already in use by another service: $holder"
+            fi
+        fi
+    done
+
+    if [ -n "$TLS_CERT_FILE" ] || [ -n "$TLS_KEY_FILE" ]; then
+        [ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ] || die "set both TLS_CERT_FILE and TLS_KEY_FILE"
+        [ -f "$TLS_CERT_FILE" ] || die "TLS_CERT_FILE does not exist: $TLS_CERT_FILE"
+        [ -f "$TLS_KEY_FILE" ] || die "TLS_KEY_FILE does not exist: $TLS_KEY_FILE"
+        use_existing_cert=1
+    else
+        use_existing_cert=0
+        if ! command -v certbot >/dev/null 2>&1; then
+            if [ "$INSTALL_CERTBOT" = "1" ]; then
+                install_package_if_possible certbot
+            else
+                die "certbot not found; install certbot or set INSTALL_CERTBOT=1"
+            fi
+        fi
+    fi
+
+    webroot="/var/www/blackwire-${DOMAIN}"
+    sudo_cmd install -d -m 0755 "$webroot"
+    sudo_cmd sh -c "cat > '$webroot/index.html'" <<HTML
+blackwire
+HTML
+
+    nginx_available="/etc/nginx/sites-available/blackwire-${DOMAIN}.conf"
+    nginx_enabled="/etc/nginx/sites-enabled/blackwire-${DOMAIN}.conf"
+    sudo_cmd sh -c "cat > '$nginx_available'" <<NGINX
+server {
+    listen 80;
+    server_name $DOMAIN;
+    root $webroot;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+NGINX
+    sudo_cmd ln -sf "$nginx_available" "$nginx_enabled"
+    sudo_cmd nginx -t
+    sudo_cmd systemctl enable --now nginx
+    sudo_cmd systemctl reload nginx
+
+    if [ "$use_existing_cert" = "1" ]; then
+        cert_file="$TLS_CERT_FILE"
+        key_file="$TLS_KEY_FILE"
+        log "using provided TLS certificate for nginx"
+    else
+        certbot_args=(--nginx --non-interactive --agree-tos --domain "$DOMAIN")
+        if [ -n "$ACME_EMAIL" ]; then
+            certbot_args+=(--email "$ACME_EMAIL")
+        else
+            certbot_args+=(--register-unsafely-without-email)
+        fi
+        if [ "$ACME_STAGING" = "1" ]; then
+            certbot_args+=(--staging)
+        fi
+
+        log "requesting nginx-managed Let's Encrypt certificate for $DOMAIN"
+        sudo_cmd certbot "${certbot_args[@]}"
+        cert_file="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+        key_file="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+    fi
+
+    sudo_cmd sh -c "cat > '$nginx_available'" <<NGINX
+server {
+    listen 80;
+    server_name $DOMAIN;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $DOMAIN;
+
+    ssl_certificate $cert_file;
+    ssl_certificate_key $key_file;
+
+    root $webroot;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+
+    location $WS_PATH {
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 300s;
+        proxy_pass http://127.0.0.1:$INTERNAL_PORT;
+    }
+}
+NGINX
+    sudo_cmd sh -c "printf '%s\n' 'blackwire-${DOMAIN}.conf' > '$CONFIG_DIR/nginx-site'"
+    sudo_cmd nginx -t
+    sudo_cmd systemctl reload nginx
+    log "installed nginx TLS reverse proxy for https://$DOMAIN$WS_PATH"
 }
 
 download_url() {
@@ -454,18 +711,28 @@ install_config() {
 
 configure_firewall() {
     [ "$OPEN_FIREWALL" = "1" ] || return 0
-    validate_port
+    validate_server_port
+
+    if [ "$SETUP" = "domain" ] || [ "$INIT_SERVER" = "vless-ws-nginx" ]; then
+        firewall_ports="80/tcp 443/tcp"
+    else
+        firewall_ports="${SERVER_PORT}/tcp"
+    fi
 
     if command -v ufw >/dev/null 2>&1; then
-        sudo_cmd ufw allow "${SERVER_PORT}/tcp"
-        log "opened tcp/${SERVER_PORT} with ufw"
+        for port in $firewall_ports; do
+            sudo_cmd ufw allow "$port"
+        done
+        log "opened $firewall_ports with ufw"
     elif command -v firewall-cmd >/dev/null 2>&1; then
-        sudo_cmd firewall-cmd --add-port="${SERVER_PORT}/tcp" --permanent
+        for port in $firewall_ports; do
+            sudo_cmd firewall-cmd --add-port="$port" --permanent
+        done
         sudo_cmd firewall-cmd --reload
-        log "opened tcp/${SERVER_PORT} with firewalld"
+        log "opened $firewall_ports with firewalld"
     else
         log "OPEN_FIREWALL=1 requested, but ufw/firewalld was not found"
-        log "open tcp/${SERVER_PORT} in your cloud firewall and host firewall"
+        log "open $firewall_ports in your cloud firewall and host firewall"
     fi
 }
 
@@ -482,7 +749,11 @@ print_next_steps() {
     if [ -f "$CONFIG_DIR/client-info.txt" ]; then
         log "next: read client connection hints from '$CONFIG_DIR/client-info.txt'"
     fi
-    log "next: ensure tcp/${SERVER_PORT} is open in your VPS/cloud firewall"
+    if [ "$SETUP" = "domain" ] || [ "$INIT_SERVER" = "vless-ws-nginx" ]; then
+        log "next: ensure tcp/80 and tcp/443 are open in your VPS/cloud firewall"
+    else
+        log "next: ensure tcp/${SERVER_PORT} is open in your VPS/cloud firewall"
+    fi
     log "next: view logs with 'journalctl -u blackwire -f'"
 }
 
@@ -507,6 +778,8 @@ main() {
     if [ "$(id -u)" -ne 0 ]; then
         need_cmd sudo
     fi
+    resolve_setup
+    check_domain_preflight
 
     asset="$(detect_asset)"
     base_url="$(download_url "$asset")"
