@@ -608,6 +608,65 @@ async fn routing_rule_can_target_registered_balancer() {
 }
 
 #[tokio::test]
+async fn adaptive_balancer_profiles_parse_and_take_precedence_over_selector() {
+    let cfg = parse_config(json!({
+        "log": { "level": "warning" },
+        "inbounds": [],
+        "outbounds": [
+            freedom_outbound("direct-a"),
+            freedom_outbound("direct-b")
+        ],
+        "routing": {
+            "balancers": [{
+                "tag": "auto",
+                "selector": ["missing-selector-is-ignored"],
+                "strategy": "adaptive",
+                "profiles": [
+                    { "name": "stable", "outboundTag": "direct-a" },
+                    { "name": "backup", "outboundTag": "direct-b" }
+                ],
+                "adaptive": {
+                    "failureThreshold": 2,
+                    "cooldownSecs": 30,
+                    "ewmaAlpha": 0.2,
+                    "switchMargin": 0.15
+                }
+            }],
+            "rules": [{
+                "type": "field",
+                "outboundTag": "auto"
+            }]
+        }
+    }));
+
+    let instance = Instance::from_config(Arc::new(cfg))
+        .await
+        .expect("adaptive balancer profiles should register");
+    drop(instance);
+}
+
+#[tokio::test]
+async fn adaptive_balancer_rejects_missing_profile_outbound() {
+    let cfg = parse_config(json!({
+        "log": { "level": "warning" },
+        "inbounds": [],
+        "outbounds": [freedom_outbound("direct")],
+        "routing": {
+            "balancers": [{
+                "tag": "auto",
+                "strategy": "adaptive",
+                "profiles": [
+                    { "name": "missing", "outboundTag": "missing" }
+                ]
+            }],
+            "rules": []
+        }
+    }));
+
+    assert!(Instance::from_config(Arc::new(cfg)).await.is_err());
+}
+
+#[tokio::test]
 async fn balancer_rejects_missing_selector_outbound() {
     let cfg = parse_config(json!({
         "log": { "level": "warning" },

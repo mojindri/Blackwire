@@ -64,7 +64,23 @@
           "primary-vless",
           "backup-ss2022"
         ],
-        "strategy": "latency",
+        "strategy": "adaptive",
+        "profiles": [
+          {
+            "name": "stable",
+            "outboundTag": "primary-vless"
+          },
+          {
+            "name": "backup",
+            "outboundTag": "backup-ss2022"
+          }
+        ],
+        "adaptive": {
+          "failureThreshold": 2,
+          "cooldownSecs": 30,
+          "ewmaAlpha": 0.2,
+          "switchMargin": 0.15
+        },
         "health_check": {
           "url": "http://www.gstatic.com/generate_204",
           "interval_secs": 30,
