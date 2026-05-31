@@ -31,6 +31,7 @@ export function clearToken(): void {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
+  headers.set("X-Black-UI-Request", "fetch");
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 
   const res = await fetch(path, { ...options, credentials: "same-origin", headers });

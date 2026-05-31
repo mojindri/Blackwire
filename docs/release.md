@@ -25,7 +25,7 @@ Validated by CI, the e2e test suite, and the realistic lab mandatory matrix.
 - DNS resolver (system, DoH, DoT), FakeIP pool, DNS cache, `domain_strategy`
 - HTTP + TLS + FakeDNS sniffing with `destOverride`, `routeOnly`, `metadataOnly`
 - Routing rules (domain, suffix, keyword, regex, IP/CIDR, port, source_ip, inboundTag, sniffed `protocol`, GeoIP/geosite)
-- Load balancer with health-check failover
+- Adaptive load balancer with health-check failover
 - Prometheus metrics (`/metrics`, `/healthz`, `/readyz`, `/version`)
 - Config hot-reload: routing rules, VLESS user UUIDs, GeoIP/geosite data
 - Structural config reload via automatic CLI instance rebuild with rollback

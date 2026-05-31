@@ -78,7 +78,7 @@ If `blackwire-core` is the assembler, `blackwire-app` is the brain.
 - relay
 - DNS
 - health checking
-- balancer
+- balancer / adaptive failover
 - metrics
 
 ### Read First

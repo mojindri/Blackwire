@@ -25,6 +25,12 @@
 //! | `proxy_relay_splice_fallback_total` | Counter | `reason` |
 //! | `proxy_relay_bytes_total` | Counter | `direction`, `path` |
 //! | `freedom_pool_leases_total` | Counter | `outbound` |
+//! | `balancer_adaptive_profile_score` | Gauge | `balancer`, `profile` |
+//! | `balancer_adaptive_profile_selected` | Gauge | `balancer`, `profile` |
+//! | `balancer_adaptive_selections_total` | Counter | `balancer`, `profile` |
+//! | `balancer_adaptive_cooldowns_total` | Counter | `balancer`, `profile` |
+//! | `balancer_adaptive_connect_success_total` | Counter | `balancer`, `profile` |
+//! | `balancer_adaptive_connect_failures_total` | Counter | `balancer`, `profile` |
 //!
 //! # Usage
 //!
@@ -254,6 +260,36 @@ fn describe_metrics() {
         metrics::Unit::Count,
         "Current adaptive per-destination Freedom pool hotness estimate"
     );
+    metrics::describe_gauge!(
+        "balancer_adaptive_profile_score",
+        metrics::Unit::Count,
+        "Adaptive balancer score by profile"
+    );
+    metrics::describe_gauge!(
+        "balancer_adaptive_profile_selected",
+        metrics::Unit::Count,
+        "Adaptive balancer selected profile marker"
+    );
+    metrics::describe_counter!(
+        "balancer_adaptive_selections_total",
+        metrics::Unit::Count,
+        "Adaptive balancer profile selections"
+    );
+    metrics::describe_counter!(
+        "balancer_adaptive_cooldowns_total",
+        metrics::Unit::Count,
+        "Adaptive balancer profile cooldown entries"
+    );
+    metrics::describe_counter!(
+        "balancer_adaptive_connect_success_total",
+        metrics::Unit::Count,
+        "Adaptive balancer outbound connect successes"
+    );
+    metrics::describe_counter!(
+        "balancer_adaptive_connect_failures_total",
+        metrics::Unit::Count,
+        "Adaptive balancer outbound connect failures"
+    );
 }
 
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
@@ -402,6 +438,77 @@ pub fn record_connection_closed(inbound: &str, rx_bytes: u64, tx_bytes: u64, dur
         "inbound" => inbound.to_owned()
     )
     .record(duration.as_secs_f64());
+}
+
+/// Record the current adaptive score for one balancer profile.
+pub fn record_adaptive_balancer_score(balancer: &str, profile: &str, score: f64) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::gauge!(
+        "balancer_adaptive_profile_score",
+        "balancer" => balancer.to_owned(),
+        "profile" => profile.to_owned()
+    )
+    .set(score);
+}
+
+/// Record an adaptive profile selection.
+pub fn record_adaptive_balancer_selection(balancer: &str, profile: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "balancer_adaptive_selections_total",
+        "balancer" => balancer.to_owned(),
+        "profile" => profile.to_owned()
+    )
+    .increment(1);
+    metrics::gauge!(
+        "balancer_adaptive_profile_selected",
+        "balancer" => balancer.to_owned(),
+        "profile" => profile.to_owned()
+    )
+    .set(1.0);
+}
+
+/// Record that an adaptive profile entered cooldown.
+pub fn record_adaptive_balancer_cooldown(balancer: &str, profile: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "balancer_adaptive_cooldowns_total",
+        "balancer" => balancer.to_owned(),
+        "profile" => profile.to_owned()
+    )
+    .increment(1);
+}
+
+/// Record an adaptive outbound connect success.
+pub fn record_adaptive_balancer_connect_success(balancer: &str, profile: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "balancer_adaptive_connect_success_total",
+        "balancer" => balancer.to_owned(),
+        "profile" => profile.to_owned()
+    )
+    .increment(1);
+}
+
+/// Record an adaptive outbound connect failure.
+pub fn record_adaptive_balancer_connect_failure(balancer: &str, profile: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "balancer_adaptive_connect_failures_total",
+        "balancer" => balancer.to_owned(),
+        "profile" => profile.to_owned()
+    )
+    .increment(1);
 }
 
 #[cfg(test)]
