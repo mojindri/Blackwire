@@ -155,14 +155,14 @@ are documented in [installed-command-guide.md](installed-command-guide.md).
 Prerelease install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/v2ray/v0.1.0-rc.3/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.3/scripts/install.sh \
   | VERSION=v0.1.0-rc.3 bash
 ```
 
 Stable install, after a stable release is marked latest:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/v2ray/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/main/scripts/install.sh | bash
 ```
 
 By default, the installer does not start the service. To start immediately after
@@ -173,7 +173,7 @@ that contains the archive and matching `.sha256` file.
 Config-aware install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/v2ray/v0.1.0-rc.3/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.3/scripts/install.sh \
   | VERSION=v0.1.0-rc.3 CONFIG_PATH=/path/to/config.json bash
 ```
 
@@ -184,7 +184,7 @@ the config. `START_SERVICE=1` is rejected unless a config is present and valid.
 Generated Linux VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/v2ray/v0.1.0-rc.3/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.3/scripts/install.sh \
   | VERSION=v0.1.0-rc.3 SETUP=reality PUBLIC_HOST=example.com bash
 ```
 
@@ -197,7 +197,7 @@ firewall/log/start commands.
 Standard domain setup:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/v2ray/v0.1.0-rc.3/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.3/scripts/install.sh \
   | VERSION=v0.1.0-rc.3 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
@@ -232,7 +232,7 @@ guided VPS setup modes.
 The release workflow publishes an unsigned static apt repository to GitHub Pages:
 
 ```sh
-echo 'deb [trusted=yes] https://mojindri.github.io/v2ray/apt stable main' | \
+echo 'deb [trusted=yes] https://mojindri.github.io/Blackwire/apt stable main' | \
   sudo tee /etc/apt/sources.list.d/blackwire.list
 sudo apt update
 sudo apt install blackwire
