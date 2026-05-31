@@ -18,7 +18,7 @@ Everything in the repo exists to implement one piece of that path.
 
 ## What Problem This Repo Solves
 
-A proxy server has to do several different jobs at once:
+A proxy runtime has to do several different jobs at once:
 
 1. Accept a connection from a client.
 2. Understand the protocol the client is speaking.
