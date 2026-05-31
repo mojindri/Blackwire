@@ -90,15 +90,15 @@ For a generated Linux VPS config:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mojindri/v2ray/v0.1.0-rc.3/scripts/install.sh \
-  | VERSION=v0.1.0-rc.3 INIT_SERVER=vless-reality PUBLIC_HOST=example.com bash
+  | VERSION=v0.1.0-rc.3 SETUP=reality PUBLIC_HOST=example.com bash
 ```
 
-For a domain-backed TLS server, point DNS at the VPS first and make sure port 80
-is open for the ACME challenge:
+For the standard domain setup, point DNS at the VPS first and make sure ports 80
+and 443 are open:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mojindri/v2ray/v0.1.0-rc.3/scripts/install.sh \
-  | VERSION=v0.1.0-rc.3 INIT_SERVER=trojan-tls DOMAIN=proxy.example.com INSTALL_CERTBOT=1 START_SERVICE=1 bash
+  | VERSION=v0.1.0-rc.3 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 ## Fast Profile
