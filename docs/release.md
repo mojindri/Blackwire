@@ -5,6 +5,10 @@
 This is a pre-1.0 project. The table below is the release support contract.
 Any area not listed as **Supported** carries an explicit caveat.
 
+This file owns release support labels. Detailed feature evidence lives in
+[feature-matrix.md](feature-matrix.md), and gate commands live in
+[11-testing.md](11-testing.md) / [test-workflows.md](test-workflows.md).
+
 ### Supported (safe to rely on)
 
 Validated by CI, the e2e test suite, and the realistic lab mandatory matrix.
