@@ -702,3 +702,26 @@ Known instability remained in sing-box no-keepalive baselines on this VPS
 
 Decision: accepted for shared-path progression under xray-focused gate; keep
 sing-box noka as a separate stability follow-up.
+
+## Shared-path accept-loop cut (2026-05-31)
+
+Commit: `a2522cb`
+
+Change:
+
+- `crates/blackwire-transport/src/tcp.rs`
+  - move accepted socket option tuning (`apply_socket_opts`) from the accept
+    loop into the per-connection task after admission.
+  - goal: keep accept loop focused on accept + limit checks under load.
+
+VPS subset (`gate-matrix`, `5s`, `c32`, payloads `1k 64k`, keepalive `on off`,
+upstream `127.0.0.1:18080` native nginx):
+
+- `xray-bw-fast-tcp-1k-ka`: `18523.4` vs `xray-xray` `15135.0`
+- `xray-bw-fast-tcp-1k-noka`: `2809.5` vs `xray-xray` `2562.5`
+- `xray-bw-fast-tcp-64k-ka`: `8593.4` vs `xray-xray` `8140.7`
+- `xray-bw-fast-tcp-64k-noka`: `2409.4` vs `xray-xray` `1998.7`
+- xray rows errors: `0`
+
+Decision: accepted in shared-path cycle (xray stable lanes improved). Sing-box
+no-keepalive baseline remained unstable on this host and is tracked separately.
