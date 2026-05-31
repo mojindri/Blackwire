@@ -15,6 +15,7 @@ place: duplicate summaries drift quickly.
 | What exact Make targets exist? | [15-make-command-guide.md](15-make-command-guide.md), [make-target-inventory.md](make-target-inventory.md) |
 | How do I operate an installed Linux VPS? | [installed-command-guide.md](installed-command-guide.md) |
 | What does the external-client matrix prove? | [parity-status.md](parity-status.md), [../labs/realistic/external-clients/README.md](../labs/realistic/external-clients/README.md) |
+| What local report results have been summarized for the repo? | [performance-evidence.md](performance-evidence.md) |
 | What is the abuse-prevention / traffic-policy backlog? | [traffic-policy-roadmap.md](traffic-policy-roadmap.md) |
 | What is the network-resilience hardening backlog? | [network-resilience-roadmap.md](network-resilience-roadmap.md) |
 
@@ -38,6 +39,8 @@ Related docs:
   Shipped parity, external-client matrix SKIPs (vs server support), backlog.
 - [feature-matrix.md](feature-matrix.md)
   Evidence-based feature status.
+- [performance-evidence.md](performance-evidence.md)
+  Latest local performance and memory-profile result summaries.
 - [xray-parity-source-of-truth.md](xray-parity-source-of-truth.md)
   Upstream-first rules for wire parity.
 - [traffic-policy-roadmap.md](traffic-policy-roadmap.md)
