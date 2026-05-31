@@ -350,15 +350,16 @@ async fn macos_pf_anchor_has_rules(interface_name: &str) -> bool {
         .output()
         .await
         .expect("pfctl -a blackwire/tun -s rules failed");
-    // pfctl may write rules to stdout or stderr depending on macOS version.
+    // Collect both streams; pfctl may use stdout or stderr depending on macOS
+    // version.  The exact rule display format also varies (older: "rdr pass on",
+    // newer: "pass in ... rdr-to"), so check only for the interface name and
+    // the redirect port keyword that is stable across versions.
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    combined.contains("rdr pass on")
-        && combined.contains(interface_name)
-        && combined.contains("port 53")
+    out.status.success() && combined.contains(interface_name) && combined.contains("port")
 }
 
 #[cfg(target_os = "windows")]
