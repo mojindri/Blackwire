@@ -1,8 +1,8 @@
 use axum::{
     extract::{DefaultBodyLimit, Request},
-    http::{header, HeaderValue},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post, put},
     Router,
 };
@@ -34,8 +34,24 @@ fn cors_layer() -> CorsLayer {
 }
 
 async fn security_headers(request: Request, next: Next) -> Response {
+    let is_api = request.uri().path().starts_with("/api/");
+    if requires_internal_request_header(is_api, request.method(), request.headers()) {
+        return (
+            StatusCode::FORBIDDEN,
+            [(header::CONTENT_TYPE, "application/json")],
+            r#"{"error":"missing Black UI request header"}"#,
+        )
+            .into_response();
+    }
+
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
+    if is_api {
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store, max-age=0"),
+        );
+    }
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -46,12 +62,42 @@ async fn security_headers(request: Request, next: Next) -> Response {
     );
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(
+        HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=(), payment=()"),
+    );
+    headers.insert(
+        HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-permitted-cross-domain-policies"),
+        HeaderValue::from_static("none"),
+    );
+    if std::env::var("BLACK_UI_COOKIE_SECURE").ok().as_deref() == Some("1") {
+        headers.insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        );
+    }
+    headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
             "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
         ),
     );
     response
+}
+
+fn requires_internal_request_header(is_api: bool, method: &Method, headers: &HeaderMap) -> bool {
+    is_api
+        && matches!(
+            *method,
+            Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+        )
+        && headers
+            .get("x-black-ui-request")
+            .and_then(|value| value.to_str().ok())
+            != Some("fetch")
 }
 
 fn api_router() -> Router<AppState> {
@@ -118,4 +164,47 @@ fn api_router() -> Router<AppState> {
         .route("/config/validate", post(handlers::config_validate))
         .route("/config/write", post(handlers::config_write))
         .route("/config/apply", post(handlers::config_apply))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{HeaderMap, HeaderValue, Method};
+
+    use super::requires_internal_request_header;
+
+    #[test]
+    fn mutating_api_request_requires_internal_header() {
+        let headers = HeaderMap::new();
+        assert!(requires_internal_request_header(
+            true,
+            &Method::POST,
+            &headers
+        ));
+    }
+
+    #[test]
+    fn mutating_api_request_accepts_internal_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-black-ui-request", HeaderValue::from_static("fetch"));
+        assert!(!requires_internal_request_header(
+            true,
+            &Method::POST,
+            &headers
+        ));
+    }
+
+    #[test]
+    fn non_api_or_read_request_does_not_require_internal_header() {
+        let headers = HeaderMap::new();
+        assert!(!requires_internal_request_header(
+            true,
+            &Method::GET,
+            &headers
+        ));
+        assert!(!requires_internal_request_header(
+            false,
+            &Method::POST,
+            &headers
+        ));
+    }
 }

@@ -4,7 +4,8 @@
 //!
 //!   SOCKS client
 //!     -> routing selects `auto-proxy` balancer
-//!     -> `primary-vless` (broken upstream) marked dead by HTTP probes
+//!     -> adaptive balancer profiles score each member path
+//!     -> `primary-vless` (broken upstream) marked dead by HTTP probes/cooldown
 //!     -> `backup-freedom` (healthy) carries user traffic to echo target
 //!
 //! Health probes dial the configured `http://…` URL **through each member
@@ -134,7 +135,17 @@ fn failover_config(
                 "balancers": [{{
                     "tag": "auto-proxy",
                     "selector": ["primary-vless", "backup-freedom"],
-                    "strategy": "latency",
+                    "strategy": "adaptive",
+                    "profiles": [
+                        {{ "name": "stable", "outboundTag": "primary-vless" }},
+                        {{ "name": "backup", "outboundTag": "backup-freedom" }}
+                    ],
+                    "adaptive": {{
+                        "failureThreshold": 2,
+                        "cooldownSecs": 2,
+                        "ewmaAlpha": 0.2,
+                        "switchMargin": 0.15
+                    }},
                     "health_check": {{
                         "url": "http://127.0.0.1:{health_port}/generate_204",
                         "interval_secs": 1,

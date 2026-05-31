@@ -115,7 +115,7 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "routing",
                 "Routing rules",
                 "supported",
-                "Rules, geoip/geosite, balancers, health checks",
+                "Rules, geoip/geosite, adaptive balancers, health checks",
             ),
             item(
                 "dns",

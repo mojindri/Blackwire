@@ -609,6 +609,13 @@ tr.row-selected {
   overflow: auto;
 }
 
+.section-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .drawer-card {
   border: 1px solid var(--line);
   border-radius: 8px;
