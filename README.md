@@ -19,43 +19,15 @@ per-protocol status, see [docs/feature-matrix.md](docs/feature-matrix.md).
 
 ## Release Status
 
-This is a pre-1.0 project. The support contract is explicit:
+This is a pre-1.0 project with an explicit support contract. The canonical
+release contract lives in [docs/release.md](docs/release.md); the detailed
+feature evidence table lives in [docs/feature-matrix.md](docs/feature-matrix.md).
 
-**Release-supported** (CI + e2e + realistic lab):
-- VLESS over TCP, UDP, Mux, Vision, REALITY, WebSocket, HTTPUpgrade, SplitHTTP
-- Hysteria2 TCP + UDP relay
-- V2Ray QUIC transport, ShadowTLS v3 transport, and mKCP transport
-- VMess AEAD over TCP
-- VMess over gRPC (Gun transport) — END_STREAM propagation validated
-- Trojan over TLS/TCP + UDP
-- Shadowsocks 2022 TCP + UDP SIP022
-- SOCKS5 (TCP CONNECT + UDP ASSOCIATE), HTTP CONNECT
-- Freedom outbound
-- DNS resolver (system, DoH/DoT), DNS cache, FakeIP, routing rules, GeoIP/geosite
-- HTTP + TLS + FakeDNS sniffing (`destOverride`, `routeOnly`, `metadataOnly`)
-- Sniffed `protocol` routing rules
-- Load balancer with health-check failover
-- Prometheus metrics, config hot-reload (routing rules, VLESS users, GeoIP/geosite)
-- Structural config reload via automatic CLI instance rebuild with rollback
-- Native JSON config schema with fail-closed validation
-- Per-inbound / global `max_connections` limits (TCP, mKCP, QUIC, Hysteria2)
-- Resource-risk smoke coverage in normal CI
-- External-client failure pcaps in CI artifacts
-- TUN transparent proxy on Linux/macOS/Windows, including privileged CI coverage
-- Handler API (gRPC) list/user/structural endpoint operations using native endpoint JSON
+High-level summary:
 
-**Experimental** (implemented, lacking hostile-network or soak proof):
-- Stats API (gRPC) runtime stats; uptime/RSS/task count are wired, but soak and observability validation are still pending
-
-**Unsupported** (fail-closed or documented out of scope):
-- `protocol: shadowtls` — fails config validation; use `security: shadowtls` in `streamSettings`
-- V2Ray/Xray JSON config import
-- Handler API Xray core endpoint protobuf decoding
-- VMess legacy alterId / non-AEAD
-- DNS/dokodemo/tun as inbound `protocol` values
-- Byte-identical browser TLS fingerprinting
-- OpenWrt, Android, iOS
-- Standalone client app
+- Supported: core proxy runtime, server mode, local SOCKS/HTTP proxy mode, the documented protocol/transport matrix, Handler API structural operations, and TUN runtime on Linux/macOS/Windows.
+- Experimental: Stats API (gRPC) runtime stats until soak and observability validation are complete.
+- Unsupported: V2Ray/Xray JSON import, VMess legacy alterId/non-AEAD, Xray endpoint protobuf decoding for Handler structural RPCs, OpenWrt/Android/iOS, and a standalone desktop/mobile client app.
 
 ## Start Here
 
