@@ -346,10 +346,10 @@ async fn macos_split_routes_present(interface_name: &str) -> bool {
 #[cfg(target_os = "macos")]
 async fn macos_pf_anchor_has_rules(interface_name: &str) -> bool {
     let out = tokio::process::Command::new("pfctl")
-        .args(["-a", "blackwire/tun", "-s", "rules"])
+        .args(["-a", "blackwire", "-s", "rules"])
         .output()
         .await
-        .expect("pfctl -a blackwire/tun -s rules failed");
+        .expect("pfctl -a blackwire -s rules failed");
     // Collect both streams; pfctl may use stdout or stderr depending on macOS
     // version.  The exact rule display format also varies (older: "rdr pass on",
     // newer: "pass in ... rdr-to"), so check only for the interface name and

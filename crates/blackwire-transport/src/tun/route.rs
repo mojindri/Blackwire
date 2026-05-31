@@ -511,7 +511,7 @@ pub async fn cleanup_macos_routes(config: &TunConfig) {
 }
 
 #[cfg(target_os = "macos")]
-const MACOS_PF_ANCHOR: &str = "blackwire/tun";
+const MACOS_PF_ANCHOR: &str = "blackwire";
 
 #[cfg(target_os = "macos")]
 fn validate_macos_runtime_config(config: &TunConfig) -> Result<()> {
