@@ -448,6 +448,7 @@ dependencies = [
 name = "blackwire-benches"
 version = "0.1.0"
 dependencies = [
+ "blackwire-common",
  "blackwire-config",
  "blackwire-core",
  "bytes",

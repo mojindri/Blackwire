@@ -60,6 +60,10 @@ pub struct FastConfig {
     /// so future payload-aware thresholds do not change config shape.
     #[serde(default)]
     pub splice: FastSplicePolicy,
+
+    /// Userspace relay engine used when splice is unavailable or disabled.
+    #[serde(default)]
+    pub relay: FastRelayConfig,
 }
 
 impl FastConfig {
@@ -74,8 +78,74 @@ impl Default for FastConfig {
             strict_production: true,
             pool: FastPoolPolicy::default(),
             splice: FastSplicePolicy::default(),
+            relay: FastRelayConfig::default(),
         }
     }
+}
+
+/// Relay engine and buffer policy for Fast Profile userspace copy paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FastRelayConfig {
+    /// Userspace relay implementation. `legacy` preserves the current pooled
+    /// two-loop relay. `v2` enables one-task ring-buffer relay.
+    #[serde(default)]
+    pub engine: FastRelayEngine,
+
+    /// Write flush behavior for Relay Engine v2.
+    #[serde(default)]
+    pub flush: FastRelayFlushPolicy,
+
+    /// Initial per-direction v2 buffer size in bytes.
+    #[serde(default = "FastRelayConfig::default_initial_buffer")]
+    pub initial_buffer: usize,
+
+    /// Maximum per-direction v2 buffer size in bytes.
+    #[serde(default = "FastRelayConfig::default_max_buffer")]
+    pub max_buffer: usize,
+}
+
+impl FastRelayConfig {
+    fn default_initial_buffer() -> usize {
+        16 * 1024
+    }
+
+    fn default_max_buffer() -> usize {
+        256 * 1024
+    }
+}
+
+impl Default for FastRelayConfig {
+    fn default() -> Self {
+        Self {
+            engine: FastRelayEngine::default(),
+            flush: FastRelayFlushPolicy::default(),
+            initial_buffer: Self::default_initial_buffer(),
+            max_buffer: Self::default_max_buffer(),
+        }
+    }
+}
+
+/// Userspace relay engine selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FastRelayEngine {
+    /// Existing pooled relay implementation.
+    #[default]
+    Legacy,
+    /// Relay Engine v2: one-task duplex relay with growable ring buffers.
+    V2,
+}
+
+/// Flush policy for Relay Engine v2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FastRelayFlushPolicy {
+    /// Flush after each write, matching legacy semantics.
+    #[default]
+    Immediate,
+    /// Flush when a direction reaches EOF/shutdown.
+    Deferred,
 }
 
 /// TCP connection pool strategy for the Fast Profile outbound.
