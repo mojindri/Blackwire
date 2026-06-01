@@ -7,8 +7,12 @@
 //! This module provides helpers to build Quinn QUIC server and client endpoints
 //! with the TLS configuration required for Hysteria2.
 
+pub mod badnet;
 mod brutal_cc;
 
+pub use badnet::{
+    BadNetControllerFactory, CongestionConfig, CongestionMode, LossFingerprint, PathSample,
+};
 pub use brutal_cc::{BrutalCC, BrutalCCFactory};
 
 use std::net::SocketAddr;
