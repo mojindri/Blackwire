@@ -429,6 +429,7 @@ dependencies = [
  "dashmap",
  "hickory-resolver",
  "ipnet",
+ "libc",
  "lru",
  "metrics",
  "metrics-exporter-prometheus",

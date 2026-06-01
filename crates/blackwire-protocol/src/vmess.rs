@@ -27,4 +27,7 @@ pub mod outbound;
 pub mod stream;
 
 pub use inbound::{VmessInbound, VmessUser, VmessUserRegistry};
-pub use outbound::{connect_vmess_on_stream, VmessOutbound, VmessOutboundConfig};
+pub use outbound::{
+    connect_vmess_on_stream, connect_vmess_on_stream_with_early_payload, VmessOutbound,
+    VmessOutboundConfig,
+};
