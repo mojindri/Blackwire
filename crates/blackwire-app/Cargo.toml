@@ -9,6 +9,7 @@ authors.workspace = true
 [dependencies]
 blackwire-common          = { path = "../blackwire-common" }
 blackwire-config          = { path = "../blackwire-config" }
+blackwire-connmgr         = { path = "../blackwire-connmgr" }
 
 tokio.workspace            = true
 bytes.workspace            = true
