@@ -710,6 +710,17 @@ impl InboundManagement for RuntimeControl {
         })
         .await
     }
+
+    async fn list_connections(&self) -> Vec<blackwire_connmgr::ConnectionSnapshot> {
+        blackwire_connmgr::global_manager().list()
+    }
+
+    async fn close_connections(
+        &self,
+        selector: blackwire_connmgr::CloseSelector,
+    ) -> Result<usize, String> {
+        Ok(blackwire_connmgr::global_manager().close(selector).matched)
+    }
 }
 
 // ── `test` subcommand ─────────────────────────────────────────────────────────
