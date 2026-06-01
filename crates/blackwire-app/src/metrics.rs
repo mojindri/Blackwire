@@ -37,6 +37,11 @@
 //! | `blackwire_early_payload_written_total` | Counter | `protocol`, `outbound` |
 //! | `blackwire_handshake_kick_total` | Counter | `protocol`, `direction`, `result` |
 //! | `blackwire_first_byte_latency_seconds` | Histogram | `protocol`, `transport` |
+//! | `blackwire_route_match_seconds` | Histogram | none |
+//! | `blackwire_route_cache_hits_total` | Counter | none |
+//! | `blackwire_route_cache_misses_total` | Counter | none |
+//! | `blackwire_route_compiled_rules_total` | Gauge | `kind` |
+//! | `blackwire_dns_prefetch_total` | Counter | `result` |
 //! | `freedom_pool_leases_total` | Counter | `outbound` |
 //! | `balancer_adaptive_profile_score` | Gauge | `balancer`, `profile` |
 //! | `balancer_adaptive_profile_selected` | Gauge | `balancer`, `profile` |
@@ -267,6 +272,31 @@ fn describe_metrics() {
         "blackwire_first_byte_latency_seconds",
         metrics::Unit::Seconds,
         "Latency until the first upstream byte can be written"
+    );
+    metrics::describe_histogram!(
+        "blackwire_route_match_seconds",
+        metrics::Unit::Seconds,
+        "Compiled router match latency in seconds"
+    );
+    metrics::describe_counter!(
+        "blackwire_route_cache_hits_total",
+        metrics::Unit::Count,
+        "Compiled router cache hits"
+    );
+    metrics::describe_counter!(
+        "blackwire_route_cache_misses_total",
+        metrics::Unit::Count,
+        "Compiled router cache misses"
+    );
+    metrics::describe_gauge!(
+        "blackwire_route_compiled_rules_total",
+        metrics::Unit::Count,
+        "Compiled routing rules by rule kind"
+    );
+    metrics::describe_counter!(
+        "blackwire_dns_prefetch_total",
+        metrics::Unit::Count,
+        "Background routing DNS prefetch outcomes"
     );
     metrics::describe_counter!(
         "freedom_pool_hits_total",
@@ -520,6 +550,54 @@ pub fn record_first_byte_latency(protocol: &str, transport: &str, elapsed: Durat
         "transport" => transport.to_owned()
     )
     .record(elapsed.as_secs_f64());
+}
+
+/// Record compiled router match latency.
+pub fn record_route_match(elapsed: Duration) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::histogram!("blackwire_route_match_seconds").record(elapsed.as_secs_f64());
+}
+
+/// Increment a compiled route cache hit.
+pub fn record_route_cache_hit() {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!("blackwire_route_cache_hits_total").increment(1);
+}
+
+/// Increment a compiled route cache miss.
+pub fn record_route_cache_miss() {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!("blackwire_route_cache_misses_total").increment(1);
+}
+
+/// Publish the current compiled routing rule count for a rule kind.
+pub fn record_route_compiled_rules(kind: &str, count: usize) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::gauge!(
+        "blackwire_route_compiled_rules_total",
+        "kind" => kind.to_owned()
+    )
+    .set(count as f64);
+}
+
+/// Record a background routing DNS prefetch outcome.
+pub fn record_dns_prefetch(result: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_dns_prefetch_total",
+        "result" => result.to_owned()
+    )
+    .increment(1);
 }
 
 /// Increment the relay error counter for an inbound.
