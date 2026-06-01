@@ -12,6 +12,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tracing::debug;
@@ -32,6 +33,8 @@ use blackwire_transport::{
     dial_httpupgrade, grpc_connect, mkcp_connect, quic_connect, shadowtls_v3_connect,
     splithttp_connect, tls_connect, ws_connect, MkcpClientConfig, WsConnectConfig,
 };
+
+const OUTBOUND_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// VLESS outbound that honors `streamSettings.network = "ws"` and
 /// `streamSettings.security = "tls"` before sending the VLESS header.
@@ -269,7 +272,12 @@ async fn connect_transport(
             .map(|t| t.alpn.iter().map(String::as_str).collect::<Vec<_>>())
             .unwrap_or_default();
 
-        stream = tls_connect(stream, server_name, &alpn, allow_insecure).await?;
+        stream = tokio::time::timeout(
+            OUTBOUND_TLS_HANDSHAKE_TIMEOUT,
+            tls_connect(stream, server_name, &alpn, allow_insecure),
+        )
+        .await
+        .map_err(|_| ProxyError::Tls("outbound TLS handshake timed out".into()))??;
     }
 
     if network == Some(&NetworkType::Grpc) {
