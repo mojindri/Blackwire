@@ -35,7 +35,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::debug;
 
 use blackwire_app::context::Context;
-use blackwire_app::features::OutboundHandler;
+use blackwire_app::features::{OutboundConnectResult, OutboundHandler};
 use blackwire_common::{tcp_connect, Address, BoxedStream, ProxyError};
 
 use super::variable_header::build_request_variable_header;
@@ -80,6 +80,27 @@ impl OutboundHandler for Ss2022Outbound {
             open_ss2022_stream(Box::new(tcp), &self.psk, dest).await?,
         ))
     }
+
+    async fn connect_with_early_payload(
+        &self,
+        _ctx: &Context,
+        dest: &Address,
+        early_payload: Option<Vec<u8>>,
+    ) -> Result<OutboundConnectResult, ProxyError> {
+        debug!(server = %self.server, dest = %dest, "SS-2022 outbound connecting with early payload");
+        let tcp = tcp_connect(self.server).await?;
+        tcp.set_nodelay(true)?;
+        let payload = early_payload.unwrap_or_default();
+        let wrote_early_payload = !payload.is_empty();
+        let stream =
+            open_ss2022_stream_with_initial_payload(Box::new(tcp), &self.psk, dest, &payload)
+                .await?;
+        Ok(OutboundConnectResult {
+            stream: Box::new(stream),
+            wrote_early_payload,
+            returned_early_response: None,
+        })
+    }
 }
 
 const MAX_TIME_DIFF: u64 = 30;
@@ -93,9 +114,19 @@ const TYPE_SERVER: u8 = 0x01;
 ///   server→client: resp_salt(32) | enc_resp_hdr(59) | enc_initial(len+16)
 ///   data:  both sides use regular length-prefixed chunks, nonces starting at 2.
 pub async fn open_ss2022_stream(
+    raw: BoxedStream,
+    psk: &[u8; 32],
+    dest: &Address,
+) -> Result<Ss2022Stream, ProxyError> {
+    open_ss2022_stream_with_initial_payload(raw, psk, dest, &[]).await
+}
+
+/// Open an SS-2022 session and embed optional first payload in the request variable header.
+pub async fn open_ss2022_stream_with_initial_payload(
     mut raw: BoxedStream,
     psk: &[u8; 32],
     dest: &Address,
+    initial_payload: &[u8],
 ) -> Result<Ss2022Stream, ProxyError> {
     // ── 1. Send request ───────────────────────────────────────────────────────
     let mut req_salt = [0u8; 32];
@@ -104,7 +135,7 @@ pub async fn open_ss2022_stream(
 
     let req_subkey = derive_subkey(psk, &req_salt);
     let req_cipher = Aes256Gcm::new(GenericArray::from_slice(&req_subkey));
-    let variable = build_request_variable_header(dest)?;
+    let variable = build_request_variable_header(dest, initial_payload)?;
 
     let mut fixed = [0u8; 11];
     fixed[0] = TYPE_TCP;

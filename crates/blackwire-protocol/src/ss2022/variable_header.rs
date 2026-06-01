@@ -5,12 +5,16 @@ use blackwire_common::{decode_socks5_address, write_socks5_address, Address, Pro
 /// Build the SIP022 request variable header plaintext.
 ///
 /// ```text
-/// atyp(1) | addr | port(2 BE) | padding_len(2 BE)=0 | initial_payload(empty)
+/// atyp(1) | addr | port(2 BE) | padding_len(2 BE)=0 | initial_payload
 /// ```
-pub fn build_request_variable_header(dest: &Address) -> Result<Vec<u8>, ProxyError> {
-    let mut buf = Vec::with_capacity(32);
+pub fn build_request_variable_header(
+    dest: &Address,
+    initial_payload: &[u8],
+) -> Result<Vec<u8>, ProxyError> {
+    let mut buf = Vec::with_capacity(32 + initial_payload.len());
     write_socks5_address(&mut buf, dest)?;
     buf.extend_from_slice(&0u16.to_be_bytes());
+    buf.extend_from_slice(initial_payload);
     Ok(buf)
 }
 
