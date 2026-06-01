@@ -413,7 +413,11 @@ impl Instance {
             ),
             None => DefaultDispatcher::new_with_sniffing(router, outbound_map, sniffing_shared),
         }
-        .with_profile_and_fast(config.profile, config.fast.as_ref());
+        .with_profile_fast_and_vision(
+            config.profile,
+            config.fast.as_ref(),
+            config.vision.as_ref(),
+        );
 
         if config.profile == ProfileMode::Fast {
             let fast = config.fast.as_ref().cloned().unwrap_or_default();
@@ -424,6 +428,7 @@ impl Instance {
                 adaptive_pool_min_hotness = adaptive_pool.min_hotness_for_pool,
                 adaptive_pool_idle_ttl_ms = adaptive_pool.idle_ttl.as_millis(),
                 splice_policy = ?fast.splice,
+                vision_policy = ?config.vision.unwrap_or_default(),
                 adaptive_splice_min_bytes = ADAPTIVE_SPLICE_MIN_BYTES,
                 adaptive_splice_long_stream_ms = ADAPTIVE_SPLICE_LONG_STREAM_AFTER.as_millis(),
                 strict_production = fast.strict_production,

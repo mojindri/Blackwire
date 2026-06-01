@@ -30,6 +30,7 @@ COMPETITIVE_DURATION="${COMPETITIVE_DURATION:-10}"
 COMPETITIVE_CONCURRENCY="${COMPETITIVE_CONCURRENCY:-16}"
 COMPETITIVE_PAYLOADS="${COMPETITIVE_PAYLOADS:-1k}"
 COMPETITIVE_UPSTREAM_URL="${COMPETITIVE_UPSTREAM_URL:-}"
+COMPETITIVE_EXPENSIVE_UPSTREAM_URL="${COMPETITIVE_EXPENSIVE_UPSTREAM_URL:-https://www.microsoft.com}"
 COMPETITIVE_UPSTREAM_KIND="${COMPETITIVE_UPSTREAM_KIND:-auto}"
 COMPETITIVE_REMOTE_UPSTREAM_PORT="${COMPETITIVE_REMOTE_UPSTREAM_PORT:-18080}"
 
@@ -267,6 +268,24 @@ EOF
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/blackwire-client-candidate.json'" <<EOF
 {"log":{"level":"warn"},"inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1091}],"outbounds":[{"tag":"vless-out","protocol":"vless","settings":{"address":"$SERVER_HOST","port":10090,"users":[{"id":"00000000-0000-4000-8000-000000000001","flow":""}]}}]}
 EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-vision-server.json'" <<'EOF'
+{"profile":"fast","fast":{"strictProduction":false,"pool":"disabled","splice":"adaptive"},"log":{"level":"warn"},"inbounds":[{"tag":"vless-vision-in","protocol":"vless","listen":"0.0.0.0","port":10082,"settings":{"clients":[{"id":"1791A4CD-09E3-4A29-A36D-FEA98300C845","email":"lab","flow":"xtls-rprx-vision"}]},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"127.0.0.1:18443","serverName":"www.microsoft.com","privateKey":"6f4850ca51ced64b4acfd90c73fd60392c0c2f92744933b28b1bc0f7b8683d79","shortIds":["aabbccdd00000001"]}}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-vision-server-candidate.json'" <<'EOF'
+{"profile":"fast","fast":{"strictProduction":false,"pool":"disabled","splice":"adaptive","relay":{"engine":"v2","flush":"deferred","initialBuffer":16384,"maxBuffer":262144}},"vision":{"directCopy":"auto","maxPacketsToFilter":8,"allowSpliceAfterDirect":true},"log":{"level":"warn"},"inbounds":[{"tag":"vless-vision-in","protocol":"vless","listen":"0.0.0.0","port":10092,"settings":{"clients":[{"id":"1791A4CD-09E3-4A29-A36D-FEA98300C845","email":"lab","flow":"xtls-rprx-vision"}]},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"127.0.0.1:18443","serverName":"www.microsoft.com","privateKey":"6f4850ca51ced64b4acfd90c73fd60392c0c2f92744933b28b1bc0f7b8683d79","shortIds":["aabbccdd00000001"]}}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/xray-vision-current-client.json'" <<EOF
+{"log":{"loglevel":"warning"},"inbounds":[{"tag":"http-in","listen":"127.0.0.1","port":1086,"protocol":"http"}],"outbounds":[{"tag":"blackwire-vision-out","protocol":"vless","settings":{"vnext":[{"address":"$SERVER_HOST","port":10082,"users":[{"id":"1791A4CD-09E3-4A29-A36D-FEA98300C845","encryption":"none","flow":"xtls-rprx-vision"}]}]},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"fingerprint":"chrome","serverName":"www.microsoft.com","publicKey":"loYSsUliNDpTJ_ISdh6Q3A3fMc7TnaQfuDlpS-K46Wo","shortId":"aabbccdd00000001"}}}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/xray-vision-candidate-client.json'" <<EOF
+{"log":{"loglevel":"warning"},"inbounds":[{"tag":"http-in","listen":"127.0.0.1","port":1096,"protocol":"http"}],"outbounds":[{"tag":"blackwire-vision-out","protocol":"vless","settings":{"vnext":[{"address":"$SERVER_HOST","port":10092,"users":[{"id":"1791A4CD-09E3-4A29-A36D-FEA98300C845","encryption":"none","flow":"xtls-rprx-vision"}]}]},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"fingerprint":"chrome","serverName":"www.microsoft.com","publicKey":"loYSsUliNDpTJ_ISdh6Q3A3fMc7TnaQfuDlpS-K46Wo","shortId":"aabbccdd00000001"}}}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/xray-vision-server.json'" <<'EOF'
+{"log":{"loglevel":"warning"},"inbounds":[{"tag":"vless-vision-in","protocol":"vless","listen":"0.0.0.0","port":10192,"settings":{"clients":[{"id":"1791A4CD-09E3-4A29-A36D-FEA98300C845","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"127.0.0.1:18443","serverNames":["www.microsoft.com"],"privateKey":"QHBt24zKYs1NgFCWM0OP0RFLMpUKUOX3wB3J9aGUb0c","shortIds":["aabbccdd00000001"]}}}],"outbounds":[{"tag":"direct","protocol":"freedom"}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/xray-vision-client.json'" <<EOF
+{"log":{"loglevel":"warning"},"inbounds":[{"tag":"http-in","listen":"127.0.0.1","port":1087,"protocol":"http"}],"outbounds":[{"tag":"xray-vision-out","protocol":"vless","settings":{"vnext":[{"address":"$SERVER_HOST","port":10192,"users":[{"id":"1791A4CD-09E3-4A29-A36D-FEA98300C845","encryption":"none","flow":"xtls-rprx-vision"}]}]},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"fingerprint":"chrome","serverName":"www.microsoft.com","publicKey":"YLCM0wOiSrxzyGYQuQKeQct-4gKm5MLrLy4RAH6--1w","shortId":"aabbccdd00000001"}}}]}
+EOF
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/xray-server.json'" <<'EOF'
 {"log":{"loglevel":"warning"},"inbounds":[{"tag":"vless-in","protocol":"vless","listen":"0.0.0.0","port":10180,"settings":{"clients":[{"id":"00000000-0000-4000-8000-000000000001","flow":""}],"decryption":"none"}}],"outbounds":[{"tag":"direct","protocol":"freedom"}]}
 EOF
@@ -319,12 +338,23 @@ EOF
     run_remote_hey() {
         local variant="$1" payload="$2" proxy="$3" protocol="$4" transport="$5" profile="$6"
         local target="http://$SERVER_HOST:$COMPETITIVE_REMOTE_UPSTREAM_PORT/$payload"
+        if [ "$SCENARIO" = "expensive" ]; then
+            target="$COMPETITIVE_EXPENSIVE_UPSTREAM_URL"
+        fi
         local cmd="hey -z '${COMPETITIVE_DURATION}s' -c '$COMPETITIVE_CONCURRENCY'"
-        [ -n "$proxy" ] && cmd="$cmd -x socks5://127.0.0.1:$proxy"
+        if [ -n "$proxy" ]; then
+            if [[ "$proxy" == *"://"* ]]; then
+                cmd="$cmd -x '$proxy'"
+            else
+                cmd="$cmd -x socks5://127.0.0.1:$proxy"
+            fi
+        fi
         local raw
         if raw="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "$cmd '$target'" 2>&1)"; then
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-${payload}-${TS}.raw.log"
             parse_hey "$variant" "$payload" "$raw" "$protocol" "$transport" "$profile"
         else
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-${payload}-${TS}.raw.log"
             emit_row "$variant" failed "$raw" "$protocol" "$transport" "$profile" "$payload"
         fi
     }
@@ -336,7 +366,7 @@ EOF
         remote_stop "$CLIENT_HOST" "${REMOTE_CLIENT_DIR:-}"
     }
     trap cleanup_remote_dirs EXIT
-    ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "ufw allow ${COMPETITIVE_REMOTE_UPSTREAM_PORT}/tcp >/dev/null; ufw allow 10080/tcp >/dev/null; ufw allow 10090/tcp >/dev/null; ufw allow 10180/tcp >/dev/null; ufw allow 10182/tcp >/dev/null; ufw allow 10200/udp >/dev/null; ufw allow 10202/tcp >/dev/null" >/dev/null 2>&1 || true
+    ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "ufw allow ${COMPETITIVE_REMOTE_UPSTREAM_PORT}/tcp >/dev/null; ufw allow 10080/tcp >/dev/null; ufw allow 10082/tcp >/dev/null; ufw allow 10090/tcp >/dev/null; ufw allow 10092/tcp >/dev/null; ufw allow 10180/tcp >/dev/null; ufw allow 10182/tcp >/dev/null; ufw allow 10192/tcp >/dev/null; ufw allow 10200/udp >/dev/null; ufw allow 10202/tcp >/dev/null" >/dev/null 2>&1 || true
     scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/start_nginx_upstream.sh" "$SSH_USER@$SERVER_HOST:$REMOTE_SERVER_DIR/start_nginx_upstream.sh" >/dev/null
     write_remote_configs "$REMOTE_SERVER_DIR" "$REMOTE_CLIENT_DIR"
     if ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "bash '$REMOTE_SERVER_DIR/start_nginx_upstream.sh' '$REMOTE_SERVER_DIR/nginx' '$COMPETITIVE_REMOTE_UPSTREAM_PORT' 0.0.0.0" >/dev/null 2>&1; then
@@ -354,6 +384,55 @@ EOF
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "chmod +x '$REMOTE_SERVER_DIR/blackwire-candidate'" >/dev/null 2>&1 || true
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "chmod +x '$REMOTE_CLIENT_DIR/blackwire-candidate'" >/dev/null 2>&1 || true
     fi
+
+    if [ "$SCENARIO" = "expensive" ]; then
+        for payload in $COMPETITIVE_PAYLOADS; do
+            emit_row remote-inventory ok "wrote remote-inventory-${TS}.log" inventory ssh baseline "$payload"
+            if [ "$nginx_started" = "1" ] && has_tool "$client_inv" "hey"; then
+                run_remote_hey direct-vps-native "$payload" "" direct tcp baseline
+            else
+                emit_row direct-vps-native skipped "nginx on server or hey on client missing" direct tcp baseline "$payload"
+            fi
+
+            if [ -x "$BLACKWIRE_BIN" ] && has_tool "$client_inv" "xray" && [ "$nginx_started" = "1" ]; then
+                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-vision-server "./blackwire run -c blackwire-vision-server.json" 10082 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" xray-vision-current-client "xray run -config xray-vision-current-client.json" 1086; then
+                    run_remote_hey blackwire-current-vision "$payload" http://127.0.0.1:1086 vless reality-vision current
+                else
+                    emit_row blackwire-current-vision failed "temporary Blackwire Vision server or Xray client did not become ready" vless reality-vision current "$payload"
+                fi
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/blackwire-vision-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/blackwire-vision-server.pid'" >/dev/null 2>&1 || true
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/xray-vision-current-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/xray-vision-current-client.pid'" >/dev/null 2>&1 || true
+            else
+                emit_row blackwire-current-vision skipped "BLACKWIRE_BIN, xray client, or nginx unavailable" vless reality-vision current "$payload"
+            fi
+
+            if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ] && has_tool "$client_inv" "xray" && [ "$nginx_started" = "1" ]; then
+                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-vision-candidate-server "./blackwire-candidate run -c blackwire-vision-server-candidate.json" 10092 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" xray-vision-candidate-client "xray run -config xray-vision-candidate-client.json" 1096; then
+                    run_remote_hey blackwire-candidate-vision "$payload" http://127.0.0.1:1096 vless reality-vision candidate
+                else
+                    emit_row blackwire-candidate-vision failed "temporary Blackwire candidate Vision server or Xray client did not become ready" vless reality-vision candidate "$payload"
+                fi
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/blackwire-vision-candidate-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/blackwire-vision-candidate-server.pid'" >/dev/null 2>&1 || true
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/xray-vision-candidate-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/xray-vision-candidate-client.pid'" >/dev/null 2>&1 || true
+            else
+                emit_row blackwire-candidate-vision skipped "no distinct BLACKWIRE_CANDIDATE_BIN, xray client, or nginx unavailable" vless reality-vision candidate "$payload"
+            fi
+
+            if has_tool "$server_inv" "xray" && has_tool "$client_inv" "xray" && [ "$nginx_started" = "1" ]; then
+                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" xray-vision-server "xray run -config xray-vision-server.json" 10192 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" xray-vision-client "xray run -config xray-vision-client.json" 1087; then
+                    run_remote_hey xray-vision "$payload" http://127.0.0.1:1087 vless reality-vision baseline
+                else
+                    emit_row xray-vision failed "xray Vision server/client did not become ready" vless reality-vision baseline "$payload"
+                fi
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/xray-vision-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/xray-vision-server.pid'" >/dev/null 2>&1 || true
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/xray-vision-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/xray-vision-client.pid'" >/dev/null 2>&1 || true
+            else
+                emit_row xray-vision skipped "xray missing on at least one VPS" vless reality-vision baseline "$payload"
+            fi
+        done
+        return
+    fi
+
     for payload in $COMPETITIVE_PAYLOADS; do
         emit_row remote-inventory ok "wrote remote-inventory-${TS}.log" inventory ssh baseline "$payload"
         if [ "$nginx_started" = "1" ] && has_tool "$client_inv" "hey"; then

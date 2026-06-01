@@ -13,6 +13,7 @@ mod profile;
 mod protocol;
 mod routing;
 mod transport;
+mod vision;
 
 pub use endpoint::{InboundConfig, InboundLimitsConfig, OutboundConfig};
 pub use logging_dns::{DnsConfig, FakeIpConfig, LogConfig};
@@ -29,6 +30,7 @@ pub use transport::{
     GrpcConfig, Hysteria2Config, KcpConfig, RealityConfig, ShadowTlsConfig, SniffingConfig,
     SplitHttpConfig, StreamSettingsConfig, TlsConfig, WsConfig,
 };
+pub use vision::{VisionConfig, VisionDirectCopyPolicy};
 
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -47,6 +49,10 @@ pub struct Config {
     /// Extra settings that apply only when `profile = "fast"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast: Option<FastConfig>,
+
+    /// XTLS Vision optimization policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<VisionConfig>,
 
     /// Logging settings.
     #[serde(default)]
@@ -260,6 +266,33 @@ mod tests {
         assert_eq!(cfg.outbounds.len(), 1);
         assert_eq!(cfg.inbounds[0].tag, "socks");
         assert_eq!(cfg.outbounds[0].tag, "direct");
+    }
+
+    #[test]
+    fn vision_policy_deserialises() {
+        let json = r#"{
+            "vision": {
+                "directCopy": "disabled",
+                "maxPacketsToFilter": 4,
+                "allowSpliceAfterDirect": false
+            },
+            "inbounds": [{
+                "tag": "socks",
+                "protocol": "socks",
+                "listen": "127.0.0.1",
+                "port": 1080
+            }],
+            "outbounds": [{
+                "tag": "direct",
+                "protocol": "freedom"
+            }]
+        }"#;
+
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        let vision = cfg.vision.unwrap();
+        assert_eq!(vision.direct_copy, VisionDirectCopyPolicy::Disabled);
+        assert_eq!(vision.max_packets_to_filter, 4);
+        assert!(!vision.allow_splice_after_direct);
     }
 
     #[test]
