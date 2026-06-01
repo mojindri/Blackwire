@@ -48,6 +48,7 @@ macro_rules! relay_log {
 /// Slow DNS during routing would stall the entire connection dispatch, so we cap
 /// the budget well below the connection handshake timeout.
 const ROUTING_DNS_TIMEOUT: Duration = Duration::from_secs(3);
+const OUTBOUND_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// Maximum time Fast Profile waits for client bytes before validating a pooled socket.
 ///
 /// The first-use guard needs client bytes so it can retry with a fresh dial if
@@ -627,18 +628,22 @@ impl DefaultDispatcher {
             })?;
 
         let t_connect = Instant::now();
-        let result = outbound
-            .connect_with_early_payload(ctx, &dest, early_payload)
-            .await
-            .map_err(|e| {
-                warn!(
-                    outbound = %route.outbound_tag,
-                    dest = %dest,
-                    error = %e,
-                    "outbound connect failed"
-                );
-                e
-            });
+        let result = tokio::time::timeout(
+            OUTBOUND_CONNECT_TIMEOUT,
+            outbound.connect_with_early_payload(ctx, &dest, early_payload),
+        )
+        .await
+        .map_err(|_| ProxyError::Timeout)
+        .and_then(|result| result)
+        .map_err(|e| {
+            warn!(
+                outbound = %route.outbound_tag,
+                dest = %dest,
+                error = %e,
+                "outbound connect failed"
+            );
+            e
+        });
         if let Ok(result) = &result {
             if result.wrote_early_payload {
                 record_early_payload_written(&ctx.inbound_tag, &route.outbound_tag);

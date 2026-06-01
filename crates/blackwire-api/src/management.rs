@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use blackwire_connmgr::{CloseSelector, ConnectionSnapshot};
 
 /// VLESS user row returned by HandlerService queries.
 #[derive(Debug, Clone)]
@@ -75,6 +76,16 @@ pub trait InboundManagement: Send + Sync {
     /// Replace an outbound with a full native blackwire endpoint config.
     async fn alter_outbound(&self, _config: NativeEndpointConfig) -> Result<(), String> {
         Err("AlterOutbound is not available from this management handle".into())
+    }
+
+    /// List active managed connections.
+    async fn list_connections(&self) -> Vec<ConnectionSnapshot> {
+        Vec::new()
+    }
+
+    /// Close managed connections matching the selector.
+    async fn close_connections(&self, _selector: CloseSelector) -> Result<usize, String> {
+        Err("CloseConnections is not available from this management handle".into())
     }
 }
 
