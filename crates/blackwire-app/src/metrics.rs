@@ -24,6 +24,8 @@
 //! | `proxy_relay_splice_selected_total` | Counter | `policy` |
 //! | `proxy_relay_splice_fallback_total` | Counter | `reason` |
 //! | `proxy_relay_bytes_total` | Counter | `direction`, `path` |
+//! | `proxy_relay_v2_flushes_total` | Counter | none |
+//! | `proxy_relay_v2_buffer_grows_total` | Counter | none |
 //! | `freedom_pool_leases_total` | Counter | `outbound` |
 //! | `balancer_adaptive_profile_score` | Gauge | `balancer`, `profile` |
 //! | `balancer_adaptive_profile_selected` | Gauge | `balancer`, `profile` |
@@ -189,6 +191,16 @@ fn describe_metrics() {
         "proxy_relay_bytes_total",
         metrics::Unit::Bytes,
         "Bytes relayed by path-specific relay implementation"
+    );
+    metrics::describe_counter!(
+        "proxy_relay_v2_flushes_total",
+        metrics::Unit::Count,
+        "Flush operations performed by Relay Engine v2"
+    );
+    metrics::describe_counter!(
+        "proxy_relay_v2_buffer_grows_total",
+        metrics::Unit::Count,
+        "Dynamic buffer growth events performed by Relay Engine v2"
     );
     metrics::describe_counter!(
         "freedom_pool_hits_total",

@@ -58,7 +58,9 @@ const POOLED_FIRST_WRITE_GUARD_BUF_SIZE: usize = 2048;
 use std::collections::HashMap;
 
 use blackwire_common::{tcp_connect, Address, BoxedStream, PooledStream, ProxyError};
-use blackwire_config::schema::{FastConfig, FastSplicePolicy, ProfileMode, SniffingConfig};
+use blackwire_config::schema::{
+    FastConfig, FastRelayConfig, FastSplicePolicy, ProfileMode, SniffingConfig,
+};
 use smallvec::SmallVec;
 use tokio::net::TcpStream;
 
@@ -110,6 +112,7 @@ pub struct DefaultDispatcher {
     /// `debug` level rather than `info` to reduce log overhead on hot paths.
     profile: ProfileMode,
     splice_policy: FastSplicePolicy,
+    relay_policy: FastRelayConfig,
 }
 
 fn splice_policy_for_profile(profile: ProfileMode, fast: Option<&FastConfig>) -> FastSplicePolicy {
@@ -117,6 +120,14 @@ fn splice_policy_for_profile(profile: ProfileMode, fast: Option<&FastConfig>) ->
         fast.map(|f| f.splice).unwrap_or_default()
     } else {
         FastSplicePolicy::Adaptive
+    }
+}
+
+fn relay_policy_for_profile(profile: ProfileMode, fast: Option<&FastConfig>) -> FastRelayConfig {
+    if profile == ProfileMode::Fast {
+        fast.map(|f| f.relay).unwrap_or_default()
+    } else {
+        FastRelayConfig::default()
     }
 }
 
@@ -137,6 +148,7 @@ impl DefaultDispatcher {
             sniffing: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
+            relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
         })
     }
 
@@ -153,6 +165,7 @@ impl DefaultDispatcher {
             sniffing,
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
+            relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
         })
     }
 
@@ -172,6 +185,7 @@ impl DefaultDispatcher {
             sniffing: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
+            relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
         })
     }
 
@@ -189,6 +203,7 @@ impl DefaultDispatcher {
             sniffing,
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
+            relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
         })
     }
 
@@ -206,7 +221,11 @@ impl DefaultDispatcher {
         fast: Option<&FastConfig>,
     ) -> Arc<Self> {
         let splice_policy = splice_policy_for_profile(profile, fast);
-        if self.profile == profile && self.splice_policy == splice_policy {
+        let relay_policy = relay_policy_for_profile(profile, fast);
+        if self.profile == profile
+            && self.splice_policy == splice_policy
+            && self.relay_policy == relay_policy
+        {
             return self;
         }
         // We own the only Arc reference here (just constructed), so unwrap is safe.
@@ -215,6 +234,7 @@ impl DefaultDispatcher {
             Ok(mut inner) => {
                 inner.profile = profile;
                 inner.splice_policy = splice_policy;
+                inner.relay_policy = relay_policy;
                 Arc::new(inner)
             }
             Err(arc) => Arc::new(Self {
@@ -224,6 +244,7 @@ impl DefaultDispatcher {
                 sniffing: Arc::clone(&arc.sniffing),
                 profile,
                 splice_policy,
+                relay_policy,
             }),
         }
     }
@@ -271,10 +292,11 @@ impl Dispatcher for DefaultDispatcher {
         //   outbound → inbound (server sending data back to the client)
         //
         // It returns the total bytes sent in each direction when finished.
-        let result = crate::relay::relay_bidirectional_with_splice_policy(
+        let result = crate::relay::relay_bidirectional_with_policies(
             inbound_stream,
             outbound_stream,
             self.splice_policy,
+            self.relay_policy,
         )
         .await
         .map(|(up, down)| (up + prewritten_up, down));
@@ -697,7 +719,9 @@ mod tests {
     use super::*;
     use crate::dns::DnsModuleConfig;
     use crate::router::{Route, RoutingContext};
-    use blackwire_config::schema::{FastPoolPolicy, FastSplicePolicy};
+    use blackwire_config::schema::{
+        FastPoolPolicy, FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy,
+    };
 
     struct StaticRouter;
 
@@ -725,11 +749,31 @@ mod tests {
         let fast = FastConfig {
             splice: FastSplicePolicy::Always,
             pool: FastPoolPolicy::Disabled,
+            relay: FastRelayConfig::default(),
             strict_production: false,
         };
         assert_eq!(
             splice_policy_for_profile(ProfileMode::Fast, Some(&fast)),
             FastSplicePolicy::Always
+        );
+    }
+
+    #[test]
+    fn fast_profile_honors_configured_relay_policy() {
+        let fast = FastConfig {
+            splice: FastSplicePolicy::Disabled,
+            pool: FastPoolPolicy::Disabled,
+            relay: FastRelayConfig {
+                engine: FastRelayEngine::V2,
+                flush: FastRelayFlushPolicy::Deferred,
+                initial_buffer: 4096,
+                max_buffer: 65536,
+            },
+            strict_production: false,
+        };
+        assert_eq!(
+            relay_policy_for_profile(ProfileMode::Fast, Some(&fast)),
+            fast.relay
         );
     }
 
