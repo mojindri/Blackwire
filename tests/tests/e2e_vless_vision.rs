@@ -66,9 +66,17 @@ fn parse_config(json: String) -> Arc<blackwire_config::schema::Config> {
 }
 
 fn server_config(vless_port: u16) -> Arc<blackwire_config::schema::Config> {
+    server_config_with_vision(vless_port, "")
+}
+
+fn server_config_with_vision(
+    vless_port: u16,
+    vision_json: &str,
+) -> Arc<blackwire_config::schema::Config> {
     parse_config(format!(
         r#"{{
             "log": {{ "level": "info", "json": false }},
+            {vision_json}
             "inbounds": [{{
                 "tag": "vless-vision-in",
                 "protocol": "vless",
@@ -127,6 +135,36 @@ async fn vless_vision_plain_tcp_echo() {
 
     let mut stream = socks5_connect(socks_port, "127.0.0.1", echo_port).await;
     let payload = b"HELLO PHASE5 VLESS VISION";
+    stream.write_all(payload).await.unwrap();
+
+    let mut echoed = vec![0u8; payload.len()];
+    stream.read_exact(&mut echoed).await.unwrap();
+    assert_eq!(echoed, payload);
+
+    echo_task.abort();
+}
+
+#[tokio::test]
+async fn vless_vision_direct_copy_disabled_still_relays() {
+    let _ = tracing_subscriber::fmt().with_env_filter("warn").try_init();
+
+    let (echo_port, echo_task) = spawn_echo_server().await;
+    let vless_port = unused_local_port();
+    let socks_port = unused_local_port();
+
+    let vision = r#""vision": { "directCopy": "disabled", "maxPacketsToFilter": 4, "allowSpliceAfterDirect": false },"#;
+    let _server =
+        blackwire_core::Instance::from_config(server_config_with_vision(vless_port, vision))
+            .await
+            .expect("server start failed");
+    let _client = blackwire_core::Instance::from_config(client_config(socks_port, vless_port))
+        .await
+        .expect("client start failed");
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let mut stream = socks5_connect(socks_port, "127.0.0.1", echo_port).await;
+    let payload = b"VISION DIRECT COPY DISABLED";
     stream.write_all(payload).await.unwrap();
 
     let mut echoed = vec![0u8; payload.len()];
