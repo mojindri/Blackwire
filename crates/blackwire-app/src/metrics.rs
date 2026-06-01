@@ -398,6 +398,7 @@ fn describe_metrics() {
         metrics::Unit::Count,
         "Adaptive balancer outbound connect failures"
     );
+    blackwire_connmgr::metrics::describe_metrics();
 }
 
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
