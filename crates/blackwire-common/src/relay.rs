@@ -57,18 +57,13 @@ where
 }
 
 /// Flush policy for [`copy_bidirectional_v2`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RelayFlushPolicy {
     /// Flush after every successful write, matching the legacy relay behavior.
+    #[default]
     Immediate,
     /// Flush on EOF/shutdown only. This lowers syscall pressure for bulk flows.
     Deferred,
-}
-
-impl Default for RelayFlushPolicy {
-    fn default() -> Self {
-        Self::Immediate
-    }
 }
 
 /// Options for [`copy_bidirectional_v2`].
@@ -334,14 +329,15 @@ where
                     debug_assert_eq!(pushed, filled);
                     state.read_ops += 1;
                     progressed = true;
-                    if filled == read_len && state.pending.remaining_capacity() == 0 {
-                        if state.pending.grow() {
-                            state.grow_events += 1;
-                            let new_len = state.scratch.len().saturating_mul(2);
-                            state
-                                .scratch
-                                .resize(new_len.min(state.pending.capacity()), 0);
-                        }
+                    if filled == read_len
+                        && state.pending.remaining_capacity() == 0
+                        && state.pending.grow()
+                    {
+                        state.grow_events += 1;
+                        let new_len = state.scratch.len().saturating_mul(2);
+                        state
+                            .scratch
+                            .resize(new_len.min(state.pending.capacity()), 0);
                     }
                 }
             }

@@ -69,3 +69,73 @@ No active optional xHTTP parity item remains in the roadmap. `xmux`, x-padding, 
 4. **External client** — `make -C labs/realistic interop-server-docker`.
 
 Related: [parity-status.md](parity-status.md), [feature-matrix.md](feature-matrix.md).
+
+---
+
+## Rust competitor parity backlog
+
+This section tracks protocol breadth needed to compete with Rust multi-protocol
+proxy projects such as `cfal/shoes`. It is not part of the release support
+contract until each item is implemented, tested, and promoted through
+[feature-matrix.md](feature-matrix.md).
+
+### P0 - Highest user-value gaps
+
+- [ ] TUIC v5
+  - Add server and local outbound/client role if feasible.
+  - Cover TCP and UDP relay behavior.
+  - Add e2e tests and, where possible, external-client validation.
+- [ ] NaiveProxy
+  - Add TLS/H2-compatible server behavior and user auth.
+  - Add local-client outbound path if Blackwire is used as a chained local
+    proxy.
+  - Add interop tests against a known NaiveProxy-compatible client.
+- [ ] Classic Shadowsocks AEAD
+  - Add `aes-128-gcm`, `aes-256-gcm`, and `chacha20-ietf-poly1305`.
+  - Keep Shadowsocks 2022 support as the preferred modern path.
+  - Add TCP and UDP e2e coverage plus config examples.
+
+### P1 - Breadth gaps
+
+- [ ] Snell v3
+  - Add TCP and UDP behavior if upstream references are stable enough.
+  - Decide whether this belongs in release scope or optional compatibility
+    scope.
+- [ ] Mixed HTTP/SOCKS inbound
+  - Auto-detect HTTP CONNECT vs SOCKS5 on one listener.
+  - Preserve existing explicit HTTP and SOCKS listeners.
+  - Add negative tests for ambiguous or partial handshakes.
+- [ ] General H2MUX
+  - Compare against existing VLESS Mux.Cool and gRPC paths.
+  - Decide whether to support only the protocol combinations users actually
+    need, rather than every advertised combination.
+
+### P2 - Long-tail compatibility
+
+- [ ] AnyTLS
+  - Define exact upstream behavior and threat model before implementation.
+  - Add server and outbound roles only if there is real deployment demand.
+- [ ] SagerNet UDP-over-TCP
+  - Evaluate for SOCKS5/Shadowsocks compatibility use cases.
+  - Add only after UDP policy and no-leakage tests are strong.
+- [ ] Shadowsocks SIP003 WebSocket plugin-style compatibility
+  - Blackwire already has WebSocket as a transport; verify whether SIP003-style
+    Shadowsocks expectations require additional framing/config behavior.
+
+### Platform parity
+
+- [ ] Android TUN/VPN runtime
+  - Requires mobile packaging, VPN service integration, lifecycle handling, and
+    no-leakage tests.
+- [ ] iOS TUN/VPN runtime
+  - Requires Network Extension packaging and a separate distribution model.
+
+### Priority rule
+
+Do not chase protocol count at the cost of Blackwire's differentiators:
+
+- external-client proof
+- fail-closed config validation
+- no-leakage gates
+- operator docs and Black UI workflows
+- reproducible release evidence
