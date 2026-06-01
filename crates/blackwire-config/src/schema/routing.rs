@@ -63,6 +63,10 @@ pub struct RoutingRule {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protocol: Vec<String>,
 
+    /// Only apply this rule to authenticated users with these names/emails.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user: Vec<String>,
+
     /// Outbound tag to use when this rule matches.
     #[serde(rename = "outboundTag")]
     pub outbound_tag: String,

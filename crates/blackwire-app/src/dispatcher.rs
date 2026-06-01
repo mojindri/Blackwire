@@ -70,9 +70,9 @@ use crate::context::Context;
 use crate::dns::DnsModule;
 use crate::features::OutboundHandler;
 use crate::metrics::{
-    record_connection_accepted, record_connection_closed, record_dns, record_early_payload,
-    record_early_payload_written, record_first_byte_latency, record_handshake_kick,
-    record_outbound_connect, record_relay_error, record_route,
+    record_connection_accepted, record_connection_closed, record_dns, record_dns_prefetch,
+    record_early_payload, record_early_payload_written, record_first_byte_latency,
+    record_handshake_kick, record_outbound_connect, record_relay_error, record_route,
 };
 use crate::router::{normalize_routing_domain_strategy, Router, RoutingDomainStrategy};
 use crate::runtime_stats;
@@ -329,9 +329,24 @@ impl Dispatcher for DefaultDispatcher {
         if early_payload_len > 0 {
             record_early_payload(&ctx.inbound_tag, early_payload_len as u64);
         }
-        let outbound = self
+        let outbound = match self
             .connect_outbound_result(&ctx, &dest, early_payload.clone())
-            .await?;
+            .await
+        {
+            Ok(outbound) => outbound,
+            Err(e) => {
+                let _ = inbound_stream.shutdown().await;
+                let elapsed = start.elapsed();
+                metrics::counter!(
+                    "proxy_relay_first_byte_failures_total",
+                    "inbound" => ctx.inbound_tag.clone()
+                )
+                .increment(1);
+                record_relay_error(&ctx.inbound_tag);
+                record_connection_closed(&ctx.inbound_tag, 0, 0, elapsed);
+                return Err(e);
+            }
+        };
         if outbound.wrote_early_payload {
             record_handshake_kick(&ctx.inbound_tag, "upstream", "written");
         } else if let Some(payload) = early_payload {
@@ -699,31 +714,47 @@ impl DefaultDispatcher {
             // Inline version of resolve_domain_ips without borrowing self.
             let mut ips: SmallVec<[Address; 4]> = SmallVec::new();
             let resolved = tokio::time::timeout(ROUTING_DNS_TIMEOUT, dns.resolve(domain)).await;
-            if let Ok(Ok(addrs)) = resolved {
-                for ip in addrs {
-                    ips.push(match ip {
-                        std::net::IpAddr::V4(v4) => Address::Ipv4(v4, port),
-                        std::net::IpAddr::V6(v6) => Address::Ipv6(v6, port),
-                    });
+            match resolved {
+                Ok(Ok(addrs)) => {
+                    for ip in addrs {
+                        ips.push(match ip {
+                            std::net::IpAddr::V4(v4) => Address::Ipv4(v4, port),
+                            std::net::IpAddr::V6(v6) => Address::Ipv6(v6, port),
+                        });
+                    }
                 }
+                Err(_) => {
+                    record_dns_prefetch("timeout");
+                    return None;
+                }
+                Ok(Err(_)) => {}
             }
             if ips.is_empty() {
                 let lookup = tokio::time::timeout(
                     ROUTING_DNS_TIMEOUT,
                     tokio::net::lookup_host((domain, port)),
                 );
-                if let Ok(Ok(addrs)) = lookup.await {
-                    for addr in addrs {
-                        ips.push(match addr {
-                            std::net::SocketAddr::V4(v4) => Address::Ipv4(*v4.ip(), port),
-                            std::net::SocketAddr::V6(v6) => Address::Ipv6(*v6.ip(), port),
-                        });
+                match lookup.await {
+                    Ok(Ok(addrs)) => {
+                        for addr in addrs {
+                            ips.push(match addr {
+                                std::net::SocketAddr::V4(v4) => Address::Ipv4(*v4.ip(), port),
+                                std::net::SocketAddr::V6(v6) => Address::Ipv6(*v6.ip(), port),
+                            });
+                        }
                     }
+                    Err(_) => {
+                        record_dns_prefetch("timeout");
+                        return None;
+                    }
+                    Ok(Err(_)) => {}
                 }
             }
             if ips.is_empty() {
+                record_dns_prefetch("miss");
                 None
             } else {
+                record_dns_prefetch("hit");
                 Some(ips)
             }
         }))
