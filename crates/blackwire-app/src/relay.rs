@@ -23,9 +23,11 @@ use std::time::Duration;
 use blackwire_common::relay::{RelayFlushPolicy, RelayV2Options};
 use blackwire_common::BoxedStream;
 #[cfg(target_os = "linux")]
-use blackwire_common::BufferPool;
+use blackwire_common::{BufferPool, LowerState};
+#[cfg(target_os = "linux")]
+use blackwire_config::schema::VisionDirectCopyPolicy;
 use blackwire_config::schema::{
-    FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy,
+    FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy, VisionConfig,
 };
 #[cfg(target_os = "linux")]
 use bytes::BytesMut;
@@ -69,8 +71,14 @@ pub async fn relay_bidirectional_with_splice_policy(
     outbound: BoxedStream,
     splice_policy: FastSplicePolicy,
 ) -> io::Result<(u64, u64)> {
-    relay_bidirectional_with_policies(inbound, outbound, splice_policy, FastRelayConfig::default())
-        .await
+    relay_bidirectional_with_policies(
+        inbound,
+        outbound,
+        splice_policy,
+        FastRelayConfig::default(),
+        VisionConfig::default(),
+    )
+    .await
 }
 
 /// Relay bytes with explicit Fast Profile splice and userspace relay policies.
@@ -79,6 +87,7 @@ pub async fn relay_bidirectional_with_policies(
     outbound: BoxedStream,
     splice_policy: FastSplicePolicy,
     relay_policy: FastRelayConfig,
+    vision_policy: VisionConfig,
 ) -> io::Result<(u64, u64)> {
     #[cfg(target_os = "linux")]
     {
@@ -96,6 +105,7 @@ pub async fn relay_bidirectional_with_policies(
                             outbound,
                             splice_policy,
                             relay_policy,
+                            vision_policy,
                         )
                         .await;
                     }
@@ -186,6 +196,7 @@ pub async fn relay_bidirectional_with_policies(
     #[cfg(not(target_os = "linux"))]
     {
         let _ = splice_policy;
+        let _ = vision_policy;
         userspace_copy_bidirectional(inbound, outbound, relay_policy).await
     }
 }
@@ -196,8 +207,33 @@ async fn relay_vision_inbound_with_splice_policy(
     outbound: BoxedStream,
     splice_policy: FastSplicePolicy,
     relay_policy: FastRelayConfig,
+    vision_policy: VisionConfig,
 ) -> io::Result<(u64, u64)> {
     use blackwire_common::{try_into_tcp_stream_with_prefix, PrependedStream};
+
+    record_vision_phase(inbound.lower_state());
+
+    if vision_policy.direct_copy == VisionDirectCopyPolicy::Disabled {
+        metrics::counter!(
+            "blackwire_vision_lower_failed_total",
+            "reason" => "policy_disabled"
+        )
+        .increment(1);
+        record_vision_decision(
+            userspace_relay_path(relay_policy, "vision_copy", "vision_copy_v2"),
+            "balanced",
+            false,
+            false,
+        );
+        let (up, down) =
+            userspace_copy_bidirectional(Box::new(inbound), outbound, relay_policy).await?;
+        record_relay_path_bytes(
+            userspace_relay_path(relay_policy, "vision_copy", "vision_copy_v2"),
+            up,
+            down,
+        );
+        return Ok((up, down));
+    }
 
     let (mut outbound, outbound_prefix) = match try_into_tcp_stream_with_prefix(outbound) {
         Ok(parts) => parts,
@@ -207,6 +243,17 @@ async fn relay_vision_inbound_with_splice_policy(
                 "reason" => "vision_outbound_wrapped"
             )
             .increment(1);
+            metrics::counter!(
+                "blackwire_vision_lower_failed_total",
+                "reason" => "outbound_wrapped"
+            )
+            .increment(1);
+            record_vision_decision(
+                userspace_relay_path(relay_policy, "vision_copy", "vision_copy_v2"),
+                "balanced",
+                false,
+                false,
+            );
             return userspace_copy_bidirectional(Box::new(inbound), outbound, relay_policy).await;
         }
     };
@@ -230,6 +277,7 @@ async fn relay_vision_inbound_with_splice_policy(
             && inbound.inner_is_tcp_like()
             && !up_eof
             && !down_eof
+            && vision_policy.allow_splice_after_direct
             && vision_splice_policy_ready(
                 splice_policy,
                 up,
@@ -239,6 +287,8 @@ async fn relay_vision_inbound_with_splice_policy(
                 down_full_read_streak,
             )
         {
+            metrics::counter!("blackwire_vision_direct_copy_ready_total").increment(1);
+            record_vision_decision("vision_splice", "bulk", true, false);
             metrics::counter!(
                 "proxy_relay_splice_selected_total",
                 "policy" => vision_splice_policy_label(splice_policy),
@@ -252,6 +302,8 @@ async fn relay_vision_inbound_with_splice_policy(
                     if !inbound_prefix.is_empty() {
                         outbound.write_all(&inbound_prefix).await?;
                         up += inbound_prefix.len() as u64;
+                        metrics::counter!("blackwire_vision_cached_bytes_total")
+                            .increment(inbound_prefix.len() as u64);
                     }
                     match blackwire_common::splice::splice_bidirectional(
                         &mut inbound_tcp,
@@ -260,6 +312,10 @@ async fn relay_vision_inbound_with_splice_policy(
                     .await
                     {
                         Ok((more_up, more_down)) => {
+                            metrics::counter!("blackwire_vision_direct_copy_active_total")
+                                .increment(1);
+                            metrics::counter!("blackwire_vision_splice_after_direct_total")
+                                .increment(1);
                             up += more_up;
                             down += more_down;
                             let path = if splice_policy == FastSplicePolicy::Adaptive {
@@ -274,6 +330,11 @@ async fn relay_vision_inbound_with_splice_policy(
                             metrics::counter!(
                                 "proxy_relay_splice_fallback_total",
                                 "reason" => "vision_splice_error"
+                            )
+                            .increment(1);
+                            metrics::counter!(
+                                "blackwire_vision_lower_failed_total",
+                                "reason" => "splice_error"
                             )
                             .increment(1);
                             let inbound: BoxedStream = if inbound_prefix.is_empty() {
@@ -306,6 +367,11 @@ async fn relay_vision_inbound_with_splice_policy(
                         "reason" => "vision_inner_wrapped"
                     )
                     .increment(1);
+                    metrics::counter!(
+                        "blackwire_vision_lower_failed_total",
+                        "reason" => "inner_wrapped"
+                    )
+                    .increment(1);
                     let (more_up, more_down) = userspace_copy_bidirectional(
                         inbound_inner,
                         Box::new(outbound),
@@ -329,10 +395,20 @@ async fn relay_vision_inbound_with_splice_policy(
         if up_eof && down_eof {
             let reason = if splice_policy == FastSplicePolicy::Disabled {
                 "vision_policy_disabled"
+            } else if !vision_policy.allow_splice_after_direct {
+                "vision_splice_disabled"
             } else {
                 "vision_direct_not_ready"
             };
             metrics::counter!("proxy_relay_splice_fallback_total", "reason" => reason).increment(1);
+            if vision_policy.direct_copy == VisionDirectCopyPolicy::Require {
+                metrics::counter!(
+                    "blackwire_vision_lower_failed_total",
+                    "reason" => "required_not_ready"
+                )
+                .increment(1);
+            }
+            record_vision_decision("vision_copy", "balanced", false, false);
             record_relay_path_bytes("vision_copy", up, down);
             return Ok((up, down));
         }
@@ -396,6 +472,34 @@ fn vision_splice_policy_label(splice_policy: FastSplicePolicy) -> &'static str {
         FastSplicePolicy::Always => "always",
         FastSplicePolicy::Adaptive => "adaptive",
     }
+}
+
+#[cfg(target_os = "linux")]
+fn record_vision_phase(state: LowerState) {
+    let phase = match state {
+        LowerState::Never => "never",
+        LowerState::NotYet => "not_yet",
+        LowerState::AfterHandshake => "after_handshake",
+        LowerState::Now => "now",
+    };
+    metrics::counter!("blackwire_vision_phase_total", "phase" => phase).increment(1);
+}
+
+#[cfg(target_os = "linux")]
+fn record_vision_decision(
+    path: &'static str,
+    profile: &'static str,
+    splice_eligible: bool,
+    zero_copy_eligible: bool,
+) {
+    metrics::counter!(
+        "blackwire_relay_v2_selected_total",
+        "path" => path,
+        "profile" => profile,
+        "splice_eligible" => splice_eligible.to_string(),
+        "zero_copy_eligible" => zero_copy_eligible.to_string()
+    )
+    .increment(1);
 }
 
 #[cfg(target_os = "linux")]
