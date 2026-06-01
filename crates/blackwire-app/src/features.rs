@@ -18,10 +18,32 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::io::AsyncWriteExt;
+
 use blackwire_common::{Address, BoxedStream, ProxyError};
 
 use crate::context::Context;
 use crate::dispatcher::Dispatcher;
+
+/// Result of opening an outbound stream.
+pub struct OutboundConnectResult {
+    /// Stream ready for normal bidirectional relay.
+    pub stream: BoxedStream,
+    /// Whether the outbound wrote the caller-provided early payload itself.
+    pub wrote_early_payload: bool,
+    /// Optional bytes produced during connect that must be delivered to the inbound before relay.
+    pub returned_early_response: Option<Vec<u8>>,
+}
+
+impl OutboundConnectResult {
+    pub fn stream(stream: BoxedStream) -> Self {
+        Self {
+            stream,
+            wrote_early_payload: false,
+            returned_early_response: None,
+        }
+    }
+}
 
 /// An inbound handler: listens for incoming connections and processes them.
 ///
@@ -81,6 +103,34 @@ pub trait OutboundHandler: Send + Sync + 'static {
     /// * `ctx` — connection context (for logging and routing decisions)
     /// * `dest` — the destination the client wants to reach
     async fn connect(&self, ctx: &Context, dest: &Address) -> Result<BoxedStream, ProxyError>;
+
+    /// Connect and, when supported, write the first already-buffered payload during handshake.
+    ///
+    /// The default preserves existing behavior: connect normally, then write the
+    /// early payload before returning the stream to the relay loop.
+    async fn connect_with_early_payload(
+        &self,
+        ctx: &Context,
+        dest: &Address,
+        early_payload: Option<Vec<u8>>,
+    ) -> Result<OutboundConnectResult, ProxyError> {
+        let mut stream = self.connect(ctx, dest).await?;
+        let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+            if !payload.is_empty() {
+                stream.write_all(payload).await?;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        Ok(OutboundConnectResult {
+            stream,
+            wrote_early_payload,
+            returned_early_response: None,
+        })
+    }
 }
 
 /// A low-level connection handler, used by transport layers.
