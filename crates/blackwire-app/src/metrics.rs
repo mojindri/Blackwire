@@ -26,6 +26,13 @@
 //! | `proxy_relay_bytes_total` | Counter | `direction`, `path` |
 //! | `proxy_relay_v2_flushes_total` | Counter | none |
 //! | `proxy_relay_v2_buffer_grows_total` | Counter | none |
+//! | `blackwire_relay_v2_selected_total` | Counter | `path`, `profile` |
+//! | `blackwire_vision_phase_total` | Counter | `phase` |
+//! | `blackwire_vision_direct_copy_ready_total` | Counter | none |
+//! | `blackwire_vision_direct_copy_active_total` | Counter | none |
+//! | `blackwire_vision_lower_failed_total` | Counter | `reason` |
+//! | `blackwire_vision_cached_bytes_total` | Counter | none |
+//! | `blackwire_vision_splice_after_direct_total` | Counter | none |
 //! | `freedom_pool_leases_total` | Counter | `outbound` |
 //! | `balancer_adaptive_profile_score` | Gauge | `balancer`, `profile` |
 //! | `balancer_adaptive_profile_selected` | Gauge | `balancer`, `profile` |
@@ -201,6 +208,41 @@ fn describe_metrics() {
         "proxy_relay_v2_buffer_grows_total",
         metrics::Unit::Count,
         "Dynamic buffer growth events performed by Relay Engine v2"
+    );
+    metrics::describe_counter!(
+        "blackwire_relay_v2_selected_total",
+        metrics::Unit::Count,
+        "Relay v2 or lowering-aware path selections by path and profile"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_phase_total",
+        metrics::Unit::Count,
+        "XTLS Vision lower-state observations by phase"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_direct_copy_ready_total",
+        metrics::Unit::Count,
+        "XTLS Vision streams that became ready for direct copy"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_direct_copy_active_total",
+        metrics::Unit::Count,
+        "XTLS Vision streams that activated direct copy"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_lower_failed_total",
+        metrics::Unit::Count,
+        "XTLS Vision lowering failures by reason"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_cached_bytes_total",
+        metrics::Unit::Bytes,
+        "Cached XTLS Vision bytes drained while lowering"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_splice_after_direct_total",
+        metrics::Unit::Count,
+        "XTLS Vision streams that entered splice after direct copy"
     );
     metrics::describe_counter!(
         "freedom_pool_hits_total",

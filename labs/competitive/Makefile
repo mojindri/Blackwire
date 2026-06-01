@@ -61,7 +61,17 @@ competitive-quic:
 	@REPORT_DIR="$(REPORT_DIR)" bash scripts/run_matrix.sh quic
 
 competitive-expensive:
-	@REPORT_DIR="$(REPORT_DIR)" bash scripts/run_matrix.sh expensive
+	@REPORT_DIR="$(REPORT_DIR)" \
+	 COMPETITIVE_MODE="$(COMPETITIVE_MODE)" \
+	 COMPETITIVE_SERVER_HOST="$(COMPETITIVE_SERVER_HOST)" \
+	 COMPETITIVE_CLIENT_HOST="$(COMPETITIVE_CLIENT_HOST)" \
+	 COMPETITIVE_SSH_KEY="$(COMPETITIVE_SSH_KEY)" \
+	 COMPETITIVE_SSH_USER="$(COMPETITIVE_SSH_USER)" \
+	 COMPETITIVE_DURATION="$(COMPETITIVE_DURATION)" \
+	 COMPETITIVE_CONCURRENCY="$(COMPETITIVE_CONCURRENCY)" \
+	 COMPETITIVE_PAYLOADS="$(COMPETITIVE_PAYLOADS)" \
+	 BLACKWIRE_CANDIDATE_BIN="$${BLACKWIRE_CANDIDATE_BIN:-}" \
+	 bash scripts/run_matrix.sh expensive
 
 competitive-all: competitive-smoke competitive-clean competitive-loss competitive-mobile competitive-tun competitive-quic competitive-expensive
 
