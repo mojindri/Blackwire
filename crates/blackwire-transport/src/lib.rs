@@ -68,7 +68,10 @@ pub use quic::{
     build_server_endpoint_with_alpn, dev_self_signed, dev_self_signed_for_names,
     ensure_crypto_provider,
 };
-pub use quic::{BrutalCC, BrutalCCFactory};
+pub use quic::{
+    BadNetControllerFactory, BrutalCC, BrutalCCFactory, CongestionConfig, CongestionMode,
+    LossFingerprint, PathSample,
+};
 pub use reality::{
     complete_tls13_server_handshake, reality_server_tls_stream, tls_cert_for_auth_key,
     tls_pem_for_auth_key, RealityAccepted, RealityClient, RealityClientConfig, RealityServer,

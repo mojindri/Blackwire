@@ -357,6 +357,46 @@ pub struct Hysteria2Config {
     /// verify the server certificate to prevent man-in-the-middle attacks.
     #[serde(default, rename = "skipCertVerify")]
     pub skip_cert_verify: bool,
+
+    /// Optional bad-network congestion policy. Omitted configs keep the
+    /// existing Hysteria-compatible behavior.
+    #[serde(default)]
+    pub congestion: Hysteria2CongestionConfig,
+
+    /// Number of local QUIC client endpoint shards to keep available for this
+    /// outbound. A value of 1 preserves the default single-endpoint behavior.
+    #[serde(default = "default_endpoint_shards", rename = "endpointShards")]
+    pub endpoint_shards: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Hysteria2CongestionConfig {
+    #[serde(default = "default_hysteria2_congestion_mode")]
+    pub mode: String,
+
+    #[serde(default = "default_min_ack_rate", rename = "minAckRate")]
+    pub min_ack_rate: f64,
+
+    #[serde(default = "default_max_queue_delay_ms", rename = "maxQueueDelayMs")]
+    pub max_queue_delay_ms: u64,
+
+    #[serde(default = "default_pacing_gain", rename = "pacingGain")]
+    pub pacing_gain: f64,
+
+    #[serde(default = "default_loss_compensation", rename = "lossCompensation")]
+    pub loss_compensation: bool,
+}
+
+impl Default for Hysteria2CongestionConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_hysteria2_congestion_mode(),
+            min_ack_rate: default_min_ack_rate(),
+            max_queue_delay_ms: default_max_queue_delay_ms(),
+            pacing_gain: default_pacing_gain(),
+            loss_compensation: default_loss_compensation(),
+        }
+    }
 }
 
 /// Default bandwidth in Mbps when none is specified.
@@ -364,6 +404,30 @@ pub struct Hysteria2Config {
 /// 100 Mbps is a reasonable default for most modern connections.
 fn default_mbps() -> u64 {
     100
+}
+
+fn default_endpoint_shards() -> usize {
+    1
+}
+
+fn default_hysteria2_congestion_mode() -> String {
+    "brutal-compatible".to_string()
+}
+
+fn default_min_ack_rate() -> f64 {
+    0.8
+}
+
+fn default_max_queue_delay_ms() -> u64 {
+    80
+}
+
+fn default_pacing_gain() -> f64 {
+    1.25
+}
+
+fn default_loss_compensation() -> bool {
+    true
 }
 
 /// ShadowTLS v3 configuration.
