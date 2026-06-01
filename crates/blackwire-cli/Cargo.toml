@@ -17,6 +17,7 @@ blackwire-core      = { path = "../blackwire-core" }
 blackwire-app       = { path = "../blackwire-app" }
 blackwire-api       = { path = "../blackwire-api" }
 blackwire-protocol  = { path = "../blackwire-protocol" }
+blackwire-connmgr   = { path = "../blackwire-connmgr" }
 
 tokio.workspace              = true
 clap.workspace               = true
