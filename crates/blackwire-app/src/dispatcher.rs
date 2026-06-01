@@ -812,10 +812,13 @@ mod tests {
     use super::*;
     use crate::dns::DnsModuleConfig;
     use crate::router::{Route, RoutingContext};
+    use blackwire_common::{PooledStream, PrependedStream};
     use blackwire_config::schema::{
         FastPoolPolicy, FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy,
         VisionConfig, VisionDirectCopyPolicy,
     };
+    use tokio::io::AsyncReadExt;
+    use tokio::net::{TcpListener, TcpStream};
 
     struct StaticRouter;
 
@@ -940,5 +943,71 @@ mod tests {
         let addr = Address::Ipv4(ip, 443);
         let restored = dispatcher.restore_fakeip_destination(&addr);
         assert_eq!(*restored, Address::Ipv4(ip, 443));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pooled_first_write_retries_stale_socket_with_early_payload() {
+        use std::os::fd::AsRawFd;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let pooled_client = TcpStream::connect(addr).await.unwrap();
+        let (stale_server, _) = listener.accept().await.unwrap();
+        let stale_server = stale_server.into_std().unwrap();
+        let linger = libc::linger {
+            l_onoff: 1,
+            l_linger: 0,
+        };
+        let rc = unsafe {
+            libc::setsockopt(
+                stale_server.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_LINGER,
+                (&linger as *const libc::linger).cast(),
+                std::mem::size_of::<libc::linger>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(rc, 0, "setsockopt(SO_LINGER) failed");
+        drop(stale_server);
+        drop(listener);
+
+        let fresh_listener = TcpListener::bind(addr).await.unwrap();
+        let expected = b"early payload through stale retry".to_vec();
+        let expected_for_task = expected.clone();
+        let read_task = tokio::spawn(async move {
+            let (mut fresh, _) = fresh_listener.accept().await.unwrap();
+            let mut got = vec![0u8; expected_for_task.len()];
+            fresh.read_exact(&mut got).await.unwrap();
+            got
+        });
+
+        let dispatcher =
+            DefaultDispatcher::new(Arc::new(StaticRouter), std::collections::HashMap::new())
+                .with_profile(ProfileMode::Fast);
+        let (_client_side, server_side) = tokio::io::duplex(64);
+        let inbound: BoxedStream = Box::new(PrependedStream::new(
+            Box::new(server_side),
+            expected.clone(),
+        ));
+        let outbound: BoxedStream = Box::new(PooledStream::with_pool_metadata(
+            pooled_client,
+            "freedom".to_string(),
+            addr,
+        ));
+        let ctx = Context::new("socks-in", addr);
+
+        let (_inbound, _fresh, prewritten) = dispatcher
+            .guard_pooled_first_write(
+                &ctx,
+                &Address::Ipv4("127.0.0.1".parse().unwrap(), addr.port()),
+                inbound,
+                outbound,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(prewritten, expected.len() as u64);
+        assert_eq!(read_task.await.unwrap(), expected);
     }
 }
