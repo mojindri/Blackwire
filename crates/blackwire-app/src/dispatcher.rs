@@ -57,7 +57,9 @@ const POOLED_FIRST_WRITE_GUARD_BUF_SIZE: usize = 2048;
 
 use std::collections::HashMap;
 
-use blackwire_common::{tcp_connect, Address, BoxedStream, PooledStream, ProxyError};
+use blackwire_common::{
+    tcp_connect, Address, BoxedStream, PooledStream, PrependedStream, ProxyError,
+};
 use blackwire_config::schema::{
     FastConfig, FastRelayConfig, FastSplicePolicy, ProfileMode, SniffingConfig, VisionConfig,
 };
@@ -68,8 +70,9 @@ use crate::context::Context;
 use crate::dns::DnsModule;
 use crate::features::OutboundHandler;
 use crate::metrics::{
-    record_connection_accepted, record_connection_closed, record_dns, record_outbound_connect,
-    record_relay_error, record_route,
+    record_connection_accepted, record_connection_closed, record_dns, record_early_payload,
+    record_early_payload_written, record_first_byte_latency, record_handshake_kick,
+    record_outbound_connect, record_relay_error, record_route,
 };
 use crate::router::{normalize_routing_domain_strategy, Router, RoutingDomainStrategy};
 use crate::runtime_stats;
@@ -90,6 +93,23 @@ pub trait Dispatcher: Send + Sync + 'static {
         dest: Address,
         inbound_stream: BoxedStream,
     ) -> Result<(), ProxyError>;
+
+    /// Dispatch with bytes already read past the inbound handshake.
+    async fn dispatch_with_early_payload(
+        &self,
+        ctx: Context,
+        dest: Address,
+        inbound_stream: BoxedStream,
+        early_payload: Option<Vec<u8>>,
+    ) -> Result<(), ProxyError> {
+        let inbound_stream = match early_payload {
+            Some(payload) if !payload.is_empty() => {
+                Box::new(PrependedStream::new(inbound_stream, payload)) as BoxedStream
+            }
+            _ => inbound_stream,
+        };
+        self.dispatch(ctx, dest, inbound_stream).await
+    }
 
     /// Route and open an outbound stream without relaying (Mux.Cool sub-connections).
     async fn connect_outbound(
@@ -273,9 +293,20 @@ impl DefaultDispatcher {
 impl Dispatcher for DefaultDispatcher {
     async fn dispatch(
         &self,
+        ctx: Context,
+        dest: Address,
+        inbound_stream: BoxedStream,
+    ) -> Result<(), ProxyError> {
+        self.dispatch_with_early_payload(ctx, dest, inbound_stream, None)
+            .await
+    }
+
+    async fn dispatch_with_early_payload(
+        &self,
         mut ctx: Context,
         mut dest: Address,
         mut inbound_stream: BoxedStream,
+        early_payload: Option<Vec<u8>>,
     ) -> Result<(), ProxyError> {
         let sniff_cfg = self.sniffing.load().get(&ctx.inbound_tag).cloned();
         if let Some(cfg) = sniff_cfg {
@@ -294,7 +325,31 @@ impl Dispatcher for DefaultDispatcher {
         }
 
         let start = Instant::now();
-        let outbound_stream = self.connect_outbound(&ctx, &dest).await?;
+        let early_payload_len = early_payload.as_ref().map_or(0, Vec::len);
+        if early_payload_len > 0 {
+            record_early_payload(&ctx.inbound_tag, early_payload_len as u64);
+        }
+        let outbound = self
+            .connect_outbound_result(&ctx, &dest, early_payload.clone())
+            .await?;
+        if outbound.wrote_early_payload {
+            record_handshake_kick(&ctx.inbound_tag, "upstream", "written");
+        } else if let Some(payload) = early_payload {
+            if !payload.is_empty() {
+                inbound_stream = Box::new(PrependedStream::new(inbound_stream, payload));
+            }
+        }
+        let prewritten_early_up = if outbound.wrote_early_payload {
+            early_payload_len as u64
+        } else {
+            0
+        };
+        let outbound_stream = match outbound.returned_early_response {
+            Some(response) if !response.is_empty() => {
+                Box::new(PrependedStream::new(outbound.stream, response)) as BoxedStream
+            }
+            _ => outbound.stream,
+        };
         let (inbound_stream, outbound_stream, prewritten_up) = self
             .guard_pooled_first_write(&ctx, &dest, inbound_stream, outbound_stream)
             .await?;
@@ -319,7 +374,7 @@ impl Dispatcher for DefaultDispatcher {
             self.vision_policy,
         )
         .await
-        .map(|(up, down)| (up + prewritten_up, down));
+        .map(|(up, down)| (up + prewritten_up + prewritten_early_up, down));
 
         let elapsed = start.elapsed();
 
@@ -482,6 +537,15 @@ impl DefaultDispatcher {
         ctx: &Context,
         dest: &Address,
     ) -> Result<BoxedStream, ProxyError> {
+        Ok(self.connect_outbound_result(ctx, dest, None).await?.stream)
+    }
+
+    async fn connect_outbound_result(
+        &self,
+        ctx: &Context,
+        dest: &Address,
+        early_payload: Option<Vec<u8>>,
+    ) -> Result<crate::features::OutboundConnectResult, ProxyError> {
         let dest = self.restore_fakeip_destination(dest);
 
         let protocol_label = ctx.sniffed_protocol.as_deref().unwrap_or("tcp");
@@ -509,15 +573,24 @@ impl DefaultDispatcher {
             })?;
 
         let t_connect = Instant::now();
-        let result = outbound.connect(ctx, &dest).await.map_err(|e| {
-            warn!(
-                outbound = %route.outbound_tag,
-                dest = %dest,
-                error = %e,
-                "outbound connect failed"
-            );
-            e
-        });
+        let result = outbound
+            .connect_with_early_payload(ctx, &dest, early_payload)
+            .await
+            .map_err(|e| {
+                warn!(
+                    outbound = %route.outbound_tag,
+                    dest = %dest,
+                    error = %e,
+                    "outbound connect failed"
+                );
+                e
+            });
+        if let Ok(result) = &result {
+            if result.wrote_early_payload {
+                record_early_payload_written(&ctx.inbound_tag, &route.outbound_tag);
+                record_first_byte_latency(protocol_label, &route.outbound_tag, t_connect.elapsed());
+            }
+        }
         record_outbound_connect(&ctx.inbound_tag, &route.outbound_tag, t_connect.elapsed());
         result
     }
