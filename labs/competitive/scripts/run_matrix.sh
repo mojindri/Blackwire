@@ -1,0 +1,440 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCENARIO="${1:-smoke}"
+LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$LAB_DIR/../.." && pwd)"
+CONFIG_DIR="$LAB_DIR/configs"
+REPORT_DIR="${REPORT_DIR:-$LAB_DIR/reports}"
+MODE="${COMPETITIVE_MODE:-local}"
+TS="$(date -u +%Y%m%dT%H%M%SZ)"
+OUT="$REPORT_DIR/${SCENARIO}-${MODE}-${TS}.jsonl"
+
+BLACKWIRE_BIN_WAS_DEFAULT=0
+if [ -z "${BLACKWIRE_BIN:-}" ]; then
+    BLACKWIRE_BIN="$ROOT/target/release/blackwire"
+    BLACKWIRE_BIN_WAS_DEFAULT=1
+fi
+BLACKWIRE_CURRENT_BIN="${BLACKWIRE_CURRENT_BIN:-$BLACKWIRE_BIN}"
+BLACKWIRE_CANDIDATE_WAS_DEFAULT=0
+if [ -z "${BLACKWIRE_CANDIDATE_BIN:-}" ]; then
+    BLACKWIRE_CANDIDATE_BIN="$BLACKWIRE_BIN"
+    BLACKWIRE_CANDIDATE_WAS_DEFAULT=1
+fi
+XRAY_BIN="${XRAY_BIN:-xray}"
+SING_BOX_BIN="${SING_BOX_BIN:-sing-box}"
+HYSTERIA_BIN="${HYSTERIA_BIN:-hysteria}"
+SHOES_BIN="${SHOES_BIN:-shoes}"
+HEY_BIN="${HEY_BIN:-hey}"
+COMPETITIVE_DURATION="${COMPETITIVE_DURATION:-10}"
+COMPETITIVE_CONCURRENCY="${COMPETITIVE_CONCURRENCY:-16}"
+COMPETITIVE_PAYLOADS="${COMPETITIVE_PAYLOADS:-1k}"
+COMPETITIVE_UPSTREAM_URL="${COMPETITIVE_UPSTREAM_URL:-}"
+COMPETITIVE_UPSTREAM_KIND="${COMPETITIVE_UPSTREAM_KIND:-auto}"
+COMPETITIVE_REMOTE_UPSTREAM_PORT="${COMPETITIVE_REMOTE_UPSTREAM_PORT:-18080}"
+
+SERVER_HOST="${COMPETITIVE_SERVER_HOST:-91.107.164.107}"
+CLIENT_HOST="${COMPETITIVE_CLIENT_HOST:-91.107.176.118}"
+SSH_USER="${COMPETITIVE_SSH_USER:-root}"
+SSH_KEY="${COMPETITIVE_SSH_KEY:-id_hetzner}"
+SSH_OPTS=(-i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new)
+
+if [ "$MODE" = "remote" ] && [ "$BLACKWIRE_BIN_WAS_DEFAULT" = "1" ] && [ -x "$ROOT/target/linux-amd64/blackwire" ]; then
+    BLACKWIRE_BIN="$ROOT/target/linux-amd64/blackwire"
+    BLACKWIRE_CURRENT_BIN="$BLACKWIRE_BIN"
+    if [ "$BLACKWIRE_CANDIDATE_WAS_DEFAULT" = "1" ]; then
+        BLACKWIRE_CANDIDATE_BIN="$BLACKWIRE_BIN"
+    fi
+fi
+
+mkdir -p "$REPORT_DIR"
+
+json_escape() {
+    python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))'
+}
+
+emit_row() {
+    local variant="$1" status="$2" reason="$3" protocol="$4" transport="$5" profile="$6" payload="$7"
+    local reason_json
+    reason_json="$(printf '%s' "$reason" | json_escape)"
+    cat >> "$OUT" <<EOF
+{"timestamp":"$TS","variant":"$variant","scenario":"$SCENARIO","protocol":"$protocol","transport":"$transport","profile":"$profile","payload_size":"$payload","concurrency":$COMPETITIVE_CONCURRENCY,"duration":$COMPETITIVE_DURATION,"keepalive_on":true,"loss_percent":0,"rtt_ms":0,"jitter_ms":0,"bandwidth_limit":"","requests_per_sec":0,"throughput_mbps":0,"ttfb_p50":0,"ttfb_p90":0,"ttfb_p95":0,"ttfb_p99":0,"ttfb_p999":0,"latency_p50":0,"latency_p90":0,"latency_p95":0,"latency_p99":0,"latency_p999":0,"cpu_user":0,"cpu_system":0,"cpu_percent":0,"rss_mb":0,"allocations_per_sec":0,"syscalls_per_sec":0,"bytes_up":0,"bytes_down":0,"errors":0,"handshake_failures":0,"reconnect_time_ms":0,"route_time_us":0,"dns_time_us":0,"relay_path":"","status":"$status","reason":$reason_json}
+EOF
+}
+
+parse_hey() {
+    local variant="$1" payload="$2" raw="$3" protocol="$4" transport="$5" profile="$6"
+    RAW_TEXT="$raw" python3 - "$variant" "$SCENARIO" "$payload" "$COMPETITIVE_CONCURRENCY" "$COMPETITIVE_DURATION" "$protocol" "$transport" "$profile" "$TS" <<'PY' >> "$OUT"
+import json, re, sys
+import os
+variant, scenario, payload, conc, duration, protocol, transport, profile, ts = sys.argv[1:]
+raw = os.environ.get("RAW_TEXT", "")
+def first(pattern, default=0.0):
+    m = re.search(pattern, raw, re.M)
+    return float(m.group(1)) if m else default
+def pct(p):
+    return first(rf"\s{p}%+ in ([0-9.]+) secs")
+errors = 0
+in_errors = False
+for line in raw.splitlines():
+    if "Error distribution:" in line:
+        in_errors = True
+        continue
+    if in_errors:
+        m = re.match(r"\s*\[(\d+)\]", line)
+        if m:
+            errors += int(m.group(1))
+row = {
+    "timestamp": ts, "variant": variant, "scenario": scenario,
+    "protocol": protocol, "transport": transport, "profile": profile,
+    "payload_size": payload, "concurrency": int(conc), "duration": int(duration),
+    "keepalive_on": True, "loss_percent": 0, "rtt_ms": 0, "jitter_ms": 0,
+    "bandwidth_limit": "", "requests_per_sec": first(r"Requests/sec:\s+([0-9.]+)"),
+    "throughput_mbps": 0, "ttfb_p50": 0, "ttfb_p90": 0, "ttfb_p95": 0,
+    "ttfb_p99": 0, "ttfb_p999": 0, "latency_p50": pct(50),
+    "latency_p90": pct(90), "latency_p95": pct(95), "latency_p99": pct(99),
+    "latency_p999": pct(99), "cpu_user": 0, "cpu_system": 0, "cpu_percent": 0,
+    "rss_mb": 0, "allocations_per_sec": 0, "syscalls_per_sec": 0,
+    "bytes_up": 0, "bytes_down": 0, "errors": errors, "handshake_failures": 0,
+    "reconnect_time_ms": 0, "route_time_us": 0, "dns_time_us": 0,
+    "relay_path": "", "status": "ok" if errors == 0 else "failed", "reason": ""
+}
+print(json.dumps(row, separators=(",", ":")))
+PY
+}
+
+port_open() {
+    local port="$1"
+    if command -v nc >/dev/null 2>&1; then
+        nc -z 127.0.0.1 "$port" >/dev/null 2>&1
+    else
+        (echo >/dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1
+    fi
+}
+
+start_proc() {
+    local name="$1" cmd="$2" port="${3:-}"
+    bash -lc "$cmd" >"$REPORT_DIR/${name}-${TS}.log" 2>&1 &
+    local pid=$!
+    if [ -n "$port" ]; then
+        for _ in $(seq 1 40); do
+            port_open "$port" && { echo "$pid"; return 0; }
+            sleep 0.25
+        done
+        kill "$pid" 2>/dev/null || true
+        echo "ERROR: $name did not open port $port" >&2
+        return 1
+    fi
+    sleep 0.5
+    echo "$pid"
+}
+
+run_hey() {
+    local variant="$1" payload="$2" proxy="${3:-}" protocol="${4:-direct}" transport="${5:-tcp}" profile="${6:-baseline}"
+    if ! command -v "$HEY_BIN" >/dev/null 2>&1; then
+        emit_row "$variant" "skipped" "hey not found" "$protocol" "$transport" "$profile" "$payload"
+        return
+    fi
+    local args=(-z "${COMPETITIVE_DURATION}s" -c "$COMPETITIVE_CONCURRENCY")
+    [ -n "$proxy" ] && args+=(-x "socks5://$proxy")
+    local raw
+    local target="${COMPETITIVE_UPSTREAM_URL:-http://127.0.0.1:18080}/$payload"
+    if raw="$("$HEY_BIN" "${args[@]}" "$target" 2>&1)"; then
+        parse_hey "$variant" "$payload" "$raw" "$protocol" "$transport" "$profile"
+    else
+        emit_row "$variant" "failed" "$raw" "$protocol" "$transport" "$profile" "$payload"
+    fi
+}
+
+run_local() {
+    echo "competitive run: $SCENARIO ($MODE) -> $OUT"
+    if [[ "$SCENARIO" =~ ^(tun|quic|expensive)$ ]]; then
+        for payload in $COMPETITIVE_PAYLOADS; do
+            emit_row "blackwire-current" "skipped" "scenario scaffolded; protocol-specific runner not implemented in Milestone A" "mixed" "$SCENARIO" "baseline" "$payload"
+            emit_row "xray" "skipped" "scenario scaffolded; protocol-specific runner not implemented in Milestone A" "mixed" "$SCENARIO" "baseline" "$payload"
+            emit_row "sing-box" "skipped" "scenario scaffolded; protocol-specific runner not implemented in Milestone A" "mixed" "$SCENARIO" "baseline" "$payload"
+        done
+        return
+    fi
+
+    UPSTREAM_PID=""
+    if [ -z "$COMPETITIVE_UPSTREAM_URL" ]; then
+        if [ "$COMPETITIVE_UPSTREAM_KIND" = "nginx" ] || { [ "$COMPETITIVE_UPSTREAM_KIND" = "auto" ] && command -v nginx >/dev/null 2>&1; }; then
+            bash "$LAB_DIR/scripts/start_nginx_upstream.sh" "$REPORT_DIR/nginx-${TS}" 18080
+            UPSTREAM_PID="$(cat "$REPORT_DIR/nginx-${TS}/nginx.pid")"
+        else
+            UPSTREAM_PID="$(start_proc upstream "python3 '$LAB_DIR/scripts/upstream_static.py' --host 127.0.0.1 --port 18080" 18080)"
+        fi
+    fi
+    cleanup() { kill "${UPSTREAM_PID:-}" ${PIDS:-} 2>/dev/null || true; }
+    trap cleanup EXIT
+
+    for payload in $COMPETITIVE_PAYLOADS; do
+        run_hey direct "$payload" "" direct tcp baseline
+
+        if [ -x "$BLACKWIRE_CURRENT_BIN" ]; then
+            local s c
+            s="$(start_proc bw-current-server "'$BLACKWIRE_CURRENT_BIN' run -c '$CONFIG_DIR/blackwire/vless-server.json'" 10080)" || { emit_row blackwire-current failed "server did not start" vless tcp current "$payload"; continue; }
+            c="$(start_proc bw-current-client "'$BLACKWIRE_CURRENT_BIN' run -c '$CONFIG_DIR/blackwire/vless-client.json'" 1081)" || { kill "$s" 2>/dev/null || true; emit_row blackwire-current failed "client did not start" vless tcp current "$payload"; continue; }
+            PIDS="${PIDS:-} $s $c"
+            run_hey blackwire-current "$payload" 127.0.0.1:1081 vless tcp current
+            kill "$s" "$c" 2>/dev/null || true
+        else
+            emit_row blackwire-current skipped "BLACKWIRE_CURRENT_BIN not executable: $BLACKWIRE_CURRENT_BIN" vless tcp current "$payload"
+        fi
+
+        if [ -x "$BLACKWIRE_CANDIDATE_BIN" ]; then
+            local s2 c2
+            s2="$(start_proc bw-candidate-server "'$BLACKWIRE_CANDIDATE_BIN' run -c '$CONFIG_DIR/blackwire/vless-server-candidate.json'" 10090)" || { emit_row blackwire-candidate failed "server did not start" vless tcp candidate "$payload"; continue; }
+            c2="$(start_proc bw-candidate-client "'$BLACKWIRE_CANDIDATE_BIN' run -c '$CONFIG_DIR/blackwire/vless-client-candidate.json'" 1091)" || { kill "$s2" 2>/dev/null || true; emit_row blackwire-candidate failed "client did not start" vless tcp candidate "$payload"; continue; }
+            PIDS="${PIDS:-} $s2 $c2"
+            run_hey blackwire-candidate "$payload" 127.0.0.1:1091 vless tcp candidate
+            kill "$s2" "$c2" 2>/dev/null || true
+        else
+            emit_row blackwire-candidate skipped "BLACKWIRE_CANDIDATE_BIN not executable: $BLACKWIRE_CANDIDATE_BIN" vless tcp candidate "$payload"
+        fi
+
+        if command -v "$XRAY_BIN" >/dev/null 2>&1; then
+            local xs xc
+            xs="$(start_proc xray-server "$XRAY_BIN run -config '$CONFIG_DIR/xray/vless-server.json'" 10180)" || { emit_row xray failed "server did not start" vless tcp baseline "$payload"; continue; }
+            xc="$(start_proc xray-client "$XRAY_BIN run -config '$CONFIG_DIR/xray/vless-client.json'" 1082)" || { kill "$xs" 2>/dev/null || true; emit_row xray failed "client did not start" vless tcp baseline "$payload"; continue; }
+            PIDS="${PIDS:-} $xs $xc"
+            run_hey xray "$payload" 127.0.0.1:1082 vless tcp baseline
+            kill "$xs" "$xc" 2>/dev/null || true
+        else
+            emit_row xray skipped "XRAY_BIN not found: $XRAY_BIN" vless tcp baseline "$payload"
+        fi
+
+        if command -v "$SING_BOX_BIN" >/dev/null 2>&1; then
+            local ss sc
+            ss="$(start_proc singbox-server "$SING_BOX_BIN run -c '$CONFIG_DIR/sing-box/vless-server.json'" 10182)" || { emit_row sing-box failed "server did not start" vless tcp baseline "$payload"; continue; }
+            sc="$(start_proc singbox-client "$SING_BOX_BIN run -c '$CONFIG_DIR/sing-box/vless-client.json'" 1083)" || { kill "$ss" 2>/dev/null || true; emit_row sing-box failed "client did not start" vless tcp baseline "$payload"; continue; }
+            PIDS="${PIDS:-} $ss $sc"
+            run_hey sing-box "$payload" 127.0.0.1:1083 vless tcp baseline
+            kill "$ss" "$sc" 2>/dev/null || true
+        else
+            emit_row sing-box skipped "SING_BOX_BIN not found: $SING_BOX_BIN" vless tcp baseline "$payload"
+        fi
+
+        command -v "$HYSTERIA_BIN" >/dev/null 2>&1 \
+            && emit_row hysteria skipped "binary found but Hysteria protocol row is scaffold-only in Milestone A" hysteria2 quic baseline "$payload" \
+            || emit_row hysteria skipped "HYSTERIA_BIN not found: $HYSTERIA_BIN" hysteria2 quic baseline "$payload"
+        command -v "$SHOES_BIN" >/dev/null 2>&1 \
+            && emit_row shoes skipped "binary found but Shoes protocol row is scaffold-only in Milestone A" socks tcp baseline "$payload" \
+            || emit_row shoes skipped "SHOES_BIN not found: $SHOES_BIN" socks tcp baseline "$payload"
+    done
+}
+
+run_remote() {
+    echo "competitive remote inventory: server=$SERVER_HOST client=$CLIENT_HOST -> $OUT"
+    local server_inv client_inv
+    server_inv="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" 'hostname; uname -a; for b in blackwire xray sing-box hysteria shoes hey oha iperf3 tc perf strace nginx; do p="$(command -v "$b" || true)"; printf "%s=%s\n" "$b" "$p"; done' 2>&1 || true)"
+    client_inv="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" 'hostname; uname -a; for b in blackwire xray sing-box hysteria shoes hey oha iperf3 tc perf strace nginx; do p="$(command -v "$b" || true)"; printf "%s=%s\n" "$b" "$p"; done' 2>&1 || true)"
+    printf '%s\n\n%s\n' "$server_inv" "$client_inv" > "$REPORT_DIR/remote-inventory-${TS}.log"
+    has_tool() {
+        local inventory="$1" tool="$2"
+        grep -Eq "^${tool}=/" <<<"$inventory"
+    }
+    remote_port_open() {
+        local host="$1" port="$2"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "for i in \$(seq 1 40); do (echo >/dev/tcp/127.0.0.1/$port) >/dev/null 2>&1 && exit 0; sleep 0.25; done; exit 1" >/dev/null 2>&1
+    }
+    remote_start() {
+        local host="$1" dir="$2" name="$3" cmd="$4" port="${5:-}"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "cd '$dir'; nohup bash -lc '$cmd' > '$name.log' 2>&1 & echo \$! > '$name.pid'"
+        if [ -n "$port" ]; then
+            remote_port_open "$host" "$port"
+        else
+            sleep 0.5
+        fi
+    }
+    remote_stop() {
+        local host="$1" dir="$2"
+        [ -n "$dir" ] || return 0
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "find '$dir' -name '*.pid' -type f -print0 2>/dev/null | while IFS= read -r -d '' p; do kill \$(cat \"\$p\") 2>/dev/null || true; done; rm -rf '$dir'" >/dev/null 2>&1 || true
+    }
+    write_remote_configs() {
+        local _server_dir="$1" _client_dir="$2"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-server.json'" <<'EOF'
+{"profile":"fast","fast":{"strictProduction":false,"pool":"disabled","splice":"adaptive"},"log":{"level":"warn"},"inbounds":[{"tag":"vless-in","protocol":"vless","listen":"0.0.0.0","port":10080,"settings":{"clients":[{"id":"00000000-0000-4000-8000-000000000001"}]}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/blackwire-client.json'" <<EOF
+{"log":{"level":"warn"},"inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1081}],"outbounds":[{"tag":"vless-out","protocol":"vless","settings":{"address":"$SERVER_HOST","port":10080,"users":[{"id":"00000000-0000-4000-8000-000000000001","flow":""}]}}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-server-candidate.json'" <<'EOF'
+{"profile":"fast","fast":{"strictProduction":false,"pool":"disabled","splice":"adaptive","relay":{"engine":"v2","flush":"deferred","initialBuffer":16384,"maxBuffer":262144}},"log":{"level":"warn"},"inbounds":[{"tag":"vless-in","protocol":"vless","listen":"0.0.0.0","port":10090,"settings":{"clients":[{"id":"00000000-0000-4000-8000-000000000001"}]}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/blackwire-client-candidate.json'" <<EOF
+{"log":{"level":"warn"},"inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1091}],"outbounds":[{"tag":"vless-out","protocol":"vless","settings":{"address":"$SERVER_HOST","port":10090,"users":[{"id":"00000000-0000-4000-8000-000000000001","flow":""}]}}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/xray-server.json'" <<'EOF'
+{"log":{"loglevel":"warning"},"inbounds":[{"tag":"vless-in","protocol":"vless","listen":"0.0.0.0","port":10180,"settings":{"clients":[{"id":"00000000-0000-4000-8000-000000000001","flow":""}],"decryption":"none"}}],"outbounds":[{"tag":"direct","protocol":"freedom"}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/xray-client.json'" <<EOF
+{"log":{"loglevel":"warning"},"inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1082,"settings":{"auth":"noauth"}}],"outbounds":[{"tag":"vless-out","protocol":"vless","settings":{"vnext":[{"address":"$SERVER_HOST","port":10180,"users":[{"id":"00000000-0000-4000-8000-000000000001","encryption":"none","flow":""}]}]}}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/singbox-server.json'" <<'EOF'
+{"log":{"level":"warn"},"inbounds":[{"type":"vless","tag":"vless-in","listen":"0.0.0.0","listen_port":10182,"users":[{"uuid":"00000000-0000-4000-8000-000000000001"}]}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/singbox-client.json'" <<EOF
+{"log":{"level":"warn"},"inbounds":[{"type":"socks","tag":"socks-in","listen":"127.0.0.1","listen_port":1083}],"outbounds":[{"type":"vless","tag":"vless-out","server":"$SERVER_HOST","server_port":10182,"uuid":"00000000-0000-4000-8000-000000000001"}],"route":{"final":"vless-out"}}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/hysteria-server.yaml'" <<'EOF'
+listen: :10200
+tls:
+  cert: server.crt
+  key: server.key
+auth:
+  type: password
+  password: blackwire-lab
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/hysteria-client.yaml'" <<EOF
+server: $SERVER_HOST:10200
+auth: blackwire-lab
+tls:
+  insecure: true
+socks5:
+  listen: 127.0.0.1:1084
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/shoes-server.yaml'" <<'EOF'
+- address: 0.0.0.0:10202
+  protocol:
+    type: vless
+    user_id: 00000000-0000-4000-8000-000000000001
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/shoes-client.yaml'" <<EOF
+- address: 127.0.0.1:1085
+  protocol:
+    type: socks
+  rules:
+    - masks: "0.0.0.0/0"
+      action: allow
+      client_chain:
+        address: "$SERVER_HOST:10202"
+        protocol:
+          type: vless
+          user_id: 00000000-0000-4000-8000-000000000001
+EOF
+    }
+    run_remote_hey() {
+        local variant="$1" payload="$2" proxy="$3" protocol="$4" transport="$5" profile="$6"
+        local target="http://$SERVER_HOST:$COMPETITIVE_REMOTE_UPSTREAM_PORT/$payload"
+        local cmd="hey -z '${COMPETITIVE_DURATION}s' -c '$COMPETITIVE_CONCURRENCY'"
+        [ -n "$proxy" ] && cmd="$cmd -x socks5://127.0.0.1:$proxy"
+        local raw
+        if raw="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "$cmd '$target'" 2>&1)"; then
+            parse_hey "$variant" "$payload" "$raw" "$protocol" "$transport" "$profile"
+        else
+            emit_row "$variant" failed "$raw" "$protocol" "$transport" "$profile" "$payload"
+        fi
+    }
+    REMOTE_SERVER_DIR="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" 'mktemp -d /tmp/blackwire-competitive.XXXXXX')"
+    REMOTE_CLIENT_DIR="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" 'mktemp -d /tmp/blackwire-competitive.XXXXXX')"
+    local nginx_started=0
+    cleanup_remote_dirs() {
+        remote_stop "$SERVER_HOST" "${REMOTE_SERVER_DIR:-}"
+        remote_stop "$CLIENT_HOST" "${REMOTE_CLIENT_DIR:-}"
+    }
+    trap cleanup_remote_dirs EXIT
+    ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "ufw allow ${COMPETITIVE_REMOTE_UPSTREAM_PORT}/tcp >/dev/null; ufw allow 10080/tcp >/dev/null; ufw allow 10090/tcp >/dev/null; ufw allow 10180/tcp >/dev/null; ufw allow 10182/tcp >/dev/null; ufw allow 10200/udp >/dev/null; ufw allow 10202/tcp >/dev/null" >/dev/null 2>&1 || true
+    scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/start_nginx_upstream.sh" "$SSH_USER@$SERVER_HOST:$REMOTE_SERVER_DIR/start_nginx_upstream.sh" >/dev/null
+    write_remote_configs "$REMOTE_SERVER_DIR" "$REMOTE_CLIENT_DIR"
+    if ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "bash '$REMOTE_SERVER_DIR/start_nginx_upstream.sh' '$REMOTE_SERVER_DIR/nginx' '$COMPETITIVE_REMOTE_UPSTREAM_PORT' 0.0.0.0" >/dev/null 2>&1; then
+        nginx_started=1
+    fi
+    if [ -x "$BLACKWIRE_BIN" ]; then
+        scp "${SSH_OPTS[@]}" "$BLACKWIRE_BIN" "$SSH_USER@$SERVER_HOST:$REMOTE_SERVER_DIR/blackwire" >/dev/null || true
+        scp "${SSH_OPTS[@]}" "$BLACKWIRE_BIN" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/blackwire" >/dev/null || true
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "chmod +x '$REMOTE_SERVER_DIR/blackwire'" >/dev/null 2>&1 || true
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "chmod +x '$REMOTE_CLIENT_DIR/blackwire'" >/dev/null 2>&1 || true
+    fi
+    if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ]; then
+        scp "${SSH_OPTS[@]}" "$BLACKWIRE_CANDIDATE_BIN" "$SSH_USER@$SERVER_HOST:$REMOTE_SERVER_DIR/blackwire-candidate" >/dev/null || true
+        scp "${SSH_OPTS[@]}" "$BLACKWIRE_CANDIDATE_BIN" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/blackwire-candidate" >/dev/null || true
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "chmod +x '$REMOTE_SERVER_DIR/blackwire-candidate'" >/dev/null 2>&1 || true
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "chmod +x '$REMOTE_CLIENT_DIR/blackwire-candidate'" >/dev/null 2>&1 || true
+    fi
+    for payload in $COMPETITIVE_PAYLOADS; do
+        emit_row remote-inventory ok "wrote remote-inventory-${TS}.log" inventory ssh baseline "$payload"
+        if [ "$nginx_started" = "1" ] && has_tool "$client_inv" "hey"; then
+            run_remote_hey direct-vps-native "$payload" "" direct tcp baseline
+        else
+            emit_row direct-vps-native skipped "nginx on server or hey on client missing" direct tcp baseline "$payload"
+        fi
+        if [ -x "$BLACKWIRE_BIN" ] && [ "$nginx_started" = "1" ]; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-server "./blackwire run -c blackwire-server.json" 10080 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-client "./blackwire run -c blackwire-client.json" 1081; then
+                run_remote_hey blackwire-current "$payload" 1081 vless tcp current
+            else
+                emit_row blackwire-current failed "temporary Blackwire server/client did not become ready" vless tcp current "$payload"
+            fi
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/blackwire-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/blackwire-server.pid'" >/dev/null 2>&1 || true
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/blackwire-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/blackwire-client.pid'" >/dev/null 2>&1 || true
+        else
+            emit_row blackwire-current skipped "local BLACKWIRE_BIN not executable or nginx upstream unavailable: $BLACKWIRE_BIN" vless tcp current "$payload"
+        fi
+        if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ] && [ "$nginx_started" = "1" ]; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-candidate-server "./blackwire-candidate run -c blackwire-server-candidate.json" 10090 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-candidate-client "./blackwire-candidate run -c blackwire-client-candidate.json" 1091; then
+                run_remote_hey blackwire-candidate "$payload" 1091 vless tcp candidate
+            else
+                emit_row blackwire-candidate failed "temporary Blackwire candidate server/client did not become ready" vless tcp candidate "$payload"
+            fi
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/blackwire-candidate-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/blackwire-candidate-server.pid'" >/dev/null 2>&1 || true
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/blackwire-candidate-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/blackwire-candidate-client.pid'" >/dev/null 2>&1 || true
+        else
+            emit_row blackwire-candidate skipped "no distinct BLACKWIRE_CANDIDATE_BIN configured" vless tcp candidate "$payload"
+        fi
+        if has_tool "$server_inv" "xray" && has_tool "$client_inv" "xray" && [ "$nginx_started" = "1" ]; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" xray-server "xray run -config xray-server.json" 10180 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" xray-client "xray run -config xray-client.json" 1082; then
+                run_remote_hey xray "$payload" 1082 vless tcp baseline
+            else
+                emit_row xray failed "xray server/client did not become ready" vless tcp baseline "$payload"
+            fi
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/xray-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/xray-server.pid'" >/dev/null 2>&1 || true
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/xray-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/xray-client.pid'" >/dev/null 2>&1 || true
+        else
+            emit_row xray skipped "xray missing on at least one VPS" vless tcp baseline "$payload"
+        fi
+        if has_tool "$server_inv" "sing-box" && has_tool "$client_inv" "sing-box" && [ "$nginx_started" = "1" ]; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" singbox-server "sing-box run -c singbox-server.json" 10182 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" singbox-client "sing-box run -c singbox-client.json" 1083; then
+                run_remote_hey sing-box "$payload" 1083 vless tcp baseline
+            else
+                emit_row sing-box failed "sing-box server/client did not become ready" vless tcp baseline "$payload"
+            fi
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/singbox-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/singbox-server.pid'" >/dev/null 2>&1 || true
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/singbox-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/singbox-client.pid'" >/dev/null 2>&1 || true
+        else
+            emit_row sing-box skipped "sing-box missing on at least one VPS" vless tcp baseline "$payload"
+        fi
+        if has_tool "$server_inv" "hysteria" && has_tool "$client_inv" "hysteria" && [ "$nginx_started" = "1" ]; then
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cd '$REMOTE_SERVER_DIR'; hysteria cert --host '$SERVER_HOST' --cert server.crt --key server.key --overwrite >/dev/null 2>&1" || true
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" hysteria-server "hysteria server -c hysteria-server.yaml" "" && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" hysteria-client "hysteria client -c hysteria-client.yaml" 1084; then
+                run_remote_hey hysteria "$payload" 1084 hysteria2 quic baseline
+            else
+                emit_row hysteria failed "hysteria server/client did not become ready" hysteria2 quic baseline "$payload"
+            fi
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/hysteria-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/hysteria-server.pid'" >/dev/null 2>&1 || true
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/hysteria-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/hysteria-client.pid'" >/dev/null 2>&1 || true
+        else
+            emit_row hysteria skipped "hysteria missing on at least one VPS" hysteria2 quic baseline "$payload"
+        fi
+        if has_tool "$server_inv" "shoes" && has_tool "$client_inv" "shoes" && [ "$nginx_started" = "1" ]; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" shoes-server "shoes --no-reload shoes-server.yaml" 10202 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" shoes-client "shoes --no-reload shoes-client.yaml" 1085; then
+                run_remote_hey shoes "$payload" 1085 vless tcp baseline
+            else
+                emit_row shoes failed "shoes server/client did not become ready" vless tcp baseline "$payload"
+            fi
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/shoes-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/shoes-server.pid'" >/dev/null 2>&1 || true
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/shoes-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/shoes-client.pid'" >/dev/null 2>&1 || true
+        else
+            emit_row shoes skipped "shoes missing on at least one VPS" socks tcp baseline "$payload"
+        fi
+    done
+}
+
+case "$MODE" in
+    local) run_local ;;
+    remote) run_remote ;;
+    *) echo "ERROR: COMPETITIVE_MODE must be local or remote, got $MODE" >&2; exit 1 ;;
+esac
+
+echo "wrote $OUT"

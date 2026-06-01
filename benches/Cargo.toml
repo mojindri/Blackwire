@@ -18,6 +18,7 @@ bench-alloc = []
 [dependencies]
 blackwire-core   = { path = "../crates/blackwire-core" }
 blackwire-config = { path = "../crates/blackwire-config" }
+blackwire-common = { path = "../crates/blackwire-common" }
 
 tokio.workspace = true
 socket2.workspace = true
