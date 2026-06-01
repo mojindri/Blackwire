@@ -9,11 +9,15 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 
 use blackwire_app::dispatcher::Dispatcher;
-use blackwire_app::features::{ConnectionHandler, InboundHandler, OutboundHandler};
+use blackwire_app::features::{
+    ConnectionHandler, InboundHandler, OutboundConnectResult, OutboundHandler,
+};
 use blackwire_common::{with_handshake_timeout, BoxedStream, ProxyError};
 use blackwire_config::schema::{SecurityType, StreamSettingsConfig};
 use blackwire_protocol::vless::codec::Command;
-use blackwire_protocol::vless::connect_vless_on_stream;
+use blackwire_protocol::vless::{
+    connect_vless_on_stream, connect_vless_on_stream_with_early_payload,
+};
 use tracing::warn;
 
 use blackwire_transport::{
@@ -128,6 +132,24 @@ impl OutboundHandler for RealityVlessOutbound {
     ) -> Result<BoxedStream, ProxyError> {
         let stream = self.reality.dial().await?;
         connect_vless_on_stream(stream, &self.uuid, &self.flow, Command::Tcp, dest).await
+    }
+
+    async fn connect_with_early_payload(
+        &self,
+        _ctx: &blackwire_app::context::Context,
+        dest: &blackwire_common::Address,
+        early_payload: Option<Vec<u8>>,
+    ) -> Result<OutboundConnectResult, ProxyError> {
+        let stream = self.reality.dial().await?;
+        connect_vless_on_stream_with_early_payload(
+            stream,
+            &self.uuid,
+            &self.flow,
+            Command::Tcp,
+            dest,
+            early_payload,
+        )
+        .await
     }
 }
 
