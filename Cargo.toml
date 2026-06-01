@@ -16,6 +16,7 @@
 members = [
     "benches",
     "crates/blackwire-cli",
+    "crates/blackwire-connmgr",
     "crates/blackwire-core",
     "crates/blackwire-common",
     "crates/blackwire-config",
