@@ -398,6 +398,51 @@ fn describe_metrics() {
         metrics::Unit::Count,
         "Adaptive balancer outbound connect failures"
     );
+    metrics::describe_counter!(
+        "blackwire_quic_congestion_mode_total",
+        metrics::Unit::Count,
+        "QUIC congestion mode selections"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_ack_rate",
+        metrics::Unit::Count,
+        "Estimated QUIC ACK rate for bad-network congestion control"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_loss_rate",
+        metrics::Unit::Count,
+        "Estimated QUIC loss rate for bad-network congestion control"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_queue_delay_ms",
+        metrics::Unit::Milliseconds,
+        "Estimated QUIC queue delay"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_pacing_rate_bps",
+        metrics::Unit::Bytes,
+        "Selected QUIC pacing rate in bytes per second"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_cwnd_bytes",
+        metrics::Unit::Bytes,
+        "Selected QUIC congestion window"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_delivery_rate_bps",
+        metrics::Unit::Bytes,
+        "Estimated QUIC delivery rate in bytes per second"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_endpoint_shards",
+        metrics::Unit::Count,
+        "Configured QUIC endpoint shard count"
+    );
+    metrics::describe_counter!(
+        "blackwire_quic_loss_fingerprint_total",
+        metrics::Unit::Count,
+        "Classified QUIC path loss fingerprints"
+    );
     blackwire_connmgr::metrics::describe_metrics();
 }
 

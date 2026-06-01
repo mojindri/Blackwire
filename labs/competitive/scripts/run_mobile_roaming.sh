@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Milestone A scaffold: record mobile-like scenarios without mutating routes.
-for scenario in mobile-rtt-50 mobile-rtt-100 mobile-jitter-20 mobile-roaming; do
-    MOBILE_SCENARIO="$scenario" bash "$(dirname "$0")/run_matrix.sh" "$scenario"
-done
+RTT_MS=50 bash "$(dirname "$0")/run_matrix.sh" "hysteria2-rtt-50"
+RTT_MS=100 bash "$(dirname "$0")/run_matrix.sh" "hysteria2-rtt-100"
+JITTER_MS=20 bash "$(dirname "$0")/run_matrix.sh" "hysteria2-jitter-20"
+BANDWIDTH_LIMIT=10mbps bash "$(dirname "$0")/run_matrix.sh" "hysteria2-bandwidth-10mbps"
+RTT_MS=100 JITTER_MS=20 LOSS_PERCENT=3 bash "$(dirname "$0")/run_matrix.sh" "hysteria2-mobile-radio-pause"
