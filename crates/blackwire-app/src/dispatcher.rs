@@ -59,7 +59,7 @@ use std::collections::HashMap;
 
 use blackwire_common::{tcp_connect, Address, BoxedStream, PooledStream, ProxyError};
 use blackwire_config::schema::{
-    FastConfig, FastRelayConfig, FastSplicePolicy, ProfileMode, SniffingConfig,
+    FastConfig, FastRelayConfig, FastSplicePolicy, ProfileMode, SniffingConfig, VisionConfig,
 };
 use smallvec::SmallVec;
 use tokio::net::TcpStream;
@@ -113,6 +113,7 @@ pub struct DefaultDispatcher {
     profile: ProfileMode,
     splice_policy: FastSplicePolicy,
     relay_policy: FastRelayConfig,
+    vision_policy: VisionConfig,
 }
 
 fn splice_policy_for_profile(profile: ProfileMode, fast: Option<&FastConfig>) -> FastSplicePolicy {
@@ -149,6 +150,7 @@ impl DefaultDispatcher {
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
+            vision_policy: VisionConfig::default(),
         })
     }
 
@@ -166,6 +168,7 @@ impl DefaultDispatcher {
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
+            vision_policy: VisionConfig::default(),
         })
     }
 
@@ -186,6 +189,7 @@ impl DefaultDispatcher {
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
+            vision_policy: VisionConfig::default(),
         })
     }
 
@@ -204,6 +208,7 @@ impl DefaultDispatcher {
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
+            vision_policy: VisionConfig::default(),
         })
     }
 
@@ -220,11 +225,23 @@ impl DefaultDispatcher {
         profile: ProfileMode,
         fast: Option<&FastConfig>,
     ) -> Arc<Self> {
+        self.with_profile_fast_and_vision(profile, fast, None)
+    }
+
+    /// Set profile, Fast Profile config, and Vision policy together.
+    pub fn with_profile_fast_and_vision(
+        self: Arc<Self>,
+        profile: ProfileMode,
+        fast: Option<&FastConfig>,
+        vision: Option<&VisionConfig>,
+    ) -> Arc<Self> {
         let splice_policy = splice_policy_for_profile(profile, fast);
         let relay_policy = relay_policy_for_profile(profile, fast);
+        let vision_policy = vision.copied().unwrap_or_default();
         if self.profile == profile
             && self.splice_policy == splice_policy
             && self.relay_policy == relay_policy
+            && self.vision_policy == vision_policy
         {
             return self;
         }
@@ -235,6 +252,7 @@ impl DefaultDispatcher {
                 inner.profile = profile;
                 inner.splice_policy = splice_policy;
                 inner.relay_policy = relay_policy;
+                inner.vision_policy = vision_policy;
                 Arc::new(inner)
             }
             Err(arc) => Arc::new(Self {
@@ -245,6 +263,7 @@ impl DefaultDispatcher {
                 profile,
                 splice_policy,
                 relay_policy,
+                vision_policy,
             }),
         }
     }
@@ -297,6 +316,7 @@ impl Dispatcher for DefaultDispatcher {
             outbound_stream,
             self.splice_policy,
             self.relay_policy,
+            self.vision_policy,
         )
         .await
         .map(|(up, down)| (up + prewritten_up, down));
@@ -721,6 +741,7 @@ mod tests {
     use crate::router::{Route, RoutingContext};
     use blackwire_config::schema::{
         FastPoolPolicy, FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy,
+        VisionConfig, VisionDirectCopyPolicy,
     };
 
     struct StaticRouter;
@@ -774,6 +795,30 @@ mod tests {
         assert_eq!(
             relay_policy_for_profile(ProfileMode::Fast, Some(&fast)),
             fast.relay
+        );
+    }
+
+    #[test]
+    fn dispatcher_honors_configured_vision_policy() {
+        let dispatcher =
+            DefaultDispatcher::new(Arc::new(StaticRouter), std::collections::HashMap::new())
+                .with_profile_fast_and_vision(
+                    ProfileMode::Fast,
+                    None,
+                    Some(&VisionConfig {
+                        direct_copy: VisionDirectCopyPolicy::Disabled,
+                        max_packets_to_filter: 4,
+                        allow_splice_after_direct: false,
+                    }),
+                );
+
+        assert_eq!(
+            dispatcher.vision_policy,
+            VisionConfig {
+                direct_copy: VisionDirectCopyPolicy::Disabled,
+                max_packets_to_filter: 4,
+                allow_splice_after_direct: false,
+            }
         );
     }
 

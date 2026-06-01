@@ -4,6 +4,8 @@ set -euo pipefail
 WORK_DIR="${1:?usage: start_nginx_upstream.sh <work-dir> [port]}"
 PORT="${2:-18080}"
 HOST="${3:-127.0.0.1}"
+STREAM_PORT="${4:-18443}"
+STREAM_UPSTREAM="${5:-www.microsoft.com:443}"
 mkdir -p "$WORK_DIR/html" "$WORK_DIR/logs" "$WORK_DIR/client_body"
 chmod 755 "$(dirname "$WORK_DIR")"
 chmod 755 "$WORK_DIR" "$WORK_DIR/html" "$WORK_DIR/logs" "$WORK_DIR/client_body"
@@ -18,11 +20,23 @@ for name, size in sizes.items():
 PY
 chmod 644 "$WORK_DIR/html"/*
 
+stream_module=""
+if [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
+  stream_module="load_module /usr/lib/nginx/modules/ngx_stream_module.so;"
+fi
+
 cat > "$WORK_DIR/nginx.conf" <<EOF
+$stream_module
 daemon off;
 pid $WORK_DIR/nginx.pid;
 error_log $WORK_DIR/logs/error.log warn;
 events { worker_connections 4096; }
+stream {
+  server {
+    listen $HOST:$STREAM_PORT;
+    proxy_pass $STREAM_UPSTREAM;
+  }
+}
 http {
   access_log off;
   sendfile on;
@@ -49,5 +63,6 @@ for _ in $(seq 1 40); do
 done
 kill "$pid" 2>/dev/null || true
 cat "$WORK_DIR/logs/error.log" >&2 2>/dev/null || true
+cat "$WORK_DIR/stdout.log" >&2 2>/dev/null || true
 echo "ERROR: nginx upstream did not start on 127.0.0.1:$PORT" >&2
 exit 1
