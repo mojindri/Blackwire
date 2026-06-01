@@ -9,6 +9,7 @@ fn minimal_config(port: u16) -> Config {
     Config {
         profile: ProfileMode::default(),
         fast: None,
+        vision: None,
         log: LogConfig::default(),
         dns: None,
         routing: None,

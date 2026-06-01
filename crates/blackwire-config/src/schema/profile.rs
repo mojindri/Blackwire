@@ -381,6 +381,7 @@ mod tests {
         Config {
             profile: ProfileMode::Fast,
             fast: None,
+            vision: None,
             log: LogConfig::default(),
             dns: None,
             routing: None,
