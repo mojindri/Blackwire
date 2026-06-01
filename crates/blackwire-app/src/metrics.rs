@@ -33,6 +33,10 @@
 //! | `blackwire_vision_lower_failed_total` | Counter | `reason` |
 //! | `blackwire_vision_cached_bytes_total` | Counter | none |
 //! | `blackwire_vision_splice_after_direct_total` | Counter | none |
+//! | `blackwire_early_payload_bytes_total` | Counter | `protocol` |
+//! | `blackwire_early_payload_written_total` | Counter | `protocol`, `outbound` |
+//! | `blackwire_handshake_kick_total` | Counter | `protocol`, `direction`, `result` |
+//! | `blackwire_first_byte_latency_seconds` | Histogram | `protocol`, `transport` |
 //! | `freedom_pool_leases_total` | Counter | `outbound` |
 //! | `balancer_adaptive_profile_score` | Gauge | `balancer`, `profile` |
 //! | `balancer_adaptive_profile_selected` | Gauge | `balancer`, `profile` |
@@ -245,6 +249,26 @@ fn describe_metrics() {
         "XTLS Vision streams that entered splice after direct copy"
     );
     metrics::describe_counter!(
+        "blackwire_early_payload_bytes_total",
+        metrics::Unit::Bytes,
+        "Inbound bytes captured after protocol handshake and forwarded as early payload"
+    );
+    metrics::describe_counter!(
+        "blackwire_early_payload_written_total",
+        metrics::Unit::Count,
+        "Early payload write attempts by protocol and outbound path"
+    );
+    metrics::describe_counter!(
+        "blackwire_handshake_kick_total",
+        metrics::Unit::Count,
+        "Handshake kick events by protocol, direction, and result"
+    );
+    metrics::describe_histogram!(
+        "blackwire_first_byte_latency_seconds",
+        metrics::Unit::Seconds,
+        "Latency until the first upstream byte can be written"
+    );
+    metrics::describe_counter!(
         "freedom_pool_hits_total",
         metrics::Unit::Count,
         "Freedom outbound preconnect pool hits after first client write succeeds"
@@ -442,6 +466,58 @@ pub fn record_outbound_connect(inbound: &str, outbound: &str, elapsed: std::time
         "proxy_outbound_connect_seconds",
         "inbound" => inbound.to_owned(),
         "outbound" => outbound.to_owned()
+    )
+    .record(elapsed.as_secs_f64());
+}
+
+/// Record bytes captured by an inbound parser after its handshake.
+pub fn record_early_payload(protocol: &str, bytes: u64) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_early_payload_bytes_total",
+        "protocol" => protocol.to_owned()
+    )
+    .increment(bytes);
+}
+
+/// Record an outbound writing already-buffered first payload bytes.
+pub fn record_early_payload_written(protocol: &str, outbound: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_early_payload_written_total",
+        "protocol" => protocol.to_owned(),
+        "outbound" => outbound.to_owned()
+    )
+    .increment(1);
+}
+
+/// Record a handshake kick event.
+pub fn record_handshake_kick(protocol: &str, direction: &str, result: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_handshake_kick_total",
+        "protocol" => protocol.to_owned(),
+        "direction" => direction.to_owned(),
+        "result" => result.to_owned()
+    )
+    .increment(1);
+}
+
+/// Record latency until the first upstream byte can be written.
+pub fn record_first_byte_latency(protocol: &str, transport: &str, elapsed: Duration) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::histogram!(
+        "blackwire_first_byte_latency_seconds",
+        "protocol" => protocol.to_owned(),
+        "transport" => transport.to_owned()
     )
     .record(elapsed.as_secs_f64());
 }

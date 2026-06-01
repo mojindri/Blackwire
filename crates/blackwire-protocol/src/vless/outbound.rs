@@ -21,7 +21,7 @@ use tokio::net::TcpStream;
 use tracing::debug;
 
 use blackwire_app::context::Context;
-use blackwire_app::features::OutboundHandler;
+use blackwire_app::features::{OutboundConnectResult, OutboundHandler};
 use blackwire_common::{Address, BoxedStream, ProxyError};
 
 use super::codec::{encode_request, Command};
@@ -71,6 +71,67 @@ pub async fn connect_vless_on_stream(
     } else {
         Ok(stream)
     }
+}
+
+/// Send a VLESS request header and optional first payload over an established stream.
+pub async fn connect_vless_on_stream_with_early_payload(
+    mut stream: BoxedStream,
+    uuid: &[u8; 16],
+    flow: &str,
+    command: Command,
+    dest: &Address,
+    early_payload: Option<Vec<u8>>,
+) -> Result<OutboundConnectResult, ProxyError> {
+    if flow == "xtls-rprx-vision" {
+        let mut stream = connect_vless_on_stream(stream, uuid, flow, command, dest).await?;
+        let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+            if !payload.is_empty() {
+                stream.write_all(payload).await?;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        return Ok(OutboundConnectResult {
+            stream,
+            wrote_early_payload,
+            returned_early_response: None,
+        });
+    }
+
+    let header = encode_request(uuid, flow, command, dest)?;
+    stream.write_all(&header).await?;
+    let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+        if !payload.is_empty() {
+            stream.write_all(payload).await?;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    stream.flush().await?;
+
+    let ver = stream.read_u8().await?;
+    if ver != 0x00 {
+        return Err(ProxyError::Protocol(format!(
+            "VLESS server responded with unexpected version {ver:#x}"
+        )));
+    }
+    let addons_len = stream.read_u8().await? as usize;
+    if addons_len > 0 {
+        let mut addons = vec![0u8; addons_len];
+        stream.read_exact(&mut addons).await?;
+    }
+
+    Ok(OutboundConnectResult {
+        stream,
+        wrote_early_payload,
+        returned_early_response: None,
+    })
 }
 
 /// VLESS outbound configuration.
@@ -153,5 +214,80 @@ impl OutboundHandler for VlessOutbound {
         } else {
             Ok(stream)
         }
+    }
+
+    async fn connect_with_early_payload(
+        &self,
+        _ctx: &Context,
+        dest: &Address,
+        early_payload: Option<Vec<u8>>,
+    ) -> Result<OutboundConnectResult, ProxyError> {
+        let stream = TcpStream::connect(self.config.server).await?;
+        stream.set_nodelay(true)?;
+
+        debug!(
+            server = %self.config.server,
+            dest = %dest,
+            "VLESS outbound connecting with early payload"
+        );
+
+        let stream: BoxedStream = Box::new(stream);
+        connect_vless_on_stream_with_early_payload(
+            stream,
+            &self.config.uuid,
+            &self.config.flow,
+            Command::Tcp,
+            dest,
+            early_payload,
+        )
+        .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::{TcpListener, TcpStream};
+
+    use crate::vless::codec as vless_codec;
+
+    #[tokio::test]
+    async fn connect_on_stream_with_early_payload_preserves_first_bytes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let uuid = [7u8; 16];
+        let dest = Address::Domain("example.com".into(), 443);
+        let early_payload = b"GET / HTTP/1.1\r\n\r\n".to_vec();
+
+        let expected_dest = dest.clone();
+        let expected_payload = early_payload.clone();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut stream: BoxedStream = Box::new(tcp);
+            let req = vless_codec::decode_request(&mut stream).await.unwrap();
+            assert_eq!(req.uuid, uuid);
+            assert_eq!(req.command, Command::Tcp);
+            assert_eq!(req.dest, expected_dest);
+
+            let mut payload = vec![0u8; expected_payload.len()];
+            stream.read_exact(&mut payload).await.unwrap();
+            assert_eq!(payload, expected_payload);
+            stream.write_all(&[0x00, 0x00]).await.unwrap();
+        });
+
+        let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let result = connect_vless_on_stream_with_early_payload(
+            Box::new(tcp),
+            &uuid,
+            "",
+            Command::Tcp,
+            &dest,
+            Some(early_payload),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.wrote_early_payload);
+        assert!(result.returned_early_response.is_none());
     }
 }
