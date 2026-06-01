@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::BytesMut;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::debug;
 
 use blackwire_app::context::Context;
@@ -103,17 +103,20 @@ impl InboundHandler for Socks5Inbound {
 
     async fn handle(
         &self,
-        mut stream: BoxedStream,
+        stream: BoxedStream,
         source: SocketAddr,
         dispatcher: Arc<dyn Dispatcher>,
     ) -> Result<(), ProxyError> {
-        let request = socks5_handshake(&mut stream).await?;
+        let (request, mut stream, early_payload) =
+            socks5_handshake_with_early_payload(stream).await?;
 
         match request {
             Socks5Request::Connect(dest) => {
                 debug!(source = %source, dest = %dest, "SOCKS5 CONNECT");
                 let ctx = Context::new(&self.tag, source);
-                dispatcher.dispatch(ctx, dest, stream).await
+                dispatcher
+                    .dispatch_with_early_payload(ctx, dest, stream, early_payload)
+                    .await
             }
             Socks5Request::UdpAssociate => {
                 debug!(source = %source, "SOCKS5 UDP ASSOCIATE");
@@ -142,7 +145,30 @@ enum Socks5Request {
 ///
 /// After this function returns `Ok(dest)`, the stream is positioned at the
 /// start of the proxied data — no more SOCKS5 framing, just raw bytes.
+#[cfg(test)]
 async fn socks5_handshake(stream: &mut BoxedStream) -> Result<Socks5Request, ProxyError> {
+    perform_socks5_handshake(stream).await
+}
+
+async fn socks5_handshake_with_early_payload(
+    stream: BoxedStream,
+) -> Result<(Socks5Request, BoxedStream, Option<Vec<u8>>), ProxyError> {
+    let mut reader = BufReader::new(stream);
+    let request = perform_socks5_handshake(&mut reader).await?;
+    let early_payload = reader.buffer().to_vec();
+    let stream = reader.into_inner();
+    let early_payload = if early_payload.is_empty() {
+        None
+    } else {
+        Some(early_payload)
+    };
+    Ok((request, stream, early_payload))
+}
+
+async fn perform_socks5_handshake<S>(stream: &mut S) -> Result<Socks5Request, ProxyError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     // ── SOCKS5 greeting ──────────────────────────────────────────────────────
     //
     // The client sends:
@@ -219,15 +245,17 @@ async fn socks5_handshake(stream: &mut BoxedStream) -> Result<Socks5Request, Pro
 ///
 /// The bound address is always 0.0.0.0:0 — we tell the client we succeeded
 /// (or failed) but do not bind a real address on its behalf.
-async fn send_reply(stream: &mut BoxedStream, rep: u8) -> Result<(), ProxyError> {
+async fn send_reply<S>(stream: &mut S, rep: u8) -> Result<(), ProxyError>
+where
+    S: AsyncWrite + Unpin,
+{
     send_bind_reply(stream, rep, SocketAddr::from(([0, 0, 0, 0], 0))).await
 }
 
-async fn send_bind_reply(
-    stream: &mut BoxedStream,
-    rep: u8,
-    bind: SocketAddr,
-) -> Result<(), ProxyError> {
+async fn send_bind_reply<S>(stream: &mut S, rep: u8, bind: SocketAddr) -> Result<(), ProxyError>
+where
+    S: AsyncWrite + Unpin,
+{
     let mut body = BytesMut::with_capacity(32);
     body.extend_from_slice(&[SOCKS_VERSION, rep, RSV]);
     let addr = match bind {
@@ -242,6 +270,7 @@ async fn send_bind_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use blackwire_common::PrependedStream;
     use std::net::Ipv4Addr;
     use tokio::io::duplex;
 
@@ -325,5 +354,49 @@ mod tests {
         });
         let result = socks5_handshake(&mut server_stream).await;
         assert!(matches!(result, Err(ProxyError::AuthFailed)));
+    }
+
+    #[tokio::test]
+    async fn connect_preserves_coalesced_first_payload_after_success_reply() {
+        let (mut client, server) = duplex(1024);
+        let payload = b"GET / HTTP/1.1\r\n\r\n";
+        let mut client_bytes = vec![
+            5, 1, 0, // greeting
+            5, 1, 0, 3, // request header
+            11u8,
+        ];
+        client_bytes.extend_from_slice(b"example.com");
+        client_bytes.extend_from_slice(&[0x01, 0xBB]);
+        client_bytes.extend_from_slice(payload);
+
+        tokio::spawn(async move {
+            client.write_all(&client_bytes).await.unwrap();
+            let mut greeting_reply = [0u8; 2];
+            client.read_exact(&mut greeting_reply).await.unwrap();
+            assert_eq!(greeting_reply, [5, 0]);
+            let mut connect_reply = [0u8; 10];
+            client.read_exact(&mut connect_reply).await.unwrap();
+            assert_eq!(&connect_reply[..4], &[5, 0, 0, 1]);
+        });
+
+        let (request, stream, early_payload) =
+            socks5_handshake_with_early_payload(Box::new(server))
+                .await
+                .unwrap();
+        match request {
+            Socks5Request::Connect(dest) => {
+                assert_eq!(dest, Address::Domain("example.com".into(), 443));
+            }
+            Socks5Request::UdpAssociate => panic!("expected CONNECT"),
+        }
+        assert_eq!(early_payload.as_deref(), Some(payload.as_slice()));
+
+        let mut replayed: BoxedStream = Box::new(PrependedStream::new(
+            stream,
+            early_payload.expect("early payload"),
+        ));
+        let mut buf = vec![0u8; payload.len()];
+        replayed.read_exact(&mut buf).await.unwrap();
+        assert_eq!(buf, payload);
     }
 }
