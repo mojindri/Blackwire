@@ -378,6 +378,7 @@ dependencies = [
  "blackwire-app",
  "blackwire-common",
  "blackwire-config",
+ "blackwire-connmgr",
  "blackwire-core",
  "blackwire-protocol",
  "clap",
@@ -424,6 +425,7 @@ dependencies = [
  "axum",
  "blackwire-common",
  "blackwire-config",
+ "blackwire-connmgr",
  "blake3",
  "bytes",
  "dashmap",
@@ -489,6 +491,18 @@ dependencies = [
  "tokio",
  "tracing",
  "validator",
+]
+
+[[package]]
+name = "blackwire-connmgr"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "metrics",
+ "once_cell",
+ "serde",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

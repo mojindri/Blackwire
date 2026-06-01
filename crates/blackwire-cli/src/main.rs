@@ -95,6 +95,9 @@ enum Command {
     /// format. Copy it into your config.json under `clients[n].id`.
     Uuid,
 
+    /// Inspect or close active in-process connections.
+    Connections(ConnectionsArgs),
+
     /// Print the build version and quit.
     Version,
 }
@@ -132,6 +135,48 @@ struct TestArgs {
     /// Validates the config against the given profile's constraints.
     #[arg(long = "profile", value_name = "PROFILE")]
     profile: Option<ProfileMode>,
+}
+
+#[derive(clap::Args)]
+struct ConnectionsArgs {
+    #[command(subcommand)]
+    command: ConnectionsCommand,
+}
+
+#[derive(Subcommand)]
+enum ConnectionsCommand {
+    /// List active connections.
+    List,
+
+    /// Show active connections sorted by bytes or age.
+    Top {
+        #[arg(long = "sort", value_enum, default_value_t = ConnectionSort::Bytes)]
+        sort: ConnectionSort,
+    },
+
+    /// Close active connections by id, user, inbound, or outbound.
+    Close(ConnectionCloseArgs),
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ConnectionSort {
+    Bytes,
+    Age,
+}
+
+#[derive(clap::Args)]
+struct ConnectionCloseArgs {
+    #[arg(long = "id", conflicts_with_all = ["user", "inbound", "outbound"])]
+    id: Option<u64>,
+
+    #[arg(long = "user", conflicts_with_all = ["id", "inbound", "outbound"])]
+    user: Option<String>,
+
+    #[arg(long = "inbound", conflicts_with_all = ["id", "user", "outbound"])]
+    inbound: Option<String>,
+
+    #[arg(long = "outbound", conflicts_with_all = ["id", "user", "inbound"])]
+    outbound: Option<String>,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -190,6 +235,7 @@ fn main() {
 
         Command::X25519 => cmd_x25519(),
         Command::Uuid => cmd_uuid(),
+        Command::Connections(args) => cmd_connections(args),
 
         Command::Version => {
             println!("blackwire {}", env!("CARGO_PKG_VERSION"));
@@ -797,6 +843,67 @@ fn cmd_uuid() {
     // the OS CSPRNG and formats them with the version (4) and variant bits set.
     let id = uuid::Uuid::new_v4();
     println!("{id}");
+}
+
+// ── `connections` subcommand ─────────────────────────────────────────────────
+
+fn cmd_connections(args: ConnectionsArgs) {
+    match args.command {
+        ConnectionsCommand::List => print_connections(blackwire_connmgr::global_manager().list()),
+        ConnectionsCommand::Top { sort } => {
+            let mut snapshots = blackwire_connmgr::global_manager().list();
+            match sort {
+                ConnectionSort::Bytes => {
+                    snapshots.sort_by_key(|snapshot| std::cmp::Reverse(snapshot.total_bytes()));
+                }
+                ConnectionSort::Age => {
+                    snapshots.sort_by(|a, b| {
+                        b.age_secs
+                            .partial_cmp(&a.age_secs)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+            }
+            print_connections(snapshots);
+        }
+        ConnectionsCommand::Close(args) => {
+            let selector = if let Some(id) = args.id {
+                blackwire_connmgr::CloseSelector::Id(id)
+            } else if let Some(user) = args.user {
+                blackwire_connmgr::CloseSelector::User(user)
+            } else if let Some(inbound) = args.inbound {
+                blackwire_connmgr::CloseSelector::Inbound(inbound)
+            } else if let Some(outbound) = args.outbound {
+                blackwire_connmgr::CloseSelector::Outbound(outbound)
+            } else {
+                eprintln!("Error: specify one of --id, --user, --inbound, or --outbound");
+                std::process::exit(2);
+            };
+            let result = blackwire_connmgr::global_manager().close(selector);
+            println!("closed {}", result.matched);
+        }
+    }
+}
+
+fn print_connections(snapshots: Vec<blackwire_connmgr::ConnectionSnapshot>) {
+    println!(
+        "{:<8} {:<14} {:<14} {:<18} {:<9} {:<10} {:>10} {:>10} {:>8}",
+        "id", "inbound", "outbound", "user", "protocol", "transport", "up", "down", "age_s"
+    );
+    for snapshot in snapshots {
+        println!(
+            "{:<8} {:<14} {:<14} {:<18} {:<9} {:<10} {:>10} {:>10} {:>8.1}",
+            snapshot.id,
+            snapshot.inbound,
+            snapshot.outbound,
+            snapshot.user.as_deref().unwrap_or("-"),
+            snapshot.protocol.as_str(),
+            snapshot.transport.as_str(),
+            snapshot.bytes_up,
+            snapshot.bytes_down,
+            snapshot.age_secs,
+        );
+    }
 }
 
 // ── Logging setup ─────────────────────────────────────────────────────────────

@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use blackwire_connmgr::{global_manager, CloseReason, Protocol, RelayPath, Transport};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info, warn};
 
@@ -76,6 +77,11 @@ use crate::metrics::{
 };
 use crate::router::{normalize_routing_domain_strategy, Router, RoutingDomainStrategy};
 use crate::runtime_stats;
+
+struct RoutedOutboundConnectResult {
+    connect: crate::features::OutboundConnectResult,
+    outbound_tag: Arc<str>,
+}
 
 /// The dispatcher connects inbounds to outbounds by consulting the router
 /// and relaying bytes.
@@ -347,29 +353,43 @@ impl Dispatcher for DefaultDispatcher {
                 return Err(e);
             }
         };
-        if outbound.wrote_early_payload {
+        if outbound.connect.wrote_early_payload {
             record_handshake_kick(&ctx.inbound_tag, "upstream", "written");
         } else if let Some(payload) = early_payload {
             if !payload.is_empty() {
                 inbound_stream = Box::new(PrependedStream::new(inbound_stream, payload));
             }
         }
-        let prewritten_early_up = if outbound.wrote_early_payload {
+        let prewritten_early_up = if outbound.connect.wrote_early_payload {
             early_payload_len as u64
         } else {
             0
         };
-        let outbound_stream = match outbound.returned_early_response {
+        let outbound_stream = match outbound.connect.returned_early_response {
             Some(response) if !response.is_empty() => {
-                Box::new(PrependedStream::new(outbound.stream, response)) as BoxedStream
+                Box::new(PrependedStream::new(outbound.connect.stream, response)) as BoxedStream
             }
-            _ => outbound.stream,
+            _ => outbound.connect.stream,
         };
         let (inbound_stream, outbound_stream, prewritten_up) = self
             .guard_pooled_first_write(&ctx, &dest, inbound_stream, outbound_stream)
             .await?;
 
         relay_log!(self.profile, dest = %dest, inbound = %ctx.inbound_tag, "relay started");
+        let protocol = ctx
+            .sniffed_protocol
+            .as_deref()
+            .map(Protocol::from)
+            .unwrap_or(Protocol::Tcp);
+        let conn = global_manager().track(
+            Arc::from(ctx.inbound_tag.as_str()),
+            Arc::clone(&outbound.outbound_tag),
+            ctx.user.as_ref().map(Arc::clone),
+            protocol,
+            Transport::Tcp,
+            RelayPath::Adaptive,
+        );
+        let cancel = conn.cancellation_token();
 
         // Relay bytes bidirectionally until either side closes.
         //
@@ -381,17 +401,30 @@ impl Dispatcher for DefaultDispatcher {
         //   outbound → inbound (server sending data back to the client)
         //
         // It returns the total bytes sent in each direction when finished.
-        let result = crate::relay::relay_bidirectional_with_policies(
+        let relay = crate::relay::relay_bidirectional_with_policies(
             inbound_stream,
             outbound_stream,
             self.splice_policy,
             self.relay_policy,
             self.vision_policy,
-        )
-        .await
-        .map(|(up, down)| (up + prewritten_up + prewritten_early_up, down));
+        );
+        tokio::pin!(relay);
+        let result = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(ProxyError::Transport("connection closed by manager".into())),
+            result = &mut relay => result
+                .map(|(up, down)| (up + prewritten_up + prewritten_early_up, down))
+                .map_err(ProxyError::Io),
+        };
 
         let elapsed = start.elapsed();
+        let close_reason = if cancel.is_cancelled() {
+            CloseReason::ClosedById
+        } else if result.is_ok() {
+            CloseReason::Completed
+        } else {
+            CloseReason::Error
+        };
 
         match &result {
             Ok((up, down)) => {
@@ -422,6 +455,7 @@ impl Dispatcher for DefaultDispatcher {
         }
 
         let (rx_bytes, tx_bytes) = result.unwrap_or((0, 0));
+        conn.finish(rx_bytes, tx_bytes, close_reason);
         record_connection_closed(&ctx.inbound_tag, rx_bytes, tx_bytes, elapsed);
         if let Some(user) = ctx.user.as_deref() {
             runtime_stats::record_user_traffic(user, rx_bytes, tx_bytes);
@@ -552,7 +586,11 @@ impl DefaultDispatcher {
         ctx: &Context,
         dest: &Address,
     ) -> Result<BoxedStream, ProxyError> {
-        Ok(self.connect_outbound_result(ctx, dest, None).await?.stream)
+        Ok(self
+            .connect_outbound_result(ctx, dest, None)
+            .await?
+            .connect
+            .stream)
     }
 
     async fn connect_outbound_result(
@@ -560,7 +598,7 @@ impl DefaultDispatcher {
         ctx: &Context,
         dest: &Address,
         early_payload: Option<Vec<u8>>,
-    ) -> Result<crate::features::OutboundConnectResult, ProxyError> {
+    ) -> Result<RoutedOutboundConnectResult, ProxyError> {
         let dest = self.restore_fakeip_destination(dest);
 
         let protocol_label = ctx.sniffed_protocol.as_deref().unwrap_or("tcp");
@@ -579,6 +617,7 @@ impl DefaultDispatcher {
         record_route(&ctx.inbound_tag, t_route.elapsed());
 
         relay_log!(self.profile, outbound = %route.outbound_tag, "route selected");
+        let route_tag = Arc::clone(&route.outbound_tag);
 
         let outbound = self
             .outbounds
@@ -607,7 +646,10 @@ impl DefaultDispatcher {
             }
         }
         record_outbound_connect(&ctx.inbound_tag, &route.outbound_tag, t_connect.elapsed());
-        result
+        result.map(|connect| RoutedOutboundConnectResult {
+            connect,
+            outbound_tag: route_tag,
+        })
     }
 
     /// Xray routing: https://xtls.github.io/en/config/routing.html#domainstrategy
