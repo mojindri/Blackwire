@@ -6,13 +6,15 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_config::schema::{InboundConfig, OutboundConfig};
 use blackwire_transport::{
-    Hysteria2ClientConfig, Hysteria2OutboundHandler, Hysteria2Server, Hysteria2ServerConfig,
+    CongestionConfig, CongestionMode, Hysteria2ClientConfig, Hysteria2OutboundHandler,
+    Hysteria2Server, Hysteria2ServerConfig,
 };
 
 /// Build and launch a Hysteria2 server inbound, returning a join handle for
@@ -121,6 +123,11 @@ fn parse_client_config(cfg: &OutboundConfig) -> Result<Hysteria2ClientConfig> {
     let up_mbps = s["upMbps"].as_u64().unwrap_or(100);
     let down_mbps = s["downMbps"].as_u64().unwrap_or(100);
     let skip_cert_verify = s["skipCertVerify"].as_bool().unwrap_or(false);
+    let congestion = parse_congestion_config(s, up_mbps, down_mbps)?;
+    let endpoint_shards = s["endpointShards"]
+        .as_u64()
+        .map(|v| v.clamp(1, 64) as usize)
+        .unwrap_or(1);
 
     // Use the server address host as SNI if not explicitly configured.
     let server_name = s["serverName"]
@@ -135,6 +142,53 @@ fn parse_client_config(cfg: &OutboundConfig) -> Result<Hysteria2ClientConfig> {
         up_mbps,
         down_mbps,
         skip_cert_verify,
+        congestion,
+        endpoint_shards,
+    })
+}
+
+fn parse_congestion_config(
+    settings: &serde_json::Value,
+    up_mbps: u64,
+    down_mbps: u64,
+) -> Result<CongestionConfig> {
+    let congestion = settings
+        .get("congestion")
+        .unwrap_or(&serde_json::Value::Null);
+    let mode = congestion
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("brutal-compatible")
+        .parse::<CongestionMode>()
+        .map_err(anyhow::Error::msg)?;
+    let min_ack_rate = congestion
+        .get("minAckRate")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.8)
+        .clamp(0.05, 1.0);
+    let max_queue_delay_ms = congestion
+        .get("maxQueueDelayMs")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(80)
+        .clamp(1, 10_000);
+    let pacing_gain = congestion
+        .get("pacingGain")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.25)
+        .clamp(0.1, 5.0);
+    let loss_compensation = congestion
+        .get("lossCompensation")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    Ok(CongestionConfig {
+        mode,
+        up_mbps,
+        down_mbps,
+        min_ack_rate,
+        max_queue_delay: Duration::from_millis(max_queue_delay_ms),
+        pacing_gain,
+        loss_compensation,
     })
 }
 

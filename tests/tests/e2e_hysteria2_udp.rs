@@ -117,6 +117,12 @@ async fn hysteria2_udp_relay_roundtrip() {
         up_mbps: 50,
         down_mbps: 50,
         skip_cert_verify: true,
+        congestion: blackwire_transport::CongestionConfig {
+            up_mbps: 50,
+            down_mbps: 50,
+            ..blackwire_transport::CongestionConfig::default()
+        },
+        endpoint_shards: 1,
     };
 
     let session = timeout(

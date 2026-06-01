@@ -611,6 +611,7 @@ dependencies = [
  "hmac 0.13.0",
  "http",
  "libc",
+ "metrics",
  "nix",
  "notify",
  "p256",

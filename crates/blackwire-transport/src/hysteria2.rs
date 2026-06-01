@@ -38,7 +38,10 @@ const MAX_HYSTERIA2_CONNECTIONS: usize = 1024;
 const CLIENT_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIENT_OPEN_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 
-use crate::quic::{build_hysteria2_server_endpoint, ensure_crypto_provider, BrutalCCFactory};
+use crate::quic::{
+    build_hysteria2_server_endpoint, ensure_crypto_provider, BadNetControllerFactory,
+    BrutalCCFactory, CongestionConfig, CongestionMode,
+};
 
 /// Configuration for a Hysteria2 inbound server.
 #[derive(Debug, Clone)]
@@ -76,6 +79,10 @@ pub struct Hysteria2ClientConfig {
     pub down_mbps: u64,
     /// If `true`, skip TLS certificate verification (unsafe, for testing only).
     pub skip_cert_verify: bool,
+    /// QUIC congestion policy for lossy/mobile links.
+    pub congestion: CongestionConfig,
+    /// Number of local QUIC endpoint shards requested by config.
+    pub endpoint_shards: usize,
 }
 
 /// A Hysteria2 proxy server.
@@ -160,20 +167,7 @@ impl Hysteria2Client {
     /// The returned stream is ready to carry bytes for `dest`.
     pub async fn connect_and_dial(&self, dest: &Address) -> Result<BoxedStream, ProxyError> {
         let rx_bps = self.config.down_mbps.saturating_mul(1_000_000 / 8);
-        let target_bps = self.config.up_mbps.saturating_mul(1_000_000 / 8);
-        let mut transport_config = quinn::TransportConfig::default();
-        transport_config.congestion_controller_factory(Arc::new(BrutalCCFactory::new(target_bps)));
-
-        // Size QUIC flow-control windows to the configured bandwidth × 500 ms RTT.
-        // Without this, BrutalCC can be stalled waiting for STREAM_DATA_BLOCKED
-        // acknowledgement before the CC window fills on high-bandwidth links.
-        let (stream_rx, conn_rx, conn_tx) =
-            crate::quic::bdp_windows(self.config.down_mbps, self.config.up_mbps);
-        transport_config.stream_receive_window(stream_rx);
-        transport_config.receive_window(conn_rx);
-        transport_config.send_window(conn_tx);
-
-        let transport_arc = Arc::new(transport_config);
+        let transport_arc = Arc::new(self.transport_config());
 
         let client_config =
             build_hysteria2_client_config(self.config.skip_cert_verify, transport_arc)
@@ -212,6 +206,40 @@ impl Hysteria2Client {
             _conn: conn,
             _endpoint: endpoint,
         }))
+    }
+
+    fn transport_config(&self) -> quinn::TransportConfig {
+        let mut transport_config = quinn::TransportConfig::default();
+        configure_congestion(&mut transport_config, &self.config.congestion);
+        crate::quic::badnet::record_mode(self.config.congestion.mode);
+        crate::quic::badnet::record_endpoint_shards(self.config.endpoint_shards.max(1));
+
+        // Size QUIC flow-control windows to the configured bandwidth × 500 ms RTT.
+        // Without this, congestion control can be stalled waiting for
+        // STREAM_DATA_BLOCKED acknowledgement before the CC window fills.
+        let (stream_rx, conn_rx, conn_tx) =
+            crate::quic::bdp_windows(self.config.down_mbps, self.config.up_mbps);
+        transport_config.stream_receive_window(stream_rx);
+        transport_config.receive_window(conn_rx);
+        transport_config.send_window(conn_tx);
+        transport_config
+    }
+}
+
+fn configure_congestion(transport_config: &mut quinn::TransportConfig, cfg: &CongestionConfig) {
+    match cfg.mode {
+        CongestionMode::StandardQuic => {}
+        CongestionMode::BrutalCompatible => {
+            transport_config
+                .congestion_controller_factory(Arc::new(BrutalCCFactory::new(cfg.target_bps())));
+        }
+        CongestionMode::NovaCc
+        | CongestionMode::BadNetLowLatency
+        | CongestionMode::BadNetThroughput
+        | CongestionMode::AutoProbe => {
+            transport_config
+                .congestion_controller_factory(Arc::new(BadNetControllerFactory::new(cfg.clone())));
+        }
     }
 }
 
@@ -434,9 +462,10 @@ impl Hysteria2UdpSession {
     /// Returns a UDP session ready for `send` / `recv`.
     pub async fn connect(config: &Hysteria2ClientConfig) -> Result<Self, ProxyError> {
         let rx_bps = config.down_mbps.saturating_mul(1_000_000 / 8);
-        let target_bps = config.up_mbps.saturating_mul(1_000_000 / 8);
         let mut transport_config = quinn::TransportConfig::default();
-        transport_config.congestion_controller_factory(Arc::new(BrutalCCFactory::new(target_bps)));
+        configure_congestion(&mut transport_config, &config.congestion);
+        crate::quic::badnet::record_mode(config.congestion.mode);
+        crate::quic::badnet::record_endpoint_shards(config.endpoint_shards.max(1));
         let (stream_rx, conn_rx, conn_tx) =
             crate::quic::bdp_windows(config.down_mbps, config.up_mbps);
         transport_config.stream_receive_window(stream_rx);

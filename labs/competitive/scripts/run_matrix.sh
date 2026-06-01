@@ -33,6 +33,10 @@ COMPETITIVE_UPSTREAM_URL="${COMPETITIVE_UPSTREAM_URL:-}"
 COMPETITIVE_EXPENSIVE_UPSTREAM_URL="${COMPETITIVE_EXPENSIVE_UPSTREAM_URL:-https://www.microsoft.com}"
 COMPETITIVE_UPSTREAM_KIND="${COMPETITIVE_UPSTREAM_KIND:-auto}"
 COMPETITIVE_REMOTE_UPSTREAM_PORT="${COMPETITIVE_REMOTE_UPSTREAM_PORT:-18080}"
+LOSS_PERCENT="${LOSS_PERCENT:-0}"
+RTT_MS="${RTT_MS:-0}"
+JITTER_MS="${JITTER_MS:-0}"
+BANDWIDTH_LIMIT="${BANDWIDTH_LIMIT:-}"
 
 SERVER_HOST="${COMPETITIVE_SERVER_HOST:-91.107.164.107}"
 CLIENT_HOST="${COMPETITIVE_CLIENT_HOST:-91.107.176.118}"
@@ -59,7 +63,7 @@ emit_row() {
     local reason_json
     reason_json="$(printf '%s' "$reason" | json_escape)"
     cat >> "$OUT" <<EOF
-{"timestamp":"$TS","variant":"$variant","scenario":"$SCENARIO","protocol":"$protocol","transport":"$transport","profile":"$profile","payload_size":"$payload","concurrency":$COMPETITIVE_CONCURRENCY,"duration":$COMPETITIVE_DURATION,"keepalive_on":true,"loss_percent":0,"rtt_ms":0,"jitter_ms":0,"bandwidth_limit":"","requests_per_sec":0,"throughput_mbps":0,"ttfb_p50":0,"ttfb_p90":0,"ttfb_p95":0,"ttfb_p99":0,"ttfb_p999":0,"latency_p50":0,"latency_p90":0,"latency_p95":0,"latency_p99":0,"latency_p999":0,"cpu_user":0,"cpu_system":0,"cpu_percent":0,"rss_mb":0,"allocations_per_sec":0,"syscalls_per_sec":0,"bytes_up":0,"bytes_down":0,"errors":0,"handshake_failures":0,"reconnect_time_ms":0,"route_time_us":0,"dns_time_us":0,"relay_path":"","status":"$status","reason":$reason_json}
+{"timestamp":"$TS","variant":"$variant","scenario":"$SCENARIO","protocol":"$protocol","transport":"$transport","profile":"$profile","payload_size":"$payload","concurrency":$COMPETITIVE_CONCURRENCY,"duration":$COMPETITIVE_DURATION,"keepalive_on":true,"loss_percent":$LOSS_PERCENT,"rtt_ms":$RTT_MS,"jitter_ms":$JITTER_MS,"bandwidth_limit":"$BANDWIDTH_LIMIT","requests_per_sec":0,"throughput_mbps":0,"ttfb_p50":0,"ttfb_p90":0,"ttfb_p95":0,"ttfb_p99":0,"ttfb_p999":0,"latency_p50":0,"latency_p90":0,"latency_p95":0,"latency_p99":0,"latency_p999":0,"cpu_user":0,"cpu_system":0,"cpu_percent":0,"rss_mb":0,"allocations_per_sec":0,"syscalls_per_sec":0,"bytes_up":0,"bytes_down":0,"errors":0,"handshake_failures":0,"reconnect_time_ms":0,"route_time_us":0,"dns_time_us":0,"relay_path":"","status":"$status","reason":$reason_json}
 EOF
 }
 
@@ -89,8 +93,12 @@ row = {
     "timestamp": ts, "variant": variant, "scenario": scenario,
     "protocol": protocol, "transport": transport, "profile": profile,
     "payload_size": payload, "concurrency": int(conc), "duration": int(duration),
-    "keepalive_on": True, "loss_percent": 0, "rtt_ms": 0, "jitter_ms": 0,
-    "bandwidth_limit": "", "requests_per_sec": first(r"Requests/sec:\s+([0-9.]+)"),
+    "keepalive_on": True,
+    "loss_percent": float(os.environ.get("LOSS_PERCENT", "0")),
+    "rtt_ms": float(os.environ.get("RTT_MS", "0")),
+    "jitter_ms": float(os.environ.get("JITTER_MS", "0")),
+    "bandwidth_limit": os.environ.get("BANDWIDTH_LIMIT", ""),
+    "requests_per_sec": first(r"Requests/sec:\s+([0-9.]+)"),
     "throughput_mbps": 0, "ttfb_p50": 0, "ttfb_p90": 0, "ttfb_p95": 0,
     "ttfb_p99": 0, "ttfb_p999": 0, "latency_p50": pct(50),
     "latency_p90": pct(90), "latency_p95": pct(95), "latency_p99": pct(99),
@@ -149,6 +157,16 @@ run_hey() {
 
 run_local() {
     echo "competitive run: $SCENARIO ($MODE) -> $OUT"
+    if [[ "$SCENARIO" =~ ^(hysteria2-|loss-|mobile-) ]]; then
+        for payload in $COMPETITIVE_PAYLOADS; do
+            emit_row "blackwire-current-hysteria2" "skipped" "local Hysteria2 badnet runner requires remote VPS or explicit Hysteria2 client/server orchestration" "hysteria2" "quic" "current" "$payload"
+            emit_row "blackwire-candidate-hysteria2" "skipped" "local Hysteria2 badnet runner requires remote VPS or explicit Hysteria2 client/server orchestration" "hysteria2" "quic" "badnet" "$payload"
+            command -v "$HYSTERIA_BIN" >/dev/null 2>&1 \
+                && emit_row "hysteria" "skipped" "official Hysteria binary present; local badnet netem runner is remote-only for now" "hysteria2" "quic" "baseline" "$payload" \
+                || emit_row "hysteria" "skipped" "HYSTERIA_BIN not found: $HYSTERIA_BIN" "hysteria2" "quic" "baseline" "$payload"
+        done
+        return
+    fi
     if [[ "$SCENARIO" =~ ^(tun|quic|expensive)$ ]]; then
         for payload in $COMPETITIVE_PAYLOADS; do
             emit_row "blackwire-current" "skipped" "scenario scaffolded; protocol-specific runner not implemented in Milestone A" "mixed" "$SCENARIO" "baseline" "$payload"
@@ -240,6 +258,26 @@ run_remote() {
         local host="$1" port="$2"
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "for i in \$(seq 1 40); do (echo >/dev/tcp/127.0.0.1/$port) >/dev/null 2>&1 && exit 0; sleep 0.25; done; exit 1" >/dev/null 2>&1
     }
+    remote_default_iface() {
+        local host="$1"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if(\$i==\"dev\") {print \$(i+1); exit}}'" 2>/dev/null || true
+    }
+    remote_netem_apply() {
+        local host="$1" iface="$2"
+        [ -n "$iface" ] || return 0
+        local args=()
+        [ "${RTT_MS:-0}" != "0" ] && args+=(delay "${RTT_MS}ms")
+        [ "${JITTER_MS:-0}" != "0" ] && args+=("${JITTER_MS}ms")
+        [ "${LOSS_PERCENT:-0}" != "0" ] && args+=(loss "${LOSS_PERCENT}%")
+        if [ "${#args[@]}" -gt 0 ]; then
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "tc qdisc replace dev '$iface' root netem ${args[*]}" >/dev/null 2>&1 || true
+        fi
+    }
+    remote_netem_clear() {
+        local host="$1" iface="$2"
+        [ -n "$iface" ] || return 0
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "tc qdisc del dev '$iface' root >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+    }
     remote_start() {
         local host="$1" dir="$2" name="$3" cmd="$4" port="${5:-}"
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "cd '$dir'; nohup bash -lc '$cmd' > '$name.log' 2>&1 & echo \$! > '$name.pid'"
@@ -267,6 +305,18 @@ EOF
 EOF
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/blackwire-client-candidate.json'" <<EOF
 {"log":{"level":"warn"},"inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1091}],"outbounds":[{"tag":"vless-out","protocol":"vless","settings":{"address":"$SERVER_HOST","port":10090,"users":[{"id":"00000000-0000-4000-8000-000000000001","flow":""}]}}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-hysteria2-server.json'" <<'EOF'
+{"log":{"level":"warn"},"inbounds":[{"tag":"hy2-in","protocol":"hysteria2","listen":"0.0.0.0","port":10300,"settings":{"auth":"blackwire-lab","upMbps":100,"downMbps":100},"streamSettings":{"network":"quic","security":"tls","tlsSettings":{"certificateFile":"server.crt","keyFile":"server.key"}}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/blackwire-hysteria2-client.json'" <<EOF
+{"log":{"level":"warn"},"inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1088}],"outbounds":[{"tag":"hy2-out","protocol":"hysteria2","settings":{"server":"$SERVER_HOST:10300","serverName":"$SERVER_HOST","auth":"blackwire-lab","upMbps":100,"downMbps":100,"skipCertVerify":true,"congestion":{"mode":"brutal-compatible","minAckRate":0.8,"maxQueueDelayMs":80,"pacingGain":1.25,"lossCompensation":true},"endpointShards":1}}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-hysteria2-server-candidate.json'" <<'EOF'
+{"log":{"level":"warn"},"inbounds":[{"tag":"hy2-in","protocol":"hysteria2","listen":"0.0.0.0","port":10310,"settings":{"auth":"blackwire-lab","upMbps":100,"downMbps":100},"streamSettings":{"network":"quic","security":"tls","tlsSettings":{"certificateFile":"server.crt","keyFile":"server.key"}}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/blackwire-hysteria2-client-candidate.json'" <<EOF
+{"log":{"level":"warn"},"inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1098}],"outbounds":[{"tag":"hy2-out","protocol":"hysteria2","settings":{"server":"$SERVER_HOST:10310","serverName":"$SERVER_HOST","auth":"blackwire-lab","upMbps":100,"downMbps":100,"skipCertVerify":true,"congestion":{"mode":"badnet-throughput","minAckRate":0.75,"maxQueueDelayMs":80,"pacingGain":1.35,"lossCompensation":true},"endpointShards":4}}]}
 EOF
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-vision-server.json'" <<'EOF'
 {"profile":"fast","fast":{"strictProduction":false,"pool":"disabled","splice":"adaptive"},"log":{"level":"warn"},"inbounds":[{"tag":"vless-vision-in","protocol":"vless","listen":"0.0.0.0","port":10082,"settings":{"clients":[{"id":"1791A4CD-09E3-4A29-A36D-FEA98300C845","email":"lab","flow":"xtls-rprx-vision"}]},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"127.0.0.1:18443","serverName":"www.microsoft.com","privateKey":"6f4850ca51ced64b4acfd90c73fd60392c0c2f92744933b28b1bc0f7b8683d79","shortIds":["aabbccdd00000001"]}}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
@@ -362,16 +412,19 @@ EOF
     REMOTE_CLIENT_DIR="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" 'mktemp -d /tmp/blackwire-competitive.XXXXXX')"
     local nginx_started=0
     cleanup_remote_dirs() {
+        remote_netem_clear "$SERVER_HOST" "${SERVER_IFACE:-}"
+        remote_netem_clear "$CLIENT_HOST" "${CLIENT_IFACE:-}"
         remote_stop "$SERVER_HOST" "${REMOTE_SERVER_DIR:-}"
         remote_stop "$CLIENT_HOST" "${REMOTE_CLIENT_DIR:-}"
     }
     trap cleanup_remote_dirs EXIT
-    ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "ufw allow ${COMPETITIVE_REMOTE_UPSTREAM_PORT}/tcp >/dev/null; ufw allow 10080/tcp >/dev/null; ufw allow 10082/tcp >/dev/null; ufw allow 10090/tcp >/dev/null; ufw allow 10092/tcp >/dev/null; ufw allow 10180/tcp >/dev/null; ufw allow 10182/tcp >/dev/null; ufw allow 10192/tcp >/dev/null; ufw allow 10200/udp >/dev/null; ufw allow 10202/tcp >/dev/null" >/dev/null 2>&1 || true
+    ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "ufw allow ${COMPETITIVE_REMOTE_UPSTREAM_PORT}/tcp >/dev/null; ufw allow 10080/tcp >/dev/null; ufw allow 10082/tcp >/dev/null; ufw allow 10090/tcp >/dev/null; ufw allow 10092/tcp >/dev/null; ufw allow 10180/tcp >/dev/null; ufw allow 10182/tcp >/dev/null; ufw allow 10192/tcp >/dev/null; ufw allow 10200/udp >/dev/null; ufw allow 10202/tcp >/dev/null; ufw allow 10300/udp >/dev/null; ufw allow 10310/udp >/dev/null" >/dev/null 2>&1 || true
     scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/start_nginx_upstream.sh" "$SSH_USER@$SERVER_HOST:$REMOTE_SERVER_DIR/start_nginx_upstream.sh" >/dev/null
     write_remote_configs "$REMOTE_SERVER_DIR" "$REMOTE_CLIENT_DIR"
     if ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "bash '$REMOTE_SERVER_DIR/start_nginx_upstream.sh' '$REMOTE_SERVER_DIR/nginx' '$COMPETITIVE_REMOTE_UPSTREAM_PORT' 0.0.0.0" >/dev/null 2>&1; then
         nginx_started=1
     fi
+    ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cd '$REMOTE_SERVER_DIR'; if command -v openssl >/dev/null 2>&1; then openssl req -x509 -newkey rsa:2048 -nodes -keyout server.key -out server.crt -subj '/CN=$SERVER_HOST' -days 1 >/dev/null 2>&1; elif command -v hysteria >/dev/null 2>&1; then hysteria cert --host '$SERVER_HOST' --cert server.crt --key server.key --overwrite >/dev/null 2>&1; fi" >/dev/null 2>&1 || true
     if [ -x "$BLACKWIRE_BIN" ]; then
         scp "${SSH_OPTS[@]}" "$BLACKWIRE_BIN" "$SSH_USER@$SERVER_HOST:$REMOTE_SERVER_DIR/blackwire" >/dev/null || true
         scp "${SSH_OPTS[@]}" "$BLACKWIRE_BIN" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/blackwire" >/dev/null || true
@@ -383,6 +436,53 @@ EOF
         scp "${SSH_OPTS[@]}" "$BLACKWIRE_CANDIDATE_BIN" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/blackwire-candidate" >/dev/null || true
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "chmod +x '$REMOTE_SERVER_DIR/blackwire-candidate'" >/dev/null 2>&1 || true
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "chmod +x '$REMOTE_CLIENT_DIR/blackwire-candidate'" >/dev/null 2>&1 || true
+    fi
+
+    if [[ "$SCENARIO" =~ ^hysteria2- ]]; then
+        SERVER_IFACE="$(remote_default_iface "$SERVER_HOST")"
+        CLIENT_IFACE="$(remote_default_iface "$CLIENT_HOST")"
+        remote_netem_apply "$SERVER_HOST" "$SERVER_IFACE"
+        remote_netem_apply "$CLIENT_HOST" "$CLIENT_IFACE"
+        for payload in $COMPETITIVE_PAYLOADS; do
+            emit_row remote-inventory ok "wrote remote-inventory-${TS}.log" inventory ssh badnet "$payload"
+            if [ -x "$BLACKWIRE_BIN" ] && [ "$nginx_started" = "1" ] && has_tool "$client_inv" "hey"; then
+                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-server "./blackwire run -c blackwire-hysteria2-server.json" "" && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-hysteria2-client "./blackwire run -c blackwire-hysteria2-client.json" 1088; then
+                    run_remote_hey blackwire-current-hysteria2 "$payload" 1088 hysteria2 quic current
+                else
+                    emit_row blackwire-current-hysteria2 failed "temporary Blackwire Hysteria2 server/client did not become ready" hysteria2 quic current "$payload"
+                fi
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/blackwire-hysteria2-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/blackwire-hysteria2-server.pid'" >/dev/null 2>&1 || true
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/blackwire-hysteria2-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/blackwire-hysteria2-client.pid'" >/dev/null 2>&1 || true
+            else
+                emit_row blackwire-current-hysteria2 skipped "BLACKWIRE_BIN, hey, or nginx unavailable" hysteria2 quic current "$payload"
+            fi
+
+            if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ] && [ "$nginx_started" = "1" ] && has_tool "$client_inv" "hey"; then
+                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-candidate-server "./blackwire-candidate run -c blackwire-hysteria2-server-candidate.json" "" && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-hysteria2-candidate-client "./blackwire-candidate run -c blackwire-hysteria2-client-candidate.json" 1098; then
+                    run_remote_hey blackwire-candidate-hysteria2 "$payload" 1098 hysteria2 quic badnet
+                else
+                    emit_row blackwire-candidate-hysteria2 failed "temporary Blackwire candidate Hysteria2 server/client did not become ready" hysteria2 quic badnet "$payload"
+                fi
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/blackwire-hysteria2-candidate-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/blackwire-hysteria2-candidate-server.pid'" >/dev/null 2>&1 || true
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/blackwire-hysteria2-candidate-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/blackwire-hysteria2-candidate-client.pid'" >/dev/null 2>&1 || true
+            else
+                emit_row blackwire-candidate-hysteria2 skipped "no distinct BLACKWIRE_CANDIDATE_BIN, hey, or nginx unavailable" hysteria2 quic badnet "$payload"
+            fi
+
+            if has_tool "$server_inv" "hysteria" && has_tool "$client_inv" "hysteria" && [ "$nginx_started" = "1" ] && has_tool "$client_inv" "hey"; then
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cd '$REMOTE_SERVER_DIR'; hysteria cert --host '$SERVER_HOST' --cert server.crt --key server.key --overwrite >/dev/null 2>&1" || true
+                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" hysteria-server "hysteria server -c hysteria-server.yaml" "" && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" hysteria-client "hysteria client -c hysteria-client.yaml" 1084; then
+                    run_remote_hey hysteria "$payload" 1084 hysteria2 quic baseline
+                else
+                    emit_row hysteria failed "hysteria server/client did not become ready" hysteria2 quic baseline "$payload"
+                fi
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/hysteria-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/hysteria-server.pid'" >/dev/null 2>&1 || true
+                ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/hysteria-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/hysteria-client.pid'" >/dev/null 2>&1 || true
+            else
+                emit_row hysteria skipped "hysteria or hey missing on at least one VPS" hysteria2 quic baseline "$payload"
+            fi
+        done
+        return
     fi
 
     if [ "$SCENARIO" = "expensive" ]; then
