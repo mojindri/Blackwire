@@ -974,6 +974,8 @@ mod tests {
             budget: None,
             vision: None,
             quic: None,
+            datagram: None,
+            fec: None,
             log: LogConfig::default(),
             dns: None,
             routing: None,

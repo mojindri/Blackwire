@@ -11,7 +11,9 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 
 use blackwire_app::dispatcher::Dispatcher;
-use blackwire_config::schema::{InboundConfig, OutboundConfig, QuicConfig};
+use blackwire_config::schema::{
+    DatagramConfig, FecConfig, FecMode as ConfigFecMode, InboundConfig, OutboundConfig, QuicConfig,
+};
 use blackwire_transport::{
     CongestionConfig, CongestionMode, Hysteria2ClientConfig, Hysteria2OutboundHandler,
     Hysteria2Server, Hysteria2ServerConfig, QuicSocketConfig,
@@ -25,9 +27,11 @@ use blackwire_transport::{
 pub(crate) fn start_hysteria2_inbound(
     cfg: &InboundConfig,
     quic: Option<&QuicConfig>,
+    datagram: Option<&DatagramConfig>,
+    fec: Option<&FecConfig>,
     dispatcher: Arc<dyn Dispatcher>,
 ) -> Result<tokio::task::JoinHandle<()>> {
-    let server_config = parse_server_config(cfg, quic)?;
+    let server_config = parse_server_config(cfg, quic, datagram, fec)?;
     let tag = cfg.tag.clone();
 
     let handle = tokio::spawn(async move {
@@ -44,8 +48,10 @@ pub(crate) fn start_hysteria2_inbound(
 pub(crate) fn build_hysteria2_outbound(
     cfg: &OutboundConfig,
     quic: Option<&QuicConfig>,
+    datagram: Option<&DatagramConfig>,
+    fec: Option<&FecConfig>,
 ) -> Result<Arc<dyn blackwire_app::features::OutboundHandler>> {
-    let client_config = parse_client_config(cfg, quic)?;
+    let client_config = parse_client_config(cfg, quic, datagram, fec)?;
     Ok(Hysteria2OutboundHandler::new(
         client_config,
         cfg.tag.clone(),
@@ -58,6 +64,8 @@ pub(crate) fn build_hysteria2_outbound(
 fn parse_server_config(
     cfg: &InboundConfig,
     quic: Option<&QuicConfig>,
+    datagram: Option<&DatagramConfig>,
+    fec: Option<&FecConfig>,
 ) -> Result<Hysteria2ServerConfig> {
     let s = &cfg.settings;
 
@@ -101,6 +109,8 @@ fn parse_server_config(
 
     let max_connections = cfg.limits.as_ref().and_then(|l| l.max_connections);
     let socket = parse_socket_config(s, quic);
+    let datagram_enabled = datagram_enabled(s, datagram);
+    let fec = parse_fec_policy(s, fec);
 
     Ok(Hysteria2ServerConfig {
         tag: cfg.tag.clone(),
@@ -113,6 +123,8 @@ fn parse_server_config(
         max_connections,
         congestion,
         socket,
+        datagram_enabled,
+        fec,
     })
 }
 
@@ -120,6 +132,8 @@ fn parse_server_config(
 fn parse_client_config(
     cfg: &OutboundConfig,
     quic: Option<&QuicConfig>,
+    datagram: Option<&DatagramConfig>,
+    fec: Option<&FecConfig>,
 ) -> Result<Hysteria2ClientConfig> {
     let s = &cfg.settings;
 
@@ -141,6 +155,8 @@ fn parse_client_config(
         .map(|v| v.clamp(1, 64) as usize)
         .unwrap_or(1);
     let socket = parse_socket_config(s, quic);
+    let datagram_enabled = datagram_enabled(s, datagram);
+    let fec = parse_fec_policy(s, fec);
 
     // Use the server address host as SNI if not explicitly configured.
     let server_name = s["serverName"]
@@ -158,6 +174,8 @@ fn parse_client_config(
         congestion,
         endpoint_shards,
         socket,
+        datagram_enabled,
+        fec,
     })
 }
 
@@ -213,6 +231,75 @@ fn parse_endpoint_count(value: &serde_json::Value) -> Option<usize> {
         serde_json::Value::String(s) => s.parse().ok(),
         serde_json::Value::Number(n) => n.as_u64().map(|v| v as usize),
         _ => None,
+    }
+}
+
+fn datagram_enabled(settings: &serde_json::Value, datagram: Option<&DatagramConfig>) -> bool {
+    let mut enabled = datagram.cloned().unwrap_or_default().enabled
+        && datagram.cloned().unwrap_or_default().udp_over_datagram;
+    if let Some(overrides) = settings.get("datagram") {
+        if let Some(value) = overrides
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+        {
+            enabled = value;
+        }
+        if let Some(value) = overrides
+            .get("udpOverDatagram")
+            .and_then(serde_json::Value::as_bool)
+        {
+            enabled &= value;
+        }
+    }
+    enabled
+}
+
+fn parse_fec_policy(
+    settings: &serde_json::Value,
+    fec: Option<&FecConfig>,
+) -> blackwire_transport::FecPolicy {
+    let mut cfg = fec.cloned().unwrap_or_default();
+    if let Some(overrides) = settings.get("fec") {
+        if let Some(mode) = overrides.get("mode").and_then(serde_json::Value::as_str) {
+            cfg.mode = parse_config_fec_mode(mode);
+        }
+        if let Some(max) = overrides
+            .get("maxOverheadPercent")
+            .and_then(serde_json::Value::as_u64)
+        {
+            cfg.max_overhead_percent = max.min(u8::MAX as u64) as u8;
+        }
+        if let Some(avoid) = overrides
+            .get("avoidBulkTcp")
+            .and_then(serde_json::Value::as_bool)
+        {
+            cfg.avoid_bulk_tcp = avoid;
+        }
+    }
+    blackwire_transport::FecPolicy {
+        mode: map_fec_mode(cfg.effective_mode()),
+        max_overhead_percent: cfg.max_overhead_percent,
+        group_size: 4,
+    }
+}
+
+fn parse_config_fec_mode(value: &str) -> ConfigFecMode {
+    match value {
+        "xor1-of-n" | "xor1OfN" | "xor" => ConfigFecMode::Xor1OfN,
+        "reed-solomon" | "reedSolomon" => ConfigFecMode::ReedSolomon,
+        "raptor-like" | "raptorLike" => ConfigFecMode::RaptorLike,
+        "auto" => ConfigFecMode::Auto,
+        _ => ConfigFecMode::Off,
+    }
+}
+
+fn map_fec_mode(mode: ConfigFecMode) -> blackwire_transport::FecMode {
+    match mode {
+        ConfigFecMode::Off => blackwire_transport::FecMode::Off,
+        ConfigFecMode::Xor1OfN => blackwire_transport::FecMode::Xor1OfN,
+        ConfigFecMode::ReedSolomon => blackwire_transport::FecMode::ReedSolomon,
+        ConfigFecMode::RaptorLike => blackwire_transport::FecMode::RaptorLike,
+        ConfigFecMode::Auto => blackwire_transport::FecMode::Auto,
     }
 }
 
