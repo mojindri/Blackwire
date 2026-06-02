@@ -47,6 +47,8 @@ pub struct TunConfig {
     pub udp_max_sessions: usize,
     /// UDP idle timeout for NAT/session flows.
     pub udp_idle_timeout: Duration,
+    /// Maximum concurrent packet-level TCP bridge flows.
+    pub tcp_max_sessions: usize,
 }
 
 impl Default for TunConfig {
@@ -70,6 +72,7 @@ impl Default for TunConfig {
             batch: TunBatchConfig::default(),
             udp_max_sessions: 4096,
             udp_idle_timeout: Duration::from_secs(60),
+            tcp_max_sessions: 4096,
         }
     }
 }

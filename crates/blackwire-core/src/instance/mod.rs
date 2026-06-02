@@ -274,6 +274,7 @@ impl Instance {
                 },
                 udp_max_sessions: tun_cfg.sessions.udp_max,
                 udp_idle_timeout: Duration::from_secs(tun_cfg.sessions.udp_idle_timeout_sec),
+                tcp_max_sessions: tun_cfg.sessions.tcp_max,
             };
             let device =
                 create_tun(&tc).context("TUN device creation failed (are we running as root?)")?;
