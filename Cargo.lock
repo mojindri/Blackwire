@@ -398,6 +398,8 @@ dependencies = [
  "blackwire-connmgr",
  "blackwire-core",
  "blackwire-protocol",
+ "blackwire-transport",
+ "bytes",
  "clap",
  "hex",
  "metrics-exporter-prometheus",
