@@ -26,8 +26,11 @@ use blackwire_common::BoxedStream;
 use blackwire_common::{BufferPool, LowerState};
 #[cfg(target_os = "linux")]
 use blackwire_config::schema::VisionDirectCopyPolicy;
+#[cfg(target_os = "linux")]
+use blackwire_config::schema::{FastExperimentalBackendPolicy, FastZerocopyPolicy};
 use blackwire_config::schema::{
-    FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy, VisionConfig,
+    FastLinuxConfig, FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy,
+    VisionConfig,
 };
 #[cfg(target_os = "linux")]
 use bytes::BytesMut;
@@ -76,6 +79,7 @@ pub async fn relay_bidirectional_with_splice_policy(
         outbound,
         splice_policy,
         FastRelayConfig::default(),
+        FastLinuxConfig::default(),
         VisionConfig::default(),
     )
     .await
@@ -87,6 +91,7 @@ pub async fn relay_bidirectional_with_policies(
     outbound: BoxedStream,
     splice_policy: FastSplicePolicy,
     relay_policy: FastRelayConfig,
+    linux_policy: FastLinuxConfig,
     vision_policy: VisionConfig,
 ) -> io::Result<(u64, u64)> {
     #[cfg(target_os = "linux")]
@@ -105,6 +110,7 @@ pub async fn relay_bidirectional_with_policies(
                             outbound,
                             splice_policy,
                             relay_policy,
+                            linux_policy,
                             vision_policy,
                         )
                         .await;
@@ -153,6 +159,17 @@ pub async fn relay_bidirectional_with_policies(
                 "reason" => "policy_disabled"
             )
             .increment(1);
+            if linux_policy.zerocopy != FastZerocopyPolicy::Disabled {
+                return zerocopy_tcp_bidirectional(
+                    inbound,
+                    outbound,
+                    prefix_up,
+                    prefix_down,
+                    linux_policy,
+                )
+                .await;
+            }
+
             let (up, down) =
                 userspace_copy_bidirectional(Box::new(inbound), Box::new(outbound), relay_policy)
                     .await?;
@@ -165,13 +182,24 @@ pub async fn relay_bidirectional_with_policies(
         }
 
         if splice_policy == FastSplicePolicy::Adaptive {
-            return adaptive_copy_then_splice(inbound, outbound, prefix_up, prefix_down).await;
+            return adaptive_copy_then_splice(
+                inbound,
+                outbound,
+                prefix_up,
+                prefix_down,
+                linux_policy,
+            )
+            .await;
         }
 
         metrics::counter!("proxy_relay_splice_selected_total", "policy" => "always").increment(1);
 
-        if let Ok((up, down)) =
-            blackwire_common::splice::splice_bidirectional(&mut inbound, &mut outbound).await
+        if let Ok((up, down)) = blackwire_common::splice::splice_bidirectional_with_backend(
+            &mut inbound,
+            &mut outbound,
+            splice_backend_policy(linux_policy),
+        )
+        .await
         {
             record_relay_path_bytes("splice", up + prefix_up, down + prefix_down);
             return Ok((up + prefix_up, down + prefix_down));
@@ -196,6 +224,7 @@ pub async fn relay_bidirectional_with_policies(
     #[cfg(not(target_os = "linux"))]
     {
         let _ = splice_policy;
+        let _ = linux_policy;
         let _ = vision_policy;
         userspace_copy_bidirectional(inbound, outbound, relay_policy).await
     }
@@ -207,6 +236,7 @@ async fn relay_vision_inbound_with_splice_policy(
     outbound: BoxedStream,
     splice_policy: FastSplicePolicy,
     relay_policy: FastRelayConfig,
+    linux_policy: FastLinuxConfig,
     vision_policy: VisionConfig,
 ) -> io::Result<(u64, u64)> {
     use blackwire_common::{try_into_tcp_stream_with_prefix, PrependedStream};
@@ -264,6 +294,7 @@ async fn relay_vision_inbound_with_splice_policy(
     let mut down_eof = false;
     let mut up_buf = PooledRelayBuffer::new(ADAPTIVE_COPY_BUFFER_BYTES);
     let mut down_buf = PooledRelayBuffer::new(ADAPTIVE_COPY_BUFFER_BYTES);
+    let outbound_zerocopy = enable_zerocopy_for_policy(&outbound, linux_policy, "vision_up")?;
     let started_at = tokio::time::Instant::now();
     let mut up_full_read_streak = 0u8;
     let mut down_full_read_streak = 0u8;
@@ -305,9 +336,10 @@ async fn relay_vision_inbound_with_splice_policy(
                         metrics::counter!("blackwire_vision_cached_bytes_total")
                             .increment(inbound_prefix.len() as u64);
                     }
-                    match blackwire_common::splice::splice_bidirectional(
+                    match blackwire_common::splice::splice_bidirectional_with_backend(
                         &mut inbound_tcp,
                         &mut outbound,
+                        splice_backend_policy(linux_policy),
                     )
                     .await
                     {
@@ -433,8 +465,15 @@ async fn relay_vision_inbound_with_splice_policy(
                     up_eof = true;
                     outbound.shutdown().await?;
                 } else {
-                    outbound.write_all(&up_buf.as_slice()[..n]).await?;
-                    up += n as u64;
+                    let report = write_tcp_with_zerocopy(
+                        &mut outbound,
+                        &up_buf.as_slice()[..n],
+                        outbound_zerocopy,
+                        linux_policy,
+                        "vision_up",
+                    )
+                    .await?;
+                    up += report.bytes as u64;
                     up_full_read_streak =
                         update_full_read_streak(up_full_read_streak, n, up_buf.len());
                 }
@@ -486,6 +525,166 @@ fn record_vision_phase(state: LowerState) {
 }
 
 #[cfg(target_os = "linux")]
+async fn zerocopy_tcp_bidirectional(
+    mut inbound: tokio::net::TcpStream,
+    mut outbound: tokio::net::TcpStream,
+    prefix_up: u64,
+    prefix_down: u64,
+    linux_policy: FastLinuxConfig,
+) -> io::Result<(u64, u64)> {
+    let inbound_zerocopy = enable_zerocopy_for_policy(&inbound, linux_policy, "down")?;
+    let outbound_zerocopy = enable_zerocopy_for_policy(&outbound, linux_policy, "up")?;
+    let mut up = 0u64;
+    let mut down = 0u64;
+    let mut up_eof = false;
+    let mut down_eof = false;
+    let mut up_buf = PooledRelayBuffer::new(ADAPTIVE_COPY_BUFFER_BYTES);
+    let mut down_buf = PooledRelayBuffer::new(ADAPTIVE_COPY_BUFFER_BYTES);
+
+    loop {
+        if up_eof && down_eof {
+            record_relay_path_bytes("zerocopy_copy", up + prefix_up, down + prefix_down);
+            return Ok((up + prefix_up, down + prefix_down));
+        }
+
+        tokio::select! {
+            biased;
+            read = outbound.read(down_buf.as_mut_slice()), if !down_eof => {
+                let n = read?;
+                if n == 0 {
+                    down_eof = true;
+                    inbound.shutdown().await?;
+                } else {
+                    let report = write_tcp_with_zerocopy(
+                        &mut inbound,
+                        &down_buf.as_slice()[..n],
+                        inbound_zerocopy,
+                        linux_policy,
+                        "down",
+                    )
+                    .await?;
+                    down += report.bytes as u64;
+                }
+            }
+            read = inbound.read(up_buf.as_mut_slice()), if !up_eof => {
+                let n = read?;
+                if n == 0 {
+                    up_eof = true;
+                    outbound.shutdown().await?;
+                } else {
+                    let report = write_tcp_with_zerocopy(
+                        &mut outbound,
+                        &up_buf.as_slice()[..n],
+                        outbound_zerocopy,
+                        linux_policy,
+                        "up",
+                    )
+                    .await?;
+                    up += report.bytes as u64;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn enable_zerocopy_for_policy(
+    stream: &tokio::net::TcpStream,
+    linux_policy: FastLinuxConfig,
+    direction: &'static str,
+) -> io::Result<bool> {
+    if linux_policy.zerocopy == FastZerocopyPolicy::Disabled {
+        return Ok(false);
+    }
+
+    match blackwire_common::zerocopy::enable_tcp_zerocopy(stream) {
+        Ok(true) => {
+            metrics::counter!(
+                "proxy_relay_zerocopy_socket_enabled_total",
+                "direction" => direction
+            )
+            .increment(1);
+            Ok(true)
+        }
+        Ok(false) => {
+            metrics::counter!(
+                "proxy_relay_zerocopy_fallback_total",
+                "direction" => direction,
+                "reason" => "unsupported"
+            )
+            .increment(1);
+            Ok(false)
+        }
+        Err(err) => {
+            metrics::counter!(
+                "proxy_relay_zerocopy_fallback_total",
+                "direction" => direction,
+                "reason" => "setsockopt_error"
+            )
+            .increment(1);
+            Err(err)
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn write_tcp_with_zerocopy(
+    stream: &mut tokio::net::TcpStream,
+    buf: &[u8],
+    zerocopy_enabled: bool,
+    linux_policy: FastLinuxConfig,
+    direction: &'static str,
+) -> io::Result<blackwire_common::zerocopy::ZeroCopyWriteReport> {
+    let min_bytes = match linux_policy.zerocopy {
+        FastZerocopyPolicy::Disabled => usize::MAX,
+        FastZerocopyPolicy::Bulk => {
+            blackwire_common::zerocopy::normalized_min_bytes(linux_policy.zerocopy_min_bytes)
+        }
+        FastZerocopyPolicy::Always => 1,
+    };
+    let report = blackwire_common::zerocopy::write_all_maybe_zerocopy(
+        stream,
+        buf,
+        zerocopy_enabled,
+        min_bytes,
+    )
+    .await?;
+
+    if report.used_zerocopy {
+        metrics::counter!(
+            "proxy_relay_zerocopy_bytes_total",
+            "direction" => direction
+        )
+        .increment(report.bytes as u64);
+    }
+    if report.fallback_used {
+        metrics::counter!(
+            "proxy_relay_zerocopy_fallback_total",
+            "direction" => direction,
+            "reason" => "send_fallback"
+        )
+        .increment(1);
+    }
+
+    Ok(report)
+}
+
+#[cfg(target_os = "linux")]
+fn splice_backend_policy(
+    linux_policy: FastLinuxConfig,
+) -> blackwire_common::splice::SpliceBackendPolicy {
+    match linux_policy.io_uring {
+        FastExperimentalBackendPolicy::Disabled => {
+            blackwire_common::splice::SpliceBackendPolicy::EpollOnly
+        }
+        FastExperimentalBackendPolicy::Auto => blackwire_common::splice::SpliceBackendPolicy::Auto,
+        FastExperimentalBackendPolicy::Require => {
+            blackwire_common::splice::SpliceBackendPolicy::RequireIoUring
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn record_vision_decision(
     path: &'static str,
     profile: &'static str,
@@ -508,6 +707,7 @@ async fn adaptive_copy_then_splice(
     mut outbound: tokio::net::TcpStream,
     prefix_up: u64,
     prefix_down: u64,
+    linux_policy: FastLinuxConfig,
 ) -> io::Result<(u64, u64)> {
     let mut up = 0u64;
     let mut down = 0u64;
@@ -532,7 +732,12 @@ async fn adaptive_copy_then_splice(
         {
             metrics::counter!("proxy_relay_splice_selected_total", "policy" => "adaptive")
                 .increment(1);
-            match blackwire_common::splice::splice_bidirectional(&mut inbound, &mut outbound).await
+            match blackwire_common::splice::splice_bidirectional_with_backend(
+                &mut inbound,
+                &mut outbound,
+                splice_backend_policy(linux_policy),
+            )
+            .await
             {
                 Ok((more_up, more_down)) => {
                     up += more_up;

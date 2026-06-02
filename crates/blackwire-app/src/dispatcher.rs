@@ -63,7 +63,8 @@ use blackwire_common::{
     tcp_connect, Address, BoxedStream, PooledStream, PrependedStream, ProxyError,
 };
 use blackwire_config::schema::{
-    FastConfig, FastRelayConfig, FastSplicePolicy, ProfileMode, SniffingConfig, VisionConfig,
+    FastConfig, FastLinuxConfig, FastRelayConfig, FastSplicePolicy, ProfileMode, SniffingConfig,
+    VisionConfig,
 };
 use smallvec::SmallVec;
 use tokio::net::TcpStream;
@@ -140,6 +141,7 @@ pub struct DefaultDispatcher {
     profile: ProfileMode,
     splice_policy: FastSplicePolicy,
     relay_policy: FastRelayConfig,
+    linux_policy: FastLinuxConfig,
     vision_policy: VisionConfig,
 }
 
@@ -156,6 +158,14 @@ fn relay_policy_for_profile(profile: ProfileMode, fast: Option<&FastConfig>) -> 
         fast.map(|f| f.relay).unwrap_or_default()
     } else {
         FastRelayConfig::default()
+    }
+}
+
+fn linux_policy_for_profile(profile: ProfileMode, fast: Option<&FastConfig>) -> FastLinuxConfig {
+    if profile == ProfileMode::Fast {
+        fast.map(|f| f.linux).unwrap_or_default()
+    } else {
+        FastLinuxConfig::default()
     }
 }
 
@@ -177,6 +187,7 @@ impl DefaultDispatcher {
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
+            linux_policy: linux_policy_for_profile(ProfileMode::default(), None),
             vision_policy: VisionConfig::default(),
         })
     }
@@ -195,6 +206,7 @@ impl DefaultDispatcher {
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
+            linux_policy: linux_policy_for_profile(ProfileMode::default(), None),
             vision_policy: VisionConfig::default(),
         })
     }
@@ -216,6 +228,7 @@ impl DefaultDispatcher {
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
+            linux_policy: linux_policy_for_profile(ProfileMode::default(), None),
             vision_policy: VisionConfig::default(),
         })
     }
@@ -235,6 +248,7 @@ impl DefaultDispatcher {
             profile: ProfileMode::default(),
             splice_policy: splice_policy_for_profile(ProfileMode::default(), None),
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
+            linux_policy: linux_policy_for_profile(ProfileMode::default(), None),
             vision_policy: VisionConfig::default(),
         })
     }
@@ -264,10 +278,12 @@ impl DefaultDispatcher {
     ) -> Arc<Self> {
         let splice_policy = splice_policy_for_profile(profile, fast);
         let relay_policy = relay_policy_for_profile(profile, fast);
+        let linux_policy = linux_policy_for_profile(profile, fast);
         let vision_policy = vision.copied().unwrap_or_default();
         if self.profile == profile
             && self.splice_policy == splice_policy
             && self.relay_policy == relay_policy
+            && self.linux_policy == linux_policy
             && self.vision_policy == vision_policy
         {
             return self;
@@ -279,6 +295,7 @@ impl DefaultDispatcher {
                 inner.profile = profile;
                 inner.splice_policy = splice_policy;
                 inner.relay_policy = relay_policy;
+                inner.linux_policy = linux_policy;
                 inner.vision_policy = vision_policy;
                 Arc::new(inner)
             }
@@ -290,6 +307,7 @@ impl DefaultDispatcher {
                 profile,
                 splice_policy,
                 relay_policy,
+                linux_policy,
                 vision_policy,
             }),
         }
@@ -407,6 +425,7 @@ impl Dispatcher for DefaultDispatcher {
             outbound_stream,
             self.splice_policy,
             self.relay_policy,
+            self.linux_policy,
             self.vision_policy,
         );
         tokio::pin!(relay);
@@ -892,8 +911,8 @@ mod tests {
     use crate::router::{Route, RoutingContext};
     use blackwire_common::{PooledStream, PrependedStream};
     use blackwire_config::schema::{
-        FastPoolPolicy, FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy,
-        VisionConfig, VisionDirectCopyPolicy,
+        FastLinuxConfig, FastPoolPolicy, FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy,
+        FastSplicePolicy, VisionConfig, VisionDirectCopyPolicy,
     };
     use tokio::io::AsyncReadExt;
     use tokio::net::{TcpListener, TcpStream};
@@ -925,6 +944,7 @@ mod tests {
             splice: FastSplicePolicy::Always,
             pool: FastPoolPolicy::Disabled,
             relay: FastRelayConfig::default(),
+            linux: FastLinuxConfig::default(),
             strict_production: false,
         };
         assert_eq!(
@@ -944,6 +964,7 @@ mod tests {
                 initial_buffer: 4096,
                 max_buffer: 65536,
             },
+            linux: FastLinuxConfig::default(),
             strict_production: false,
         };
         assert_eq!(
