@@ -14,6 +14,7 @@ pub use auth::AuthError;
 pub use proto::{AuthRequest, AuthResponse, TcpRequest, TcpResponse};
 pub use udp::Destination as UdpDestination;
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -28,7 +29,7 @@ use blackwire_app::features::OutboundHandler;
 use blackwire_common::{Address, BoxedStream, ProxyError, ReunionStream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{Mutex, Semaphore};
-use tokio::time::timeout;
+use tokio::time::{timeout, Instant, Sleep};
 use tracing::{info, warn};
 
 /// Maximum concurrent QUIC connections on a single Hysteria2 server.
@@ -39,6 +40,8 @@ const MAX_HYSTERIA2_CONNECTIONS: usize = 1024;
 const MAX_HYSTERIA2_CLIENT_SHARDS: usize = 16;
 const CLIENT_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIENT_OPEN_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
+const LOW_LATENCY_PACER_BURST: u64 = 64 * 1024;
+const THROUGHPUT_PACER_BURST: u64 = 256 * 1024;
 
 use crate::quic::{
     build_hysteria2_server_endpoint_with_congestion_and_socket, ensure_crypto_provider,
@@ -46,7 +49,7 @@ use crate::quic::{
     CongestionMode, QuicSocketConfig,
 };
 
-pub use udp::{DatagramLane, FecMode, FecPolicy};
+pub use udp::{DatagramLane, DatagramPolicy, DatagramPriorityMode, FecMode, FecPolicy};
 
 /// Configuration for a Hysteria2 inbound server.
 #[derive(Debug, Clone)]
@@ -75,6 +78,8 @@ pub struct Hysteria2ServerConfig {
     pub datagram_enabled: bool,
     /// Forward-error-correction policy for UDP datagrams.
     pub fec: FecPolicy,
+    /// UDP datagram scheduling policy and DNS fast-retry settings.
+    pub datagram_policy: DatagramPolicy,
 }
 
 /// Configuration for a Hysteria2 outbound client.
@@ -102,6 +107,8 @@ pub struct Hysteria2ClientConfig {
     pub datagram_enabled: bool,
     /// Forward-error-correction policy for UDP datagrams.
     pub fec: FecPolicy,
+    /// UDP datagram scheduling policy and DNS fast-retry settings.
+    pub datagram_policy: DatagramPolicy,
 }
 
 /// A Hysteria2 proxy server.
@@ -357,6 +364,11 @@ impl Hysteria2Client {
 
         Ok(Box::new(Hysteria2Stream {
             inner: ReunionStream::new(recv, send),
+            pacer: pacer_for_config(
+                &self.config.congestion,
+                CongestionDirection::ClientUpload,
+                "client-upload",
+            ),
             _session: session,
         }))
     }
@@ -417,6 +429,11 @@ async fn client_h3_auth(
         .map_err(|e| ProxyError::Transport(format!("h3 client: {e}")))?;
 
     let driver_task = tokio::spawn(async move {
+        // Hysteria2 uses HTTP/3 only for the auth request. After auth, TCP
+        // proxy streams use raw QUIC stream type 0x401 and UDP uses QUIC
+        // DATAGRAM. Polling the h3 driver to idle after auth can close the
+        // underlying QUIC connection, so retain the h3 connection object
+        // without driving it once the auth exchange has completed.
         let _driver = driver;
         std::future::pending::<()>().await;
     });
@@ -469,6 +486,7 @@ async fn client_h3_auth(
 
 struct Hysteria2Stream {
     inner: ReunionStream<quinn::RecvStream, quinn::SendStream>,
+    pacer: Option<Pacer>,
     _session: Arc<Hysteria2ClientSession>,
 }
 
@@ -488,7 +506,14 @@ impl AsyncWrite for Hysteria2Stream {
         cx: &mut TaskContext<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write(cx, buf)
+        let allowed = match self.pacer.as_mut() {
+            Some(pacer) => match pacer.poll_allow(cx, buf.len()) {
+                Poll::Ready(allowed) => allowed,
+                Poll::Pending => return Poll::Pending,
+            },
+            None => buf.len(),
+        };
+        Pin::new(&mut self.inner).poll_write(cx, &buf[..allowed])
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
@@ -500,6 +525,170 @@ impl AsyncWrite for Hysteria2Stream {
         cx: &mut TaskContext<'_>,
     ) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+pub(crate) struct PacedStream<S> {
+    inner: S,
+    pacer: Option<Pacer>,
+}
+
+impl<S> PacedStream<S> {
+    pub(crate) fn new(inner: S, pacer: Option<Pacer>) -> Self {
+        Self { inner, pacer }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for PacedStream<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for PacedStream<S> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let allowed = match self.pacer.as_mut() {
+            Some(pacer) => match pacer.poll_allow(cx, buf.len()) {
+                Poll::Ready(allowed) => allowed,
+                Poll::Pending => return Poll::Pending,
+            },
+            None => buf.len(),
+        };
+        Pin::new(&mut self.inner).poll_write(cx, &buf[..allowed])
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+pub(crate) fn server_download_pacer(cfg: &CongestionConfig) -> Option<Pacer> {
+    pacer_for_config(cfg, CongestionDirection::ServerDownload, "server-download")
+}
+
+fn pacer_for_config(
+    cfg: &CongestionConfig,
+    direction: CongestionDirection,
+    lane: &'static str,
+) -> Option<Pacer> {
+    if matches!(cfg.mode, CongestionMode::StandardQuic) {
+        return None;
+    }
+
+    let target = cfg.target_bps_for(direction);
+    if target == 0 {
+        return None;
+    }
+
+    let ack_rate = cfg.min_ack_rate.clamp(0.05, 1.0);
+    let rate_bps = ((target as f64) / ack_rate).ceil() as u64;
+    let burst_window = match cfg.mode {
+        CongestionMode::BadNetLowLatency => Duration::from_millis(10),
+        _ => Duration::from_millis(25),
+    };
+    let burst_cap = match cfg.mode {
+        CongestionMode::BadNetLowLatency => LOW_LATENCY_PACER_BURST,
+        _ => THROUGHPUT_PACER_BURST,
+    };
+    let burst_bytes = ((rate_bps as f64) * burst_window.as_secs_f64())
+        .ceil()
+        .max(1.0) as u64;
+    Some(Pacer::new(rate_bps, burst_bytes.min(burst_cap), lane))
+}
+
+pub(crate) struct Pacer {
+    rate_bps: u64,
+    burst_bytes: u64,
+    tokens: f64,
+    last: Instant,
+    sleep: Option<Pin<Box<Sleep>>>,
+    lane: &'static str,
+}
+
+impl Pacer {
+    fn new(rate_bps: u64, burst_bytes: u64, lane: &'static str) -> Self {
+        metrics::gauge!("blackwire_hysteria2_pacer_rate_bps", "lane" => lane).set(rate_bps as f64);
+        metrics::gauge!("blackwire_hysteria2_pacer_burst_bytes", "lane" => lane)
+            .set(burst_bytes as f64);
+        Self {
+            rate_bps,
+            burst_bytes,
+            tokens: burst_bytes as f64,
+            last: Instant::now(),
+            sleep: None,
+            lane,
+        }
+    }
+
+    fn poll_allow(&mut self, cx: &mut TaskContext<'_>, requested: usize) -> Poll<usize> {
+        if requested == 0 {
+            return Poll::Ready(0);
+        }
+
+        self.refill();
+        if self.tokens >= 1.0 {
+            return Poll::Ready(self.consume(requested));
+        }
+
+        if self.sleep.is_none() {
+            let deficit = 1.0 - self.tokens;
+            let wait = Duration::from_secs_f64((deficit / self.rate_bps as f64).max(0.000_001));
+            metrics::counter!("blackwire_hysteria2_pacer_sleep_total", "lane" => self.lane)
+                .increment(1);
+            metrics::counter!("blackwire_hysteria2_pacer_sleep_ms_total", "lane" => self.lane)
+                .increment(wait.as_millis().max(1) as u64);
+            self.sleep = Some(Box::pin(tokio::time::sleep(wait)));
+        }
+
+        match self
+            .sleep
+            .as_mut()
+            .expect("sleep initialized")
+            .as_mut()
+            .poll(cx)
+        {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(()) => {
+                self.sleep = None;
+                self.refill();
+                if self.tokens < 1.0 {
+                    self.tokens = 1.0;
+                }
+                Poll::Ready(self.consume(requested))
+            }
+        }
+    }
+
+    fn refill(&mut self) {
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(self.last).as_secs_f64();
+        self.last = now;
+        self.tokens = (self.tokens + elapsed * self.rate_bps as f64).min(self.burst_bytes as f64);
+    }
+
+    fn consume(&mut self, requested: usize) -> usize {
+        let allowed = requested.min(self.tokens.floor().max(1.0) as usize);
+        if allowed < requested {
+            metrics::counter!("blackwire_hysteria2_pacer_limited_writes_total", "lane" => self.lane)
+                .increment(1);
+        }
+        self.tokens -= allowed as f64;
+        allowed
     }
 }
 
@@ -612,6 +801,69 @@ impl rustls::client::danger::ServerCertVerifier for SkipVerifier {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn congestion(mode: CongestionMode) -> CongestionConfig {
+        CongestionConfig {
+            mode,
+            up_mbps: 10,
+            down_mbps: 100,
+            min_ack_rate: 0.8,
+            ..CongestionConfig::default()
+        }
+    }
+
+    #[test]
+    fn standard_quic_keeps_pacing_disabled_for_control_rows() {
+        let cfg = congestion(CongestionMode::StandardQuic);
+        assert!(pacer_for_config(&cfg, CongestionDirection::ClientUpload, "test").is_none());
+    }
+
+    #[test]
+    fn badnet_low_latency_uses_small_burst_cap() {
+        let mut cfg = congestion(CongestionMode::BadNetLowLatency);
+        cfg.up_mbps = 100;
+        let pacer = pacer_for_config(&cfg, CongestionDirection::ClientUpload, "test")
+            .expect("badnet low latency enables pacing");
+
+        assert_eq!(pacer.burst_bytes, LOW_LATENCY_PACER_BURST);
+        assert_eq!(pacer.rate_bps, 15_625_000);
+    }
+
+    #[test]
+    fn badnet_throughput_uses_larger_burst_cap() {
+        let cfg = congestion(CongestionMode::BadNetThroughput);
+        let pacer = pacer_for_config(&cfg, CongestionDirection::ServerDownload, "test")
+            .expect("badnet throughput enables pacing");
+
+        assert_eq!(pacer.burst_bytes, THROUGHPUT_PACER_BURST);
+        assert_eq!(pacer.rate_bps, 15_625_000);
+    }
+
+    #[test]
+    fn server_download_pacer_uses_downlink_rate() {
+        let cfg = congestion(CongestionMode::NovaCc);
+        let pacer = server_download_pacer(&cfg).expect("nova enables pacing");
+
+        assert_eq!(pacer.rate_bps, 15_625_000);
+    }
+
+    #[test]
+    fn badnet_low_latency_window_profile_is_smaller_than_throughput() {
+        let low = congestion(CongestionMode::BadNetLowLatency).window_profile();
+        let throughput = congestion(CongestionMode::BadNetThroughput).window_profile();
+
+        assert_eq!(low.bdp_rtt, Duration::from_millis(150));
+        assert_eq!(low.min_window_bytes, 1024 * 1024);
+        assert_eq!(low.max_window_bytes, 32 * 1024 * 1024);
+        assert_eq!(low.conn_window_multiplier, 2);
+        assert!(low.max_window_bytes < throughput.max_window_bytes);
+        assert!(low.bdp_rtt < throughput.bdp_rtt);
+    }
+}
+
 /// A client-side Hysteria2 UDP session.
 ///
 /// Wraps the QUIC connection for sending and receiving UDP datagrams.
@@ -622,6 +874,7 @@ pub struct Hysteria2UdpSession {
     session_id: u32,
     packet_id: std::sync::atomic::AtomicU16,
     datagram_enabled: bool,
+    datagram_policy: DatagramPolicy,
     fec_encoder: StdMutex<udp::FecEncoder>,
     fec_decoder: StdMutex<udp::FecDecoder>,
 }
@@ -673,6 +926,7 @@ impl Hysteria2UdpSession {
             session_id: rand::random(),
             packet_id: std::sync::atomic::AtomicU16::new(0),
             datagram_enabled: config.datagram_enabled,
+            datagram_policy: config.datagram_policy,
             fec_encoder: StdMutex::new(udp::FecEncoder::new(config.fec)),
             fec_decoder: StdMutex::new(udp::FecDecoder::new(config.fec)),
         })
@@ -697,13 +951,17 @@ impl Hysteria2UdpSession {
             dest,
             data,
         };
+        let lane = self.datagram_policy.lane_for(&dg.dest, dg.data.len());
         let encoded = udp::encode_udp_datagram(&dg);
-        let parity = self
-            .fec_encoder
-            .lock()
-            .map_err(|_| ProxyError::Transport("FEC encoder lock poisoned".into()))?
-            .protect(&dg, &encoded);
-        udp::record_datagram_packet(DatagramLane::Unreliable.class(), "tx");
+        let parity = if matches!(lane, DatagramLane::Priority) {
+            self.fec_encoder
+                .lock()
+                .map_err(|_| ProxyError::Transport("FEC encoder lock poisoned".into()))?
+                .protect(&dg, &encoded)
+        } else {
+            None
+        };
+        udp::record_datagram_packet(lane.class(), "tx");
         crate::quic::record_endpoint_io("client", "tx", encoded.len());
         self.conn
             .send_datagram(encoded)
@@ -729,9 +987,12 @@ impl Hysteria2UdpSession {
             .lock()
             .map_err(|_| ProxyError::Transport("FEC decoder lock poisoned".into()))?
             .decode(raw);
-        decoded
-            .into_iter()
-            .next()
-            .ok_or_else(|| ProxyError::Transport("received only FEC metadata".into()))
+        if let Some(dg) = decoded.into_iter().next() {
+            let lane = self.datagram_policy.lane_for(&dg.dest, dg.data.len());
+            udp::record_datagram_packet(lane.class(), "rx");
+            Ok(dg)
+        } else {
+            Err(ProxyError::Transport("received only FEC metadata".into()))
+        }
     }
 }

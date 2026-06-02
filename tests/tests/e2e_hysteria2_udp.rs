@@ -109,6 +109,7 @@ fn client_config(hysteria_port: u16) -> blackwire_transport::Hysteria2ClientConf
         socket: blackwire_transport::QuicSocketConfig::default(),
         datagram_enabled: true,
         fec: blackwire_transport::FecPolicy::default(),
+        datagram_policy: blackwire_transport::DatagramPolicy::default(),
     }
 }
 

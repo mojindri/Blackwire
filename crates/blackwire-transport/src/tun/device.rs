@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use tracing::info;
@@ -15,6 +17,8 @@ pub type TunDevice = tun::AsyncDevice;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 #[derive(Debug)]
 pub struct TunDevice;
+
+use super::batch::TunBatchConfig;
 
 /// Settings used when creating the OS TUN interface.
 #[derive(Debug, Clone)]
@@ -37,6 +41,12 @@ pub struct TunConfig {
     pub dns_port: u16,
     /// Windows-only path to `wintun.dll`.
     pub wintun_file: Option<String>,
+    /// Packet batching controls for packets written back to TUN.
+    pub batch: TunBatchConfig,
+    /// Maximum concurrent UDP NAT/session flows.
+    pub udp_max_sessions: usize,
+    /// UDP idle timeout for NAT/session flows.
+    pub udp_idle_timeout: Duration,
 }
 
 impl Default for TunConfig {
@@ -57,6 +67,9 @@ impl Default for TunConfig {
             redirect_port: 7890,
             dns_port: 5300,
             wintun_file: None,
+            batch: TunBatchConfig::default(),
+            udp_max_sessions: 4096,
+            udp_idle_timeout: Duration::from_secs(60),
         }
     }
 }
