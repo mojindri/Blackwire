@@ -607,6 +607,8 @@ PY
     scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/udp_echo.py" "$SSH_USER@$SERVER_HOST:$REMOTE_SERVER_DIR/udp_echo.py" >/dev/null
     scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/socks5_udp_bench.py" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/socks5_udp_bench.py" >/dev/null
     scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/direct_udp_bench.py" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/direct_udp_bench.py" >/dev/null
+    scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/tun_remote_once.sh" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/tun_remote_once.sh" >/dev/null
+    ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "chmod +x '$REMOTE_CLIENT_DIR/tun_remote_once.sh'" >/dev/null 2>&1 || true
     write_remote_configs "$REMOTE_SERVER_DIR" "$REMOTE_CLIENT_DIR"
     if ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "bash '$REMOTE_SERVER_DIR/start_nginx_upstream.sh' '$REMOTE_SERVER_DIR/nginx' '$COMPETITIVE_REMOTE_UPSTREAM_PORT' 0.0.0.0" >/dev/null 2>&1; then
         nginx_started=1
@@ -636,13 +638,14 @@ PY
         if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$nginx_started" = "1" ]; then
             remote_tun_cleanup_client "$control_peer"
             remote_tun_safety_add "$control_peer"
-            if remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-tun "timeout 120s ./blackwire-candidate run -c blackwire-tun.json; ip link del bw-tun-i 2>/dev/null || true; ip route del default dev bw-tun-i table 100 2>/dev/null || true; while ip rule del not fwmark 0x1234 lookup 100 2>/dev/null; do :; done; iptables -t nat -D OUTPUT -p udp --dport 53 -j REDIRECT --to-port 15300 2>/dev/null || true; ip route flush cache 2>/dev/null || true" ""; then
-                sleep 2
-                run_remote_tun_udp_bench blackwire-candidate-tun
-                run_remote_tun_tcp_bench blackwire-candidate-tun blackwire-tun
-                remote_capture_proc_stats "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-tun blackwire-candidate-tun client
+            if raw="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cd '$REMOTE_CLIENT_DIR'; VARIANT=blackwire-candidate-tun RUNTIME_NAME=blackwire-tun RUNTIME_CMD='./blackwire-candidate run -c blackwire-tun.json' SERVER_HOST='$SERVER_HOST' TS='$TS' SCENARIO='$SCENARIO' TUN_UDP_ECHO_PORT='$TUN_UDP_ECHO_PORT' TUN_UDP_COUNT='$TUN_UDP_COUNT' TUN_UDP_PAYLOAD_BYTES='$TUN_UDP_PAYLOAD_BYTES' TUN_UDP_TIMEOUT_MS='$TUN_UDP_TIMEOUT_MS' COMPETITIVE_REMOTE_UPSTREAM_PORT='$COMPETITIVE_REMOTE_UPSTREAM_PORT' TUN_TCP_PAYLOAD='$TUN_TCP_PAYLOAD' COMPETITIVE_CONCURRENCY='$COMPETITIVE_CONCURRENCY' COMPETITIVE_DURATION='$COMPETITIVE_DURATION' LOSS_PERCENT='$LOSS_PERCENT' RTT_MS='$RTT_MS' JITTER_MS='$JITTER_MS' ./tun_remote_once.sh" 2>&1)"; then
+                printf '%s\n' "$raw" > "$REPORT_DIR/blackwire-candidate-tun-once-${TS}.raw.log"
+                printf '%s\n' "$raw" >> "$OUT"
+                scp "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/blackwire-candidate-tun-"'*.log' "$REPORT_DIR/" >/dev/null 2>&1 || true
+                scp "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/blackwire-tun.log" "$REPORT_DIR/blackwire-tun-${TS}.log" >/dev/null 2>&1 || true
             else
-                emit_row blackwire-candidate-tun failed "Blackwire TUN runtime did not start" direct tun tun "$TUN_TCP_PAYLOAD"
+                printf '%s\n' "$raw" > "$REPORT_DIR/blackwire-candidate-tun-once-${TS}.raw.log"
+                emit_row blackwire-candidate-tun failed "$raw" direct tun tun "$TUN_TCP_PAYLOAD"
             fi
             remote_tun_cleanup_client "$control_peer"
         else
@@ -652,11 +655,11 @@ PY
         if has_tool "$client_inv" "sing-box" && [ "$nginx_started" = "1" ]; then
             remote_tun_cleanup_client "$control_peer"
             remote_tun_safety_add "$control_peer"
-            if ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cd '$REMOTE_CLIENT_DIR'; sing-box check -c singbox-tun.json" > "$REPORT_DIR/singbox-tun-check-${TS}.log" 2>&1 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" singbox-tun "timeout 120s sing-box run -c singbox-tun.json; ip link del sb-tun-i 2>/dev/null || true; ip route flush cache 2>/dev/null || true" ""; then
-                sleep 2
-                run_remote_tun_udp_bench sing-box-tun
-                run_remote_tun_tcp_bench sing-box-tun singbox-tun
-                remote_capture_proc_stats "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" singbox-tun sing-box-tun client
+            if ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cd '$REMOTE_CLIENT_DIR'; sing-box check -c singbox-tun.json" > "$REPORT_DIR/singbox-tun-check-${TS}.log" 2>&1 && raw="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cd '$REMOTE_CLIENT_DIR'; VARIANT=sing-box-tun RUNTIME_NAME=singbox-tun RUNTIME_CMD='sing-box run -c singbox-tun.json' SERVER_HOST='$SERVER_HOST' TS='$TS' SCENARIO='$SCENARIO' TUN_UDP_ECHO_PORT='$TUN_UDP_ECHO_PORT' TUN_UDP_COUNT='$TUN_UDP_COUNT' TUN_UDP_PAYLOAD_BYTES='$TUN_UDP_PAYLOAD_BYTES' TUN_UDP_TIMEOUT_MS='$TUN_UDP_TIMEOUT_MS' COMPETITIVE_REMOTE_UPSTREAM_PORT='$COMPETITIVE_REMOTE_UPSTREAM_PORT' TUN_TCP_PAYLOAD='$TUN_TCP_PAYLOAD' COMPETITIVE_CONCURRENCY='$COMPETITIVE_CONCURRENCY' COMPETITIVE_DURATION='$COMPETITIVE_DURATION' LOSS_PERCENT='$LOSS_PERCENT' RTT_MS='$RTT_MS' JITTER_MS='$JITTER_MS' ./tun_remote_once.sh" 2>&1)"; then
+                printf '%s\n' "$raw" > "$REPORT_DIR/sing-box-tun-once-${TS}.raw.log"
+                printf '%s\n' "$raw" >> "$OUT"
+                scp "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/sing-box-tun-"'*.log' "$REPORT_DIR/" >/dev/null 2>&1 || true
+                scp "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/singbox-tun.log" "$REPORT_DIR/singbox-tun-${TS}.log" >/dev/null 2>&1 || true
             else
                 emit_row sing-box-tun failed "sing-box TUN runtime did not start or config check failed; see singbox-tun-check-${TS}.log" direct tun tun "$TUN_TCP_PAYLOAD"
             fi

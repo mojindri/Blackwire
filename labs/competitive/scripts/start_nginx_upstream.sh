@@ -29,8 +29,16 @@ PY
 chmod 644 "$WORK_DIR/html"/*
 
 stream_module=""
+stream_block=""
 if [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
   stream_module="load_module /usr/lib/nginx/modules/ngx_stream_module.so;"
+  stream_block="
+stream {
+  server {
+    listen $HOST:$STREAM_PORT;
+    proxy_pass $STREAM_UPSTREAM;
+  }
+}"
 fi
 
 cat > "$WORK_DIR/nginx.conf" <<EOF
@@ -38,13 +46,8 @@ $stream_module
 daemon off;
 pid $WORK_DIR/nginx.pid;
 error_log $WORK_DIR/logs/error.log warn;
-events { worker_connections 4096; }
-stream {
-  server {
-    listen $HOST:$STREAM_PORT;
-    proxy_pass $STREAM_UPSTREAM;
-  }
-}
+events { worker_connections 512; }
+$stream_block
 http {
   access_log off;
   sendfile on;
@@ -62,8 +65,12 @@ EOF
 
 nginx -c "$WORK_DIR/nginx.conf" -p "$WORK_DIR" > "$WORK_DIR/stdout.log" 2>&1 &
 pid=$!
+CHECK_HOST="$HOST"
+if [ "$CHECK_HOST" = "0.0.0.0" ] || [ "$CHECK_HOST" = "::" ]; then
+    CHECK_HOST="127.0.0.1"
+fi
 for _ in $(seq 1 40); do
-    if curl -fsS "http://127.0.0.1:$PORT/1k" >/dev/null 2>&1; then
+    if curl -fsS "http://$CHECK_HOST:$PORT/1k" >/dev/null 2>&1; then
         echo "$pid" > "$WORK_DIR/nginx.pid"
         exit 0
     fi
