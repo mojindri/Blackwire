@@ -320,8 +320,13 @@ impl Instance {
                 }
                 Protocol::Vless => build_vless_outbound(out_cfg)
                     .with_context(|| format!("building VLESS outbound '{}'", out_cfg.tag))?,
-                Protocol::Hysteria2 => build_hysteria2_outbound(out_cfg, config.quic.as_ref())
-                    .with_context(|| format!("building Hysteria2 outbound '{}'", out_cfg.tag))?,
+                Protocol::Hysteria2 => build_hysteria2_outbound(
+                    out_cfg,
+                    config.quic.as_ref(),
+                    config.datagram.as_ref(),
+                    config.fec.as_ref(),
+                )
+                .with_context(|| format!("building Hysteria2 outbound '{}'", out_cfg.tag))?,
                 Protocol::Trojan => build_trojan_outbound(out_cfg)
                     .with_context(|| format!("building Trojan outbound '{}'", out_cfg.tag))?,
                 Protocol::Vmess => build_vmess_outbound(out_cfg)
@@ -454,8 +459,14 @@ impl Instance {
             if in_cfg.protocol == Protocol::Hysteria2 {
                 info!(tag = %in_cfg.tag, addr = %addr, "starting Hysteria2 inbound listener");
                 let dispatcher_for_h2 = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
-                let task = start_hysteria2_inbound(in_cfg, config.quic.as_ref(), dispatcher_for_h2)
-                    .with_context(|| format!("starting Hysteria2 inbound '{}'", in_cfg.tag))?;
+                let task = start_hysteria2_inbound(
+                    in_cfg,
+                    config.quic.as_ref(),
+                    config.datagram.as_ref(),
+                    config.fec.as_ref(),
+                    dispatcher_for_h2,
+                )
+                .with_context(|| format!("starting Hysteria2 inbound '{}'", in_cfg.tag))?;
                 tasks.push(task);
                 continue;
             }
