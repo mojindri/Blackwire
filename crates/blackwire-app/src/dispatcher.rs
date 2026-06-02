@@ -48,7 +48,7 @@ macro_rules! relay_log {
 /// Slow DNS during routing would stall the entire connection dispatch, so we cap
 /// the budget well below the connection handshake timeout.
 const ROUTING_DNS_TIMEOUT: Duration = Duration::from_secs(3);
-const OUTBOUND_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const OUTBOUND_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum time Fast Profile waits for client bytes before validating a pooled socket.
 ///
 /// The first-use guard needs client bytes so it can retry with a fresh dial if
