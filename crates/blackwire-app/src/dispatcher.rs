@@ -63,8 +63,8 @@ use blackwire_common::{
     tcp_connect, Address, BoxedStream, PooledStream, PrependedStream, ProxyError,
 };
 use blackwire_config::schema::{
-    FastConfig, FastLinuxConfig, FastRelayConfig, FastSplicePolicy, ProfileMode, SniffingConfig,
-    VisionConfig,
+    FastConfig, FastLinuxConfig, FastRelayConfig, FastSplicePolicy, FirstPacketBoostConfig,
+    ProfileMode, SniffingConfig, VisionConfig,
 };
 use smallvec::SmallVec;
 use tokio::net::TcpStream;
@@ -73,9 +73,10 @@ use crate::context::Context;
 use crate::dns::DnsModule;
 use crate::features::OutboundHandler;
 use crate::metrics::{
-    record_connection_accepted, record_connection_closed, record_dns, record_dns_prefetch,
-    record_early_payload, record_early_payload_written, record_first_byte_latency,
-    record_handshake_kick, record_outbound_connect, record_relay_error, record_route,
+    record_connection_accepted, record_connection_closed, record_connection_plan_selected,
+    record_dns, record_dns_prefetch, record_early_payload, record_early_payload_written,
+    record_first_byte_latency, record_first_packet_boost, record_handshake_kick,
+    record_outbound_connect, record_relay_error, record_route,
 };
 use crate::router::{normalize_routing_domain_strategy, Router, RoutingDomainStrategy};
 use crate::runtime_stats;
@@ -143,6 +144,8 @@ pub struct DefaultDispatcher {
     relay_policy: FastRelayConfig,
     linux_policy: FastLinuxConfig,
     vision_policy: VisionConfig,
+    first_packet_boost: FirstPacketBoostConfig,
+    connection_plans: Arc<HashMap<String, Arc<str>>>,
 }
 
 fn splice_policy_for_profile(profile: ProfileMode, fast: Option<&FastConfig>) -> FastSplicePolicy {
@@ -189,6 +192,8 @@ impl DefaultDispatcher {
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
             linux_policy: linux_policy_for_profile(ProfileMode::default(), None),
             vision_policy: VisionConfig::default(),
+            first_packet_boost: FirstPacketBoostConfig::default(),
+            connection_plans: Arc::new(HashMap::new()),
         })
     }
 
@@ -208,6 +213,8 @@ impl DefaultDispatcher {
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
             linux_policy: linux_policy_for_profile(ProfileMode::default(), None),
             vision_policy: VisionConfig::default(),
+            first_packet_boost: FirstPacketBoostConfig::default(),
+            connection_plans: Arc::new(HashMap::new()),
         })
     }
 
@@ -230,6 +237,8 @@ impl DefaultDispatcher {
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
             linux_policy: linux_policy_for_profile(ProfileMode::default(), None),
             vision_policy: VisionConfig::default(),
+            first_packet_boost: FirstPacketBoostConfig::default(),
+            connection_plans: Arc::new(HashMap::new()),
         })
     }
 
@@ -250,6 +259,8 @@ impl DefaultDispatcher {
             relay_policy: relay_policy_for_profile(ProfileMode::default(), None),
             linux_policy: linux_policy_for_profile(ProfileMode::default(), None),
             vision_policy: VisionConfig::default(),
+            first_packet_boost: FirstPacketBoostConfig::default(),
+            connection_plans: Arc::new(HashMap::new()),
         })
     }
 
@@ -309,6 +320,63 @@ impl DefaultDispatcher {
                 relay_policy,
                 linux_policy,
                 vision_policy,
+                first_packet_boost: arc.first_packet_boost,
+                connection_plans: Arc::clone(&arc.connection_plans),
+            }),
+        }
+    }
+
+    /// Set first-packet acceleration policy.
+    pub fn with_first_packet_boost(
+        self: Arc<Self>,
+        first_packet_boost: FirstPacketBoostConfig,
+    ) -> Arc<Self> {
+        if self.first_packet_boost == first_packet_boost {
+            return self;
+        }
+        match Arc::try_unwrap(self) {
+            Ok(mut inner) => {
+                inner.first_packet_boost = first_packet_boost;
+                Arc::new(inner)
+            }
+            Err(arc) => Arc::new(Self {
+                router: Arc::clone(&arc.router),
+                outbounds: arc.outbounds.clone(),
+                dns: arc.dns.clone(),
+                sniffing: Arc::clone(&arc.sniffing),
+                profile: arc.profile,
+                splice_policy: arc.splice_policy,
+                relay_policy: arc.relay_policy,
+                linux_policy: arc.linux_policy,
+                vision_policy: arc.vision_policy,
+                first_packet_boost,
+                connection_plans: Arc::clone(&arc.connection_plans),
+            }),
+        }
+    }
+
+    /// Set compiled connection-plan labels indexed by inbound tag.
+    pub fn with_connection_plans(
+        self: Arc<Self>,
+        plans: Arc<HashMap<String, Arc<str>>>,
+    ) -> Arc<Self> {
+        match Arc::try_unwrap(self) {
+            Ok(mut inner) => {
+                inner.connection_plans = plans;
+                Arc::new(inner)
+            }
+            Err(arc) => Arc::new(Self {
+                router: Arc::clone(&arc.router),
+                outbounds: arc.outbounds.clone(),
+                dns: arc.dns.clone(),
+                sniffing: Arc::clone(&arc.sniffing),
+                profile: arc.profile,
+                splice_policy: arc.splice_policy,
+                relay_policy: arc.relay_policy,
+                linux_policy: arc.linux_policy,
+                vision_policy: arc.vision_policy,
+                first_packet_boost: arc.first_packet_boost,
+                connection_plans: plans,
             }),
         }
     }
@@ -353,6 +421,9 @@ impl Dispatcher for DefaultDispatcher {
         let early_payload_len = early_payload.as_ref().map_or(0, Vec::len);
         if early_payload_len > 0 {
             record_early_payload(&ctx.inbound_tag, early_payload_len as u64);
+            if self.first_packet_boost.enabled && self.first_packet_boost.send_early_payload {
+                record_first_packet_boost("early_payload");
+            }
         }
         let outbound = match self
             .connect_outbound_result(&ctx, &dest, early_payload.clone())
@@ -637,6 +708,12 @@ impl DefaultDispatcher {
         record_route(&ctx.inbound_tag, t_route.elapsed());
 
         relay_log!(self.profile, outbound = %route.outbound_tag, "route selected");
+        let plan_label = self
+            .connection_plans
+            .get(&ctx.inbound_tag)
+            .map(|label| label.as_ref())
+            .unwrap_or("dynamic");
+        record_connection_plan_selected(plan_label);
         let route_tag = Arc::clone(&route.outbound_tag);
 
         let outbound = self
@@ -714,10 +791,15 @@ impl DefaultDispatcher {
         // DNS we avoid serialising the two when the domain rule misses and IP rules
         // need to be consulted. A tokio task is spawned only when DNS is configured
         // AND the router has IP-based rules (otherwise DNS would be pointless).
-        let prefetch = if strategy == RoutingDomainStrategy::IpIfNonMatch
+        let dns_prefetch_allowed = !self.first_packet_boost.enabled || self.first_packet_boost.dns;
+        let prefetch = if dns_prefetch_allowed
+            && strategy == RoutingDomainStrategy::IpIfNonMatch
             && matches!(dest, Address::Domain(..))
             && self.router.has_ip_rules()
         {
+            if self.first_packet_boost.enabled {
+                record_first_packet_boost("dns_prefetch");
+            }
             self.prefetch_dns(dest)
         } else {
             None
