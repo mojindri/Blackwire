@@ -26,7 +26,7 @@ use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::OutboundHandler;
 use blackwire_common::{Address, BoxedStream, ProxyError, ReunionStream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 use tokio::time::timeout;
 use tracing::{info, warn};
 
@@ -154,18 +154,46 @@ impl Hysteria2Server {
 /// A Hysteria2 proxy client.
 pub struct Hysteria2Client {
     config: Hysteria2ClientConfig,
+    session: Mutex<Option<Arc<Hysteria2ClientSession>>>,
+}
+
+struct Hysteria2ClientSession {
+    conn: quinn::Connection,
+    _endpoint: quinn::Endpoint,
 }
 
 impl Hysteria2Client {
     /// Build a Hysteria2 client from static config.
     pub fn new(config: Hysteria2ClientConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            session: Mutex::new(None),
+        }
     }
 
     /// Connect to the server, authenticate, and open one proxied TCP stream.
     ///
     /// The returned stream is ready to carry bytes for `dest`.
     pub async fn connect_and_dial(&self, dest: &Address) -> Result<BoxedStream, ProxyError> {
+        let session = self.session().await?;
+        match self.open_proxy_stream(Arc::clone(&session), dest).await {
+            Ok(stream) => Ok(stream),
+            Err(first) => {
+                self.clear_session(&session).await;
+                let session = self.session().await?;
+                self.open_proxy_stream(session, dest).await.or(Err(first))
+            }
+        }
+    }
+
+    async fn session(&self) -> Result<Arc<Hysteria2ClientSession>, ProxyError> {
+        let mut guard = self.session.lock().await;
+        if let Some(session) = guard.as_ref() {
+            if session.conn.close_reason().is_none() {
+                return Ok(Arc::clone(session));
+            }
+        }
+
         let rx_bps = self.config.down_mbps.saturating_mul(1_000_000 / 8);
         let transport_arc = Arc::new(self.transport_config());
 
@@ -193,7 +221,30 @@ impl Hysteria2Client {
         .await
         .map_err(|_| ProxyError::Timeout)??;
 
-        let (mut send, mut recv) = timeout(CLIENT_OPEN_STREAM_TIMEOUT, conn.open_bi())
+        let session = Arc::new(Hysteria2ClientSession {
+            conn,
+            _endpoint: endpoint,
+        });
+        *guard = Some(Arc::clone(&session));
+        Ok(session)
+    }
+
+    async fn clear_session(&self, session: &Arc<Hysteria2ClientSession>) {
+        let mut guard = self.session.lock().await;
+        if guard
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, session))
+        {
+            *guard = None;
+        }
+    }
+
+    async fn open_proxy_stream(
+        &self,
+        session: Arc<Hysteria2ClientSession>,
+        dest: &Address,
+    ) -> Result<BoxedStream, ProxyError> {
+        let (mut send, mut recv) = timeout(CLIENT_OPEN_STREAM_TIMEOUT, session.conn.open_bi())
             .await
             .map_err(|_| ProxyError::Timeout)?
             .map_err(|e| ProxyError::Transport(format!("open proxy stream: {e}")))?;
@@ -203,8 +254,7 @@ impl Hysteria2Client {
 
         Ok(Box::new(Hysteria2Stream {
             inner: ReunionStream::new(recv, send),
-            _conn: conn,
-            _endpoint: endpoint,
+            _session: session,
         }))
     }
 
@@ -308,8 +358,7 @@ async fn client_h3_auth(
 
 struct Hysteria2Stream {
     inner: ReunionStream<quinn::RecvStream, quinn::SendStream>,
-    _conn: quinn::Connection,
-    _endpoint: quinn::Endpoint,
+    _session: Arc<Hysteria2ClientSession>,
 }
 
 impl AsyncRead for Hysteria2Stream {
@@ -440,7 +489,12 @@ impl rustls::client::danger::ServerCertVerifier for SkipVerifier {
             rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
             rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
             rustls::SignatureScheme::ED25519,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
             rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
         ]
     }
 }
