@@ -176,16 +176,13 @@ impl DatagramLane {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum DatagramPriorityMode {
+    #[default]
     Standard,
     H2Plus,
 }
 
-impl Default for DatagramPriorityMode {
-    fn default() -> Self {
-        Self::Standard
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct DatagramPolicy {
