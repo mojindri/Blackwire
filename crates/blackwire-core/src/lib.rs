@@ -14,6 +14,7 @@
 //! 3. The instance runs until `instance.stop()` is called or a fatal error occurs
 //! 4. On config reload → `ReloadState::apply()` swaps router + VLESS users
 
+pub mod data_plane;
 mod http;
 mod hysteria2;
 pub mod instance;
@@ -25,6 +26,11 @@ mod trojan;
 mod vmess;
 mod ws_tls;
 
+pub use data_plane::{
+    compile_data_plane, ConnectionPlan, DataPlane, DataPlaneStore, InboundKind, LimitPlan,
+    ListenerPlan, OutboundKind, OutboundPlan, RelayPlan, RoutePlan, SniffPlan, TransportKind,
+    UserTable,
+};
 pub use instance::Instance;
 /// Hot-reload handles: swap routing rules and VLESS users without restarting listeners.
 pub use reload::{inbound_listener_changes, requires_instance_restart, ReloadState};

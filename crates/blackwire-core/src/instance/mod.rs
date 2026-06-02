@@ -58,6 +58,7 @@ use blackwire_transport::{
 };
 use tokio::net::UdpSocket as TokioUdpSocket;
 
+use crate::data_plane::{compile_data_plane, DataPlaneStore};
 use crate::http::build_http_inbound;
 use crate::hysteria2::{
     build_hysteria2_outbound, socket_config_from_quic, start_hysteria2_inbound,
@@ -213,6 +214,8 @@ pub struct Instance {
     outbound_interface: Option<String>,
     /// Hot-reload state shared with the config watcher.
     pub reload: ReloadState,
+    /// Immutable hot-path data-plane snapshot.
+    pub data_plane: DataPlaneStore,
 }
 
 impl fmt::Debug for Instance {
@@ -243,6 +246,7 @@ impl Instance {
         let mut shutdown_tx: Option<tokio::sync::watch::Sender<bool>> = None;
         let mut outbound_bypass_mark = None;
         let mut outbound_interface = None;
+        let data_plane = compile_data_plane(config.as_ref());
 
         // ── Optional: TUN transparent-proxy runtime ──────────────────────────
         if let Some(tun_cfg) = &config.tun {
@@ -444,6 +448,11 @@ impl Instance {
             Arc::clone(&outbound_tags),
         );
         let vless_registries = Arc::clone(&reload.vless_registries);
+        let connection_plan_labels: HashMap<String, Arc<str>> = data_plane
+            .connection_plans
+            .iter()
+            .map(|plan| (plan.inbound_tag.to_string(), Arc::clone(&plan.label)))
+            .collect();
 
         // ── Step 4: Create dispatcher ────────────────────────────────────────
         let dispatcher = match &dns {
@@ -455,11 +464,9 @@ impl Instance {
             ),
             None => DefaultDispatcher::new_with_sniffing(router, outbound_map, sniffing_shared),
         }
-        .with_profile_fast_and_vision(
-            config.profile,
-            config.fast.as_ref(),
-            config.vision.as_ref(),
-        );
+        .with_profile_fast_and_vision(config.profile, config.fast.as_ref(), config.vision.as_ref())
+        .with_first_packet_boost(config.first_packet_boost.unwrap_or_default())
+        .with_connection_plans(Arc::new(connection_plan_labels));
 
         if config.profile == ProfileMode::Fast {
             let fast = config.fast.as_ref().cloned().unwrap_or_default();
@@ -834,6 +841,7 @@ impl Instance {
             outbound_bypass_mark,
             outbound_interface,
             reload,
+            data_plane: DataPlaneStore::new(data_plane),
         })
     }
 
