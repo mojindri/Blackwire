@@ -281,16 +281,13 @@ pub struct DatagramConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum DatagramPolicy {
+    #[default]
     Standard,
     H2Plus,
 }
 
-impl Default for DatagramPolicy {
-    fn default() -> Self {
-        Self::Standard
-    }
-}
 
 impl DatagramConfig {
     fn default_max_queue_delay_ms() -> u64 {
