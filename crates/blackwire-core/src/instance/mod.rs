@@ -271,6 +271,7 @@ impl Instance {
                     enabled: tun_cfg.batch.enabled,
                     max_packets: tun_cfg.batch.max_packets,
                     max_delay: Duration::from_micros(tun_cfg.batch.max_delay_us),
+                    latency_flush_bytes: tun_cfg.batch.latency_flush_bytes,
                 },
                 udp_max_sessions: tun_cfg.sessions.udp_max,
                 udp_idle_timeout: Duration::from_secs(tun_cfg.sessions.udp_idle_timeout_sec),
