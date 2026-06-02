@@ -973,6 +973,7 @@ mod tests {
             fast: None,
             budget: None,
             vision: None,
+            quic: None,
             log: LogConfig::default(),
             dns: None,
             routing: None,

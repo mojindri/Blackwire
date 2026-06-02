@@ -66,7 +66,7 @@ pub use mkcp::{
 pub use quic::{
     build_client_endpoint, build_client_endpoint_with_alpn, build_server_endpoint,
     build_server_endpoint_with_alpn, dev_self_signed, dev_self_signed_for_names,
-    ensure_crypto_provider,
+    ensure_crypto_provider, QuicSocketConfig,
 };
 pub use quic::{
     BadNetControllerFactory, BrutalCC, BrutalCCFactory, CongestionConfig, CongestionDirection,
@@ -95,7 +95,10 @@ pub use tun::{
     build_tcp_packet, build_tcp_rst, create_tun, current_tun_support, ensure_tun_runtime_supported,
     IpPacket, TransportProtocol, TunConfig, TunPlatformSupport, TunRuntime, UdpNatTable,
 };
-pub use v2rayquic::{accepted_quic_stream, quic_connect, quic_server_endpoint, QuicStream};
+pub use v2rayquic::{
+    accepted_quic_stream, quic_connect, quic_connect_with_socket_config, quic_server_endpoint,
+    quic_server_endpoint_with_socket_config, QuicStream,
+};
 pub use ws::{ws_accept, ws_connect, WsConnectConfig};
 
 // Re-export quinn's congestion module so downstream crates can implement
