@@ -26,7 +26,10 @@ pub mod zerocopy;
 // Re-export the most commonly used items so callers can write
 // `use blackwire_common::Address` instead of `use blackwire_common::address::Address`.
 pub use address::{Address, Network};
-pub use buf::BufferPool;
+pub use buf::{
+    BufferPool, BULK_RELAY_BUFFER_SIZE, CONTROL_BUFFER_SIZE, DEFAULT_RELAY_BUFFER_SIZE,
+    QUIC_BULK_BUFFER_SIZE,
+};
 pub use connect::{
     clear_outbound_bypass_mark, clear_outbound_interface_index, outbound_bypass_mark,
     outbound_interface_index, protect_udp_socket, protect_udp_socket_with_bypass_mark,
