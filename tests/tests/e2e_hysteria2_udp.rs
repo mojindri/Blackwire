@@ -123,6 +123,7 @@ async fn hysteria2_udp_relay_roundtrip() {
             ..blackwire_transport::CongestionConfig::default()
         },
         endpoint_shards: 1,
+        socket: blackwire_transport::QuicSocketConfig::default(),
     };
 
     let session = timeout(

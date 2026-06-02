@@ -11,10 +11,10 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 
 use blackwire_app::dispatcher::Dispatcher;
-use blackwire_config::schema::{InboundConfig, OutboundConfig};
+use blackwire_config::schema::{InboundConfig, OutboundConfig, QuicConfig};
 use blackwire_transport::{
     CongestionConfig, CongestionMode, Hysteria2ClientConfig, Hysteria2OutboundHandler,
-    Hysteria2Server, Hysteria2ServerConfig,
+    Hysteria2Server, Hysteria2ServerConfig, QuicSocketConfig,
 };
 
 /// Build and launch a Hysteria2 server inbound, returning a join handle for
@@ -24,9 +24,10 @@ use blackwire_transport::{
 /// the normal `TcpServerTransport` path. Instead, it spawns its own task here.
 pub(crate) fn start_hysteria2_inbound(
     cfg: &InboundConfig,
+    quic: Option<&QuicConfig>,
     dispatcher: Arc<dyn Dispatcher>,
 ) -> Result<tokio::task::JoinHandle<()>> {
-    let server_config = parse_server_config(cfg)?;
+    let server_config = parse_server_config(cfg, quic)?;
     let tag = cfg.tag.clone();
 
     let handle = tokio::spawn(async move {
@@ -42,8 +43,9 @@ pub(crate) fn start_hysteria2_inbound(
 /// Build a `Hysteria2OutboundHandler` from the outbound config.
 pub(crate) fn build_hysteria2_outbound(
     cfg: &OutboundConfig,
+    quic: Option<&QuicConfig>,
 ) -> Result<Arc<dyn blackwire_app::features::OutboundHandler>> {
-    let client_config = parse_client_config(cfg)?;
+    let client_config = parse_client_config(cfg, quic)?;
     Ok(Hysteria2OutboundHandler::new(
         client_config,
         cfg.tag.clone(),
@@ -53,7 +55,10 @@ pub(crate) fn build_hysteria2_outbound(
 // ── Config parsing ────────────────────────────────────────────────────────────
 
 /// Parse Hysteria2 server settings from inbound config.
-fn parse_server_config(cfg: &InboundConfig) -> Result<Hysteria2ServerConfig> {
+fn parse_server_config(
+    cfg: &InboundConfig,
+    quic: Option<&QuicConfig>,
+) -> Result<Hysteria2ServerConfig> {
     let s = &cfg.settings;
 
     let password = s["auth"].as_str().unwrap_or_default().to_string();
@@ -95,6 +100,7 @@ fn parse_server_config(cfg: &InboundConfig) -> Result<Hysteria2ServerConfig> {
         })?;
 
     let max_connections = cfg.limits.as_ref().and_then(|l| l.max_connections);
+    let socket = parse_socket_config(s, quic);
 
     Ok(Hysteria2ServerConfig {
         tag: cfg.tag.clone(),
@@ -106,11 +112,15 @@ fn parse_server_config(cfg: &InboundConfig) -> Result<Hysteria2ServerConfig> {
         key_pem,
         max_connections,
         congestion,
+        socket,
     })
 }
 
 /// Parse Hysteria2 client settings from outbound config.
-fn parse_client_config(cfg: &OutboundConfig) -> Result<Hysteria2ClientConfig> {
+fn parse_client_config(
+    cfg: &OutboundConfig,
+    quic: Option<&QuicConfig>,
+) -> Result<Hysteria2ClientConfig> {
     let s = &cfg.settings;
 
     let server_str = s["server"]
@@ -130,6 +140,7 @@ fn parse_client_config(cfg: &OutboundConfig) -> Result<Hysteria2ClientConfig> {
         .as_u64()
         .map(|v| v.clamp(1, 64) as usize)
         .unwrap_or(1);
+    let socket = parse_socket_config(s, quic);
 
     // Use the server address host as SNI if not explicitly configured.
     let server_name = s["serverName"]
@@ -146,7 +157,63 @@ fn parse_client_config(cfg: &OutboundConfig) -> Result<Hysteria2ClientConfig> {
         skip_cert_verify,
         congestion,
         endpoint_shards,
+        socket,
     })
+}
+
+pub(crate) fn socket_config_from_quic(quic: Option<&QuicConfig>) -> QuicSocketConfig {
+    let quic = quic.cloned().unwrap_or_default();
+    QuicSocketConfig {
+        reuse_port: quic.reuse_port,
+        endpoint_count: quic.endpoint_count(),
+        recv_buffer_bytes: quic.recv_buffer_bytes,
+        send_buffer_bytes: quic.send_buffer_bytes,
+    }
+}
+
+fn parse_socket_config(
+    settings: &serde_json::Value,
+    quic: Option<&QuicConfig>,
+) -> QuicSocketConfig {
+    let mut socket = socket_config_from_quic(quic);
+    let Some(overrides) = settings.get("quic") else {
+        return socket;
+    };
+    if let Some(reuse_port) = overrides
+        .get("reusePort")
+        .and_then(serde_json::Value::as_bool)
+    {
+        socket.reuse_port = reuse_port;
+    }
+    if let Some(endpoints) = overrides.get("endpoints").and_then(parse_endpoint_count) {
+        socket.endpoint_count = endpoints.clamp(1, 64);
+    }
+    if let Some(bytes) = overrides
+        .get("recvBufferBytes")
+        .and_then(serde_json::Value::as_u64)
+    {
+        socket.recv_buffer_bytes = bytes as usize;
+    }
+    if let Some(bytes) = overrides
+        .get("sendBufferBytes")
+        .and_then(serde_json::Value::as_u64)
+    {
+        socket.send_buffer_bytes = bytes as usize;
+    }
+    socket
+}
+
+fn parse_endpoint_count(value: &serde_json::Value) -> Option<usize> {
+    match value {
+        serde_json::Value::String(s) if s.eq_ignore_ascii_case("cpu") => Some(
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1),
+        ),
+        serde_json::Value::String(s) => s.parse().ok(),
+        serde_json::Value::Number(n) => n.as_u64().map(|v| v as usize),
+        _ => None,
+    }
 }
 
 fn parse_congestion_config(
