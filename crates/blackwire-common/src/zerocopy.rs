@@ -73,17 +73,18 @@ mod imp {
             stream.writable().await?;
             let chunk = &buf[written..];
             match stream.try_io(Interest::WRITABLE, || send_zerocopy(fd, chunk)) {
-                Ok(Ok(0)) => {
+                Ok(0) => {
                     return Err(io::Error::new(
                         io::ErrorKind::WriteZero,
                         "MSG_ZEROCOPY send returned zero",
                     ));
                 }
-                Ok(Ok(n)) => {
+                Ok(n) => {
                     written += n;
                     drain_zerocopy_error_queue(fd);
                 }
-                Ok(Err(err)) if is_unsupported(&err) || err.kind() == io::ErrorKind::WouldBlock => {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(err) if is_unsupported(&err) => {
                     fallback_used = true;
                     stream.write_all(&buf[written..]).await?;
                     return Ok(ZeroCopyWriteReport {
@@ -92,7 +93,7 @@ mod imp {
                         fallback_used,
                     });
                 }
-                Ok(Err(err)) if is_pressure_error(&err) => {
+                Err(err) if is_pressure_error(&err) => {
                     fallback_used = true;
                     stream.write_all(&buf[written..]).await?;
                     return Ok(ZeroCopyWriteReport {
@@ -101,8 +102,7 @@ mod imp {
                         fallback_used,
                     });
                 }
-                Ok(Err(err)) => return Err(err),
-                Err(_would_block) => continue,
+                Err(err) => return Err(err),
             }
         }
 
