@@ -25,10 +25,12 @@
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
+
+use crate::innerflow::{InnerFlowKey, PacketClass};
 
 /// Destination inside a UDP datagram using Hysteria2's compact binary address layout.
 #[derive(Debug, Clone, PartialEq)]
@@ -153,6 +155,7 @@ const FEC_MARKER_DOMAIN: &str = "__blackwire_fec_v1__";
 const FEC_MAGIC: &[u8; 6] = b"BWFEC1";
 const FEC_GROUP_SIZE: u8 = 4;
 const FEC_GROUP_TTL: Duration = Duration::from_millis(750);
+const FEC_RECOVERY_DEADLINE: Duration = Duration::from_millis(100);
 const FEC_SEEN_LIMIT: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,6 +176,89 @@ impl DatagramLane {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatagramPriorityMode {
+    Standard,
+    H2Plus,
+}
+
+impl Default for DatagramPriorityMode {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DatagramPolicy {
+    pub mode: DatagramPriorityMode,
+    pub max_queue_delay_ms: u64,
+    pub fast_dns_retry: bool,
+    pub fast_dns_retry_delay_ms: u64,
+}
+
+impl Default for DatagramPolicy {
+    fn default() -> Self {
+        Self {
+            mode: DatagramPriorityMode::Standard,
+            max_queue_delay_ms: 25,
+            fast_dns_retry: false,
+            fast_dns_retry_delay_ms: 20,
+        }
+    }
+}
+
+impl DatagramPolicy {
+    pub fn lane_for(&self, dest: &Destination, payload_len: usize) -> DatagramLane {
+        match self.mode {
+            DatagramPriorityMode::Standard => DatagramLane::Unreliable,
+            DatagramPriorityMode::H2Plus => {
+                if is_dns_like(dest) || payload_len <= 140 {
+                    DatagramLane::Priority
+                } else {
+                    DatagramLane::Unreliable
+                }
+            }
+        }
+    }
+
+    pub fn should_fast_retry_dns(&self, dest: &Destination) -> bool {
+        self.mode == DatagramPriorityMode::H2Plus && self.fast_dns_retry && is_dns_like(dest)
+    }
+}
+
+pub fn packet_class_for(dest: &Destination, payload_len: usize) -> PacketClass {
+    if is_dns_like(dest) {
+        PacketClass::Dns
+    } else if payload_len <= 140 {
+        PacketClass::Interactive
+    } else {
+        PacketClass::Bulk
+    }
+}
+
+pub fn flow_key_for(dest: &Destination, session_id: u32) -> InnerFlowKey {
+    let (dst_ip, dst_port) = match dest {
+        Destination::V4(ip, port) => (Some(IpAddr::V4(*ip)), *port),
+        Destination::V6(ip, port) => (Some(IpAddr::V6(*ip)), *port),
+        Destination::Domain(_, port) => (None, *port),
+    };
+    InnerFlowKey {
+        src_ip: None,
+        dst_ip,
+        src_port: (session_id & 0xffff) as u16,
+        dst_port,
+        protocol: 17,
+        user_hash: None,
+    }
+}
+
+fn is_dns_like(dest: &Destination) -> bool {
+    match dest {
+        Destination::V4(_, port) | Destination::V6(_, port) => matches!(port, 53 | 5353),
+        Destination::Domain(_, port) => matches!(port, 53 | 5353),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FecMode {
     Off,
     Xor1OfN,
@@ -182,9 +268,8 @@ pub enum FecMode {
 }
 
 impl FecMode {
-    pub fn effective(self, max_overhead_percent: u8) -> Self {
+    pub fn effective(self, _max_overhead_percent: u8) -> Self {
         match self {
-            Self::Auto if max_overhead_percent >= 20 => Self::Xor1OfN,
             Self::Auto => Self::Off,
             mode => mode,
         }
@@ -354,6 +439,10 @@ impl FecDecoder {
             parity: None,
         });
         group.parity = Some(parity);
+        if group.created.elapsed() > FEC_RECOVERY_DEADLINE {
+            record_fec_stale_drop();
+            return Vec::new();
+        }
         let Some(recovered_raw) = recover_one_missing(group) else {
             return Vec::new();
         };
@@ -709,5 +798,72 @@ mod tests {
         assert_eq!(recovered.len(), 1);
         assert_eq!(recovered[0].packet_id, 1);
         assert_eq!(recovered[0].data.as_ref(), b"rs-payload-1");
+    }
+
+    #[test]
+    fn auto_fec_is_conservative_without_loss_classifier() {
+        let policy = FecPolicy {
+            mode: FecMode::Auto,
+            max_overhead_percent: 20,
+            group_size: 4,
+        };
+        assert!(!policy.enabled());
+        assert_eq!(FecMode::Auto.effective(20), FecMode::Off);
+    }
+
+    #[test]
+    fn h2_plus_keeps_bulk_udp_unreliable() {
+        let policy = DatagramPolicy {
+            mode: DatagramPriorityMode::H2Plus,
+            ..DatagramPolicy::default()
+        };
+        let dest = Destination::V4("127.0.0.1".parse().unwrap(), 443);
+        assert_eq!(policy.lane_for(&dest, 1200), DatagramLane::Unreliable);
+    }
+
+    #[test]
+    fn packet_classifier_marks_dns_and_bulk() {
+        let dns = Destination::V4("127.0.0.1".parse().unwrap(), 53);
+        let bulk = Destination::V4("127.0.0.1".parse().unwrap(), 443);
+        assert_eq!(packet_class_for(&dns, 1200), PacketClass::Dns);
+        assert_eq!(packet_class_for(&bulk, 64), PacketClass::Interactive);
+        assert_eq!(packet_class_for(&bulk, 1200), PacketClass::Bulk);
+    }
+
+    #[test]
+    fn fec_drops_recovery_after_interactive_deadline() {
+        let policy = FecPolicy {
+            mode: FecMode::Xor1OfN,
+            max_overhead_percent: 25,
+            group_size: 4,
+        };
+        let mut encoder = FecEncoder::new(policy);
+        let mut originals = Vec::new();
+        let mut parity = None;
+        for packet_id in 0..4 {
+            let dg = UdpDatagram {
+                session_id: 11,
+                packet_id,
+                frag_id: 0,
+                frag_num: 1,
+                dest: Destination::V4("127.0.0.1".parse().unwrap(), 53),
+                data: Bytes::from(format!("late-payload-{packet_id}")),
+            };
+            let encoded = encode_udp_datagram(&dg);
+            parity = encoder.protect(&dg, &encoded).or(parity);
+            originals.push(encoded);
+        }
+
+        let mut decoder = FecDecoder::new(policy);
+        let _ = decoder.decode(originals[0].clone());
+        let key = (11, 0);
+        decoder.groups.get_mut(&key).expect("decode group").created =
+            Instant::now() - FEC_RECOVERY_DEADLINE - Duration::from_millis(1);
+        for idx in [1usize, 3] {
+            let _ = decoder.decode(originals[idx].clone());
+        }
+
+        let recovered = decoder.decode(parity.expect("parity datagram"));
+        assert!(recovered.is_empty());
     }
 }

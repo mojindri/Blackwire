@@ -439,6 +439,31 @@ fn describe_metrics() {
         "Configured QUIC endpoint shard count"
     );
     metrics::describe_counter!(
+        "blackwire_hysteria2_pacer_sleep_total",
+        metrics::Unit::Count,
+        "Hysteria2 application write pacer sleep events by lane"
+    );
+    metrics::describe_counter!(
+        "blackwire_hysteria2_pacer_sleep_ms_total",
+        metrics::Unit::Milliseconds,
+        "Total Hysteria2 application write pacer sleep time by lane"
+    );
+    metrics::describe_gauge!(
+        "blackwire_hysteria2_pacer_burst_bytes",
+        metrics::Unit::Bytes,
+        "Hysteria2 application write pacer burst allowance by lane"
+    );
+    metrics::describe_gauge!(
+        "blackwire_hysteria2_pacer_rate_bps",
+        metrics::Unit::Bytes,
+        "Hysteria2 application write pacer rate in bytes per second by lane"
+    );
+    metrics::describe_counter!(
+        "blackwire_hysteria2_pacer_limited_writes_total",
+        metrics::Unit::Count,
+        "Hysteria2 writes shortened by application pacing by lane"
+    );
+    metrics::describe_counter!(
         "blackwire_quic_endpoint_active_total",
         metrics::Unit::Count,
         "QUIC endpoints successfully opened"
@@ -502,6 +527,26 @@ fn describe_metrics() {
         "blackwire_datagram_fallback_total",
         metrics::Unit::Count,
         "QUIC DATAGRAM fallback events by reason"
+    );
+    metrics::describe_histogram!(
+        "blackwire_innerflow_queue_delay_ms",
+        metrics::Unit::Milliseconds,
+        "InnerFlow scheduler queue delay by packet class"
+    );
+    metrics::describe_counter!(
+        "blackwire_innerflow_drops_total",
+        metrics::Unit::Count,
+        "InnerFlow scheduler drops by packet class and reason"
+    );
+    metrics::describe_counter!(
+        "blackwire_innerflow_dequeued_total",
+        metrics::Unit::Count,
+        "InnerFlow scheduler enqueue/dequeue events by packet class"
+    );
+    metrics::describe_counter!(
+        "blackwire_innerflow_bulk_starvation_prevented_total",
+        metrics::Unit::Count,
+        "InnerFlow bulk dequeue events that yielded fairness accounting"
     );
     blackwire_connmgr::metrics::describe_metrics();
 }

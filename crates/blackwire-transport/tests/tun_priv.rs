@@ -144,6 +144,7 @@ async fn tun_device_creates_and_is_up() {
         redirect_port: 17890,
         dns_port: 15300,
         wintun_file: None,
+        ..TunConfig::default()
     };
     let _dev = create_tun(&cfg).expect("TUN device creation failed — is this running as root?");
 
@@ -182,6 +183,7 @@ async fn tun_runtime_starts_and_shuts_down() {
         redirect_port: 17891,
         dns_port: 15301,
         wintun_file: None,
+        ..TunConfig::default()
     };
     let device = create_tun(&cfg).expect("TUN device creation failed");
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -236,6 +238,7 @@ async fn macos_tun_runtime_privileged_smoke() {
         redirect_port: 17893,
         dns_port: 15303,
         wintun_file: None,
+        ..TunConfig::default()
     };
     let device = create_tun(&cfg).expect("macOS utun creation failed");
     // macOS only assigns utun<N> names; the requested name may be ignored by the
@@ -267,6 +270,7 @@ async fn windows_tun_runtime_privileged_smoke() {
         redirect_port: 17894,
         dns_port: 15304,
         wintun_file: Some(wintun_file),
+        ..TunConfig::default()
     };
     let device = create_tun(&cfg).expect("Windows Wintun creation failed");
     run_windows_runtime_with_route_asserts(cfg, device).await;
@@ -451,6 +455,7 @@ async fn route_setup_and_cleanup_are_symmetric() {
         redirect_port: 17892,
         dns_port: 15302,
         wintun_file: None,
+        ..TunConfig::default()
     };
 
     // Create TUN device so the route can reference the interface.
