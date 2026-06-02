@@ -359,7 +359,12 @@ pub fn requires_instance_restart(old: &Config, new: &Config) -> bool {
         return true;
     }
 
-    if old.metrics_addr != new.metrics_addr || old.api != new.api || old.quic != new.quic {
+    if old.metrics_addr != new.metrics_addr
+        || old.api != new.api
+        || old.quic != new.quic
+        || old.datagram != new.datagram
+        || old.fec != new.fec
+    {
         return true;
     }
 

@@ -57,8 +57,8 @@ pub mod shadowtls;
 pub use grpc::{decode_grpc_frame, encode_grpc_frame, grpc_accept, grpc_connect, GrpcStream};
 pub use httpupgrade::{accept_httpupgrade, dial_httpupgrade, httpupgrade_listen_path};
 pub use hysteria2::{
-    Hysteria2Client, Hysteria2ClientConfig, Hysteria2OutboundHandler, Hysteria2Server,
-    Hysteria2ServerConfig, Hysteria2UdpSession, UdpDestination,
+    FecMode, FecPolicy, Hysteria2Client, Hysteria2ClientConfig, Hysteria2OutboundHandler,
+    Hysteria2Server, Hysteria2ServerConfig, Hysteria2UdpSession, UdpDestination,
 };
 pub use mkcp::{
     mkcp_accept_once, mkcp_accept_sessions, mkcp_connect, MkcpClientConfig, MkcpServerConfig,
