@@ -466,6 +466,12 @@ pub struct TunBatchConfig {
         alias = "max_delay_us"
     )]
     pub max_delay_us: u64,
+    #[serde(
+        default = "default_tun_batch_latency_flush_bytes",
+        rename = "latencyFlushBytes",
+        alias = "latency_flush_bytes"
+    )]
+    pub latency_flush_bytes: usize,
 }
 
 impl Default for TunBatchConfig {
@@ -474,6 +480,7 @@ impl Default for TunBatchConfig {
             enabled: true,
             max_packets: default_tun_batch_max_packets(),
             max_delay_us: default_tun_batch_max_delay_us(),
+            latency_flush_bytes: default_tun_batch_latency_flush_bytes(),
         }
     }
 }
@@ -545,6 +552,10 @@ fn default_tun_batch_max_packets() -> usize {
 
 fn default_tun_batch_max_delay_us() -> u64 {
     750
+}
+
+fn default_tun_batch_latency_flush_bytes() -> usize {
+    256
 }
 
 fn default_tun_udp_max_sessions() -> usize {
@@ -638,6 +649,7 @@ mod tests {
         );
         assert!(camel.batch.enabled);
         assert_eq!(camel.batch.max_packets, 32);
+        assert_eq!(camel.batch.latency_flush_bytes, 256);
         assert_eq!(camel.sessions.udp_max, 4096);
 
         let snake: TunConfig = serde_json::from_str(
@@ -647,7 +659,8 @@ mod tests {
                 "batch": {
                     "enabled": false,
                     "max_packets": 16,
-                    "max_delay_us": 500
+                    "max_delay_us": 500,
+                    "latency_flush_bytes": 128
                 },
                 "sessions": {
                     "udp_max": 128,
@@ -662,6 +675,7 @@ mod tests {
         assert!(!snake.batch.enabled);
         assert_eq!(snake.batch.max_packets, 16);
         assert_eq!(snake.batch.max_delay_us, 500);
+        assert_eq!(snake.batch.latency_flush_bytes, 128);
         assert_eq!(snake.sessions.udp_max, 128);
         assert_eq!(snake.sessions.udp_idle_timeout_sec, 30);
         assert_eq!(snake.sessions.tcp_max, 256);
