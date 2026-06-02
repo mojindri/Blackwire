@@ -137,6 +137,11 @@ pub struct FastConfig {
     /// Userspace relay engine used when splice is unavailable or disabled.
     #[serde(default)]
     pub relay: FastRelayConfig,
+
+    /// Linux-only extreme-path options. Non-Linux builds accept these settings
+    /// but ignore them at runtime.
+    #[serde(default)]
+    pub linux: FastLinuxConfig,
 }
 
 impl FastConfig {
@@ -152,8 +157,75 @@ impl Default for FastConfig {
             pool: FastPoolPolicy::default(),
             splice: FastSplicePolicy::default(),
             relay: FastRelayConfig::default(),
+            linux: FastLinuxConfig::default(),
         }
     }
+}
+
+/// Linux-only relay extensions for bulk TCP paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FastLinuxConfig {
+    /// Optional MSG_ZEROCOPY use for raw TCP userspace bulk writes.
+    #[serde(default)]
+    pub zerocopy: FastZerocopyPolicy,
+
+    /// Minimum payload size before MSG_ZEROCOPY is attempted.
+    #[serde(default = "FastLinuxConfig::default_zerocopy_min_bytes")]
+    pub zerocopy_min_bytes: usize,
+
+    /// io_uring backend preference. The splice relay already attempts io_uring
+    /// first on Linux when this is not disabled.
+    #[serde(default)]
+    pub io_uring: FastExperimentalBackendPolicy,
+
+    /// AF_XDP backend preference. This is intentionally experimental and is not
+    /// selected automatically for normal proxy streams.
+    #[serde(default)]
+    pub af_xdp: FastExperimentalBackendPolicy,
+}
+
+impl FastLinuxConfig {
+    fn default_zerocopy_min_bytes() -> usize {
+        16 * 1024
+    }
+}
+
+impl Default for FastLinuxConfig {
+    fn default() -> Self {
+        Self {
+            zerocopy: FastZerocopyPolicy::default(),
+            zerocopy_min_bytes: Self::default_zerocopy_min_bytes(),
+            io_uring: FastExperimentalBackendPolicy::default(),
+            af_xdp: FastExperimentalBackendPolicy::default(),
+        }
+    }
+}
+
+/// MSG_ZEROCOPY policy for raw TCP userspace writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FastZerocopyPolicy {
+    /// Do not use MSG_ZEROCOPY.
+    #[default]
+    Disabled,
+    /// Use MSG_ZEROCOPY only on bulk writes that exceed the configured floor.
+    Bulk,
+    /// Attempt MSG_ZEROCOPY for every raw TCP userspace write.
+    Always,
+}
+
+/// Selector for Linux experimental backends that need privileged/kernel support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FastExperimentalBackendPolicy {
+    /// Do not select this backend.
+    Disabled,
+    /// Try this backend where supported, then fall back safely.
+    #[default]
+    Auto,
+    /// Require this backend. Startup/runtime validation may fail if unsupported.
+    Require,
 }
 
 /// Relay engine and buffer policy for Fast Profile userspace copy paths.
