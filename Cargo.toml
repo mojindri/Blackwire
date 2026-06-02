@@ -154,6 +154,7 @@ clap        = { version = "4", features = ["derive", "env"] }
 
 # ── Misc utilities ─────────────────────────────────────────────────────────────
 rand        = { version = "0.10", features = ["std", "std_rng", "thread_rng", "sys_rng"] }
+reed-solomon-erasure = "6.0.0"
 rand_core   = "0.6"
 hex         = "0.4"
 base64      = "0.22"

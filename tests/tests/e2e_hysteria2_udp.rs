@@ -66,6 +66,8 @@ fn server_config(
     let key_json = serde_json::to_string(key_path).expect("serialize key path");
     parse_config(format!(
         r#"{{
+            "datagram": {{"enabled": true, "udpOverDatagram": true}},
+            "fec": {{"mode": "xor1-of-n", "maxOverheadPercent": 25}},
             "inbounds": [{{
                 "tag": "hysteria2-udp-in",
                 "protocol": "hysteria2",
@@ -90,6 +92,26 @@ fn server_config(
     ))
 }
 
+fn client_config(hysteria_port: u16) -> blackwire_transport::Hysteria2ClientConfig {
+    blackwire_transport::Hysteria2ClientConfig {
+        server: format!("127.0.0.1:{hysteria_port}").parse().unwrap(),
+        server_name: "localhost".to_string(),
+        password: TEST_PASSWORD.to_string(),
+        up_mbps: 50,
+        down_mbps: 50,
+        skip_cert_verify: true,
+        congestion: blackwire_transport::CongestionConfig {
+            up_mbps: 50,
+            down_mbps: 50,
+            ..blackwire_transport::CongestionConfig::default()
+        },
+        endpoint_shards: 1,
+        socket: blackwire_transport::QuicSocketConfig::default(),
+        datagram_enabled: true,
+        fec: blackwire_transport::FecPolicy::default(),
+    }
+}
+
 /// Send a UDP datagram through the Hysteria2 tunnel, verify the echo.
 #[tokio::test]
 async fn hysteria2_udp_relay_roundtrip() {
@@ -110,21 +132,7 @@ async fn hysteria2_udp_relay_roundtrip() {
     let (echo_port, _echo) = spawn_udp_echo_server().await;
 
     // Build a Hysteria2 UDP session directly (bypasses the SOCKS5 inbound).
-    let config = blackwire_transport::Hysteria2ClientConfig {
-        server: format!("127.0.0.1:{hysteria_port}").parse().unwrap(),
-        server_name: "localhost".to_string(),
-        password: TEST_PASSWORD.to_string(),
-        up_mbps: 50,
-        down_mbps: 50,
-        skip_cert_verify: true,
-        congestion: blackwire_transport::CongestionConfig {
-            up_mbps: 50,
-            down_mbps: 50,
-            ..blackwire_transport::CongestionConfig::default()
-        },
-        endpoint_shards: 1,
-        socket: blackwire_transport::QuicSocketConfig::default(),
-    };
+    let config = client_config(hysteria_port);
 
     let session = timeout(
         Duration::from_secs(5),
@@ -151,6 +159,57 @@ async fn hysteria2_udp_relay_roundtrip() {
         payload,
         "Hysteria2 UDP echo mismatch"
     );
+
+    let _ = std::fs::remove_file(&cert_path);
+    let _ = std::fs::remove_file(&key_path);
+}
+
+#[tokio::test]
+async fn hysteria2_udp_relay_roundtrip_with_xor_fec_enabled() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("error")
+        .try_init();
+
+    let hysteria_port = unused_local_port();
+    let (cert_path, key_path) = write_dev_cert_files();
+
+    let _server =
+        blackwire_core::Instance::from_config(server_config(hysteria_port, &cert_path, &key_path))
+            .await
+            .expect("Hysteria2 server start");
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let (echo_port, _echo) = spawn_udp_echo_server().await;
+
+    let mut config = client_config(hysteria_port);
+    config.fec = blackwire_transport::FecPolicy {
+        mode: blackwire_transport::FecMode::Xor1OfN,
+        max_overhead_percent: 25,
+        group_size: 4,
+    };
+
+    let session = timeout(
+        Duration::from_secs(5),
+        blackwire_transport::Hysteria2UdpSession::connect(&config),
+    )
+    .await
+    .expect("Hysteria2 UDP connect timed out")
+    .expect("Hysteria2 UDP connect failed");
+
+    let dest = blackwire_transport::UdpDestination::V4(Ipv4Addr::LOCALHOST, echo_port);
+    for idx in 0..4 {
+        let payload = format!("hysteria2-udp-fec-{idx}");
+        session
+            .send(dest.clone(), bytes::Bytes::from(payload.clone()))
+            .expect("send UDP datagram");
+
+        let response = timeout(Duration::from_secs(5), session.recv())
+            .await
+            .expect("UDP response timed out")
+            .expect("recv datagram failed");
+        assert_eq!(response.data.as_ref(), payload.as_bytes());
+    }
 
     let _ = std::fs::remove_file(&cert_path);
     let _ = std::fs::remove_file(&key_path);

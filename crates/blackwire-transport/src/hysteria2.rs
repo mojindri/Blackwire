@@ -17,7 +17,7 @@ pub use udp::Destination as UdpDestination;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
@@ -46,6 +46,8 @@ use crate::quic::{
     CongestionMode, QuicSocketConfig,
 };
 
+pub use udp::{DatagramLane, FecMode, FecPolicy};
+
 /// Configuration for a Hysteria2 inbound server.
 #[derive(Debug, Clone)]
 pub struct Hysteria2ServerConfig {
@@ -69,6 +71,10 @@ pub struct Hysteria2ServerConfig {
     pub congestion: CongestionConfig,
     /// UDP socket tuning and server endpoint sharding policy.
     pub socket: QuicSocketConfig,
+    /// Whether UDP traffic should use the QUIC DATAGRAM lane.
+    pub datagram_enabled: bool,
+    /// Forward-error-correction policy for UDP datagrams.
+    pub fec: FecPolicy,
 }
 
 /// Configuration for a Hysteria2 outbound client.
@@ -92,6 +98,10 @@ pub struct Hysteria2ClientConfig {
     pub endpoint_shards: usize,
     /// UDP socket tuning for client endpoint shards.
     pub socket: QuicSocketConfig,
+    /// Whether UDP traffic should use the QUIC DATAGRAM lane.
+    pub datagram_enabled: bool,
+    /// Forward-error-correction policy for UDP datagrams.
+    pub fec: FecPolicy,
 }
 
 /// A Hysteria2 proxy server.
@@ -611,6 +621,9 @@ pub struct Hysteria2UdpSession {
     _endpoint: quinn::Endpoint,
     session_id: u32,
     packet_id: std::sync::atomic::AtomicU16,
+    datagram_enabled: bool,
+    fec_encoder: StdMutex<udp::FecEncoder>,
+    fec_decoder: StdMutex<udp::FecDecoder>,
 }
 
 impl Hysteria2UdpSession {
@@ -659,11 +672,20 @@ impl Hysteria2UdpSession {
             _endpoint: endpoint,
             session_id: rand::random(),
             packet_id: std::sync::atomic::AtomicU16::new(0),
+            datagram_enabled: config.datagram_enabled,
+            fec_encoder: StdMutex::new(udp::FecEncoder::new(config.fec)),
+            fec_decoder: StdMutex::new(udp::FecDecoder::new(config.fec)),
         })
     }
 
     /// Send a UDP payload to `dest` through the Hysteria2 tunnel.
     pub fn send(&self, dest: udp::Destination, data: bytes::Bytes) -> Result<(), ProxyError> {
+        if !self.datagram_enabled {
+            udp::record_datagram_fallback("disabled");
+            return Err(ProxyError::Protocol(
+                "Hysteria2 UDP DATAGRAM lane disabled".into(),
+            ));
+        }
         let packet_id = self
             .packet_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -676,10 +698,22 @@ impl Hysteria2UdpSession {
             data,
         };
         let encoded = udp::encode_udp_datagram(&dg);
+        let parity = self
+            .fec_encoder
+            .lock()
+            .map_err(|_| ProxyError::Transport("FEC encoder lock poisoned".into()))?
+            .protect(&dg, &encoded);
+        udp::record_datagram_packet(DatagramLane::Unreliable.class(), "tx");
         crate::quic::record_endpoint_io("client", "tx", encoded.len());
         self.conn
             .send_datagram(encoded)
-            .map_err(|e| ProxyError::Transport(format!("send_datagram: {e}")))
+            .map_err(|e| ProxyError::Transport(format!("send_datagram: {e}")))?;
+        if let Some(parity) = parity {
+            self.conn
+                .send_datagram(parity)
+                .map_err(|e| ProxyError::Transport(format!("send FEC datagram: {e}")))?;
+        }
+        Ok(())
     }
 
     /// Receive a UDP response datagram from the server.
@@ -690,6 +724,14 @@ impl Hysteria2UdpSession {
             .await
             .map_err(|e| ProxyError::Transport(format!("read_datagram: {e}")))?;
         crate::quic::record_endpoint_io("client", "rx", raw.len());
-        udp::decode_udp_datagram(&raw).map_err(|e| ProxyError::Transport(e.to_string()))
+        let decoded = self
+            .fec_decoder
+            .lock()
+            .map_err(|_| ProxyError::Transport("FEC decoder lock poisoned".into()))?
+            .decode(raw);
+        decoded
+            .into_iter()
+            .next()
+            .ok_or_else(|| ProxyError::Transport("received only FEC metadata".into()))
     }
 }
