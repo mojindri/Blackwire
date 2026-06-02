@@ -19,8 +19,9 @@ pub use endpoint::{InboundConfig, InboundLimitsConfig, OutboundConfig};
 pub use logging_dns::{DnsConfig, FakeIpConfig, LogConfig};
 pub use profile::{
     explain_cost, validate_fast_profile, BudgetConfig, CopyMode, CostClass, CostReport, FastConfig,
-    FastPoolPolicy, FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy,
-    ProfileMode, ProfileViolation, ProtocolCost,
+    FastExperimentalBackendPolicy, FastLinuxConfig, FastPoolPolicy, FastRelayConfig,
+    FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy, FastZerocopyPolicy, ProfileMode,
+    ProfileViolation, ProtocolCost,
 };
 pub use protocol::{NetworkType, Protocol, SecurityType};
 pub use routing::{
