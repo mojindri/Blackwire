@@ -39,6 +39,8 @@ use tokio::time::timeout;
 use blackwire_transport::tun::tun_device_name;
 use blackwire_transport::tun::{create_tun, TunConfig, TunRuntime};
 use blackwire_transport::tun::{parse_ip_packet, UdpNatTable};
+#[cfg(target_os = "linux")]
+use blackwire_transport::tun::{AfXdpBackend, TunAfXdpConfig};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -214,6 +216,34 @@ async fn tun_runtime_starts_and_shuts_down() {
         .await
         .expect("runtime task timed out")
         .expect("runtime task panicked");
+}
+
+/// Opens the experimental AF_XDP backend on a real Linux interface.
+///
+/// Set `BLACKWIRE_AF_XDP_IFACE` to a physical interface name before running.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[cfg_attr(
+    not(feature = "priv-test"),
+    ignore = "requires root + priv-test feature"
+)]
+async fn af_xdp_backend_opens_on_configured_interface() {
+    let Some(interface) = std::env::var("BLACKWIRE_AF_XDP_IFACE").ok() else {
+        eprintln!("BLACKWIRE_AF_XDP_IFACE not set; skipping AF_XDP smoke test");
+        return;
+    };
+
+    let backend = AfXdpBackend::open(&TunAfXdpConfig {
+        interface: Some(interface.clone()),
+        force_copy: true,
+        force_zerocopy: false,
+        ..TunAfXdpConfig::default()
+    })
+    .expect("AF_XDP backend open failed");
+
+    let caps = backend.capabilities();
+    assert_eq!(caps.interface, interface);
+    assert!(caps.queue_count >= 1);
 }
 
 /// Starts the macOS utun runtime long enough to create the device, resolve the

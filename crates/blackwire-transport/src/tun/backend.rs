@@ -33,7 +33,7 @@ pub fn current_tun_support() -> TunPlatformSupport {
             tcp_redirection: true,
             udp_nat: true,
             requires_privileges: true,
-            note: "Linux /dev/net/tun runtime with iptables/ip-rule TCP redirection and UDP NAT",
+            note: "Linux /dev/net/tun runtime with iptables/ip-rule TCP redirection, UDP NAT, and an experimental AF_XDP socket backend for privileged benchmarking",
         }
     }
 
