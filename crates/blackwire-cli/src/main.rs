@@ -24,6 +24,17 @@
 //!   5. Install signal handlers for SIGTERM / SIGINT.
 //!   6. Wait for either the instance to exit or a shutdown signal.
 
+#[cfg(all(feature = "jemalloc", feature = "mimalloc"))]
+compile_error!("enable at most one allocator feature: jemalloc or mimalloc");
+
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

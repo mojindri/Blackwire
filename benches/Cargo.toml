@@ -35,6 +35,10 @@ name = "tcp_relay_throughput"
 harness = false
 
 [[bench]]
+name = "buffer_pool"
+harness = false
+
+[[bench]]
 name = "protocol_handshake_latency"
 harness = false
 

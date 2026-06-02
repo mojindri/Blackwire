@@ -548,6 +548,26 @@ fn describe_metrics() {
         metrics::Unit::Count,
         "InnerFlow bulk dequeue events that yielded fairness accounting"
     );
+    metrics::describe_counter!(
+        "blackwire_pool_acquire_total",
+        metrics::Unit::Count,
+        "Shared buffer pool acquisitions by size class"
+    );
+    metrics::describe_counter!(
+        "blackwire_pool_release_total",
+        metrics::Unit::Count,
+        "Shared buffer pool releases by size class"
+    );
+    metrics::describe_counter!(
+        "blackwire_pool_miss_total",
+        metrics::Unit::Count,
+        "Shared buffer pool misses that allocated a fresh buffer"
+    );
+    metrics::describe_gauge!(
+        "blackwire_pool_bytes_active",
+        metrics::Unit::Bytes,
+        "Bytes currently checked out from shared buffer pools"
+    );
     blackwire_connmgr::metrics::describe_metrics();
 }
 
