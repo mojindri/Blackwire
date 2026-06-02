@@ -375,7 +375,7 @@ PY
     write_remote_tun_configs() {
         local peer="$1"
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/blackwire-tun.json'" <<'EOF'
-{"log":{"level":"warn"},"tun":{"name":"bw-tun-i","address":"198.18.20.1","netmask":"255.255.255.0","mtu":1500,"bypass_mark":4660,"redirect_port":17890,"dns_port":15300,"batch":{"enabled":true,"maxPackets":32,"maxDelayUs":750},"sessions":{"udpMax":4096,"udpIdleTimeoutSec":60,"tcpMax":4096}},"inbounds":[{"tag":"tun-socks","protocol":"socks","listen":"127.0.0.1","port":17890}],"outbounds":[{"tag":"direct","protocol":"freedom"}],"routing":{"rules":[]}}
+{"log":{"level":"warn"},"tun":{"name":"bw-tun-i","address":"198.18.20.1","netmask":"255.255.255.0","mtu":1500,"bypass_mark":4660,"redirect_port":17890,"dns_port":15300,"batch":{"enabled":true,"maxPackets":32,"maxDelayUs":750,"latencyFlushBytes":256},"sessions":{"udpMax":4096,"udpIdleTimeoutSec":60,"tcpMax":4096}},"inbounds":[{"tag":"tun-socks","protocol":"socks","listen":"127.0.0.1","port":17890}],"outbounds":[{"tag":"direct","protocol":"freedom"}],"routing":{"rules":[]}}
 EOF
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/singbox-tun.json'" <<EOF
 {"log":{"level":"warn"},"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"sb-tun-i","address":["198.18.30.1/30"],"mtu":1500,"auto_route":true,"strict_route":true,"route_exclude_address":["$peer/32"]}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"auto_detect_interface":true,"final":"direct"}}
