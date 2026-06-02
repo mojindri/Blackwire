@@ -12,7 +12,8 @@ use anyhow::{Context as _, Result};
 
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_config::schema::{
-    DatagramConfig, FecConfig, FecMode as ConfigFecMode, InboundConfig, OutboundConfig, QuicConfig,
+    DatagramConfig, DatagramPolicy as ConfigDatagramPolicy, FecConfig, FecMode as ConfigFecMode,
+    InboundConfig, OutboundConfig, QuicConfig,
 };
 use blackwire_transport::{
     CongestionConfig, CongestionMode, Hysteria2ClientConfig, Hysteria2OutboundHandler,
@@ -111,6 +112,7 @@ fn parse_server_config(
     let socket = parse_socket_config(s, quic);
     let datagram_enabled = datagram_enabled(s, datagram);
     let fec = parse_fec_policy(s, fec);
+    let datagram_policy = parse_datagram_policy(s, datagram);
 
     Ok(Hysteria2ServerConfig {
         tag: cfg.tag.clone(),
@@ -125,6 +127,7 @@ fn parse_server_config(
         socket,
         datagram_enabled,
         fec,
+        datagram_policy,
     })
 }
 
@@ -157,6 +160,7 @@ fn parse_client_config(
     let socket = parse_socket_config(s, quic);
     let datagram_enabled = datagram_enabled(s, datagram);
     let fec = parse_fec_policy(s, fec);
+    let datagram_policy = parse_datagram_policy(s, datagram);
 
     // Use the server address host as SNI if not explicitly configured.
     let server_name = s["serverName"]
@@ -176,6 +180,7 @@ fn parse_client_config(
         socket,
         datagram_enabled,
         fec,
+        datagram_policy,
     })
 }
 
@@ -280,6 +285,62 @@ fn parse_fec_policy(
         mode: map_fec_mode(cfg.effective_mode()),
         max_overhead_percent: cfg.max_overhead_percent,
         group_size: 4,
+    }
+}
+
+fn parse_datagram_policy(
+    settings: &serde_json::Value,
+    datagram: Option<&DatagramConfig>,
+) -> blackwire_transport::DatagramPolicy {
+    let cfg = datagram.cloned().unwrap_or_default();
+    let mut policy = map_datagram_policy(cfg.policy);
+    let mut max_queue_delay_ms = cfg.max_queue_delay_ms;
+    let mut fast_dns_retry = cfg.fast_dns_retry;
+    let mut fast_dns_retry_delay_ms = cfg.fast_dns_retry_delay_ms;
+
+    if let Some(overrides) = settings.get("datagram") {
+        if let Some(value) = overrides.get("policy").and_then(serde_json::Value::as_str) {
+            policy = parse_config_datagram_policy(value);
+        }
+        if let Some(value) = overrides
+            .get("maxQueueDelayMs")
+            .and_then(serde_json::Value::as_u64)
+        {
+            max_queue_delay_ms = value;
+        }
+        if let Some(value) = overrides
+            .get("fastDnsRetry")
+            .and_then(serde_json::Value::as_bool)
+        {
+            fast_dns_retry = value;
+        }
+        if let Some(value) = overrides
+            .get("fastDnsRetryDelayMs")
+            .and_then(serde_json::Value::as_u64)
+        {
+            fast_dns_retry_delay_ms = value;
+        }
+    }
+
+    blackwire_transport::DatagramPolicy {
+        mode: policy,
+        max_queue_delay_ms: max_queue_delay_ms.max(1),
+        fast_dns_retry,
+        fast_dns_retry_delay_ms,
+    }
+}
+
+fn parse_config_datagram_policy(value: &str) -> blackwire_transport::DatagramPriorityMode {
+    match value {
+        "h2-plus" | "h2plus" | "h2_plus" => blackwire_transport::DatagramPriorityMode::H2Plus,
+        _ => blackwire_transport::DatagramPriorityMode::Standard,
+    }
+}
+
+fn map_datagram_policy(policy: ConfigDatagramPolicy) -> blackwire_transport::DatagramPriorityMode {
+    match policy {
+        ConfigDatagramPolicy::Standard => blackwire_transport::DatagramPriorityMode::Standard,
+        ConfigDatagramPolicy::H2Plus => blackwire_transport::DatagramPriorityMode::H2Plus,
     }
 }
 

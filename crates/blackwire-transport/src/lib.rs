@@ -24,6 +24,7 @@ pub mod tcp;
 
 // QUIC and Hysteria2
 pub mod hysteria2;
+pub mod innerflow;
 pub mod quic;
 
 // TLS and WebSocket transports
@@ -57,9 +58,11 @@ pub mod shadowtls;
 pub use grpc::{decode_grpc_frame, encode_grpc_frame, grpc_accept, grpc_connect, GrpcStream};
 pub use httpupgrade::{accept_httpupgrade, dial_httpupgrade, httpupgrade_listen_path};
 pub use hysteria2::{
-    FecMode, FecPolicy, Hysteria2Client, Hysteria2ClientConfig, Hysteria2OutboundHandler,
-    Hysteria2Server, Hysteria2ServerConfig, Hysteria2UdpSession, UdpDestination,
+    DatagramLane, DatagramPolicy, DatagramPriorityMode, FecMode, FecPolicy, Hysteria2Client,
+    Hysteria2ClientConfig, Hysteria2OutboundHandler, Hysteria2Server, Hysteria2ServerConfig,
+    Hysteria2UdpSession, UdpDestination,
 };
+pub use innerflow::{InnerFlowKey, InnerFlowPacket, InnerFlowScheduler, PacketClass};
 pub use mkcp::{
     mkcp_accept_once, mkcp_accept_sessions, mkcp_connect, MkcpClientConfig, MkcpServerConfig,
 };
@@ -93,7 +96,8 @@ pub use tls::{
 };
 pub use tun::{
     build_tcp_packet, build_tcp_rst, create_tun, current_tun_support, ensure_tun_runtime_supported,
-    IpPacket, TransportProtocol, TunConfig, TunPlatformSupport, TunRuntime, UdpNatTable,
+    IpPacket, TransportProtocol, TunBatchConfig, TunConfig, TunPlatformSupport, TunRuntime,
+    UdpNatTable,
 };
 pub use v2rayquic::{
     accepted_quic_stream, quic_connect, quic_connect_with_socket_config, quic_server_endpoint,

@@ -251,6 +251,45 @@ pub struct DatagramConfig {
     /// Reserved for TUN packet DATAGRAM mode.
     #[serde(default = "default_true")]
     pub tun_packets_over_datagram: bool,
+
+    /// H2+ lane policy (standard = unchanged behavior, h2-plus = priority lane + DNS retry knobs).
+    #[serde(default)]
+    pub policy: DatagramPolicy,
+
+    /// H2+ queue delay budget for delayed non-priority packets.
+    #[serde(default = "DatagramConfig::default_max_queue_delay_ms")]
+    pub max_queue_delay_ms: u64,
+
+    /// Enable DNS shadow retry in H2+ mode.
+    #[serde(default)]
+    pub fast_dns_retry: bool,
+
+    /// DNS shadow retry delay in H2+ mode.
+    #[serde(default = "DatagramConfig::default_fast_dns_retry_delay_ms")]
+    pub fast_dns_retry_delay_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DatagramPolicy {
+    Standard,
+    H2Plus,
+}
+
+impl Default for DatagramPolicy {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
+impl DatagramConfig {
+    fn default_max_queue_delay_ms() -> u64 {
+        25
+    }
+
+    fn default_fast_dns_retry_delay_ms() -> u64 {
+        20
+    }
 }
 
 impl Default for DatagramConfig {
@@ -259,6 +298,10 @@ impl Default for DatagramConfig {
             enabled: true,
             udp_over_datagram: true,
             tun_packets_over_datagram: true,
+            policy: DatagramPolicy::Standard,
+            max_queue_delay_ms: Self::default_max_queue_delay_ms(),
+            fast_dns_retry: false,
+            fast_dns_retry_delay_ms: Self::default_fast_dns_retry_delay_ms(),
         }
     }
 }
@@ -398,6 +441,74 @@ pub struct TunConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub wintun_file: Option<String>,
+    /// Packet batching controls for TUN writeback.
+    #[serde(default, rename = "batch")]
+    pub batch: TunBatchConfig,
+    /// TUN session/NAT table limits and timeouts.
+    #[serde(default, rename = "sessions")]
+    pub sessions: TunSessionConfig,
+}
+
+/// Packet batching controls for TUN writeback.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunBatchConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(
+        default = "default_tun_batch_max_packets",
+        rename = "maxPackets",
+        alias = "max_packets"
+    )]
+    pub max_packets: usize,
+    #[serde(
+        default = "default_tun_batch_max_delay_us",
+        rename = "maxDelayUs",
+        alias = "max_delay_us"
+    )]
+    pub max_delay_us: u64,
+}
+
+impl Default for TunBatchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_packets: default_tun_batch_max_packets(),
+            max_delay_us: default_tun_batch_max_delay_us(),
+        }
+    }
+}
+
+/// TUN session and NAT table sizing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunSessionConfig {
+    #[serde(
+        default = "default_tun_udp_max_sessions",
+        rename = "udpMax",
+        alias = "udp_max"
+    )]
+    pub udp_max: usize,
+    #[serde(
+        default = "default_tun_udp_idle_timeout_secs",
+        rename = "udpIdleTimeoutSec",
+        alias = "udp_idle_timeout_sec"
+    )]
+    pub udp_idle_timeout_sec: u64,
+    #[serde(
+        default = "default_tun_tcp_max_sessions",
+        rename = "tcpMax",
+        alias = "tcp_max"
+    )]
+    pub tcp_max: usize,
+}
+
+impl Default for TunSessionConfig {
+    fn default() -> Self {
+        Self {
+            udp_max: default_tun_udp_max_sessions(),
+            udp_idle_timeout_sec: default_tun_udp_idle_timeout_secs(),
+            tcp_max: default_tun_tcp_max_sessions(),
+        }
+    }
 }
 
 fn default_tun_name() -> String {
@@ -426,6 +537,26 @@ fn default_tun_redirect_port() -> u16 {
 
 fn default_tun_dns_port() -> u16 {
     5300
+}
+
+fn default_tun_batch_max_packets() -> usize {
+    32
+}
+
+fn default_tun_batch_max_delay_us() -> u64 {
+    750
+}
+
+fn default_tun_udp_max_sessions() -> usize {
+    4096
+}
+
+fn default_tun_udp_idle_timeout_secs() -> u64 {
+    60
+}
+
+fn default_tun_tcp_max_sessions() -> usize {
+    4096
 }
 
 #[cfg(test)]
@@ -505,16 +636,35 @@ mod tests {
             camel.wintun_file.as_deref(),
             Some(r#"C:\Program Files\Blackwire\wintun.dll"#)
         );
+        assert!(camel.batch.enabled);
+        assert_eq!(camel.batch.max_packets, 32);
+        assert_eq!(camel.sessions.udp_max, 4096);
 
         let snake: TunConfig = serde_json::from_str(
             r#"{
                 "outbound_interface": "Ethernet",
-                "wintun_file": ".\\wintun.dll"
+                "wintun_file": ".\\wintun.dll",
+                "batch": {
+                    "enabled": false,
+                    "max_packets": 16,
+                    "max_delay_us": 500
+                },
+                "sessions": {
+                    "udp_max": 128,
+                    "udp_idle_timeout_sec": 30,
+                    "tcp_max": 256
+                }
             }"#,
         )
         .unwrap();
         assert_eq!(snake.outbound_interface.as_deref(), Some("Ethernet"));
         assert_eq!(snake.wintun_file.as_deref(), Some(r#".\wintun.dll"#));
+        assert!(!snake.batch.enabled);
+        assert_eq!(snake.batch.max_packets, 16);
+        assert_eq!(snake.batch.max_delay_us, 500);
+        assert_eq!(snake.sessions.udp_max, 128);
+        assert_eq!(snake.sessions.udp_idle_timeout_sec, 30);
+        assert_eq!(snake.sessions.tcp_max, 256);
     }
 
     #[test]

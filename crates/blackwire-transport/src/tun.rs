@@ -6,6 +6,8 @@
 
 /// Platform support contract for the TUN runtime.
 pub mod backend;
+/// Packet batching helpers for the TUN runtime.
+pub mod batch;
 /// TUN device creation and configuration.
 pub mod device;
 /// UDP NAT table used by the runtime.
@@ -23,6 +25,7 @@ pub mod session;
 pub mod tcp;
 
 pub use backend::{current_tun_support, ensure_tun_runtime_supported, TunPlatformSupport};
+pub use batch::{TunBatchConfig, TunPacketBatch};
 #[cfg(target_os = "macos")]
 pub use device::tun_device_name;
 pub use device::{create_tun, TunConfig, TunDevice};

@@ -37,6 +37,18 @@ LOSS_PERCENT="${LOSS_PERCENT:-0}"
 RTT_MS="${RTT_MS:-0}"
 JITTER_MS="${JITTER_MS:-0}"
 BANDWIDTH_LIMIT="${BANDWIDTH_LIMIT:-}"
+HYSTERIA2_CANDIDATE_MODE="${HYSTERIA2_CANDIDATE_MODE:-badnet-low-latency}"
+HYSTERIA2_CANDIDATE_MIN_ACK_RATE="${HYSTERIA2_CANDIDATE_MIN_ACK_RATE:-0.90}"
+HYSTERIA2_CANDIDATE_MAX_QUEUE_DELAY_MS="${HYSTERIA2_CANDIDATE_MAX_QUEUE_DELAY_MS:-50}"
+HYSTERIA2_CANDIDATE_PACING_GAIN="${HYSTERIA2_CANDIDATE_PACING_GAIN:-0.90}"
+HYSTERIA2_CANDIDATE_ENDPOINT_SHARDS="${HYSTERIA2_CANDIDATE_ENDPOINT_SHARDS:-4}"
+HYSTERIA2_CANDIDATE_VARIANT="${HYSTERIA2_CANDIDATE_VARIANT:-blackwire-candidate-${HYSTERIA2_CANDIDATE_MODE}}"
+HYSTERIA2_CANDIDATE_FEC_MODE="${HYSTERIA2_CANDIDATE_FEC_MODE:-auto}"
+HYSTERIA2_UDP_COUNT="${HYSTERIA2_UDP_COUNT:-500}"
+HYSTERIA2_UDP_CONCURRENCY="${HYSTERIA2_UDP_CONCURRENCY:-1}"
+HYSTERIA2_UDP_PAYLOAD_BYTES="${HYSTERIA2_UDP_PAYLOAD_BYTES:-64}"
+HYSTERIA2_UDP_ECHO_PORT="${HYSTERIA2_UDP_ECHO_PORT:-1053}"
+HYSTERIA2_UDP_TIMEOUT_MS="${HYSTERIA2_UDP_TIMEOUT_MS:-3000}"
 
 SERVER_HOST="${COMPETITIVE_SERVER_HOST:-91.107.164.107}"
 CLIENT_HOST="${COMPETITIVE_CLIENT_HOST:-91.107.176.118}"
@@ -273,6 +285,12 @@ run_remote() {
             ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "tc qdisc replace dev '$iface' root netem ${args[*]}" >/dev/null 2>&1 || true
         fi
     }
+    remote_qdisc_snapshot() {
+        local stage="$1" host="$2" iface="$3" label="$4"
+        [ -n "$iface" ] || return 0
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "echo 'tc qdisc show'; tc qdisc show dev '$iface' 2>&1 || true; echo; echo 'tc -s qdisc show'; tc -s qdisc show dev '$iface' 2>&1 || true" \
+            > "$REPORT_DIR/${SCENARIO}-${label}-qdisc-${stage}-${TS}.log" 2>&1 || true
+    }
     remote_netem_clear() {
         local host="$1" iface="$2"
         [ -n "$iface" ] || return 0
@@ -292,6 +310,16 @@ run_remote() {
         [ -n "$dir" ] || return 0
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "find '$dir' -name '*.pid' -type f -print0 2>/dev/null | while IFS= read -r -d '' p; do kill \$(cat \"\$p\") 2>/dev/null || true; done; rm -rf '$dir'" >/dev/null 2>&1 || true
     }
+    remote_capture_metrics() {
+        local host="$1" port="$2" variant="$3" role="$4"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "curl -fsS 'http://127.0.0.1:$port/metrics' 2>/dev/null || true" \
+            > "$REPORT_DIR/${variant}-${role}-metrics-${TS}.log" 2>&1 || true
+    }
+    remote_capture_proc_stats() {
+        local host="$1" dir="$2" name="$3" variant="$4" role="$5"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "if [ -f '$dir/$name.pid' ]; then pid=\$(cat '$dir/$name.pid'); ps -p \"\$pid\" -o pid=,pcpu=,rss=,comm= 2>/dev/null || true; fi" \
+            > "$REPORT_DIR/${variant}-${role}-proc-${TS}.log" 2>&1 || true
+    }
     write_remote_configs() {
         local _server_dir="$1" _client_dir="$2"
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-server.json'" <<'EOF'
@@ -307,16 +335,16 @@ EOF
 {"log":{"level":"warn"},"inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1091}],"outbounds":[{"tag":"vless-out","protocol":"vless","settings":{"address":"$SERVER_HOST","port":10090,"users":[{"id":"00000000-0000-4000-8000-000000000001","flow":""}]}}]}
 EOF
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-hysteria2-server.json'" <<'EOF'
-{"log":{"level":"warn"},"inbounds":[{"tag":"hy2-in","protocol":"hysteria2","listen":"0.0.0.0","port":10300,"settings":{"auth":"blackwire-lab","upMbps":100,"downMbps":100},"streamSettings":{"network":"quic","security":"tls","tlsSettings":{"certificateFile":"server.crt","keyFile":"server.key"}}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
+{"log":{"level":"warn"},"metricsAddr":"127.0.0.1:19000","inbounds":[{"tag":"hy2-in","protocol":"hysteria2","listen":"0.0.0.0","port":10300,"settings":{"auth":"blackwire-lab","upMbps":100,"downMbps":100},"streamSettings":{"network":"quic","security":"tls","tlsSettings":{"certificateFile":"server.crt","keyFile":"server.key"}}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
 EOF
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/blackwire-hysteria2-client.json'" <<EOF
-{"log":{"level":"warn"},"inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1088}],"outbounds":[{"tag":"hy2-out","protocol":"hysteria2","settings":{"server":"$SERVER_HOST:10300","serverName":"$SERVER_HOST","auth":"blackwire-lab","upMbps":100,"downMbps":100,"skipCertVerify":true,"congestion":{"mode":"brutal-compatible","minAckRate":0.8,"maxQueueDelayMs":80,"pacingGain":1.25,"lossCompensation":true},"endpointShards":1}}]}
+{"log":{"level":"warn"},"metricsAddr":"127.0.0.1:19001","inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1088}],"outbounds":[{"tag":"hy2-out","protocol":"hysteria2","settings":{"server":"$SERVER_HOST:10300","serverName":"$SERVER_HOST","auth":"blackwire-lab","upMbps":100,"downMbps":100,"skipCertVerify":true,"congestion":{"mode":"brutal-compatible","minAckRate":0.8,"maxQueueDelayMs":80,"pacingGain":1.25,"lossCompensation":true},"endpointShards":1}}]}
 EOF
-        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-hysteria2-server-candidate.json'" <<'EOF'
-{"log":{"level":"warn"},"quic":{"reusePort":true,"endpoints":"cpu","recvBufferBytes":8388608,"sendBufferBytes":8388608,"maxDatagramSize":"auto"},"datagram":{"enabled":true,"udpOverDatagram":true,"tunPacketsOverDatagram":true},"fec":{"mode":"auto","maxOverheadPercent":20,"protectClasses":["dns","interactive","control"],"avoidBulkTcp":true},"inbounds":[{"tag":"hy2-in","protocol":"hysteria2","listen":"0.0.0.0","port":10310,"settings":{"auth":"blackwire-lab","upMbps":100,"downMbps":100},"streamSettings":{"network":"quic","security":"tls","tlsSettings":{"certificateFile":"server.crt","keyFile":"server.key"}}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-hysteria2-server-candidate.json'" <<EOF
+{"log":{"level":"warn"},"metricsAddr":"127.0.0.1:19010","quic":{"reusePort":true,"endpoints":"cpu","recvBufferBytes":8388608,"sendBufferBytes":8388608,"maxDatagramSize":"auto"},"datagram":{"enabled":true,"udpOverDatagram":true,"tunPacketsOverDatagram":true,"policy":"h2-plus","fastDnsRetry":false,"fastDnsRetryDelayMs":20},"fec":{"mode":"$HYSTERIA2_CANDIDATE_FEC_MODE","maxOverheadPercent":20,"protectClasses":["dns","interactive","control"],"avoidBulkTcp":true},"inbounds":[{"tag":"hy2-in","protocol":"hysteria2","listen":"0.0.0.0","port":10310,"settings":{"auth":"blackwire-lab","upMbps":100,"downMbps":100,"congestion":{"mode":"$HYSTERIA2_CANDIDATE_MODE","minAckRate":$HYSTERIA2_CANDIDATE_MIN_ACK_RATE,"maxQueueDelayMs":$HYSTERIA2_CANDIDATE_MAX_QUEUE_DELAY_MS,"pacingGain":$HYSTERIA2_CANDIDATE_PACING_GAIN,"lossCompensation":true},"datagram":{"policy":"h2-plus","fastDnsRetry":false,"fastDnsRetryDelayMs":20},"fec":{"mode":"$HYSTERIA2_CANDIDATE_FEC_MODE","maxOverheadPercent":20}},"streamSettings":{"network":"quic","security":"tls","tlsSettings":{"certificateFile":"server.crt","keyFile":"server.key"}}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
 EOF
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/blackwire-hysteria2-client-candidate.json'" <<EOF
-{"log":{"level":"warn"},"quic":{"reusePort":false,"endpoints":4,"recvBufferBytes":8388608,"sendBufferBytes":8388608,"maxDatagramSize":"auto"},"datagram":{"enabled":true,"udpOverDatagram":true,"tunPacketsOverDatagram":true},"fec":{"mode":"auto","maxOverheadPercent":20,"protectClasses":["dns","interactive","control"],"avoidBulkTcp":true},"inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1098}],"outbounds":[{"tag":"hy2-out","protocol":"hysteria2","settings":{"server":"$SERVER_HOST:10310","serverName":"$SERVER_HOST","auth":"blackwire-lab","upMbps":100,"downMbps":100,"skipCertVerify":true,"congestion":{"mode":"badnet-low-latency","minAckRate":0.90,"maxQueueDelayMs":50,"pacingGain":0.90,"lossCompensation":true},"endpointShards":4}}]}
+{"log":{"level":"warn"},"metricsAddr":"127.0.0.1:19011","quic":{"reusePort":false,"endpoints":$HYSTERIA2_CANDIDATE_ENDPOINT_SHARDS,"recvBufferBytes":8388608,"sendBufferBytes":8388608,"maxDatagramSize":"auto"},"datagram":{"enabled":true,"udpOverDatagram":true,"tunPacketsOverDatagram":true,"policy":"h2-plus","fastDnsRetry":false,"fastDnsRetryDelayMs":20},"fec":{"mode":"$HYSTERIA2_CANDIDATE_FEC_MODE","maxOverheadPercent":20,"protectClasses":["dns","interactive","control"],"avoidBulkTcp":true},"inbounds":[{"tag":"socks-in","protocol":"socks","listen":"127.0.0.1","port":1098}],"outbounds":[{"tag":"hy2-out","protocol":"hysteria2","settings":{"server":"$SERVER_HOST:10310","serverName":"$SERVER_HOST","auth":"blackwire-lab","upMbps":100,"downMbps":100,"skipCertVerify":true,"congestion":{"mode":"$HYSTERIA2_CANDIDATE_MODE","minAckRate":$HYSTERIA2_CANDIDATE_MIN_ACK_RATE,"maxQueueDelayMs":$HYSTERIA2_CANDIDATE_MAX_QUEUE_DELAY_MS,"pacingGain":$HYSTERIA2_CANDIDATE_PACING_GAIN,"lossCompensation":true},"endpointShards":$HYSTERIA2_CANDIDATE_ENDPOINT_SHARDS,"datagram":{"policy":"h2-plus","fastDnsRetry":false,"fastDnsRetryDelayMs":20},"fec":{"mode":"$HYSTERIA2_CANDIDATE_FEC_MODE","maxOverheadPercent":20}}}]}
 EOF
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-vision-server.json'" <<'EOF'
 {"profile":"fast","fast":{"strictProduction":false,"pool":"disabled","splice":"adaptive"},"log":{"level":"warn"},"inbounds":[{"tag":"vless-vision-in","protocol":"vless","listen":"0.0.0.0","port":10082,"settings":{"clients":[{"id":"1791A4CD-09E3-4A29-A36D-FEA98300C845","email":"lab","flow":"xtls-rprx-vision"}]},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"dest":"127.0.0.1:18443","serverName":"www.microsoft.com","privateKey":"6f4850ca51ced64b4acfd90c73fd60392c0c2f92744933b28b1bc0f7b8683d79","shortIds":["aabbccdd00000001"]}}}],"outbounds":[{"tag":"freedom","protocol":"freedom"}]}
@@ -408,6 +436,41 @@ EOF
             emit_row "$variant" failed "$raw" "$protocol" "$transport" "$profile" "$payload"
         fi
     }
+    run_remote_hy2_udp_bench() {
+        local bin="$1" variant="$2" port="$3" policy="$4" fec_mode="$5"
+        local cmd="./$bin hy2-udp-bench --server '$SERVER_HOST:$port' --server-name '$SERVER_HOST' --auth blackwire-lab --skip-cert-verify --dest-host 127.0.0.1 --dest-port '$HYSTERIA2_UDP_ECHO_PORT' --count '$HYSTERIA2_UDP_COUNT' --concurrency '$HYSTERIA2_UDP_CONCURRENCY' --payload-bytes '$HYSTERIA2_UDP_PAYLOAD_BYTES' --timeout-ms '$HYSTERIA2_UDP_TIMEOUT_MS' --mode '$HYSTERIA2_CANDIDATE_MODE' --endpoint-shards '$HYSTERIA2_CANDIDATE_ENDPOINT_SHARDS' --datagram-policy '$policy' --fec-mode '$fec_mode' --fec-overhead-percent 20 --variant '$variant' --scenario '$SCENARIO'"
+        local raw
+        if raw="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cd '$REMOTE_CLIENT_DIR'; $cmd" 2>&1)"; then
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-udp-${TS}.raw.log"
+            printf '%s\n' "$raw" >> "$OUT"
+        else
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-udp-${TS}.raw.log"
+            emit_row "$variant" failed "$raw" hysteria2 quic-datagram "$policy" "${HYSTERIA2_UDP_PAYLOAD_BYTES}b"
+        fi
+    }
+    run_remote_socks_udp_bench() {
+        local variant="$1" socks_port="$2"
+        local raw
+        if raw="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cd '$REMOTE_CLIENT_DIR'; python3 socks5_udp_bench.py --socks-port '$socks_port' --dest-host 127.0.0.1 --dest-port '$HYSTERIA2_UDP_ECHO_PORT' --count '$HYSTERIA2_UDP_COUNT' --concurrency '$HYSTERIA2_UDP_CONCURRENCY' --payload-bytes '$HYSTERIA2_UDP_PAYLOAD_BYTES' --timeout-ms '$HYSTERIA2_UDP_TIMEOUT_MS' --variant '$variant' --scenario '$SCENARIO'" 2>&1)"; then
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-udp-${TS}.raw.log"
+            printf '%s\n' "$raw" >> "$OUT"
+        else
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-udp-${TS}.raw.log"
+            emit_row "$variant" failed "$raw" hysteria2 quic-datagram baseline "${HYSTERIA2_UDP_PAYLOAD_BYTES}b"
+        fi
+    }
+    run_remote_hy2_udp_mix_bench() {
+        local bin="$1" variant="$2" port="$3" policy="$4" fec_mode="$5"
+        local cmd="./$bin hy2-udp-mix-bench --server '$SERVER_HOST:$port' --server-name '$SERVER_HOST' --auth blackwire-lab --skip-cert-verify --dest-host 127.0.0.1 --dest-port '$HYSTERIA2_UDP_ECHO_PORT' --count '$HYSTERIA2_UDP_COUNT' --concurrency '$HYSTERIA2_UDP_CONCURRENCY' --payload-bytes '$HYSTERIA2_UDP_PAYLOAD_BYTES' --timeout-ms '$HYSTERIA2_UDP_TIMEOUT_MS' --mode '$HYSTERIA2_CANDIDATE_MODE' --endpoint-shards '$HYSTERIA2_CANDIDATE_ENDPOINT_SHARDS' --datagram-policy '$policy' --fec-mode '$fec_mode' --fec-overhead-percent 20 --variant '$variant' --scenario '$SCENARIO' --dns-port 5353 --interactive-port 1054 --bulk-port 1055 --dns-count '$HYSTERIA2_UDP_COUNT' --interactive-count '$HYSTERIA2_UDP_COUNT' --bulk-count '$((HYSTERIA2_UDP_COUNT * 4))' --bulk-payload-bytes 1200"
+        local raw
+        if raw="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cd '$REMOTE_CLIENT_DIR'; $cmd" 2>&1)"; then
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-innerflow-${TS}.raw.log"
+            printf '%s\n' "$raw" >> "$OUT"
+        else
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-innerflow-${TS}.raw.log"
+            emit_row "$variant" failed "$raw" hysteria2 quic-datagram "$policy" "mixed"
+        fi
+    }
     REMOTE_SERVER_DIR="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" 'mktemp -d /tmp/blackwire-competitive.XXXXXX')"
     REMOTE_CLIENT_DIR="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" 'mktemp -d /tmp/blackwire-competitive.XXXXXX')"
     local nginx_started=0
@@ -420,6 +483,8 @@ EOF
     trap cleanup_remote_dirs EXIT
     ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "ufw allow ${COMPETITIVE_REMOTE_UPSTREAM_PORT}/tcp >/dev/null; ufw allow 10080/tcp >/dev/null; ufw allow 10082/tcp >/dev/null; ufw allow 10090/tcp >/dev/null; ufw allow 10092/tcp >/dev/null; ufw allow 10180/tcp >/dev/null; ufw allow 10182/tcp >/dev/null; ufw allow 10192/tcp >/dev/null; ufw allow 10200/udp >/dev/null; ufw allow 10202/tcp >/dev/null; ufw allow 10300/udp >/dev/null; ufw allow 10310/udp >/dev/null" >/dev/null 2>&1 || true
     scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/start_nginx_upstream.sh" "$SSH_USER@$SERVER_HOST:$REMOTE_SERVER_DIR/start_nginx_upstream.sh" >/dev/null
+    scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/udp_echo.py" "$SSH_USER@$SERVER_HOST:$REMOTE_SERVER_DIR/udp_echo.py" >/dev/null
+    scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/socks5_udp_bench.py" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/socks5_udp_bench.py" >/dev/null
     write_remote_configs "$REMOTE_SERVER_DIR" "$REMOTE_CLIENT_DIR"
     if ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "bash '$REMOTE_SERVER_DIR/start_nginx_upstream.sh' '$REMOTE_SERVER_DIR/nginx' '$COMPETITIVE_REMOTE_UPSTREAM_PORT' 0.0.0.0" >/dev/null 2>&1; then
         nginx_started=1
@@ -438,16 +503,117 @@ EOF
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "chmod +x '$REMOTE_CLIENT_DIR/blackwire-candidate'" >/dev/null 2>&1 || true
     fi
 
+    if [[ "$SCENARIO" =~ ^hysteria2-innerflow ]]; then
+        SERVER_IFACE="$(remote_default_iface "$SERVER_HOST")"
+        CLIENT_IFACE="$(remote_default_iface "$CLIENT_HOST")"
+        remote_qdisc_snapshot before "$SERVER_HOST" "$SERVER_IFACE" server
+        remote_qdisc_snapshot before "$CLIENT_HOST" "$CLIENT_IFACE" client
+        remote_netem_apply "$SERVER_HOST" "$SERVER_IFACE"
+        remote_netem_apply "$CLIENT_HOST" "$CLIENT_IFACE"
+        remote_qdisc_snapshot after-apply "$SERVER_HOST" "$SERVER_IFACE" server
+        remote_qdisc_snapshot after-apply "$CLIENT_HOST" "$CLIENT_IFACE" client
+        remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" udp-echo-dns "python3 udp_echo.py --host 127.0.0.1 --port 5353" ""
+        remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" udp-echo-interactive "python3 udp_echo.py --host 127.0.0.1 --port 1054" ""
+        remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" udp-echo-bulk "python3 udp_echo.py --host 127.0.0.1 --port 1055" ""
+        emit_row remote-inventory ok "wrote remote-inventory-${TS}.log" inventory ssh innerflow mixed
+
+        if [ -x "$BLACKWIRE_BIN" ]; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-server "./blackwire run -c blackwire-hysteria2-server.json" ""; then
+                run_remote_hy2_udp_mix_bench blackwire-candidate blackwire-current-innerflow 10300 standard off
+                remote_capture_metrics "$SERVER_HOST" 19000 blackwire-current-innerflow server
+            else
+                emit_row blackwire-current-innerflow failed "temporary Blackwire Hysteria2 server did not start" hysteria2 quic-datagram current mixed
+            fi
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/blackwire-hysteria2-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/blackwire-hysteria2-server.pid'" >/dev/null 2>&1 || true
+        else
+            emit_row blackwire-current-innerflow skipped "BLACKWIRE_BIN not executable" hysteria2 quic-datagram current mixed
+        fi
+
+        if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ]; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-candidate-server "./blackwire-candidate run -c blackwire-hysteria2-server-candidate.json" ""; then
+                run_remote_hy2_udp_mix_bench blackwire-candidate blackwire-candidate-innerflow 10310 h2-plus "$HYSTERIA2_CANDIDATE_FEC_MODE"
+                remote_capture_metrics "$SERVER_HOST" 19010 blackwire-candidate-innerflow server
+            else
+                emit_row blackwire-candidate-innerflow failed "temporary Blackwire Hysteria2 candidate server did not start" hysteria2 quic-datagram h2-plus mixed
+            fi
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/blackwire-hysteria2-candidate-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/blackwire-hysteria2-candidate-server.pid'" >/dev/null 2>&1 || true
+        else
+            emit_row blackwire-candidate-innerflow skipped "no distinct BLACKWIRE_CANDIDATE_BIN" hysteria2 quic-datagram h2-plus mixed
+        fi
+        remote_qdisc_snapshot after-run "$SERVER_HOST" "$SERVER_IFACE" server
+        remote_qdisc_snapshot after-run "$CLIENT_HOST" "$CLIENT_IFACE" client
+        return
+    fi
+
+    if [[ "$SCENARIO" =~ ^hysteria2-udp-dns ]]; then
+        SERVER_IFACE="$(remote_default_iface "$SERVER_HOST")"
+        CLIENT_IFACE="$(remote_default_iface "$CLIENT_HOST")"
+        remote_qdisc_snapshot before "$SERVER_HOST" "$SERVER_IFACE" server
+        remote_qdisc_snapshot before "$CLIENT_HOST" "$CLIENT_IFACE" client
+        remote_netem_apply "$SERVER_HOST" "$SERVER_IFACE"
+        remote_netem_apply "$CLIENT_HOST" "$CLIENT_IFACE"
+        remote_qdisc_snapshot after-apply "$SERVER_HOST" "$SERVER_IFACE" server
+        remote_qdisc_snapshot after-apply "$CLIENT_HOST" "$CLIENT_IFACE" client
+        remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" udp-echo "python3 udp_echo.py --host 127.0.0.1 --port '$HYSTERIA2_UDP_ECHO_PORT'" ""
+        emit_row remote-inventory ok "wrote remote-inventory-${TS}.log" inventory ssh udp-dns "${HYSTERIA2_UDP_PAYLOAD_BYTES}b"
+
+        if [ -x "$BLACKWIRE_BIN" ]; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-server "./blackwire run -c blackwire-hysteria2-server.json" ""; then
+                run_remote_hy2_udp_bench blackwire blackwire-current-hysteria2-udp 10300 standard off
+                remote_capture_metrics "$SERVER_HOST" 19000 blackwire-current-hysteria2-udp server
+            else
+                emit_row blackwire-current-hysteria2-udp failed "temporary Blackwire Hysteria2 server did not start" hysteria2 quic-datagram current "${HYSTERIA2_UDP_PAYLOAD_BYTES}b"
+            fi
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/blackwire-hysteria2-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/blackwire-hysteria2-server.pid'" >/dev/null 2>&1 || true
+        else
+            emit_row blackwire-current-hysteria2-udp skipped "BLACKWIRE_BIN not executable" hysteria2 quic-datagram current "${HYSTERIA2_UDP_PAYLOAD_BYTES}b"
+        fi
+
+        if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ]; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-candidate-server "./blackwire-candidate run -c blackwire-hysteria2-server-candidate.json" ""; then
+                run_remote_hy2_udp_bench blackwire-candidate blackwire-candidate-h2plus-udp 10310 h2-plus "$HYSTERIA2_CANDIDATE_FEC_MODE"
+                remote_capture_metrics "$SERVER_HOST" 19010 blackwire-candidate-h2plus-udp server
+            else
+                emit_row blackwire-candidate-h2plus-udp failed "temporary Blackwire Hysteria2 candidate server did not start" hysteria2 quic-datagram h2-plus "${HYSTERIA2_UDP_PAYLOAD_BYTES}b"
+            fi
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/blackwire-hysteria2-candidate-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/blackwire-hysteria2-candidate-server.pid'" >/dev/null 2>&1 || true
+        else
+            emit_row blackwire-candidate-h2plus-udp skipped "no distinct BLACKWIRE_CANDIDATE_BIN" hysteria2 quic-datagram h2-plus "${HYSTERIA2_UDP_PAYLOAD_BYTES}b"
+        fi
+
+        if has_tool "$server_inv" "hysteria" && has_tool "$client_inv" "hysteria"; then
+            ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cd '$REMOTE_SERVER_DIR'; hysteria cert --host '$SERVER_HOST' --cert server.crt --key server.key --overwrite >/dev/null 2>&1" || true
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" hysteria-server "hysteria server -c hysteria-server.yaml" "" && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" hysteria-client "hysteria client -c hysteria-client.yaml" 1084; then
+                run_remote_socks_udp_bench hysteria-udp 1084
+            else
+                emit_row hysteria-udp failed "hysteria server/client did not become ready" hysteria2 quic-datagram baseline "${HYSTERIA2_UDP_PAYLOAD_BYTES}b"
+            fi
+        else
+            emit_row hysteria-udp skipped "hysteria missing on at least one VPS" hysteria2 quic-datagram baseline "${HYSTERIA2_UDP_PAYLOAD_BYTES}b"
+        fi
+        remote_qdisc_snapshot after-run "$SERVER_HOST" "$SERVER_IFACE" server
+        remote_qdisc_snapshot after-run "$CLIENT_HOST" "$CLIENT_IFACE" client
+        return
+    fi
+
     if [[ "$SCENARIO" =~ ^hysteria2- ]]; then
         SERVER_IFACE="$(remote_default_iface "$SERVER_HOST")"
         CLIENT_IFACE="$(remote_default_iface "$CLIENT_HOST")"
+        remote_qdisc_snapshot before "$SERVER_HOST" "$SERVER_IFACE" server
+        remote_qdisc_snapshot before "$CLIENT_HOST" "$CLIENT_IFACE" client
         remote_netem_apply "$SERVER_HOST" "$SERVER_IFACE"
         remote_netem_apply "$CLIENT_HOST" "$CLIENT_IFACE"
+        remote_qdisc_snapshot after-apply "$SERVER_HOST" "$SERVER_IFACE" server
+        remote_qdisc_snapshot after-apply "$CLIENT_HOST" "$CLIENT_IFACE" client
         for payload in $COMPETITIVE_PAYLOADS; do
             emit_row remote-inventory ok "wrote remote-inventory-${TS}.log" inventory ssh badnet "$payload"
             if [ -x "$BLACKWIRE_BIN" ] && [ "$nginx_started" = "1" ] && has_tool "$client_inv" "hey"; then
                 if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-server "./blackwire run -c blackwire-hysteria2-server.json" "" && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-hysteria2-client "./blackwire run -c blackwire-hysteria2-client.json" 1088; then
                     run_remote_hey blackwire-current-hysteria2 "$payload" 1088 hysteria2 quic current
+                    remote_capture_metrics "$SERVER_HOST" 19000 blackwire-current-hysteria2 server
+                    remote_capture_metrics "$CLIENT_HOST" 19001 blackwire-current-hysteria2 client
+                    remote_capture_proc_stats "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-server blackwire-current-hysteria2 server
+                    remote_capture_proc_stats "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-hysteria2-client blackwire-current-hysteria2 client
                 else
                     emit_row blackwire-current-hysteria2 failed "temporary Blackwire Hysteria2 server/client did not become ready" hysteria2 quic current "$payload"
                 fi
@@ -459,14 +625,18 @@ EOF
 
             if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ] && [ "$nginx_started" = "1" ] && has_tool "$client_inv" "hey"; then
                 if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-candidate-server "./blackwire-candidate run -c blackwire-hysteria2-server-candidate.json" "" && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-hysteria2-candidate-client "./blackwire-candidate run -c blackwire-hysteria2-client-candidate.json" 1098; then
-                    run_remote_hey blackwire-candidate-hysteria2 "$payload" 1098 hysteria2 quic badnet
+                    run_remote_hey "$HYSTERIA2_CANDIDATE_VARIANT" "$payload" 1098 hysteria2 quic "$HYSTERIA2_CANDIDATE_MODE"
+                    remote_capture_metrics "$SERVER_HOST" 19010 "$HYSTERIA2_CANDIDATE_VARIANT" server
+                    remote_capture_metrics "$CLIENT_HOST" 19011 "$HYSTERIA2_CANDIDATE_VARIANT" client
+                    remote_capture_proc_stats "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-candidate-server "$HYSTERIA2_CANDIDATE_VARIANT" server
+                    remote_capture_proc_stats "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-hysteria2-candidate-client "$HYSTERIA2_CANDIDATE_VARIANT" client
                 else
-                    emit_row blackwire-candidate-hysteria2 failed "temporary Blackwire candidate Hysteria2 server/client did not become ready" hysteria2 quic badnet "$payload"
+                    emit_row "$HYSTERIA2_CANDIDATE_VARIANT" failed "temporary Blackwire candidate Hysteria2 server/client did not become ready" hysteria2 quic "$HYSTERIA2_CANDIDATE_MODE" "$payload"
                 fi
                 ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "kill \$(cat '$REMOTE_SERVER_DIR/blackwire-hysteria2-candidate-server.pid') 2>/dev/null || true; rm -f '$REMOTE_SERVER_DIR/blackwire-hysteria2-candidate-server.pid'" >/dev/null 2>&1 || true
                 ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "kill \$(cat '$REMOTE_CLIENT_DIR/blackwire-hysteria2-candidate-client.pid') 2>/dev/null || true; rm -f '$REMOTE_CLIENT_DIR/blackwire-hysteria2-candidate-client.pid'" >/dev/null 2>&1 || true
             else
-                emit_row blackwire-candidate-hysteria2 skipped "no distinct BLACKWIRE_CANDIDATE_BIN, hey, or nginx unavailable" hysteria2 quic badnet "$payload"
+                emit_row "$HYSTERIA2_CANDIDATE_VARIANT" skipped "no distinct BLACKWIRE_CANDIDATE_BIN, hey, or nginx unavailable" hysteria2 quic "$HYSTERIA2_CANDIDATE_MODE" "$payload"
             fi
 
             if has_tool "$server_inv" "hysteria" && has_tool "$client_inv" "hysteria" && [ "$nginx_started" = "1" ] && has_tool "$client_inv" "hey"; then
@@ -482,6 +652,8 @@ EOF
                 emit_row hysteria skipped "hysteria or hey missing on at least one VPS" hysteria2 quic baseline "$payload"
             fi
         done
+        remote_qdisc_snapshot after-run "$SERVER_HOST" "$SERVER_IFACE" server
+        remote_qdisc_snapshot after-run "$CLIENT_HOST" "$CLIENT_IFACE" client
         return
     fi
 
