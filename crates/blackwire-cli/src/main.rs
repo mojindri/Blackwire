@@ -1263,23 +1263,20 @@ async fn run_udp_mixed_probe_set(
             .unwrap_or(timeout_per_probe)
             .max(Duration::from_millis(1));
 
-        match tokio::time::timeout(remaining, session.recv()).await {
-            Ok(Ok(reply)) => {
-                if let Some(seq) = bench_payload_seq(reply.data.as_ref()) {
-                    if let Some(probe) = in_flight.remove(&seq) {
-                        let class_stats = stats.by_class_mut(probe.class);
-                        class_stats
-                            .latencies_us
-                            .push(probe.sent_at.elapsed().as_micros() as u64);
-                        class_stats.bytes_down += reply.data.len();
-                    } else {
-                        stats.bulk.stale_replies += 1;
-                    }
+        if let Ok(Ok(reply)) = tokio::time::timeout(remaining, session.recv()).await {
+            if let Some(seq) = bench_payload_seq(reply.data.as_ref()) {
+                if let Some(probe) = in_flight.remove(&seq) {
+                    let class_stats = stats.by_class_mut(probe.class);
+                    class_stats
+                        .latencies_us
+                        .push(probe.sent_at.elapsed().as_micros() as u64);
+                    class_stats.bytes_down += reply.data.len();
                 } else {
                     stats.bulk.stale_replies += 1;
                 }
+            } else {
+                stats.bulk.stale_replies += 1;
             }
-            Ok(Err(_)) | Err(_) => {}
         }
     }
 
