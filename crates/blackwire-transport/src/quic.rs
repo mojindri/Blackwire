@@ -11,7 +11,8 @@ pub mod badnet;
 mod brutal_cc;
 
 pub use badnet::{
-    BadNetControllerFactory, CongestionConfig, CongestionMode, LossFingerprint, PathSample,
+    BadNetControllerFactory, CongestionConfig, CongestionDirection, CongestionMode,
+    LossFingerprint, PathSample,
 };
 pub use brutal_cc::{BrutalCC, BrutalCCFactory};
 
@@ -100,6 +101,19 @@ pub fn build_hysteria2_server_endpoint(
     up_mbps: u64,
     down_mbps: u64,
 ) -> Result<Endpoint> {
+    build_hysteria2_server_endpoint_with_congestion(
+        addr, cert_pem, key_pem, up_mbps, down_mbps, None,
+    )
+}
+
+pub fn build_hysteria2_server_endpoint_with_congestion(
+    addr: SocketAddr,
+    cert_pem: &str,
+    key_pem: &str,
+    up_mbps: u64,
+    down_mbps: u64,
+    congestion: Option<CongestionConfig>,
+) -> Result<Endpoint> {
     ensure_crypto_provider();
 
     let (certs, key) = parse_cert_and_key(cert_pem, key_pem)?;
@@ -123,11 +137,35 @@ pub fn build_hysteria2_server_endpoint(
     transport.max_idle_timeout(Some(idle_timeout));
     transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
     transport.datagram_send_buffer_size(2 * 1024 * 1024);
+    if let Some(cfg) = congestion.as_ref() {
+        match cfg.mode {
+            CongestionMode::StandardQuic => {}
+            CongestionMode::BrutalCompatible => {
+                transport.congestion_controller_factory(Arc::new(BrutalCCFactory::new(
+                    cfg.target_bps_for(CongestionDirection::ServerDownload),
+                )));
+            }
+            CongestionMode::NovaCc
+            | CongestionMode::BadNetLowLatency
+            | CongestionMode::BadNetThroughput
+            | CongestionMode::AutoProbe => {
+                transport.congestion_controller_factory(Arc::new(
+                    BadNetControllerFactory::new_for_direction(
+                        cfg.clone(),
+                        CongestionDirection::ServerDownload,
+                    ),
+                ));
+            }
+        }
+    }
 
     // Size QUIC flow-control windows to the configured bandwidth × 500 ms RTT
     // (BDP for a satellite/high-latency link). This prevents BrutalCC from being
     // stalled by the flow-control window before the congestion window fills.
-    let (stream_rx, conn_rx, conn_tx) = bdp_windows(up_mbps, down_mbps);
+    let (stream_rx, conn_rx, conn_tx) = congestion
+        .as_ref()
+        .map(|cfg| bdp_windows_with_profile(up_mbps, down_mbps, cfg.window_profile()))
+        .unwrap_or_else(|| bdp_windows(up_mbps, down_mbps));
     transport.stream_receive_window(stream_rx);
     transport.receive_window(conn_rx);
     transport.send_window(conn_tx);
@@ -137,23 +175,38 @@ pub fn build_hysteria2_server_endpoint(
     Endpoint::server(server_config, addr).context("failed to open Hysteria2 QUIC endpoint")
 }
 
-/// Compute (stream_receive_window, connection_receive_window, connection_send_window)
-/// from configured bandwidth limits.
-///
-/// Uses a 500 ms target RTT (satellite/intercontinental worst-case) to size the
-/// bandwidth-delay product. Windows are clamped to a [8 MB, 128 MB] range.
 pub(crate) fn bdp_windows(rx_mbps: u64, tx_mbps: u64) -> (quinn::VarInt, quinn::VarInt, u64) {
-    const RTT_MS: u64 = 500;
-    const MIN_BYTES: u64 = 8 * 1024 * 1024; // 8 MB floor
-    const MAX_BYTES: u64 = 128 * 1024 * 1024; // 128 MB ceiling
+    bdp_windows_with_profile(
+        rx_mbps,
+        tx_mbps,
+        badnet::WindowProfile {
+            bdp_rtt: Duration::from_millis(500),
+            min_window_bytes: 8 * 1024 * 1024,
+            max_window_bytes: 128 * 1024 * 1024,
+            conn_window_multiplier: 3,
+        },
+    )
+}
 
+/// Compute (stream_receive_window, connection_receive_window, connection_send_window)
+/// from configured bandwidth limits and a congestion-mode window profile.
+pub(crate) fn bdp_windows_with_profile(
+    rx_mbps: u64,
+    tx_mbps: u64,
+    profile: badnet::WindowProfile,
+) -> (quinn::VarInt, quinn::VarInt, u64) {
     let rx_bps = rx_mbps.saturating_mul(1_000_000 / 8);
     let tx_bps = tx_mbps.saturating_mul(1_000_000 / 8);
+    let rtt_ms = profile.bdp_rtt.as_millis().try_into().unwrap_or(u64::MAX);
 
-    let stream_rx = (rx_bps.saturating_mul(RTT_MS) / 1000).clamp(MIN_BYTES, MAX_BYTES);
+    let stream_rx = (rx_bps.saturating_mul(rtt_ms) / 1000)
+        .clamp(profile.min_window_bytes, profile.max_window_bytes);
     // Connection receive window covers multiple concurrent streams.
-    let conn_rx = stream_rx.saturating_mul(3).min(MAX_BYTES);
-    let conn_tx = (tx_bps.saturating_mul(RTT_MS) / 1000).clamp(MIN_BYTES, MAX_BYTES);
+    let conn_rx = stream_rx
+        .saturating_mul(profile.conn_window_multiplier)
+        .min(profile.max_window_bytes);
+    let conn_tx = (tx_bps.saturating_mul(rtt_ms) / 1000)
+        .clamp(profile.min_window_bytes, profile.max_window_bytes);
 
     (
         quinn::VarInt::from_u64(stream_rx).unwrap_or(quinn::VarInt::MAX),

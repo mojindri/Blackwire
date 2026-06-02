@@ -13,6 +13,14 @@ use quinn_proto::RttEstimator;
 
 const MIN_WINDOW: u64 = 32 * 1024;
 const DEFAULT_INITIAL_RTT: Duration = Duration::from_millis(100);
+const LOSS_WINDOW_SECS: usize = 5;
+const IDLE_RESET_AFTER: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CongestionDirection {
+    ClientUpload,
+    ServerDownload,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CongestionMode {
@@ -72,8 +80,41 @@ pub struct CongestionConfig {
 
 impl CongestionConfig {
     pub fn target_bps(&self) -> u64 {
-        self.up_mbps.saturating_mul(1_000_000 / 8)
+        self.target_bps_for(CongestionDirection::ClientUpload)
     }
+
+    pub fn target_bps_for(&self, direction: CongestionDirection) -> u64 {
+        let mbps = match direction {
+            CongestionDirection::ClientUpload => self.up_mbps,
+            CongestionDirection::ServerDownload => self.down_mbps,
+        };
+        mbps.saturating_mul(1_000_000 / 8)
+    }
+
+    pub fn window_profile(&self) -> WindowProfile {
+        match self.mode {
+            CongestionMode::BadNetLowLatency => WindowProfile {
+                bdp_rtt: Duration::from_millis(150),
+                min_window_bytes: 1024 * 1024,
+                max_window_bytes: 32 * 1024 * 1024,
+                conn_window_multiplier: 2,
+            },
+            _ => WindowProfile {
+                bdp_rtt: Duration::from_millis(500),
+                min_window_bytes: 4 * 1024 * 1024,
+                max_window_bytes: 128 * 1024 * 1024,
+                conn_window_multiplier: 3,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WindowProfile {
+    pub bdp_rtt: Duration,
+    pub min_window_bytes: u64,
+    pub max_window_bytes: u64,
+    pub conn_window_multiplier: u64,
 }
 
 impl Default for CongestionConfig {
@@ -121,6 +162,8 @@ impl fmt::Display for LossFingerprint {
 pub struct PathSample {
     pub acked_bytes: u64,
     pub lost_bytes: u64,
+    pub acked_packets: u64,
+    pub lost_packets: u64,
     pub min_rtt: Duration,
     pub srtt: Duration,
     pub delivery_rate_bps: u64,
@@ -128,11 +171,16 @@ pub struct PathSample {
 
 impl PathSample {
     pub fn loss_rate(self) -> f64 {
-        let total = self.acked_bytes.saturating_add(self.lost_bytes);
+        let total = self.acked_packets.saturating_add(self.lost_packets);
         if total == 0 {
-            0.0
+            let total = self.acked_bytes.saturating_add(self.lost_bytes);
+            if total == 0 {
+                0.0
+            } else {
+                self.lost_bytes as f64 / total as f64
+            }
         } else {
-            self.lost_bytes as f64 / total as f64
+            self.lost_packets as f64 / total as f64
         }
     }
 
@@ -171,10 +219,14 @@ pub struct ControlDecision {
     pub fingerprint: LossFingerprint,
 }
 
-pub fn brutal_compatible_decision(cfg: &CongestionConfig, sample: PathSample) -> ControlDecision {
+pub fn brutal_compatible_decision(
+    cfg: &CongestionConfig,
+    direction: CongestionDirection,
+    sample: PathSample,
+) -> ControlDecision {
     let ack_rate = sample.ack_rate().max(cfg.min_ack_rate).clamp(0.05, 1.0);
     let rtt = sample.srtt.as_secs_f64().max(0.001);
-    let target = cfg.target_bps() as f64;
+    let target = cfg.target_bps_for(direction) as f64;
     let pacing_rate_bps = (target / ack_rate) as u64;
     let cwnd_bytes = ((target * rtt * cfg.pacing_gain) / ack_rate) as u64;
     ControlDecision {
@@ -187,7 +239,11 @@ pub fn brutal_compatible_decision(cfg: &CongestionConfig, sample: PathSample) ->
     }
 }
 
-pub fn nova_decision(cfg: &CongestionConfig, sample: PathSample) -> ControlDecision {
+pub fn nova_decision(
+    cfg: &CongestionConfig,
+    direction: CongestionDirection,
+    sample: PathSample,
+) -> ControlDecision {
     let fingerprint = classify_loss(sample, cfg.max_queue_delay);
     let mut gain = cfg.pacing_gain;
     match fingerprint {
@@ -198,24 +254,32 @@ pub fn nova_decision(cfg: &CongestionConfig, sample: PathSample) -> ControlDecis
         LossFingerprint::Unknown => {}
         _ => {}
     }
-    if sample.delivery_rate_bps > cfg.target_bps() {
+    if sample.delivery_rate_bps > cfg.target_bps_for(direction) {
         gain *= 1.03;
     }
 
     let mut tuned = cfg.clone();
     tuned.pacing_gain = gain.clamp(0.50, 1.80);
-    let mut decision = brutal_compatible_decision(&tuned, sample);
+    let mut decision = brutal_compatible_decision(&tuned, direction, sample);
     decision.fingerprint = fingerprint;
     decision
 }
 
 pub struct BadNetControllerFactory {
     cfg: CongestionConfig,
+    direction: CongestionDirection,
 }
 
 impl BadNetControllerFactory {
     pub fn new(cfg: CongestionConfig) -> Self {
-        Self { cfg }
+        Self {
+            cfg,
+            direction: CongestionDirection::ClientUpload,
+        }
+    }
+
+    pub fn new_for_direction(cfg: CongestionConfig, direction: CongestionDirection) -> Self {
+        Self { cfg, direction }
     }
 }
 
@@ -223,17 +287,22 @@ impl ControllerFactory for BadNetControllerFactory {
     fn build(self: Arc<Self>, _now: Instant, current_mtu: u16) -> Box<dyn Controller> {
         Box::new(BadNetController {
             cfg: self.cfg.clone(),
+            direction: self.direction,
             mtu: current_mtu,
-            acked_bytes: 0,
-            lost_bytes: 0,
+            loss_window: LossWindow::default(),
             min_rtt: DEFAULT_INITIAL_RTT,
             srtt: DEFAULT_INITIAL_RTT,
             delivery_rate_bps: 0,
+            start: _now,
+            last_activity: _now,
             last_decision: brutal_compatible_decision(
                 &self.cfg,
+                self.direction,
                 PathSample {
                     acked_bytes: 0,
                     lost_bytes: 0,
+                    acked_packets: 0,
+                    lost_packets: 0,
                     min_rtt: DEFAULT_INITIAL_RTT,
                     srtt: DEFAULT_INITIAL_RTT,
                     delivery_rate_bps: 0,
@@ -246,37 +315,52 @@ impl ControllerFactory for BadNetControllerFactory {
 #[derive(Clone)]
 pub struct BadNetController {
     cfg: CongestionConfig,
+    direction: CongestionDirection,
     mtu: u16,
-    acked_bytes: u64,
-    lost_bytes: u64,
+    loss_window: LossWindow,
     min_rtt: Duration,
     srtt: Duration,
     delivery_rate_bps: u64,
+    start: Instant,
+    last_activity: Instant,
     last_decision: ControlDecision,
 }
 
 impl BadNetController {
     fn sample(&self) -> PathSample {
+        let totals = self.loss_window.totals();
         PathSample {
-            acked_bytes: self.acked_bytes,
-            lost_bytes: self.lost_bytes,
+            acked_bytes: totals.acked_bytes,
+            lost_bytes: totals.lost_bytes,
+            acked_packets: totals.acked_packets,
+            lost_packets: totals.lost_packets,
             min_rtt: self.min_rtt,
             srtt: self.srtt,
             delivery_rate_bps: self.delivery_rate_bps,
         }
     }
 
-    fn recompute(&mut self) {
+    fn recompute(&mut self, now: Instant) {
+        if now.saturating_duration_since(self.last_activity) > IDLE_RESET_AFTER {
+            self.loss_window.reset();
+        }
+        self.last_activity = now;
         self.last_decision = match self.cfg.mode {
             CongestionMode::NovaCc
             | CongestionMode::BadNetLowLatency
-            | CongestionMode::AutoProbe => nova_decision(&self.cfg, self.sample()),
+            | CongestionMode::AutoProbe => nova_decision(&self.cfg, self.direction, self.sample()),
             CongestionMode::BadNetThroughput | CongestionMode::BrutalCompatible => {
-                brutal_compatible_decision(&self.cfg, self.sample())
+                brutal_compatible_decision(&self.cfg, self.direction, self.sample())
             }
-            CongestionMode::StandardQuic => brutal_compatible_decision(&self.cfg, self.sample()),
+            CongestionMode::StandardQuic => {
+                brutal_compatible_decision(&self.cfg, self.direction, self.sample())
+            }
         };
         record_metrics(self.cfg.mode, self.last_decision);
+    }
+
+    fn slot_second(&self, now: Instant) -> u64 {
+        now.saturating_duration_since(self.start).as_secs()
     }
 }
 
@@ -288,8 +372,10 @@ impl Controller for BadNetController {
         _is_persistent_congestion: bool,
         lost_bytes: u64,
     ) {
-        self.lost_bytes = self.lost_bytes.saturating_add(lost_bytes);
-        self.recompute();
+        let packets = packets_from_bytes(lost_bytes, self.mtu);
+        self.loss_window
+            .record_loss(self.slot_second(_now), lost_bytes, packets);
+        self.recompute(_now);
     }
 
     fn on_mtu_update(&mut self, new_mtu: u16) {
@@ -316,16 +402,82 @@ impl Controller for BadNetController {
         _app_limited: bool,
         rtt: &RttEstimator,
     ) {
-        self.acked_bytes = self.acked_bytes.saturating_add(bytes);
+        if now.saturating_duration_since(self.last_activity) > IDLE_RESET_AFTER {
+            self.loss_window.reset();
+        }
+        let packets = packets_from_bytes(bytes, self.mtu);
+        self.loss_window
+            .record_ack(self.slot_second(now), bytes, packets);
         self.srtt = rtt.get().max(Duration::from_millis(1));
         self.min_rtt = self.min_rtt.min(self.srtt);
         let elapsed = now.saturating_duration_since(sent).as_secs_f64().max(0.001);
         self.delivery_rate_bps = (bytes as f64 / elapsed) as u64;
-        self.recompute();
+        self.recompute(now);
     }
 
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
         self
+    }
+}
+
+fn packets_from_bytes(bytes: u64, mtu: u16) -> u64 {
+    let mtu = u64::from(mtu).max(1);
+    (bytes / mtu).max(1)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LossSlot {
+    second: u64,
+    acked_packets: u64,
+    lost_packets: u64,
+    acked_bytes: u64,
+    lost_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct LossWindow {
+    slots: [LossSlot; LOSS_WINDOW_SECS],
+}
+
+impl LossWindow {
+    fn reset(&mut self) {
+        self.slots = [LossSlot::default(); LOSS_WINDOW_SECS];
+    }
+
+    fn record_ack(&mut self, second: u64, bytes: u64, packets: u64) {
+        let slot = self.slot(second);
+        slot.acked_bytes = slot.acked_bytes.saturating_add(bytes);
+        slot.acked_packets = slot.acked_packets.saturating_add(packets);
+    }
+
+    fn record_loss(&mut self, second: u64, bytes: u64, packets: u64) {
+        let slot = self.slot(second);
+        slot.lost_bytes = slot.lost_bytes.saturating_add(bytes);
+        slot.lost_packets = slot.lost_packets.saturating_add(packets);
+    }
+
+    fn totals(&self) -> LossSlot {
+        self.slots
+            .iter()
+            .fold(LossSlot::default(), |mut acc, slot| {
+                acc.acked_bytes = acc.acked_bytes.saturating_add(slot.acked_bytes);
+                acc.lost_bytes = acc.lost_bytes.saturating_add(slot.lost_bytes);
+                acc.acked_packets = acc.acked_packets.saturating_add(slot.acked_packets);
+                acc.lost_packets = acc.lost_packets.saturating_add(slot.lost_packets);
+                acc
+            })
+    }
+
+    fn slot(&mut self, second: u64) -> &mut LossSlot {
+        let idx = second as usize % LOSS_WINDOW_SECS;
+        let slot = &mut self.slots[idx];
+        if slot.second != second {
+            *slot = LossSlot {
+                second,
+                ..LossSlot::default()
+            };
+        }
+        slot
     }
 }
 
@@ -372,11 +524,14 @@ mod tests {
         let sample = PathSample {
             acked_bytes: 80,
             lost_bytes: 20,
+            acked_packets: 80,
+            lost_packets: 20,
             min_rtt: Duration::from_millis(40),
             srtt: Duration::from_millis(50),
             delivery_rate_bps: 9_000_000,
         };
-        let decision = brutal_compatible_decision(&cfg(), sample);
+        let decision =
+            brutal_compatible_decision(&cfg(), CongestionDirection::ClientUpload, sample);
         assert_eq!(decision.ack_rate, 0.8);
         assert!(decision.pacing_rate_bps > cfg().target_bps());
         assert!(decision.cwnd_bytes >= MIN_WINDOW);
@@ -387,6 +542,8 @@ mod tests {
         let wireless = PathSample {
             acked_bytes: 98,
             lost_bytes: 2,
+            acked_packets: 98,
+            lost_packets: 2,
             min_rtt: Duration::from_millis(40),
             srtt: Duration::from_millis(45),
             delivery_rate_bps: 1,
@@ -410,6 +567,8 @@ mod tests {
         let bloated = PathSample {
             acked_bytes: 100,
             lost_bytes: 0,
+            acked_packets: 100,
+            lost_packets: 0,
             min_rtt: Duration::from_millis(40),
             srtt: Duration::from_millis(180),
             delivery_rate_bps: 12_000_000,
@@ -419,8 +578,26 @@ mod tests {
             ..cfg()
         };
         assert!(
-            nova_decision(&cfg, bloated).cwnd_bytes
-                < brutal_compatible_decision(&cfg, bloated).cwnd_bytes
+            nova_decision(&cfg, CongestionDirection::ClientUpload, bloated).cwnd_bytes
+                < brutal_compatible_decision(&cfg, CongestionDirection::ClientUpload, bloated)
+                    .cwnd_bytes
+        );
+    }
+
+    #[test]
+    fn target_rate_is_direction_aware() {
+        let cfg = CongestionConfig {
+            up_mbps: 10,
+            down_mbps: 100,
+            ..cfg()
+        };
+        assert_eq!(
+            cfg.target_bps_for(CongestionDirection::ClientUpload),
+            1_250_000
+        );
+        assert_eq!(
+            cfg.target_bps_for(CongestionDirection::ServerDownload),
+            12_500_000
         );
     }
 }
