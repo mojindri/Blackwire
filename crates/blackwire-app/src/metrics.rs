@@ -273,6 +273,21 @@ fn describe_metrics() {
         metrics::Unit::Seconds,
         "Latency until the first upstream byte can be written"
     );
+    metrics::describe_counter!(
+        "blackwire_first_packet_boost_total",
+        metrics::Unit::Count,
+        "First-packet boost decisions by kind"
+    );
+    metrics::describe_histogram!(
+        "blackwire_ttfb_seconds",
+        metrics::Unit::Seconds,
+        "Time-to-first-byte by protocol and transport"
+    );
+    metrics::describe_counter!(
+        "blackwire_connection_plan_selected_total",
+        metrics::Unit::Count,
+        "Compiled connection plan selections"
+    );
     metrics::describe_histogram!(
         "blackwire_route_match_seconds",
         metrics::Unit::Seconds,
@@ -721,6 +736,36 @@ pub fn record_first_byte_latency(protocol: &str, transport: &str, elapsed: Durat
         "transport" => transport.to_owned()
     )
     .record(elapsed.as_secs_f64());
+    metrics::histogram!(
+        "blackwire_ttfb_seconds",
+        "protocol" => protocol.to_owned(),
+        "transport" => transport.to_owned()
+    )
+    .record(elapsed.as_secs_f64());
+}
+
+/// Record a first-packet boost decision.
+pub fn record_first_packet_boost(kind: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_first_packet_boost_total",
+        "kind" => kind.to_owned()
+    )
+    .increment(1);
+}
+
+/// Record a compiled connection plan selection.
+pub fn record_connection_plan_selected(plan: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_connection_plan_selected_total",
+        "plan" => plan.to_owned()
+    )
+    .increment(1);
 }
 
 /// Record compiled router match latency.
