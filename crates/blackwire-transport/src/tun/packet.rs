@@ -359,6 +359,8 @@ pub fn build_tcp_packet(
             seq,
             ack,
             flags,
+            65535,
+            &[],
             payload,
         ),
         (SocketAddr::V6(src), SocketAddr::V6(dst)) => build_ipv6_tcp_packet(
@@ -369,6 +371,47 @@ pub fn build_tcp_packet(
             seq,
             ack,
             flags,
+            65535,
+            &[],
+            payload,
+        ),
+        _ => None,
+    }
+}
+
+pub fn build_tcp_packet_with_options(
+    src: SocketAddr,
+    dst: SocketAddr,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    window: u16,
+    options: &[u8],
+    payload: &[u8],
+) -> Option<Vec<u8>> {
+    match (src, dst) {
+        (SocketAddr::V4(src), SocketAddr::V4(dst)) => build_ipv4_tcp_packet(
+            *src.ip(),
+            *dst.ip(),
+            src.port(),
+            dst.port(),
+            seq,
+            ack,
+            flags,
+            window,
+            options,
+            payload,
+        ),
+        (SocketAddr::V6(src), SocketAddr::V6(dst)) => build_ipv6_tcp_packet(
+            *src.ip(),
+            *dst.ip(),
+            src.port(),
+            dst.port(),
+            seq,
+            ack,
+            flags,
+            window,
+            options,
             payload,
         ),
         _ => None,
@@ -384,9 +427,13 @@ fn build_ipv4_tcp_packet(
     seq: u32,
     ack: u32,
     flags: u8,
+    window: u16,
+    options: &[u8],
     payload: &[u8],
 ) -> Option<Vec<u8>> {
-    let tcp_len = 20usize.checked_add(payload.len())?;
+    let padded_options_len = (options.len() + 3) & !3;
+    let header_len = 20usize.checked_add(padded_options_len)?;
+    let tcp_len = header_len.checked_add(payload.len())?;
     let total_len = 20usize.checked_add(tcp_len)?;
     if total_len > u16::MAX as usize || tcp_len > u16::MAX as usize {
         return None;
@@ -407,10 +454,13 @@ fn build_ipv4_tcp_packet(
     out[tcp + 2..tcp + 4].copy_from_slice(&dst_port.to_be_bytes());
     out[tcp + 4..tcp + 8].copy_from_slice(&seq.to_be_bytes());
     out[tcp + 8..tcp + 12].copy_from_slice(&ack.to_be_bytes());
-    out[tcp + 12] = 0x50;
+    out[tcp + 12] = ((header_len / 4) as u8) << 4;
     out[tcp + 13] = flags;
-    out[tcp + 14..tcp + 16].copy_from_slice(&65535u16.to_be_bytes());
-    out[tcp + 20..].copy_from_slice(payload);
+    out[tcp + 14..tcp + 16].copy_from_slice(&window.to_be_bytes());
+    if !options.is_empty() {
+        out[tcp + 20..tcp + 20 + options.len()].copy_from_slice(options);
+    }
+    out[tcp + header_len..].copy_from_slice(payload);
     let tcp_csum = tcp_checksum_ipv4(src, dst, &out[tcp..]);
     out[tcp + 16..tcp + 18].copy_from_slice(&tcp_csum.to_be_bytes());
     Some(out)
@@ -425,9 +475,13 @@ fn build_ipv6_tcp_packet(
     seq: u32,
     ack: u32,
     flags: u8,
+    window: u16,
+    options: &[u8],
     payload: &[u8],
 ) -> Option<Vec<u8>> {
-    let tcp_len = 20usize.checked_add(payload.len())?;
+    let padded_options_len = (options.len() + 3) & !3;
+    let header_len = 20usize.checked_add(padded_options_len)?;
+    let tcp_len = header_len.checked_add(payload.len())?;
     if tcp_len > u16::MAX as usize {
         return None;
     }
@@ -445,10 +499,13 @@ fn build_ipv6_tcp_packet(
     out[tcp + 2..tcp + 4].copy_from_slice(&dst_port.to_be_bytes());
     out[tcp + 4..tcp + 8].copy_from_slice(&seq.to_be_bytes());
     out[tcp + 8..tcp + 12].copy_from_slice(&ack.to_be_bytes());
-    out[tcp + 12] = 0x50;
+    out[tcp + 12] = ((header_len / 4) as u8) << 4;
     out[tcp + 13] = flags;
-    out[tcp + 14..tcp + 16].copy_from_slice(&65535u16.to_be_bytes());
-    out[tcp + 20..].copy_from_slice(payload);
+    out[tcp + 14..tcp + 16].copy_from_slice(&window.to_be_bytes());
+    if !options.is_empty() {
+        out[tcp + 20..tcp + 20 + options.len()].copy_from_slice(options);
+    }
+    out[tcp + header_len..].copy_from_slice(payload);
     let tcp_csum = tcp_checksum_ipv6(src, dst, &out[tcp..]);
     out[tcp + 16..tcp + 18].copy_from_slice(&tcp_csum.to_be_bytes());
     Some(out)
