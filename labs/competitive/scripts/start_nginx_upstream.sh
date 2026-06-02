@@ -74,6 +74,10 @@ for _ in $(seq 1 40); do
         echo "$pid" > "$WORK_DIR/nginx.pid"
         exit 0
     fi
+    if ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$PORT$"; then
+        echo "$pid" > "$WORK_DIR/nginx.pid"
+        exit 0
+    fi
     sleep 0.25
 done
 kill "$pid" 2>/dev/null || true
