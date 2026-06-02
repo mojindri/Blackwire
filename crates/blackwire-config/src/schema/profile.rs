@@ -26,6 +26,59 @@ pub enum ProfileMode {
     Stealth,
 }
 
+/// First-packet acceleration knobs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstPacketBoostConfig {
+    /// Master switch for first-packet acceleration.
+    #[serde(default = "FirstPacketBoostConfig::default_enabled")]
+    pub enabled: bool,
+    /// Pre-resolve DNS where route strategy can use IP rules.
+    #[serde(default = "FirstPacketBoostConfig::default_enabled")]
+    pub dns: bool,
+    /// Treat TLS ClientHello forwarding as an eligible first-packet boost.
+    #[serde(default = "FirstPacketBoostConfig::default_enabled")]
+    pub tls_client_hello: bool,
+    /// Forward first data bytes as early payload where protocol handlers support it.
+    #[serde(default = "FirstPacketBoostConfig::default_enabled")]
+    pub send_early_payload: bool,
+    /// Duplicate first control packet on bad-network paths when supported.
+    #[serde(default)]
+    pub duplicate_control_on_badnet: bool,
+    /// Packet scheduling priority for first-packet work.
+    #[serde(default)]
+    pub priority: FirstPacketPriority,
+}
+
+impl FirstPacketBoostConfig {
+    fn default_enabled() -> bool {
+        true
+    }
+}
+
+impl Default for FirstPacketBoostConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dns: true,
+            tls_client_hello: true,
+            send_early_payload: true,
+            duplicate_control_on_badnet: false,
+            priority: FirstPacketPriority::High,
+        }
+    }
+}
+
+/// Scheduling priority assigned to first-packet work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FirstPacketPriority {
+    Normal,
+    #[default]
+    High,
+    Critical,
+}
+
 impl std::fmt::Display for ProfileMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1045,6 +1098,7 @@ mod tests {
             fast: None,
             budget: None,
             vision: None,
+            first_packet_boost: None,
             quic: None,
             datagram: None,
             fec: None,
@@ -1076,6 +1130,39 @@ mod tests {
             api: None,
             metrics_addr: None,
         }
+    }
+
+    #[test]
+    fn first_packet_boost_config_parses_camel_case() {
+        let cfg: Config = serde_json::from_value(serde_json::json!({
+            "firstPacketBoost": {
+                "enabled": true,
+                "dns": false,
+                "tlsClientHello": true,
+                "sendEarlyPayload": true,
+                "duplicateControlOnBadnet": true,
+                "priority": "critical"
+            },
+            "inbounds": [{
+                "tag": "in",
+                "protocol": "socks",
+                "listen": "127.0.0.1",
+                "port": 1080
+            }],
+            "outbounds": [{
+                "tag": "direct",
+                "protocol": "freedom"
+            }]
+        }))
+        .unwrap();
+
+        let boost = cfg.first_packet_boost.unwrap();
+        assert!(boost.enabled);
+        assert!(!boost.dns);
+        assert!(boost.tls_client_hello);
+        assert!(boost.send_early_payload);
+        assert!(boost.duplicate_control_on_badnet);
+        assert_eq!(boost.priority, FirstPacketPriority::Critical);
     }
 
     #[test]
