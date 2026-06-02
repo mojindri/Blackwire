@@ -23,8 +23,10 @@ pub enum CongestionDirection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum CongestionMode {
     StandardQuic,
+    #[default]
     BrutalCompatible,
     NovaCc,
     BadNetLowLatency,
@@ -45,11 +47,6 @@ impl CongestionMode {
     }
 }
 
-impl Default for CongestionMode {
-    fn default() -> Self {
-        Self::BrutalCompatible
-    }
-}
 
 impl std::str::FromStr for CongestionMode {
     type Err = String;

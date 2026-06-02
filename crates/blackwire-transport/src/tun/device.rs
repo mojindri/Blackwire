@@ -55,19 +55,12 @@ pub struct TunConfig {
 
 /// Linux-only packet backend settings carried alongside the TUN runtime config.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub struct TunLinuxConfig {
     pub backend: TunLinuxBackend,
     pub af_xdp: TunAfXdpConfig,
 }
 
-impl Default for TunLinuxConfig {
-    fn default() -> Self {
-        Self {
-            backend: TunLinuxBackend::default(),
-            af_xdp: TunAfXdpConfig::default(),
-        }
-    }
-}
 
 /// Linux packet backend selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
