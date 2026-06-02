@@ -20,8 +20,8 @@ pub use logging_dns::{DnsConfig, FakeIpConfig, LogConfig};
 pub use profile::{
     explain_cost, validate_fast_profile, BudgetConfig, CopyMode, CostClass, CostReport, FastConfig,
     FastExperimentalBackendPolicy, FastLinuxConfig, FastPoolPolicy, FastRelayConfig,
-    FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy, FastZerocopyPolicy, ProfileMode,
-    ProfileViolation, ProtocolCost,
+    FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy, FastZerocopyPolicy,
+    FirstPacketBoostConfig, FirstPacketPriority, ProfileMode, ProfileViolation, ProtocolCost,
 };
 pub use protocol::{NetworkType, Protocol, SecurityType};
 pub use routing::{
@@ -59,6 +59,15 @@ pub struct Config {
     /// XTLS Vision optimization policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<VisionConfig>,
+
+    /// First-packet latency acceleration policy.
+    #[serde(
+        default,
+        rename = "firstPacketBoost",
+        alias = "first_packet_boost",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub first_packet_boost: Option<FirstPacketBoostConfig>,
 
     /// QUIC socket tuning used by QUIC/Hysteria2 endpoints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
