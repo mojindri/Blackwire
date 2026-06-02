@@ -439,6 +439,36 @@ fn describe_metrics() {
         "Configured QUIC endpoint shard count"
     );
     metrics::describe_counter!(
+        "blackwire_quic_endpoint_active_total",
+        metrics::Unit::Count,
+        "QUIC endpoints successfully opened"
+    );
+    metrics::describe_counter!(
+        "blackwire_quic_endpoint_packets_total",
+        metrics::Unit::Count,
+        "QUIC endpoint packets by endpoint and direction"
+    );
+    metrics::describe_counter!(
+        "blackwire_quic_endpoint_bytes_total",
+        metrics::Unit::Bytes,
+        "QUIC endpoint bytes by endpoint and direction"
+    );
+    metrics::describe_counter!(
+        "blackwire_quic_socket_drops_total",
+        metrics::Unit::Count,
+        "QUIC UDP socket drops reported by platform counters"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_recv_buffer_bytes",
+        metrics::Unit::Bytes,
+        "Actual QUIC UDP receive socket buffer size"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_send_buffer_bytes",
+        metrics::Unit::Bytes,
+        "Actual QUIC UDP send socket buffer size"
+    );
+    metrics::describe_counter!(
         "blackwire_quic_loss_fingerprint_total",
         metrics::Unit::Count,
         "Classified QUIC path loss fingerprints"

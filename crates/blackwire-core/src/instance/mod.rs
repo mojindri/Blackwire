@@ -56,7 +56,9 @@ use blackwire_transport::{create_tun, ensure_tun_runtime_supported, TunConfig, T
 use tokio::net::UdpSocket as TokioUdpSocket;
 
 use crate::http::build_http_inbound;
-use crate::hysteria2::{build_hysteria2_outbound, start_hysteria2_inbound};
+use crate::hysteria2::{
+    build_hysteria2_outbound, socket_config_from_quic, start_hysteria2_inbound,
+};
 use crate::outbound_transport::uses_quic;
 mod helpers;
 
@@ -318,7 +320,7 @@ impl Instance {
                 }
                 Protocol::Vless => build_vless_outbound(out_cfg)
                     .with_context(|| format!("building VLESS outbound '{}'", out_cfg.tag))?,
-                Protocol::Hysteria2 => build_hysteria2_outbound(out_cfg)
+                Protocol::Hysteria2 => build_hysteria2_outbound(out_cfg, config.quic.as_ref())
                     .with_context(|| format!("building Hysteria2 outbound '{}'", out_cfg.tag))?,
                 Protocol::Trojan => build_trojan_outbound(out_cfg)
                     .with_context(|| format!("building Trojan outbound '{}'", out_cfg.tag))?,
@@ -452,7 +454,7 @@ impl Instance {
             if in_cfg.protocol == Protocol::Hysteria2 {
                 info!(tag = %in_cfg.tag, addr = %addr, "starting Hysteria2 inbound listener");
                 let dispatcher_for_h2 = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
-                let task = start_hysteria2_inbound(in_cfg, dispatcher_for_h2)
+                let task = start_hysteria2_inbound(in_cfg, config.quic.as_ref(), dispatcher_for_h2)
                     .with_context(|| format!("starting Hysteria2 inbound '{}'", in_cfg.tag))?;
                 tasks.push(task);
                 continue;
@@ -600,8 +602,13 @@ impl Instance {
                     })?;
                 let key_pem = std::fs::read_to_string(&tls_cfg.key_file)
                     .with_context(|| format!("cannot read QUIC key file '{}'", tls_cfg.key_file))?;
-                let endpoint = blackwire_transport::quic_server_endpoint(addr, &cert_pem, &key_pem)
-                    .with_context(|| format!("binding QUIC inbound '{}'", in_cfg.tag))?;
+                let endpoint = blackwire_transport::quic_server_endpoint_with_socket_config(
+                    addr,
+                    &cert_pem,
+                    &key_pem,
+                    socket_config_from_quic(config.quic.as_ref()),
+                )
+                .with_context(|| format!("binding QUIC inbound '{}'", in_cfg.tag))?;
                 let conn_handler = Arc::new(InboundConnectionHandler {
                     inbound: Arc::clone(&handler),
                     dispatcher: dispatcher_for_handler,
