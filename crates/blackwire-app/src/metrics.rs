@@ -473,6 +473,36 @@ fn describe_metrics() {
         metrics::Unit::Count,
         "Classified QUIC path loss fingerprints"
     );
+    metrics::describe_counter!(
+        "blackwire_fec_mode_total",
+        metrics::Unit::Count,
+        "Selected FEC modes for protected datagram groups"
+    );
+    metrics::describe_counter!(
+        "blackwire_fec_recovered_packets_total",
+        metrics::Unit::Count,
+        "Datagram packets recovered by FEC"
+    );
+    metrics::describe_counter!(
+        "blackwire_fec_overhead_bytes_total",
+        metrics::Unit::Bytes,
+        "FEC parity overhead bytes sent"
+    );
+    metrics::describe_counter!(
+        "blackwire_fec_stale_drops_total",
+        metrics::Unit::Count,
+        "Stale FEC decode groups dropped before recovery"
+    );
+    metrics::describe_counter!(
+        "blackwire_datagram_packets_total",
+        metrics::Unit::Count,
+        "QUIC DATAGRAM packets by traffic class and direction"
+    );
+    metrics::describe_counter!(
+        "blackwire_datagram_fallback_total",
+        metrics::Unit::Count,
+        "QUIC DATAGRAM fallback events by reason"
+    );
     blackwire_connmgr::metrics::describe_metrics();
 }
 
