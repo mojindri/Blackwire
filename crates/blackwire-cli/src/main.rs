@@ -35,7 +35,8 @@ use validator::Validate;
 
 use blackwire_api::management::{InboundManagement, NativeEndpointConfig};
 use blackwire_config::schema::{
-    validate_fast_profile, Config, InboundConfig, OutboundConfig, ProfileMode, ProfileViolation,
+    explain_cost, validate_fast_profile, Config, InboundConfig, OutboundConfig, ProfileMode,
+    ProfileViolation,
 };
 use blackwire_config::ConfigManager;
 use blackwire_core::{requires_instance_restart, Instance};
@@ -98,6 +99,9 @@ enum Command {
     /// Inspect or close active in-process connections.
     Connections(ConnectionsArgs),
 
+    /// Explain the hot-path cost of a config and suggest lower-cost changes.
+    ExplainCost(ExplainCostArgs),
+
     /// Print the build version and quit.
     Version,
 }
@@ -133,6 +137,18 @@ struct TestArgs {
     /// Override the operating profile (`compat` or `fast`).
     ///
     /// Validates the config against the given profile's constraints.
+    #[arg(long = "profile", value_name = "PROFILE")]
+    profile: Option<ProfileMode>,
+}
+
+/// Arguments for the `explain-cost` subcommand.
+#[derive(clap::Args)]
+struct ExplainCostArgs {
+    /// Path to the JSON config file to inspect.
+    #[arg(short = 'c', long = "config", value_name = "PATH")]
+    config: PathBuf,
+
+    /// Override the operating profile before calculating cost.
     #[arg(long = "profile", value_name = "PROFILE")]
     profile: Option<ProfileMode>,
 }
@@ -236,6 +252,23 @@ fn main() {
         Command::X25519 => cmd_x25519(),
         Command::Uuid => cmd_uuid(),
         Command::Connections(args) => cmd_connections(args),
+        Command::ExplainCost(args) => {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Error: failed to build Tokio runtime: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+            if let Err(e) = rt.block_on(cmd_explain_cost(args)) {
+                eprintln!("Error: {e:#}");
+                std::process::exit(1);
+            }
+        }
 
         Command::Version => {
             println!("blackwire {}", env!("CARGO_PKG_VERSION"));
@@ -731,6 +764,16 @@ async fn test_config(args: TestArgs) -> Result<()> {
         .await
         .with_context(|| format!("loading config from {}", args.config.display()))?;
     apply_profile_override_and_validate(&manager.get(), args.profile)?;
+    Ok(())
+}
+
+async fn cmd_explain_cost(args: ExplainCostArgs) -> Result<()> {
+    let manager = ConfigManager::load(&args.config)
+        .await
+        .with_context(|| format!("loading config from {}", args.config.display()))?;
+    let config = effective_config(manager.get(), args.profile);
+    let report = explain_cost(&config);
+    print!("{}", report.render_text());
     Ok(())
 }
 
