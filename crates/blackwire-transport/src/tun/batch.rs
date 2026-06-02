@@ -6,6 +6,7 @@ pub struct TunBatchConfig {
     pub enabled: bool,
     pub max_packets: usize,
     pub max_delay: Duration,
+    pub latency_flush_bytes: usize,
 }
 
 impl Default for TunBatchConfig {
@@ -14,6 +15,7 @@ impl Default for TunBatchConfig {
             enabled: true,
             max_packets: 32,
             max_delay: Duration::from_micros(750),
+            latency_flush_bytes: 256,
         }
     }
 }
@@ -24,6 +26,11 @@ impl TunBatchConfig {
             enabled: self.enabled,
             max_packets: self.max_packets.clamp(1, 256),
             max_delay: self.max_delay.min(Duration::from_millis(10)),
+            latency_flush_bytes: if self.latency_flush_bytes == 0 {
+                0
+            } else {
+                self.latency_flush_bytes.clamp(64, 4096)
+            },
         }
     }
 }
@@ -60,6 +67,14 @@ impl TunPacketBatch {
         if !self.config.enabled || self.packets.len() >= self.config.max_packets {
             return true;
         }
+        if self.config.latency_flush_bytes > 0
+            && self
+                .packets
+                .first()
+                .is_some_and(|packet| packet.len() <= self.config.latency_flush_bytes)
+        {
+            return true;
+        }
         self.first_packet_at
             .is_some_and(|first| now.duration_since(first) >= self.config.max_delay)
     }
@@ -88,6 +103,7 @@ mod tests {
             enabled: true,
             max_packets: 2,
             max_delay: Duration::from_secs(1),
+            latency_flush_bytes: 0,
         });
         let now = Instant::now();
         batch.push(vec![1], now);
@@ -102,9 +118,23 @@ mod tests {
             enabled: true,
             max_packets: 16,
             max_delay: Duration::from_millis(1),
+            latency_flush_bytes: 0,
         });
         let now = Instant::now();
         batch.push(vec![1], now);
         assert!(batch.should_flush(now + Duration::from_millis(2)));
+    }
+
+    #[test]
+    fn batch_flushes_latency_sized_packets_immediately() {
+        let mut batch = TunPacketBatch::new(TunBatchConfig {
+            enabled: true,
+            max_packets: 16,
+            max_delay: Duration::from_secs(1),
+            latency_flush_bytes: 256,
+        });
+        let now = Instant::now();
+        batch.push(vec![0; 96], now);
+        assert!(batch.should_flush(now));
     }
 }
