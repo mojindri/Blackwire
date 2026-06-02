@@ -96,7 +96,8 @@ pub use tls::{
 };
 pub use tun::{
     build_tcp_packet, build_tcp_rst, create_tun, current_tun_support, ensure_tun_runtime_supported,
-    IpPacket, TransportProtocol, TunBatchConfig, TunConfig, TunPlatformSupport, TunRuntime,
+    AfXdpBackend, AfXdpCapabilities, IpPacket, TransportProtocol, TunAfXdpConfig, TunBatchConfig,
+    TunConfig, TunDevice, TunLinuxBackend, TunLinuxConfig, TunPlatformSupport, TunRuntime,
     UdpNatTable,
 };
 pub use v2rayquic::{
