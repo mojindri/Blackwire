@@ -49,6 +49,11 @@ HYSTERIA2_UDP_CONCURRENCY="${HYSTERIA2_UDP_CONCURRENCY:-1}"
 HYSTERIA2_UDP_PAYLOAD_BYTES="${HYSTERIA2_UDP_PAYLOAD_BYTES:-64}"
 HYSTERIA2_UDP_ECHO_PORT="${HYSTERIA2_UDP_ECHO_PORT:-1053}"
 HYSTERIA2_UDP_TIMEOUT_MS="${HYSTERIA2_UDP_TIMEOUT_MS:-3000}"
+TUN_UDP_COUNT="${TUN_UDP_COUNT:-500}"
+TUN_UDP_PAYLOAD_BYTES="${TUN_UDP_PAYLOAD_BYTES:-64}"
+TUN_UDP_ECHO_PORT="${TUN_UDP_ECHO_PORT:-1056}"
+TUN_UDP_TIMEOUT_MS="${TUN_UDP_TIMEOUT_MS:-3000}"
+TUN_TCP_PAYLOAD="${TUN_TCP_PAYLOAD:-64m}"
 
 SERVER_HOST="${COMPETITIVE_SERVER_HOST:-91.107.164.107}"
 CLIENT_HOST="${COMPETITIVE_CLIENT_HOST:-91.107.176.118}"
@@ -320,6 +325,62 @@ run_remote() {
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "if [ -f '$dir/$name.pid' ]; then pid=\$(cat '$dir/$name.pid'); ps -p \"\$pid\" -o pid=,pcpu=,rss=,comm= 2>/dev/null || true; fi" \
             > "$REPORT_DIR/${variant}-${role}-proc-${TS}.log" 2>&1 || true
     }
+    remote_tun_control_peer() {
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "printf '%s\n' \"\${SSH_CLIENT%% *}\"" 2>/dev/null || true
+    }
+    remote_tun_safety_add() {
+        local peer="$1"
+        [ -n "$peer" ] || return 0
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "ip rule add priority 50 to '$peer' lookup main 2>/dev/null || true; ip route flush cache 2>/dev/null || true" >/dev/null 2>&1 || true
+    }
+    remote_tun_safety_del() {
+        local peer="$1"
+        [ -n "$peer" ] || return 0
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "while ip rule del priority 50 to '$peer' lookup main 2>/dev/null; do :; done; ip route flush cache 2>/dev/null || true" >/dev/null 2>&1 || true
+    }
+    remote_tun_cleanup_client() {
+        local peer="$1"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "pkill -f 'blackwire.*blackwire-tun' 2>/dev/null || true; pkill -f 'sing-box run -c singbox-tun' 2>/dev/null || true; ip link del bw-tun-i 2>/dev/null || true; ip link del sb-tun-i 2>/dev/null || true; ip route del default dev bw-tun-i table 100 2>/dev/null || true; while ip rule del not fwmark 0x1234 lookup 100 2>/dev/null; do :; done; iptables -t nat -D OUTPUT -p udp --dport 53 -j REDIRECT --to-port 15300 2>/dev/null || true; ip6tables -t nat -D OUTPUT -p udp --dport 53 -j REDIRECT --to-port 15300 2>/dev/null || true; ip route flush cache 2>/dev/null || true" >/dev/null 2>&1 || true
+        remote_tun_safety_del "$peer"
+    }
+    remote_start_cpu_sampler() {
+        local host="$1" dir="$2" name="$3" variant="$4"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "cd '$dir'; pid=\$(cat '$name.pid'); (while kill -0 \"\$pid\" 2>/dev/null; do ps -p \"\$pid\" -o pcpu=,rss= 2>/dev/null; sleep 0.2; done) > '${variant}-cpu.log' 2>/dev/null & echo \$! > '${variant}-cpu.pid'" >/dev/null 2>&1 || true
+    }
+    remote_stop_cpu_sampler() {
+        local host="$1" dir="$2" variant="$3"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "cd '$dir'; if [ -f '${variant}-cpu.pid' ]; then kill \$(cat '${variant}-cpu.pid') 2>/dev/null || true; fi" >/dev/null 2>&1 || true
+        scp "${SSH_OPTS[@]}" "$SSH_USER@$host:$dir/${variant}-cpu.log" "$REPORT_DIR/${variant}-cpu-${TS}.log" >/dev/null 2>&1 || true
+    }
+    cpu_avg_from_log() {
+        local file="$1"
+        python3 - "$file" <<'PY'
+import sys
+vals=[]
+rss=[]
+try:
+    for line in open(sys.argv[1]):
+        parts=line.split()
+        if len(parts) >= 1:
+            vals.append(float(parts[0]))
+        if len(parts) >= 2:
+            rss.append(float(parts[1]) / 1024.0)
+except FileNotFoundError:
+    pass
+avg=sum(vals)/len(vals) if vals else 0.0
+maxrss=max(rss) if rss else 0.0
+print(f"{avg:.3f} {maxrss:.3f}")
+PY
+    }
+    write_remote_tun_configs() {
+        local peer="$1"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/blackwire-tun.json'" <<'EOF'
+{"log":{"level":"warn"},"tun":{"name":"bw-tun-i","address":"198.18.20.1","netmask":"255.255.255.0","mtu":1500,"bypass_mark":4660,"redirect_port":17890,"dns_port":15300,"batch":{"enabled":true,"maxPackets":32,"maxDelayUs":750},"sessions":{"udpMax":4096,"udpIdleTimeoutSec":60,"tcpMax":4096}},"inbounds":[{"tag":"tun-socks","protocol":"socks","listen":"127.0.0.1","port":17890}],"outbounds":[{"tag":"direct","protocol":"freedom"}],"routing":{"rules":[]}}
+EOF
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cat > '$REMOTE_CLIENT_DIR/singbox-tun.json'" <<EOF
+{"log":{"level":"warn"},"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"sb-tun-i","address":["198.18.30.1/30"],"mtu":1500,"auto_route":true,"strict_route":true,"route_exclude_address":["$peer/32"]}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"auto_detect_interface":true,"final":"direct"}}
+EOF
+    }
     write_remote_configs() {
         local _server_dir="$1" _client_dir="$2"
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "cat > '$REMOTE_SERVER_DIR/blackwire-server.json'" <<'EOF'
@@ -471,6 +532,66 @@ EOF
             emit_row "$variant" failed "$raw" hysteria2 quic-datagram "$policy" "mixed"
         fi
     }
+    run_remote_tun_udp_bench() {
+        local variant="$1"
+        local raw
+        if raw="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cd '$REMOTE_CLIENT_DIR'; python3 direct_udp_bench.py --host '$SERVER_HOST' --port '$TUN_UDP_ECHO_PORT' --count '$TUN_UDP_COUNT' --payload-bytes '$TUN_UDP_PAYLOAD_BYTES' --timeout-ms '$TUN_UDP_TIMEOUT_MS' --variant '$variant' --scenario '$SCENARIO' --timestamp '$TS' --loss-percent '$LOSS_PERCENT' --rtt-ms '$RTT_MS' --jitter-ms '$JITTER_MS'" 2>&1)"; then
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-tun-udp-${TS}.raw.log"
+            printf '%s\n' "$raw" >> "$OUT"
+        else
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-tun-udp-${TS}.raw.log"
+            emit_row "$variant" failed "$raw" direct tun-udp tun "${TUN_UDP_PAYLOAD_BYTES}b"
+        fi
+    }
+    run_remote_tun_tcp_bench() {
+        local variant="$1" proc_name="$2"
+        local target="http://$SERVER_HOST:$COMPETITIVE_REMOTE_UPSTREAM_PORT/$TUN_TCP_PAYLOAD"
+        remote_start_cpu_sampler "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" "$proc_name" "$variant"
+        local raw
+        if raw="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "curl -fsS -o /dev/null -w 'speed_download=%{speed_download}\ntime_total=%{time_total}\nsize_download=%{size_download}\n' '$target'" 2>&1)"; then
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-tun-tcp-${TS}.raw.log"
+        else
+            printf '%s\n' "$raw" > "$REPORT_DIR/${variant}-tun-tcp-${TS}.raw.log"
+            remote_stop_cpu_sampler "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" "$variant"
+            emit_row "$variant" failed "$raw" direct tun-tcp tun "$TUN_TCP_PAYLOAD"
+            return
+        fi
+        remote_stop_cpu_sampler "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" "$variant"
+        local cpu_stats cpu_avg rss_mb
+        cpu_stats="$(cpu_avg_from_log "$REPORT_DIR/${variant}-cpu-${TS}.log")"
+        cpu_avg="${cpu_stats%% *}"
+        rss_mb="${cpu_stats##* }"
+        RAW_TEXT="$raw" python3 - "$variant" "$SCENARIO" "$TUN_TCP_PAYLOAD" "$COMPETITIVE_CONCURRENCY" "$COMPETITIVE_DURATION" "$TS" "$LOSS_PERCENT" "$RTT_MS" "$JITTER_MS" "$cpu_avg" "$rss_mb" <<'PY' >> "$OUT"
+import json, os, re, sys
+variant, scenario, payload, conc, duration, ts, loss, rtt, jitter, cpu, rss = sys.argv[1:]
+raw = os.environ.get("RAW_TEXT", "")
+def val(name):
+    m = re.search(rf"{name}=([0-9.]+)", raw)
+    return float(m.group(1)) if m else 0.0
+speed_bps = val("speed_download")
+size = val("size_download")
+elapsed = val("time_total")
+row = {
+    "timestamp": ts, "variant": variant, "scenario": scenario,
+    "protocol": "direct", "transport": "tun-tcp", "profile": "tun",
+    "payload_size": payload, "concurrency": int(conc), "duration": float(duration),
+    "keepalive_on": True, "loss_percent": float(loss), "rtt_ms": float(rtt),
+    "jitter_ms": float(jitter), "bandwidth_limit": "",
+    "requests_per_sec": 1.0 / elapsed if elapsed else 0,
+    "throughput_mbps": round(speed_bps * 8.0 / 1_000_000.0, 4),
+    "ttfb_p50": 0, "ttfb_p90": 0, "ttfb_p95": 0, "ttfb_p99": 0, "ttfb_p999": 0,
+    "latency_p50": elapsed, "latency_p90": elapsed, "latency_p95": elapsed,
+    "latency_p99": elapsed, "latency_p999": elapsed,
+    "cpu_user": 0, "cpu_system": 0, "cpu_percent": float(cpu), "rss_mb": float(rss),
+    "allocations_per_sec": 0, "syscalls_per_sec": 0, "bytes_up": 0,
+    "bytes_down": int(size), "errors": 0 if speed_bps > 0 else 1,
+    "handshake_failures": 0, "reconnect_time_ms": 0, "route_time_us": 0,
+    "dns_time_us": 0, "relay_path": "", "status": "ok" if speed_bps > 0 else "failed",
+    "reason": "" if speed_bps > 0 else "curl reported zero throughput",
+}
+print(json.dumps(row, separators=(",", ":")))
+PY
+    }
     REMOTE_SERVER_DIR="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" 'mktemp -d /tmp/blackwire-competitive.XXXXXX')"
     REMOTE_CLIENT_DIR="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" 'mktemp -d /tmp/blackwire-competitive.XXXXXX')"
     local nginx_started=0
@@ -485,6 +606,7 @@ EOF
     scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/start_nginx_upstream.sh" "$SSH_USER@$SERVER_HOST:$REMOTE_SERVER_DIR/start_nginx_upstream.sh" >/dev/null
     scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/udp_echo.py" "$SSH_USER@$SERVER_HOST:$REMOTE_SERVER_DIR/udp_echo.py" >/dev/null
     scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/socks5_udp_bench.py" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/socks5_udp_bench.py" >/dev/null
+    scp "${SSH_OPTS[@]}" "$LAB_DIR/scripts/direct_udp_bench.py" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/direct_udp_bench.py" >/dev/null
     write_remote_configs "$REMOTE_SERVER_DIR" "$REMOTE_CLIENT_DIR"
     if ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "bash '$REMOTE_SERVER_DIR/start_nginx_upstream.sh' '$REMOTE_SERVER_DIR/nginx' '$COMPETITIVE_REMOTE_UPSTREAM_PORT' 0.0.0.0" >/dev/null 2>&1; then
         nginx_started=1
@@ -501,6 +623,48 @@ EOF
         scp "${SSH_OPTS[@]}" "$BLACKWIRE_CANDIDATE_BIN" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/blackwire-candidate" >/dev/null || true
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "chmod +x '$REMOTE_SERVER_DIR/blackwire-candidate'" >/dev/null 2>&1 || true
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "chmod +x '$REMOTE_CLIENT_DIR/blackwire-candidate'" >/dev/null 2>&1 || true
+    fi
+
+    if [ "$SCENARIO" = "tun" ]; then
+        local control_peer
+        control_peer="$(remote_tun_control_peer)"
+        write_remote_tun_configs "$control_peer"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$SERVER_HOST" "ufw allow ${TUN_UDP_ECHO_PORT}/udp >/dev/null" >/dev/null 2>&1 || true
+        remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" udp-echo-tun "python3 udp_echo.py --host 0.0.0.0 --port '$TUN_UDP_ECHO_PORT'" ""
+        emit_row remote-inventory ok "wrote remote-inventory-${TS}.log; control peer ${control_peer:-unknown}" inventory ssh tun "$TUN_TCP_PAYLOAD"
+
+        if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$nginx_started" = "1" ]; then
+            remote_tun_cleanup_client "$control_peer"
+            remote_tun_safety_add "$control_peer"
+            if remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-tun "timeout 120s ./blackwire-candidate run -c blackwire-tun.json; ip link del bw-tun-i 2>/dev/null || true; ip route del default dev bw-tun-i table 100 2>/dev/null || true; while ip rule del not fwmark 0x1234 lookup 100 2>/dev/null; do :; done; iptables -t nat -D OUTPUT -p udp --dport 53 -j REDIRECT --to-port 15300 2>/dev/null || true; ip route flush cache 2>/dev/null || true" ""; then
+                sleep 2
+                run_remote_tun_udp_bench blackwire-candidate-tun
+                run_remote_tun_tcp_bench blackwire-candidate-tun blackwire-tun
+                remote_capture_proc_stats "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-tun blackwire-candidate-tun client
+            else
+                emit_row blackwire-candidate-tun failed "Blackwire TUN runtime did not start" direct tun tun "$TUN_TCP_PAYLOAD"
+            fi
+            remote_tun_cleanup_client "$control_peer"
+        else
+            emit_row blackwire-candidate-tun skipped "BLACKWIRE_CANDIDATE_BIN or nginx unavailable" direct tun tun "$TUN_TCP_PAYLOAD"
+        fi
+
+        if has_tool "$client_inv" "sing-box" && [ "$nginx_started" = "1" ]; then
+            remote_tun_cleanup_client "$control_peer"
+            remote_tun_safety_add "$control_peer"
+            if ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cd '$REMOTE_CLIENT_DIR'; sing-box check -c singbox-tun.json" > "$REPORT_DIR/singbox-tun-check-${TS}.log" 2>&1 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" singbox-tun "timeout 120s sing-box run -c singbox-tun.json; ip link del sb-tun-i 2>/dev/null || true; ip route flush cache 2>/dev/null || true" ""; then
+                sleep 2
+                run_remote_tun_udp_bench sing-box-tun
+                run_remote_tun_tcp_bench sing-box-tun singbox-tun
+                remote_capture_proc_stats "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" singbox-tun sing-box-tun client
+            else
+                emit_row sing-box-tun failed "sing-box TUN runtime did not start or config check failed; see singbox-tun-check-${TS}.log" direct tun tun "$TUN_TCP_PAYLOAD"
+            fi
+            remote_tun_cleanup_client "$control_peer"
+        else
+            emit_row sing-box-tun skipped "sing-box or nginx unavailable on client/server" direct tun tun "$TUN_TCP_PAYLOAD"
+        fi
+        return
     fi
 
     if [[ "$SCENARIO" =~ ^hysteria2-innerflow ]]; then

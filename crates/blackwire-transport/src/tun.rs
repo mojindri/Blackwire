@@ -21,7 +21,7 @@ pub mod runtime;
 /// Session/flow tracking helpers.
 pub mod session;
 /// Packet-level TCP bridge used by Windows Wintun.
-#[cfg(any(test, target_os = "windows"))]
+#[cfg(any(test, target_os = "linux", target_os = "windows"))]
 pub mod tcp;
 
 pub use backend::{current_tun_support, ensure_tun_runtime_supported, TunPlatformSupport};
@@ -36,5 +36,5 @@ pub use packet::{
 };
 pub use runtime::TunRuntime;
 pub use session::{FlowKey, TunSession, TunSessionTable};
-#[cfg(any(test, target_os = "windows"))]
+#[cfg(any(test, target_os = "linux", target_os = "windows"))]
 pub use tcp::TcpBridgeTable;
