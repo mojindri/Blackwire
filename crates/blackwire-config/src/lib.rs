@@ -39,6 +39,6 @@ pub mod schema;
 
 pub use manager::ConfigManager;
 pub use schema::{
-    Config, Hysteria2Config, InboundConfig, LogConfig, NetworkType, OutboundConfig, Protocol,
-    SecurityType, StreamSettingsConfig,
+    BudgetConfig, Config, CostReport, Hysteria2Config, InboundConfig, LogConfig, NetworkType,
+    OutboundConfig, Protocol, SecurityType, StreamSettingsConfig,
 };

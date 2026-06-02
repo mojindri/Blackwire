@@ -13,6 +13,17 @@ pub enum ProfileMode {
     /// Latency-first production path: narrow protocol/transport matrix, strict
     /// defaults, and active rejection of features that add per-connection overhead.
     Fast,
+    /// Latency budget profile. This is less restrictive than `fast` and is
+    /// evaluated by the cost-budget/explain-cost layer.
+    Latency,
+    /// Throughput budget profile for bulk-transfer oriented deployments.
+    Throughput,
+    /// Bad-network profile for lossy/high-RTT links.
+    Badnet,
+    /// Mobile profile for roaming/radio-pause sensitive links.
+    Mobile,
+    /// Stealth profile for compatibility/camouflage-heavy paths.
+    Stealth,
 }
 
 impl std::fmt::Display for ProfileMode {
@@ -20,6 +31,11 @@ impl std::fmt::Display for ProfileMode {
         match self {
             ProfileMode::Compat => f.write_str("compat"),
             ProfileMode::Fast => f.write_str("fast"),
+            ProfileMode::Latency => f.write_str("latency"),
+            ProfileMode::Throughput => f.write_str("throughput"),
+            ProfileMode::Badnet => f.write_str("badnet"),
+            ProfileMode::Mobile => f.write_str("mobile"),
+            ProfileMode::Stealth => f.write_str("stealth"),
         }
     }
 }
@@ -31,9 +47,66 @@ impl std::str::FromStr for ProfileMode {
         match s {
             "compat" => Ok(ProfileMode::Compat),
             "fast" => Ok(ProfileMode::Fast),
+            "latency" => Ok(ProfileMode::Latency),
+            "throughput" => Ok(ProfileMode::Throughput),
+            "badnet" => Ok(ProfileMode::Badnet),
+            "mobile" => Ok(ProfileMode::Mobile),
+            "stealth" => Ok(ProfileMode::Stealth),
             other => Err(format!(
-                "unknown profile '{other}'; expected 'compat' or 'fast'"
+                "unknown profile '{other}'; expected compat, fast, latency, throughput, badnet, mobile, or stealth"
             )),
+        }
+    }
+}
+
+/// Performance budget constraints used by `blackwire explain-cost`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetConfig {
+    #[serde(default = "BudgetConfig::default_max_protocol_layers")]
+    pub max_protocol_layers: usize,
+    #[serde(default)]
+    pub allow_sniffing: bool,
+    #[serde(default)]
+    pub allow_fake_ip: bool,
+    #[serde(default = "BudgetConfig::default_max_route_rules")]
+    pub max_route_rules: usize,
+    #[serde(default = "BudgetConfig::default_max_handshake_ms")]
+    pub max_handshake_ms: u64,
+    #[serde(default = "BudgetConfig::default_true")]
+    pub prefer_direct_copy: bool,
+    #[serde(default = "BudgetConfig::default_true")]
+    pub prefer_datagram_for_udp: bool,
+}
+
+impl BudgetConfig {
+    fn default_max_protocol_layers() -> usize {
+        3
+    }
+
+    fn default_max_route_rules() -> usize {
+        50
+    }
+
+    fn default_max_handshake_ms() -> u64 {
+        300
+    }
+
+    fn default_true() -> bool {
+        true
+    }
+}
+
+impl Default for BudgetConfig {
+    fn default() -> Self {
+        Self {
+            max_protocol_layers: Self::default_max_protocol_layers(),
+            allow_sniffing: false,
+            allow_fake_ip: false,
+            max_route_rules: Self::default_max_route_rules(),
+            max_handshake_ms: Self::default_max_handshake_ms(),
+            prefer_direct_copy: true,
+            prefer_datagram_for_udp: true,
         }
     }
 }
@@ -183,6 +256,128 @@ pub enum ProfileViolation {
     Warning(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostClass {
+    Low,
+    Medium,
+    High,
+}
+
+impl std::fmt::Display for CostClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Low => f.write_str("low"),
+            Self::Medium => f.write_str("medium"),
+            Self::High => f.write_str("high"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyMode {
+    Direct,
+    Wrapped,
+    Framed,
+    Packet,
+}
+
+impl std::fmt::Display for CopyMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Direct => f.write_str("direct"),
+            Self::Wrapped => f.write_str("wrapped"),
+            Self::Framed => f.write_str("framed"),
+            Self::Packet => f.write_str("packet"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolCost {
+    pub cpu: CostClass,
+    pub allocations: CostClass,
+    pub latency: CostClass,
+    pub copy_mode: CopyMode,
+    pub supports_direct_copy: bool,
+    pub supports_splice: bool,
+    pub supports_early_data: bool,
+    pub supports_datagram: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CostReport {
+    pub profile: ProfileMode,
+    pub budget: BudgetConfig,
+    pub layer_count: usize,
+    pub layers: Vec<String>,
+    pub cost: ProtocolCost,
+    pub findings: Vec<ProfileViolation>,
+    pub suggestions: Vec<String>,
+}
+
+impl CostReport {
+    pub fn render_text(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!("Profile: {}\n", self.profile));
+        out.push_str("Hot-path layers:\n");
+        for layer in &self.layers {
+            out.push_str(&format!("  - {layer}\n"));
+        }
+        out.push_str(&format!("Layer count: {}\n", self.layer_count));
+        out.push_str(&format!(
+            "Cost: cpu={}, allocations={}, latency={}, copyMode={}\n",
+            self.cost.cpu, self.cost.allocations, self.cost.latency, self.cost.copy_mode
+        ));
+        out.push_str(&format!(
+            "Direct copy: {}\n",
+            if self.cost.supports_direct_copy {
+                "yes"
+            } else {
+                "no"
+            }
+        ));
+        out.push_str(&format!(
+            "Splice: {}\n",
+            if self.cost.supports_splice {
+                "yes"
+            } else {
+                "no"
+            }
+        ));
+        out.push_str(&format!(
+            "Early payload: {}\n",
+            if self.cost.supports_early_data {
+                "yes"
+            } else {
+                "no"
+            }
+        ));
+        out.push_str(&format!(
+            "Datagram: {}\n",
+            if self.cost.supports_datagram {
+                "yes"
+            } else {
+                "no"
+            }
+        ));
+        if self.findings.is_empty() {
+            out.push_str("Findings: none\n");
+        } else {
+            out.push_str("Findings:\n");
+            for finding in &self.findings {
+                out.push_str(&format!("  - {finding}\n"));
+            }
+        }
+        if !self.suggestions.is_empty() {
+            out.push_str("Suggested fixes:\n");
+            for suggestion in &self.suggestions {
+                out.push_str(&format!("  - {suggestion}\n"));
+            }
+        }
+        out
+    }
+}
+
 impl ProfileViolation {
     /// Returns `true` if this is a hard error that should abort startup.
     pub fn is_error(&self) -> bool {
@@ -229,6 +424,401 @@ fn network_name(n: &NetworkType) -> &'static str {
         NetworkType::Quic => "quic",
         NetworkType::Kcp => "kcp",
         NetworkType::SplitHttp => "splithttp",
+    }
+}
+
+fn security_name(s: &SecurityType) -> &'static str {
+    match s {
+        SecurityType::None => "none",
+        SecurityType::Tls => "tls",
+        SecurityType::Reality => "reality",
+        SecurityType::ShadowTls => "shadowtls",
+    }
+}
+
+fn bump_cost(current: CostClass, candidate: CostClass) -> CostClass {
+    match (current, candidate) {
+        (CostClass::High, _) | (_, CostClass::High) => CostClass::High,
+        (CostClass::Medium, _) | (_, CostClass::Medium) => CostClass::Medium,
+        _ => CostClass::Low,
+    }
+}
+
+fn add_unique(layers: &mut Vec<String>, layer: impl Into<String>) {
+    let layer = layer.into();
+    if !layers.iter().any(|existing| existing == &layer) {
+        layers.push(layer);
+    }
+}
+
+fn stream_settings_for_cost<'a>(
+    inbound: &'a super::InboundConfig,
+    outbound: &'a super::OutboundConfig,
+) -> Option<&'a super::StreamSettingsConfig> {
+    inbound
+        .stream_settings
+        .as_ref()
+        .or(outbound.stream_settings.as_ref())
+}
+
+fn protocol_cost(config: &Config) -> ProtocolCost {
+    let mut cpu = CostClass::Low;
+    let mut allocations = CostClass::Low;
+    let mut latency = CostClass::Low;
+    let mut copy_mode = CopyMode::Direct;
+    let mut supports_direct_copy = true;
+    let mut supports_splice = true;
+    let mut supports_early_data = true;
+    let mut supports_datagram = false;
+
+    for endpoint in config
+        .inbounds
+        .iter()
+        .map(|i| (&i.protocol, &i.stream_settings))
+    {
+        match endpoint.0 {
+            Protocol::Vless | Protocol::Freedom | Protocol::Socks | Protocol::Http => {}
+            Protocol::Trojan | Protocol::Shadowsocks => {
+                cpu = bump_cost(cpu, CostClass::Medium);
+                copy_mode = CopyMode::Wrapped;
+                supports_splice = false;
+            }
+            Protocol::Vmess => {
+                cpu = bump_cost(cpu, CostClass::High);
+                allocations = bump_cost(allocations, CostClass::Medium);
+                latency = bump_cost(latency, CostClass::Medium);
+                copy_mode = CopyMode::Wrapped;
+                supports_direct_copy = false;
+                supports_splice = false;
+                supports_early_data = false;
+            }
+            Protocol::Hysteria2 => {
+                cpu = bump_cost(cpu, CostClass::Medium);
+                latency = bump_cost(latency, CostClass::Medium);
+                copy_mode = CopyMode::Framed;
+                supports_splice = false;
+                supports_datagram = true;
+            }
+            Protocol::ShadowTls => {
+                cpu = bump_cost(cpu, CostClass::High);
+                latency = bump_cost(latency, CostClass::High);
+                copy_mode = CopyMode::Wrapped;
+                supports_direct_copy = false;
+                supports_splice = false;
+            }
+        }
+        if let Some(ss) = endpoint.1 {
+            apply_transport_cost(
+                ss,
+                &mut cpu,
+                &mut allocations,
+                &mut latency,
+                &mut copy_mode,
+                &mut supports_direct_copy,
+                &mut supports_splice,
+                &mut supports_datagram,
+            );
+        }
+    }
+
+    for endpoint in config
+        .outbounds
+        .iter()
+        .map(|o| (&o.protocol, &o.stream_settings))
+    {
+        match endpoint.0 {
+            Protocol::Vless | Protocol::Freedom => {}
+            Protocol::Socks | Protocol::Http | Protocol::Trojan | Protocol::Shadowsocks => {
+                cpu = bump_cost(cpu, CostClass::Medium);
+                copy_mode = CopyMode::Wrapped;
+                supports_splice = false;
+            }
+            Protocol::Vmess => {
+                cpu = bump_cost(cpu, CostClass::High);
+                allocations = bump_cost(allocations, CostClass::Medium);
+                latency = bump_cost(latency, CostClass::Medium);
+                copy_mode = CopyMode::Wrapped;
+                supports_direct_copy = false;
+                supports_splice = false;
+                supports_early_data = false;
+            }
+            Protocol::Hysteria2 => {
+                cpu = bump_cost(cpu, CostClass::Medium);
+                latency = bump_cost(latency, CostClass::Medium);
+                copy_mode = CopyMode::Framed;
+                supports_splice = false;
+                supports_datagram = true;
+            }
+            Protocol::ShadowTls => {
+                cpu = bump_cost(cpu, CostClass::High);
+                latency = bump_cost(latency, CostClass::High);
+                copy_mode = CopyMode::Wrapped;
+                supports_direct_copy = false;
+                supports_splice = false;
+            }
+        }
+        if let Some(ss) = endpoint.1 {
+            apply_transport_cost(
+                ss,
+                &mut cpu,
+                &mut allocations,
+                &mut latency,
+                &mut copy_mode,
+                &mut supports_direct_copy,
+                &mut supports_splice,
+                &mut supports_datagram,
+            );
+        }
+    }
+
+    ProtocolCost {
+        cpu,
+        allocations,
+        latency,
+        copy_mode,
+        supports_direct_copy,
+        supports_splice,
+        supports_early_data,
+        supports_datagram,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_transport_cost(
+    ss: &super::StreamSettingsConfig,
+    cpu: &mut CostClass,
+    allocations: &mut CostClass,
+    latency: &mut CostClass,
+    copy_mode: &mut CopyMode,
+    supports_direct_copy: &mut bool,
+    supports_splice: &mut bool,
+    supports_datagram: &mut bool,
+) {
+    match ss.network {
+        NetworkType::Tcp => {}
+        NetworkType::Ws | NetworkType::HttpUpgrade | NetworkType::Grpc | NetworkType::SplitHttp => {
+            *cpu = bump_cost(*cpu, CostClass::High);
+            *allocations = bump_cost(*allocations, CostClass::High);
+            *latency = bump_cost(*latency, CostClass::High);
+            *copy_mode = CopyMode::Framed;
+            *supports_direct_copy = false;
+            *supports_splice = false;
+        }
+        NetworkType::Quic | NetworkType::Kcp => {
+            *cpu = bump_cost(*cpu, CostClass::Medium);
+            *latency = bump_cost(*latency, CostClass::Medium);
+            *copy_mode = CopyMode::Packet;
+            *supports_splice = false;
+            *supports_datagram = true;
+        }
+    }
+
+    match ss.security {
+        SecurityType::None => {}
+        SecurityType::Tls | SecurityType::Reality => {
+            *cpu = bump_cost(*cpu, CostClass::Medium);
+            *copy_mode = CopyMode::Wrapped;
+            *supports_splice = false;
+        }
+        SecurityType::ShadowTls => {
+            *cpu = bump_cost(*cpu, CostClass::High);
+            *latency = bump_cost(*latency, CostClass::High);
+            *copy_mode = CopyMode::Wrapped;
+            *supports_direct_copy = false;
+            *supports_splice = false;
+        }
+    }
+}
+
+pub fn explain_cost(config: &Config) -> CostReport {
+    let budget = config.budget.unwrap_or_else(|| match config.profile {
+        ProfileMode::Latency | ProfileMode::Fast => BudgetConfig {
+            max_protocol_layers: 3,
+            allow_sniffing: false,
+            allow_fake_ip: false,
+            max_route_rules: 50,
+            max_handshake_ms: 300,
+            prefer_direct_copy: true,
+            prefer_datagram_for_udp: true,
+        },
+        ProfileMode::Throughput => BudgetConfig {
+            max_protocol_layers: 4,
+            max_route_rules: 200,
+            ..BudgetConfig::default()
+        },
+        ProfileMode::Badnet | ProfileMode::Mobile => BudgetConfig {
+            max_protocol_layers: 4,
+            max_handshake_ms: 700,
+            prefer_datagram_for_udp: true,
+            ..BudgetConfig::default()
+        },
+        ProfileMode::Compat | ProfileMode::Stealth => BudgetConfig {
+            max_protocol_layers: 8,
+            allow_sniffing: true,
+            allow_fake_ip: true,
+            max_route_rules: 1000,
+            max_handshake_ms: 1500,
+            prefer_direct_copy: false,
+            prefer_datagram_for_udp: false,
+        },
+    });
+
+    let mut layers = Vec::new();
+    add_unique(&mut layers, "TCP accept");
+
+    for inbound in &config.inbounds {
+        add_unique(
+            &mut layers,
+            format!(
+                "inbound {} protocol {}",
+                inbound.tag,
+                protocol_name(&inbound.protocol)
+            ),
+        );
+        if let Some(ss) = &inbound.stream_settings {
+            add_unique(
+                &mut layers,
+                format!("transport {}", network_name(&ss.network)),
+            );
+            if ss.security != SecurityType::None {
+                add_unique(
+                    &mut layers,
+                    format!("security {}", security_name(&ss.security)),
+                );
+            }
+        }
+        if inbound.sniffing.as_ref().is_some_and(|s| s.enabled) {
+            add_unique(&mut layers, "sniffing");
+        }
+    }
+
+    if let Some(routing) = &config.routing {
+        add_unique(
+            &mut layers,
+            format!("routing {} rules", routing.rules.len()),
+        );
+        if routing
+            .domain_strategy
+            .as_deref()
+            .is_some_and(|s| s.eq_ignore_ascii_case("IpOnDemand"))
+        {
+            add_unique(&mut layers, "routing DNS lookup");
+        }
+    } else {
+        add_unique(&mut layers, "routing default");
+    }
+
+    if config
+        .dns
+        .as_ref()
+        .and_then(|d| d.fake_ip.as_ref())
+        .is_some_and(|f| f.enabled)
+    {
+        add_unique(&mut layers, "FakeIP");
+    }
+
+    for outbound in &config.outbounds {
+        add_unique(
+            &mut layers,
+            format!(
+                "outbound {} protocol {}",
+                outbound.tag,
+                protocol_name(&outbound.protocol)
+            ),
+        );
+        if let Some(ss) = stream_settings_for_cost(
+            config
+                .inbounds
+                .first()
+                .expect("validated config has inbound"),
+            outbound,
+        ) {
+            if outbound.stream_settings.is_some() {
+                add_unique(
+                    &mut layers,
+                    format!("outbound transport {}", network_name(&ss.network)),
+                );
+                if ss.security != SecurityType::None {
+                    add_unique(
+                        &mut layers,
+                        format!("outbound security {}", security_name(&ss.security)),
+                    );
+                }
+            }
+        }
+    }
+
+    let cost = protocol_cost(config);
+    let mut findings = Vec::new();
+    let mut suggestions = Vec::new();
+
+    if layers.len() > budget.max_protocol_layers {
+        findings.push(ProfileViolation::Warning(format!(
+            "hot path has {} layers; budget allows {}",
+            layers.len(),
+            budget.max_protocol_layers
+        )));
+        suggestions.push("remove one wrapper layer or move to a less strict profile".into());
+    }
+
+    if !budget.allow_sniffing
+        && config
+            .inbounds
+            .iter()
+            .any(|i| i.sniffing.as_ref().is_some_and(|s| s.enabled))
+    {
+        findings.push(ProfileViolation::Warning(
+            "sniffing is enabled but this profile budget disallows it".into(),
+        ));
+        suggestions.push("disable inbound sniffing or use compat/stealth profile".into());
+    }
+
+    if !budget.allow_fake_ip
+        && config
+            .dns
+            .as_ref()
+            .and_then(|d| d.fake_ip.as_ref())
+            .is_some_and(|f| f.enabled)
+    {
+        findings.push(ProfileViolation::Warning(
+            "FakeIP is enabled but this profile budget disallows it".into(),
+        ));
+        suggestions.push("disable dns.fakeIp for latency profiles".into());
+    }
+
+    if let Some(routing) = &config.routing {
+        if routing.rules.len() > budget.max_route_rules {
+            findings.push(ProfileViolation::Warning(format!(
+                "routing has {} rules; budget allows {}",
+                routing.rules.len(),
+                budget.max_route_rules
+            )));
+            suggestions.push("compile/prune routing rules or raise budget.maxRouteRules".into());
+        }
+    }
+
+    if budget.prefer_direct_copy && !cost.supports_direct_copy {
+        findings.push(ProfileViolation::Warning(
+            "direct copy is preferred but this path cannot lower to direct copy".into(),
+        ));
+        suggestions.push(
+            "prefer VLESS+REALITY over TCP, avoid WebSocket/gRPC/SplitHTTP on latency paths".into(),
+        );
+    }
+
+    if budget.prefer_direct_copy && !cost.supports_splice {
+        suggestions
+            .push("use relay.engine=v2 for wrapped streams where splice is unavailable".into());
+    }
+
+    CostReport {
+        profile: config.profile,
+        budget,
+        layer_count: layers.len(),
+        layers,
+        cost,
+        findings,
+        suggestions,
     }
 }
 
@@ -381,6 +971,7 @@ mod tests {
         Config {
             profile: ProfileMode::Fast,
             fast: None,
+            budget: None,
             vision: None,
             log: LogConfig::default(),
             dns: None,
@@ -593,8 +1184,70 @@ mod tests {
     }
 
     #[test]
+    fn budget_profiles_deserialise_from_json() {
+        for (raw, expected) in [
+            ("latency", ProfileMode::Latency),
+            ("throughput", ProfileMode::Throughput),
+            ("badnet", ProfileMode::Badnet),
+            ("mobile", ProfileMode::Mobile),
+            ("stealth", ProfileMode::Stealth),
+        ] {
+            let json = format!(r#"{{"profile": "{raw}"}}"#);
+            let m: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let mode: ProfileMode = serde_json::from_value(m["profile"].clone()).unwrap();
+            assert_eq!(mode, expected);
+        }
+    }
+
+    #[test]
     fn profile_defaults_to_compat() {
         let mode = ProfileMode::default();
         assert_eq!(mode, ProfileMode::Compat);
+    }
+
+    #[test]
+    fn explain_cost_flags_expensive_latency_path() {
+        let mut cfg = fast_vless_config();
+        cfg.profile = ProfileMode::Latency;
+        cfg.budget = Some(BudgetConfig::default());
+        cfg.inbounds[0].sniffing = Some(SniffingConfig {
+            enabled: true,
+            dest_override: vec!["tls".into()],
+            metadata_only: false,
+            route_only: false,
+        });
+        cfg.inbounds[0].stream_settings = Some(StreamSettingsConfig {
+            network: NetworkType::Ws,
+            security: SecurityType::Reality,
+            ..Default::default()
+        });
+        cfg.outbounds[0].protocol = Protocol::Vmess;
+
+        let report = explain_cost(&cfg);
+        let rendered = report.render_text();
+        assert_eq!(report.profile, ProfileMode::Latency);
+        assert_eq!(report.cost.cpu, CostClass::High);
+        assert!(!report.cost.supports_direct_copy);
+        assert!(rendered.contains("sniffing is enabled"));
+        assert!(rendered.contains("direct copy is preferred"));
+        assert!(rendered.contains("relay.engine=v2"));
+    }
+
+    #[test]
+    fn explain_cost_accepts_simple_direct_path() {
+        let mut cfg = fast_vless_config();
+        cfg.profile = ProfileMode::Latency;
+        cfg.budget = Some(BudgetConfig {
+            max_protocol_layers: 8,
+            ..BudgetConfig::default()
+        });
+        cfg.inbounds[0].stream_settings = Some(StreamSettingsConfig {
+            security: SecurityType::None,
+            ..Default::default()
+        });
+        let report = explain_cost(&cfg);
+        assert_eq!(report.cost.copy_mode, CopyMode::Direct);
+        assert!(report.cost.supports_splice);
+        assert!(report.render_text().contains("Findings: none"));
     }
 }
