@@ -59,6 +59,10 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<VisionConfig>,
 
+    /// QUIC socket tuning used by QUIC/Hysteria2 endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quic: Option<QuicConfig>,
+
     /// Logging settings.
     #[serde(default)]
     pub log: LogConfig,
@@ -157,6 +161,71 @@ pub struct LimitsConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub max_idle_seconds: Option<u64>,
+}
+
+/// QUIC UDP socket tuning.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuicConfig {
+    /// Enable SO_REUSEPORT where supported so multiple server endpoints can bind the same UDP port.
+    #[serde(default)]
+    pub reuse_port: bool,
+
+    /// Endpoint shard count: integer string/number or "cpu".
+    #[serde(default = "QuicConfig::default_endpoints")]
+    pub endpoints: serde_json::Value,
+
+    /// Requested UDP receive buffer size.
+    #[serde(default = "QuicConfig::default_buffer_bytes")]
+    pub recv_buffer_bytes: usize,
+
+    /// Requested UDP send buffer size.
+    #[serde(default = "QuicConfig::default_buffer_bytes")]
+    pub send_buffer_bytes: usize,
+
+    /// Maximum datagram size hint. Current transport accepts the field for config parity.
+    #[serde(default = "QuicConfig::default_max_datagram_size")]
+    pub max_datagram_size: serde_json::Value,
+}
+
+impl QuicConfig {
+    fn default_endpoints() -> serde_json::Value {
+        serde_json::Value::String("1".into())
+    }
+
+    fn default_buffer_bytes() -> usize {
+        8 * 1024 * 1024
+    }
+
+    fn default_max_datagram_size() -> serde_json::Value {
+        serde_json::Value::String("auto".into())
+    }
+
+    pub fn endpoint_count(&self) -> usize {
+        match &self.endpoints {
+            serde_json::Value::String(s) if s.eq_ignore_ascii_case("cpu") => {
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1)
+            }
+            serde_json::Value::String(s) => s.parse::<usize>().unwrap_or(1),
+            serde_json::Value::Number(n) => n.as_u64().unwrap_or(1) as usize,
+            _ => 1,
+        }
+        .clamp(1, 64)
+    }
+}
+
+impl Default for QuicConfig {
+    fn default() -> Self {
+        Self {
+            reuse_port: false,
+            endpoints: Self::default_endpoints(),
+            recv_buffer_bytes: Self::default_buffer_bytes(),
+            send_buffer_bytes: Self::default_buffer_bytes(),
+            max_datagram_size: Self::default_max_datagram_size(),
+        }
+    }
 }
 
 /// Top-level TUN interception settings.
@@ -395,6 +464,32 @@ mod tests {
         assert_eq!(cfg.sc_max_buffered_posts, 12);
         assert!(cfg.xmux.is_some());
         assert!(cfg.download_settings.is_some());
+    }
+
+    #[test]
+    fn quic_socket_tuning_deserialises() {
+        let json = r#"{
+            "quic": {
+                "reusePort": true,
+                "endpoints": "cpu",
+                "recvBufferBytes": 8388608,
+                "sendBufferBytes": 8388608,
+                "maxDatagramSize": "auto"
+            },
+            "inbounds": [{
+                "tag": "socks",
+                "protocol": "socks",
+                "listen": "127.0.0.1",
+                "port": 1080
+            }],
+            "outbounds": [{"tag": "d", "protocol": "freedom"}]
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        let quic = cfg.quic.expect("quic config");
+        assert!(quic.reuse_port);
+        assert!(quic.endpoint_count() >= 1);
+        assert_eq!(quic.recv_buffer_bytes, 8 * 1024 * 1024);
+        assert_eq!(quic.send_buffer_bytes, 8 * 1024 * 1024);
     }
 
     /// `protocol: shadowtls` on an inbound must be rejected with a clear error

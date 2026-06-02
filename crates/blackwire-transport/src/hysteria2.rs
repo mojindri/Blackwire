@@ -41,9 +41,9 @@ const CLIENT_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIENT_OPEN_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 
 use crate::quic::{
-    build_hysteria2_server_endpoint_with_congestion, ensure_crypto_provider,
+    build_hysteria2_server_endpoint_with_congestion_and_socket, ensure_crypto_provider,
     BadNetControllerFactory, BrutalCCFactory, CongestionConfig, CongestionDirection,
-    CongestionMode,
+    CongestionMode, QuicSocketConfig,
 };
 
 /// Configuration for a Hysteria2 inbound server.
@@ -67,6 +67,8 @@ pub struct Hysteria2ServerConfig {
     pub max_connections: Option<usize>,
     /// QUIC congestion policy for server-to-client response traffic.
     pub congestion: CongestionConfig,
+    /// UDP socket tuning and server endpoint sharding policy.
+    pub socket: QuicSocketConfig,
 }
 
 /// Configuration for a Hysteria2 outbound client.
@@ -88,6 +90,8 @@ pub struct Hysteria2ClientConfig {
     pub congestion: CongestionConfig,
     /// Number of local QUIC endpoint shards requested by config.
     pub endpoint_shards: usize,
+    /// UDP socket tuning for client endpoint shards.
+    pub socket: QuicSocketConfig,
 }
 
 /// A Hysteria2 proxy server.
@@ -105,55 +109,98 @@ impl Hysteria2Server {
     ///
     /// This runs until the endpoint is closed or the task is cancelled.
     pub async fn serve(&self, dispatcher: Arc<dyn Dispatcher>) -> Result<()> {
-        let endpoint = build_hysteria2_server_endpoint_with_congestion(
-            self.config.addr,
-            &self.config.cert_pem,
-            &self.config.key_pem,
-            self.config.up_mbps,
-            self.config.down_mbps,
-            Some(self.config.congestion.clone()),
-        )?;
+        let endpoints = self.server_endpoints()?;
 
-        info!(addr = %self.config.addr, "Hysteria2 server listening (HTTP/3)");
+        info!(
+            addr = %self.config.addr,
+            endpoints = endpoints.len(),
+            reuse_port = self.config.socket.reuse_port,
+            "Hysteria2 server listening (HTTP/3)"
+        );
 
         let cap = self
             .config
             .max_connections
             .unwrap_or(MAX_HYSTERIA2_CONNECTIONS);
         let conn_limiter = Arc::new(Semaphore::new(cap));
+        let mut tasks = Vec::with_capacity(endpoints.len());
 
-        while let Some(incoming) = endpoint.accept().await {
-            let permit = match Arc::clone(&conn_limiter).try_acquire_owned() {
-                Ok(p) => p,
-                Err(_) => {
-                    warn!(
-                        max = MAX_HYSTERIA2_CONNECTIONS,
-                        "Hysteria2 connection limit reached; dropping incoming QUIC connection"
-                    );
-                    // Drop `incoming` without awaiting — rejects the connection.
-                    continue;
-                }
-            };
-
-            let conn = match incoming.await {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!("QUIC connection failed during handshake: {e}");
-                    continue;
-                }
-            };
-
+        for endpoint in endpoints {
             let config = self.config.clone();
             let dispatcher = Arc::clone(&dispatcher);
-            tokio::spawn(async move {
-                let _permit = permit; // hold until connection fully closes
-                if let Err(e) = http3::serve_connection(conn, config, dispatcher).await {
-                    warn!("Hysteria2 connection closed: {e}");
+            let conn_limiter = Arc::clone(&conn_limiter);
+            tasks.push(tokio::spawn(async move {
+                while let Some(incoming) = endpoint.accept().await {
+                    let permit = match Arc::clone(&conn_limiter).try_acquire_owned() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            warn!(
+                                max = MAX_HYSTERIA2_CONNECTIONS,
+                                "Hysteria2 connection limit reached; dropping incoming QUIC connection"
+                            );
+                            continue;
+                        }
+                    };
+
+                    let conn = match incoming.await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            warn!("QUIC connection failed during handshake: {e}");
+                            continue;
+                        }
+                    };
+
+                    let config = config.clone();
+                    let dispatcher = Arc::clone(&dispatcher);
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        if let Err(e) = http3::serve_connection(conn, config, dispatcher).await {
+                            warn!("Hysteria2 connection closed: {e}");
+                        }
+                    });
                 }
-            });
+        }));
         }
 
+        for task in tasks {
+            let _ = task.await;
+        }
         Ok(())
+    }
+
+    fn server_endpoints(&self) -> Result<Vec<quinn::Endpoint>> {
+        let requested = self.config.socket.endpoint_count.max(1);
+        let count = if self.config.socket.reuse_port {
+            requested
+        } else {
+            1
+        };
+        let mut endpoints = Vec::with_capacity(count);
+        for idx in 0..count {
+            let mut socket = self.config.socket;
+            socket.endpoint_count = count;
+            match build_hysteria2_server_endpoint_with_congestion_and_socket(
+                self.config.addr,
+                &self.config.cert_pem,
+                &self.config.key_pem,
+                self.config.up_mbps,
+                self.config.down_mbps,
+                Some(self.config.congestion.clone()),
+                socket,
+            ) {
+                Ok(endpoint) => endpoints.push(endpoint),
+                Err(e) if idx > 0 => {
+                    warn!(
+                        endpoint = idx,
+                        error = %e,
+                        "Hysteria2 extra endpoint bind failed; continuing with fewer shards"
+                    );
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(endpoints)
     }
 }
 
@@ -229,11 +276,12 @@ impl Hysteria2Client {
             build_hysteria2_client_config(self.config.skip_cert_verify, transport_arc)
                 .map_err(|e| ProxyError::Transport(e.to_string()))?;
 
-        let bind_addr: SocketAddr = "0.0.0.0:0"
-            .parse()
-            .map_err(|e| ProxyError::Transport(format!("invalid client bind addr: {e}")))?;
-        let endpoint = quinn::Endpoint::client(bind_addr)
-            .map_err(|e| ProxyError::Transport(format!("client endpoint: {e}")))?;
+        let endpoint = crate::quic::build_client_endpoint_with_alpn_and_socket(
+            self.config.skip_cert_verify,
+            &[b"h3".to_vec()],
+            self.config.socket,
+        )
+        .map_err(|e| ProxyError::Transport(format!("client endpoint: {e}")))?;
 
         let server_name = &self.config.server_name;
         let conn = endpoint
@@ -591,11 +639,12 @@ impl Hysteria2UdpSession {
         let client_config = build_hysteria2_client_config(config.skip_cert_verify, transport_arc)
             .map_err(|e| ProxyError::Transport(e.to_string()))?;
 
-        let bind_addr: SocketAddr = "0.0.0.0:0"
-            .parse()
-            .map_err(|e| ProxyError::Transport(format!("bind addr: {e}")))?;
-        let endpoint = quinn::Endpoint::client(bind_addr)
-            .map_err(|e| ProxyError::Transport(format!("client endpoint: {e}")))?;
+        let endpoint = crate::quic::build_client_endpoint_with_alpn_and_socket(
+            config.skip_cert_verify,
+            &[b"h3".to_vec()],
+            config.socket,
+        )
+        .map_err(|e| ProxyError::Transport(format!("client endpoint: {e}")))?;
 
         let conn = endpoint
             .connect_with(client_config, config.server, &config.server_name)
@@ -627,6 +676,7 @@ impl Hysteria2UdpSession {
             data,
         };
         let encoded = udp::encode_udp_datagram(&dg);
+        crate::quic::record_endpoint_io("client", "tx", encoded.len());
         self.conn
             .send_datagram(encoded)
             .map_err(|e| ProxyError::Transport(format!("send_datagram: {e}")))
@@ -639,6 +689,7 @@ impl Hysteria2UdpSession {
             .read_datagram()
             .await
             .map_err(|e| ProxyError::Transport(format!("read_datagram: {e}")))?;
+        crate::quic::record_endpoint_io("client", "rx", raw.len());
         udp::decode_udp_datagram(&raw).map_err(|e| ProxyError::Transport(e.to_string()))
     }
 }
