@@ -25,12 +25,20 @@ pub struct AfXdpCapabilities {
 
 /// Experimental AF_XDP backend handle.
 #[cfg(target_os = "linux")]
-#[derive(Debug)]
 pub struct AfXdpBackend {
     capabilities: AfXdpCapabilities,
     _socket: xdp::socket::XdpSocket,
     _rings: xdp::Rings,
     _umem: xdp::Umem,
+}
+
+#[cfg(target_os = "linux")]
+impl std::fmt::Debug for AfXdpBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AfXdpBackend")
+            .field("capabilities", &self.capabilities)
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(target_os = "linux")]
