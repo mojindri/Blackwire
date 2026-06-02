@@ -16,6 +16,7 @@ pub use udp::Destination as UdpDestination;
 
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
@@ -35,12 +36,14 @@ use tracing::{info, warn};
 /// The official hysteria2 server defaults to `maxIncomingConnections: 1024`.
 /// sing-quic has no cap, but we follow the reference implementation.
 const MAX_HYSTERIA2_CONNECTIONS: usize = 1024;
+const MAX_HYSTERIA2_CLIENT_SHARDS: usize = 16;
 const CLIENT_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIENT_OPEN_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 
 use crate::quic::{
-    build_hysteria2_server_endpoint, ensure_crypto_provider, BadNetControllerFactory,
-    BrutalCCFactory, CongestionConfig, CongestionMode,
+    build_hysteria2_server_endpoint_with_congestion, ensure_crypto_provider,
+    BadNetControllerFactory, BrutalCCFactory, CongestionConfig, CongestionDirection,
+    CongestionMode,
 };
 
 /// Configuration for a Hysteria2 inbound server.
@@ -62,6 +65,8 @@ pub struct Hysteria2ServerConfig {
     pub key_pem: String,
     /// Maximum concurrent QUIC connections. Falls back to `MAX_HYSTERIA2_CONNECTIONS`.
     pub max_connections: Option<usize>,
+    /// QUIC congestion policy for server-to-client response traffic.
+    pub congestion: CongestionConfig,
 }
 
 /// Configuration for a Hysteria2 outbound client.
@@ -100,12 +105,13 @@ impl Hysteria2Server {
     ///
     /// This runs until the endpoint is closed or the task is cancelled.
     pub async fn serve(&self, dispatcher: Arc<dyn Dispatcher>) -> Result<()> {
-        let endpoint = build_hysteria2_server_endpoint(
+        let endpoint = build_hysteria2_server_endpoint_with_congestion(
             self.config.addr,
             &self.config.cert_pem,
             &self.config.key_pem,
             self.config.up_mbps,
             self.config.down_mbps,
+            Some(self.config.congestion.clone()),
         )?;
 
         info!(addr = %self.config.addr, "Hysteria2 server listening (HTTP/3)");
@@ -154,20 +160,34 @@ impl Hysteria2Server {
 /// A Hysteria2 proxy client.
 pub struct Hysteria2Client {
     config: Hysteria2ClientConfig,
-    session: Mutex<Option<Arc<Hysteria2ClientSession>>>,
+    sessions: Vec<Mutex<Option<Arc<Hysteria2ClientSession>>>>,
+    next_session: AtomicUsize,
 }
 
 struct Hysteria2ClientSession {
     conn: quinn::Connection,
     _endpoint: quinn::Endpoint,
+    _h3_driver: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for Hysteria2ClientSession {
+    fn drop(&mut self) {
+        self._h3_driver.abort();
+    }
 }
 
 impl Hysteria2Client {
     /// Build a Hysteria2 client from static config.
     pub fn new(config: Hysteria2ClientConfig) -> Self {
+        let shard_count = config
+            .endpoint_shards
+            .max(1)
+            .min(MAX_HYSTERIA2_CLIENT_SHARDS);
+        let sessions = (0..shard_count).map(|_| Mutex::new(None)).collect();
         Self {
             config,
-            session: Mutex::new(None),
+            sessions,
+            next_session: AtomicUsize::new(0),
         }
     }
 
@@ -175,19 +195,27 @@ impl Hysteria2Client {
     ///
     /// The returned stream is ready to carry bytes for `dest`.
     pub async fn connect_and_dial(&self, dest: &Address) -> Result<BoxedStream, ProxyError> {
-        let session = self.session().await?;
-        match self.open_proxy_stream(Arc::clone(&session), dest).await {
-            Ok(stream) => Ok(stream),
-            Err(first) => {
-                self.clear_session(&session).await;
-                let session = self.session().await?;
-                self.open_proxy_stream(session, dest).await.or(Err(first))
+        let shard = self.next_shard();
+        self.open_with_reconnect(shard, dest).await
+    }
+
+    async fn prewarm(&self) {
+        if self.sessions.len() <= 1 {
+            return;
+        }
+        for shard in 0..self.sessions.len() {
+            if let Err(e) = self.session(shard).await {
+                tracing::debug!(shard, error = %e, "Hysteria2 shard prewarm failed");
             }
         }
     }
 
-    async fn session(&self) -> Result<Arc<Hysteria2ClientSession>, ProxyError> {
-        let mut guard = self.session.lock().await;
+    fn next_shard(&self) -> usize {
+        self.next_session.fetch_add(1, Ordering::Relaxed) % self.sessions.len()
+    }
+
+    async fn session(&self, shard: usize) -> Result<Arc<Hysteria2ClientSession>, ProxyError> {
+        let mut guard = self.sessions[shard].lock().await;
         if let Some(session) = guard.as_ref() {
             if session.conn.close_reason().is_none() {
                 return Ok(Arc::clone(session));
@@ -214,7 +242,7 @@ impl Hysteria2Client {
             .await
             .map_err(|e| ProxyError::Transport(format!("QUIC handshake: {e}")))?;
 
-        timeout(
+        let h3_driver = timeout(
             CLIENT_AUTH_TIMEOUT,
             client_h3_auth(&conn, &self.config.password, rx_bps),
         )
@@ -224,18 +252,35 @@ impl Hysteria2Client {
         let session = Arc::new(Hysteria2ClientSession {
             conn,
             _endpoint: endpoint,
+            _h3_driver: h3_driver,
         });
         *guard = Some(Arc::clone(&session));
         Ok(session)
     }
 
-    async fn clear_session(&self, session: &Arc<Hysteria2ClientSession>) {
-        let mut guard = self.session.lock().await;
+    async fn clear_session(&self, shard: usize, session: &Arc<Hysteria2ClientSession>) {
+        let mut guard = self.sessions[shard].lock().await;
         if guard
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, session))
         {
             *guard = None;
+        }
+    }
+
+    async fn open_with_reconnect(
+        &self,
+        shard: usize,
+        dest: &Address,
+    ) -> Result<BoxedStream, ProxyError> {
+        let session = self.session(shard).await?;
+        match self.open_proxy_stream(Arc::clone(&session), dest).await {
+            Ok(stream) => Ok(stream),
+            Err(first) => {
+                self.clear_session(shard, &session).await;
+                let session = self.session(shard).await?;
+                self.open_proxy_stream(session, dest).await.or(Err(first))
+            }
         }
     }
 
@@ -267,8 +312,11 @@ impl Hysteria2Client {
         // Size QUIC flow-control windows to the configured bandwidth × 500 ms RTT.
         // Without this, congestion control can be stalled waiting for
         // STREAM_DATA_BLOCKED acknowledgement before the CC window fills.
-        let (stream_rx, conn_rx, conn_tx) =
-            crate::quic::bdp_windows(self.config.down_mbps, self.config.up_mbps);
+        let (stream_rx, conn_rx, conn_tx) = crate::quic::bdp_windows_with_profile(
+            self.config.down_mbps,
+            self.config.up_mbps,
+            self.config.congestion.window_profile(),
+        );
         transport_config.stream_receive_window(stream_rx);
         transport_config.receive_window(conn_rx);
         transport_config.send_window(conn_tx);
@@ -287,8 +335,12 @@ fn configure_congestion(transport_config: &mut quinn::TransportConfig, cfg: &Con
         | CongestionMode::BadNetLowLatency
         | CongestionMode::BadNetThroughput
         | CongestionMode::AutoProbe => {
-            transport_config
-                .congestion_controller_factory(Arc::new(BadNetControllerFactory::new(cfg.clone())));
+            transport_config.congestion_controller_factory(Arc::new(
+                BadNetControllerFactory::new_for_direction(
+                    cfg.clone(),
+                    CongestionDirection::ClientUpload,
+                ),
+            ));
         }
     }
 }
@@ -298,7 +350,7 @@ async fn client_h3_auth(
     conn: &quinn::Connection,
     password: &str,
     rx_bps: u64,
-) -> Result<(), ProxyError> {
+) -> Result<tokio::task::JoinHandle<()>, ProxyError> {
     use http::header::{HeaderName, HeaderValue};
     use http::{Method, Request};
 
@@ -306,9 +358,9 @@ async fn client_h3_auth(
         .await
         .map_err(|e| ProxyError::Transport(format!("h3 client: {e}")))?;
 
-    // Keep the HTTP/3 connection driver alive for the lifetime of the QUIC session.
-    tokio::spawn(async move {
-        let _ = driver;
+    let driver_task = tokio::spawn(async move {
+        let _driver = driver;
+        std::future::pending::<()>().await;
     });
 
     let mut auth_uri = String::with_capacity(proto::AUTH_HOST.len() + proto::AUTH_PATH.len() + 8);
@@ -349,11 +401,12 @@ async fn client_h3_auth(
         .map_err(|e| ProxyError::Transport(format!("recv auth response: {e}")))?;
 
     if resp.status().as_u16() != proto::STATUS_AUTH_OK {
+        driver_task.abort();
         return Err(ProxyError::AuthFailed);
     }
 
     let _auth = proto::auth_response_from_headers(resp.headers(), resp.status().as_u16());
-    Ok(())
+    Ok(driver_task)
 }
 
 struct Hysteria2Stream {
@@ -394,17 +447,19 @@ impl AsyncWrite for Hysteria2Stream {
 
 /// Outbound handler that dials destinations through a Hysteria2 client.
 pub struct Hysteria2OutboundHandler {
-    client: Hysteria2Client,
+    client: Arc<Hysteria2Client>,
     tag: String,
 }
 
 impl Hysteria2OutboundHandler {
     /// Create a shared outbound handler with a fixed tag.
     pub fn new(config: Hysteria2ClientConfig, tag: String) -> Arc<Self> {
-        Arc::new(Self {
-            client: Hysteria2Client::new(config),
-            tag,
-        })
+        let client = Arc::new(Hysteria2Client::new(config));
+        let warm_client = Arc::clone(&client);
+        tokio::spawn(async move {
+            warm_client.prewarm().await;
+        });
+        Arc::new(Self { client, tag })
     }
 }
 
@@ -520,8 +575,11 @@ impl Hysteria2UdpSession {
         configure_congestion(&mut transport_config, &config.congestion);
         crate::quic::badnet::record_mode(config.congestion.mode);
         crate::quic::badnet::record_endpoint_shards(config.endpoint_shards.max(1));
-        let (stream_rx, conn_rx, conn_tx) =
-            crate::quic::bdp_windows(config.down_mbps, config.up_mbps);
+        let (stream_rx, conn_rx, conn_tx) = crate::quic::bdp_windows_with_profile(
+            config.down_mbps,
+            config.up_mbps,
+            config.congestion.window_profile(),
+        );
         transport_config.stream_receive_window(stream_rx);
         transport_config.receive_window(conn_rx);
         transport_config.send_window(conn_tx);

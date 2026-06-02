@@ -60,6 +60,7 @@ fn parse_server_config(cfg: &InboundConfig) -> Result<Hysteria2ServerConfig> {
 
     let up_mbps = s["upMbps"].as_u64().unwrap_or(100);
     let down_mbps = s["downMbps"].as_u64().unwrap_or(100);
+    let congestion = parse_congestion_config(s, up_mbps, down_mbps)?;
 
     // Read TLS cert+key from stream_settings.tlsSettings.
     let stream = cfg.stream_settings.as_ref().ok_or_else(|| {
@@ -104,6 +105,7 @@ fn parse_server_config(cfg: &InboundConfig) -> Result<Hysteria2ServerConfig> {
         cert_pem,
         key_pem,
         max_connections,
+        congestion,
     })
 }
 

@@ -69,8 +69,8 @@ pub use quic::{
     ensure_crypto_provider,
 };
 pub use quic::{
-    BadNetControllerFactory, BrutalCC, BrutalCCFactory, CongestionConfig, CongestionMode,
-    LossFingerprint, PathSample,
+    BadNetControllerFactory, BrutalCC, BrutalCCFactory, CongestionConfig, CongestionDirection,
+    CongestionMode, LossFingerprint, PathSample,
 };
 pub use reality::{
     complete_tls13_server_handshake, reality_server_tls_stream, tls_cert_for_auth_key,
