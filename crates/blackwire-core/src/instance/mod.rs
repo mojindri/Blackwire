@@ -35,6 +35,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -52,7 +53,9 @@ use blackwire_config::schema::{Config, FastPoolPolicy, ProfileMode, Protocol};
 use blackwire_protocol::freedom::{FreedomOutbound, PoolConfig};
 use blackwire_protocol::socks::Socks5Inbound;
 use blackwire_transport::mkcp_accept_sessions;
-use blackwire_transport::{create_tun, ensure_tun_runtime_supported, TunConfig, TunRuntime};
+use blackwire_transport::{
+    create_tun, ensure_tun_runtime_supported, TunBatchConfig, TunConfig, TunRuntime,
+};
 use tokio::net::UdpSocket as TokioUdpSocket;
 
 use crate::http::build_http_inbound;
@@ -264,6 +267,13 @@ impl Instance {
                 redirect_port: tun_cfg.redirect_port,
                 dns_port: tun_cfg.dns_port,
                 wintun_file: tun_cfg.wintun_file.clone(),
+                batch: TunBatchConfig {
+                    enabled: tun_cfg.batch.enabled,
+                    max_packets: tun_cfg.batch.max_packets,
+                    max_delay: Duration::from_micros(tun_cfg.batch.max_delay_us),
+                },
+                udp_max_sessions: tun_cfg.sessions.udp_max,
+                udp_idle_timeout: Duration::from_secs(tun_cfg.sessions.udp_idle_timeout_sec),
             };
             let device =
                 create_tun(&tc).context("TUN device creation failed (are we running as root?)")?;
