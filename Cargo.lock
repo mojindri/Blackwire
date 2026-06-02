@@ -471,9 +471,11 @@ dependencies = [
 name = "blackwire-benches"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "blackwire-common",
  "blackwire-config",
  "blackwire-core",
+ "blackwire-transport",
  "bytes",
  "criterion",
  "serde_json",
