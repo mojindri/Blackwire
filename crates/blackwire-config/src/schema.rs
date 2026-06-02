@@ -448,6 +448,73 @@ pub struct TunConfig {
     /// TUN session/NAT table limits and timeouts.
     #[serde(default, rename = "sessions")]
     pub sessions: TunSessionConfig,
+    /// Linux-only packet backend experiments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux: Option<TunLinuxConfig>,
+}
+
+/// Linux-only TUN/runtime packet backend selection.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TunLinuxConfig {
+    /// Packet backend used for Linux transparent-path experiments.
+    #[serde(default)]
+    pub backend: TunLinuxBackend,
+    /// AF_XDP socket configuration. Ignored unless `backend = "afxdp"`.
+    #[serde(default, rename = "afXdp", alias = "af_xdp")]
+    pub af_xdp: TunAfXdpConfig,
+}
+
+/// Linux packet backend selection for transparent path experiments.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TunLinuxBackend {
+    /// Default TUN device runtime.
+    #[default]
+    Tun,
+    /// Experimental AF_XDP socket backend.
+    Afxdp,
+}
+
+/// AF_XDP socket bring-up options for Linux benchmark and backend experiments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunAfXdpConfig {
+    /// Physical interface name to bind, e.g. `eth0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface: Option<String>,
+    /// NIC RX/TX queue id to bind.
+    #[serde(default)]
+    pub queue_id: u32,
+    /// Ring size for RX/TX/fill/completion rings. Must be a power of two.
+    #[serde(default = "default_tun_af_xdp_ring_entries")]
+    pub ring_entries: u32,
+    /// Number of UMEM frames to map. Must be a power of two.
+    #[serde(default = "default_tun_af_xdp_frame_count")]
+    pub frame_count: u32,
+    /// UMEM frame size in bytes.
+    #[serde(default = "default_tun_af_xdp_frame_size")]
+    pub frame_size: u32,
+    /// Force AF_XDP copy mode for broad driver compatibility.
+    #[serde(default = "default_true")]
+    pub force_copy: bool,
+    /// Force AF_XDP zerocopy mode. Incompatible with `forceCopy`.
+    #[serde(default)]
+    pub force_zerocopy: bool,
+}
+
+impl Default for TunAfXdpConfig {
+    fn default() -> Self {
+        Self {
+            interface: None,
+            queue_id: 0,
+            ring_entries: default_tun_af_xdp_ring_entries(),
+            frame_count: default_tun_af_xdp_frame_count(),
+            frame_size: default_tun_af_xdp_frame_size(),
+            force_copy: true,
+            force_zerocopy: false,
+        }
+    }
 }
 
 /// Packet batching controls for TUN writeback.
@@ -559,6 +626,18 @@ fn default_tun_batch_latency_flush_bytes() -> usize {
     256
 }
 
+fn default_tun_af_xdp_ring_entries() -> u32 {
+    1024
+}
+
+fn default_tun_af_xdp_frame_count() -> u32 {
+    4096
+}
+
+fn default_tun_af_xdp_frame_size() -> u32 {
+    2048
+}
+
 fn default_tun_udp_max_sessions() -> usize {
     4096
 }
@@ -639,7 +718,19 @@ mod tests {
         let camel: TunConfig = serde_json::from_str(
             r#"{
                 "outboundInterface": "en0",
-                "wintunFile": "C:\\Program Files\\Blackwire\\wintun.dll"
+                "wintunFile": "C:\\Program Files\\Blackwire\\wintun.dll",
+                "linux": {
+                    "backend": "afxdp",
+                    "afXdp": {
+                        "interface": "eth0",
+                        "queueId": 2,
+                        "ringEntries": 2048,
+                        "frameCount": 8192,
+                        "frameSize": 4096,
+                        "forceCopy": false,
+                        "forceZerocopy": true
+                    }
+                }
             }"#,
         )
         .unwrap();
@@ -652,6 +743,15 @@ mod tests {
         assert_eq!(camel.batch.max_packets, 32);
         assert_eq!(camel.batch.latency_flush_bytes, 256);
         assert_eq!(camel.sessions.udp_max, 4096);
+        let linux = camel.linux.expect("linux config should deserialize");
+        assert_eq!(linux.backend, TunLinuxBackend::Afxdp);
+        assert_eq!(linux.af_xdp.interface.as_deref(), Some("eth0"));
+        assert_eq!(linux.af_xdp.queue_id, 2);
+        assert_eq!(linux.af_xdp.ring_entries, 2048);
+        assert_eq!(linux.af_xdp.frame_count, 8192);
+        assert_eq!(linux.af_xdp.frame_size, 4096);
+        assert!(!linux.af_xdp.force_copy);
+        assert!(linux.af_xdp.force_zerocopy);
 
         let snake: TunConfig = serde_json::from_str(
             r#"{
@@ -667,6 +767,12 @@ mod tests {
                     "udp_max": 128,
                     "udp_idle_timeout_sec": 30,
                     "tcp_max": 256
+                },
+                "linux": {
+                    "backend": "tun",
+                    "af_xdp": {
+                        "interface": "ens3"
+                    }
                 }
             }"#,
         )
@@ -680,6 +786,12 @@ mod tests {
         assert_eq!(snake.sessions.udp_max, 128);
         assert_eq!(snake.sessions.udp_idle_timeout_sec, 30);
         assert_eq!(snake.sessions.tcp_max, 256);
+        let linux = snake.linux.expect("linux config should deserialize");
+        assert_eq!(linux.backend, TunLinuxBackend::Tun);
+        assert_eq!(linux.af_xdp.interface.as_deref(), Some("ens3"));
+        assert_eq!(linux.af_xdp.queue_id, 0);
+        assert!(linux.af_xdp.force_copy);
+        assert!(!linux.af_xdp.force_zerocopy);
     }
 
     #[test]
