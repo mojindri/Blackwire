@@ -63,6 +63,14 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quic: Option<QuicConfig>,
 
+    /// QUIC DATAGRAM lane policy for unreliable traffic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datagram: Option<DatagramConfig>,
+
+    /// Forward error correction policy for lossy/mobile datagram traffic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fec: Option<FecConfig>,
+
     /// Logging settings.
     #[serde(default)]
     pub log: LogConfig,
@@ -226,6 +234,120 @@ impl Default for QuicConfig {
             max_datagram_size: Self::default_max_datagram_size(),
         }
     }
+}
+
+/// QUIC DATAGRAM lane policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatagramConfig {
+    /// Enable QUIC DATAGRAM support for unreliable traffic.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Send UDP relay payloads over QUIC DATAGRAM instead of reliable streams.
+    #[serde(default = "default_true")]
+    pub udp_over_datagram: bool,
+
+    /// Reserved for TUN packet DATAGRAM mode.
+    #[serde(default = "default_true")]
+    pub tun_packets_over_datagram: bool,
+}
+
+impl Default for DatagramConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            udp_over_datagram: true,
+            tun_packets_over_datagram: true,
+        }
+    }
+}
+
+/// Forward error correction mode for QUIC DATAGRAM traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum FecMode {
+    #[default]
+    Off,
+    Xor1OfN,
+    ReedSolomon,
+    RaptorLike,
+    Auto,
+}
+
+/// FEC policy for unreliable datagram classes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FecConfig {
+    #[serde(default)]
+    pub mode: FecMode,
+
+    #[serde(default = "FecConfig::default_max_overhead_percent")]
+    pub max_overhead_percent: u8,
+
+    #[serde(default = "FecConfig::default_protect_classes")]
+    pub protect_classes: Vec<String>,
+
+    #[serde(default = "default_true")]
+    pub avoid_bulk_tcp: bool,
+}
+
+impl FecConfig {
+    fn default_max_overhead_percent() -> u8 {
+        20
+    }
+
+    fn default_protect_classes() -> Vec<String> {
+        vec!["dns".into(), "interactive".into(), "control".into()]
+    }
+
+    pub fn effective_mode(&self) -> FecMode {
+        match self.mode {
+            FecMode::Auto if self.max_overhead_percent >= 20 => FecMode::Xor1OfN,
+            FecMode::Auto => FecMode::Off,
+            mode => mode,
+        }
+    }
+
+    pub fn mode_for_loss(&self, loss_percent: f64, packet_class: &str, bulk_tcp: bool) -> FecMode {
+        if bulk_tcp && self.avoid_bulk_tcp {
+            return FecMode::Off;
+        }
+        if !self
+            .protect_classes
+            .iter()
+            .any(|class| class.eq_ignore_ascii_case(packet_class))
+        {
+            return FecMode::Off;
+        }
+        if self.mode != FecMode::Auto {
+            return self.effective_mode();
+        }
+        if loss_percent < 1.0 || self.max_overhead_percent < 20 {
+            FecMode::Off
+        } else if loss_percent < 3.0 {
+            FecMode::Xor1OfN
+        } else if loss_percent <= 8.0 {
+            FecMode::ReedSolomon
+        } else {
+            FecMode::RaptorLike
+        }
+    }
+}
+
+impl Default for FecConfig {
+    fn default() -> Self {
+        Self {
+            mode: FecMode::Off,
+            max_overhead_percent: Self::default_max_overhead_percent(),
+            protect_classes: Self::default_protect_classes(),
+            avoid_bulk_tcp: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Top-level TUN interception settings.
@@ -490,6 +612,59 @@ mod tests {
         assert!(quic.endpoint_count() >= 1);
         assert_eq!(quic.recv_buffer_bytes, 8 * 1024 * 1024);
         assert_eq!(quic.send_buffer_bytes, 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn datagram_and_fec_policy_deserialise() {
+        let json = r#"{
+            "datagram": {
+                "enabled": true,
+                "udpOverDatagram": true,
+                "tunPacketsOverDatagram": true
+            },
+            "fec": {
+                "mode": "auto",
+                "maxOverheadPercent": 20,
+                "protectClasses": ["dns", "interactive", "control"],
+                "avoidBulkTcp": true
+            },
+            "inbounds": [{
+                "tag": "socks",
+                "protocol": "socks",
+                "listen": "127.0.0.1",
+                "port": 1080
+            }],
+            "outbounds": [{"tag": "d", "protocol": "freedom"}]
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        let datagram = cfg.datagram.expect("datagram config");
+        assert!(datagram.enabled);
+        assert!(datagram.udp_over_datagram);
+        let fec = cfg.fec.expect("fec config");
+        assert_eq!(fec.mode, FecMode::Auto);
+        assert_eq!(fec.effective_mode(), FecMode::Xor1OfN);
+        assert_eq!(fec.max_overhead_percent, 20);
+        assert!(fec.avoid_bulk_tcp);
+    }
+
+    #[test]
+    fn fec_auto_policy_tracks_loss_and_packet_class() {
+        let fec = FecConfig {
+            mode: FecMode::Auto,
+            ..FecConfig::default()
+        };
+        assert_eq!(fec.mode_for_loss(0.5, "dns", false), FecMode::Off);
+        assert_eq!(fec.mode_for_loss(2.0, "dns", false), FecMode::Xor1OfN);
+        assert_eq!(
+            fec.mode_for_loss(5.0, "interactive", false),
+            FecMode::ReedSolomon
+        );
+        assert_eq!(
+            fec.mode_for_loss(10.0, "control", false),
+            FecMode::RaptorLike
+        );
+        assert_eq!(fec.mode_for_loss(5.0, "bulk", false), FecMode::Off);
+        assert_eq!(fec.mode_for_loss(5.0, "dns", true), FecMode::Off);
     }
 
     /// `protocol: shadowtls` on an inbound must be rejected with a clear error

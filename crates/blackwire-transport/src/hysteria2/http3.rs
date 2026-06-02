@@ -20,7 +20,10 @@ use tracing::warn;
 use super::auth::AuthError;
 use super::proto::{auth_response_to_headers, is_auth_request, AuthResponse, STATUS_AUTH_OK};
 use super::tcp;
-use super::udp::{decode_udp_datagram, encode_udp_datagram, Destination, UdpDatagram};
+use super::udp::{
+    encode_udp_datagram, record_datagram_packet, DatagramLane, Destination, FecDecoder, FecEncoder,
+    UdpDatagram,
+};
 use super::Hysteria2ServerConfig;
 
 const H3_AUTH_ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -71,7 +74,7 @@ pub async fn serve_connection(
     let udp_conn = conn.clone();
     let udp_tag = inbound_tag.clone();
     tokio::spawn(async move {
-        serve_udp_sessions(udp_conn, udp_tag).await;
+        serve_udp_sessions(udp_conn, udp_tag, config.datagram_enabled, config.fec).await;
     });
 
     loop {
@@ -125,10 +128,21 @@ pub async fn serve_connection(
 /// Loops on `conn.read_datagram()`. Each datagram is decoded, and the
 /// payload is forwarded to the destination via a per-session UDP socket.
 /// Responses are encoded and sent back as QUIC datagrams.
-async fn serve_udp_sessions(conn: Connection, inbound_tag: String) {
+async fn serve_udp_sessions(
+    conn: Connection,
+    inbound_tag: String,
+    datagram_enabled: bool,
+    fec: super::udp::FecPolicy,
+) {
+    if !datagram_enabled {
+        super::udp::record_datagram_fallback("disabled");
+        return;
+    }
     // session_id → local UDP socket bound on 0.0.0.0:0
     let sessions: Arc<DashMap<u32, Arc<UdpSocket>>> = Arc::new(DashMap::new());
     let worker_limiter = Arc::new(Semaphore::new(MAX_UDP_WORKERS_PER_CONN));
+    let mut fec_decoder = FecDecoder::new(fec);
+    let fec_encoder = Arc::new(std::sync::Mutex::new(FecEncoder::new(fec)));
 
     loop {
         let raw: bytes::Bytes = match conn.read_datagram().await {
@@ -136,101 +150,129 @@ async fn serve_udp_sessions(conn: Connection, inbound_tag: String) {
             Err(_) => break,
         };
 
-        let dg = match decode_udp_datagram(&raw) {
-            Ok(d) => d,
-            Err(e) => {
-                warn!(tag = %inbound_tag, "Hysteria2 bad UDP datagram: {e}");
-                continue;
-            }
-        };
+        let datagrams = fec_decoder.decode(raw);
+        if datagrams.is_empty() {
+            continue;
+        }
+        for dg in datagrams {
+            record_datagram_packet(DatagramLane::Unreliable.class(), "rx");
+            handle_udp_datagram(
+                conn.clone(),
+                inbound_tag.clone(),
+                Arc::clone(&sessions),
+                Arc::clone(&worker_limiter),
+                Arc::clone(&fec_encoder),
+                dg,
+            )
+            .await;
+        }
+    }
+}
 
-        let dest_addr: SocketAddr = match &dg.dest {
-            Destination::V4(ip, port) => SocketAddr::new((*ip).into(), *port),
-            Destination::V6(ip, port) => SocketAddr::new((*ip).into(), *port),
-            Destination::Domain(name, port) => {
-                match tokio::net::lookup_host((name.as_str(), *port)).await {
-                    Ok(mut addrs) => match addrs.next() {
-                        Some(a) => a,
-                        None => {
-                            warn!(tag = %inbound_tag, "Hysteria2 UDP: could not resolve '{name}'");
-                            continue;
-                        }
-                    },
-                    Err(e) => {
-                        warn!(tag = %inbound_tag, "Hysteria2 UDP DNS failed for '{name}': {e}");
-                        continue;
+async fn handle_udp_datagram(
+    conn: Connection,
+    inbound_tag: String,
+    sessions: Arc<DashMap<u32, Arc<UdpSocket>>>,
+    worker_limiter: Arc<Semaphore>,
+    fec_encoder: Arc<std::sync::Mutex<FecEncoder>>,
+    dg: UdpDatagram,
+) {
+    let dest_addr: SocketAddr = match &dg.dest {
+        Destination::V4(ip, port) => SocketAddr::new((*ip).into(), *port),
+        Destination::V6(ip, port) => SocketAddr::new((*ip).into(), *port),
+        Destination::Domain(name, port) => {
+            match tokio::net::lookup_host((name.as_str(), *port)).await {
+                Ok(mut addrs) => match addrs.next() {
+                    Some(a) => a,
+                    None => {
+                        warn!(tag = %inbound_tag, "Hysteria2 UDP: could not resolve '{name}'");
+                        return;
                     }
-                }
-            }
-        };
-
-        let session_id = dg.session_id;
-        let packet_id = dg.packet_id;
-        let payload = dg.data;
-        let dest = dg.dest;
-
-        // Get or create a local UDP socket for this session.
-        let sock = if let Some(entry) = sessions.get(&session_id) {
-            Arc::clone(entry.value())
-        } else {
-            match UdpSocket::bind("0.0.0.0:0").await {
-                Ok(new_sock) => {
-                    let s = Arc::new(new_sock);
-                    sessions.insert(session_id, Arc::clone(&s));
-                    s
-                }
+                },
                 Err(e) => {
-                    warn!(tag = %inbound_tag, "Hysteria2 UDP: socket bind failed: {e}");
-                    continue;
+                    warn!(tag = %inbound_tag, "Hysteria2 UDP DNS failed for '{name}': {e}");
+                    return;
                 }
             }
-        };
+        }
+    };
 
-        let conn2 = conn.clone();
-        let permit = match Arc::clone(&worker_limiter).try_acquire_owned() {
-            Ok(p) => p,
-            Err(_) => {
-                warn!(
-                    tag = %inbound_tag,
-                    max = MAX_UDP_WORKERS_PER_CONN,
-                    "Hysteria2 UDP worker limit reached; dropping datagram"
-                );
-                continue;
+    let session_id = dg.session_id;
+    let packet_id = dg.packet_id;
+    let payload = dg.data;
+    let dest = dg.dest;
+
+    // Get or create a local UDP socket for this session.
+    let sock = if let Some(entry) = sessions.get(&session_id) {
+        Arc::clone(entry.value())
+    } else {
+        match UdpSocket::bind("0.0.0.0:0").await {
+            Ok(new_sock) => {
+                let s = Arc::new(new_sock);
+                sessions.insert(session_id, Arc::clone(&s));
+                s
             }
-        };
-
-        tokio::spawn(async move {
-            let _permit = permit;
-            if let Err(e) = sock.send_to(payload.as_ref(), dest_addr).await {
-                warn!("Hysteria2 UDP send to {dest_addr}: {e}");
+            Err(e) => {
+                warn!(tag = %inbound_tag, "Hysteria2 UDP: socket bind failed: {e}");
                 return;
             }
+        }
+    };
 
-            let mut buf = vec![0u8; 65535];
-            match timeout(UDP_REPLY_TIMEOUT, sock.recv_from(&mut buf)).await {
-                Err(_) => {
-                    warn!("Hysteria2 UDP recv from {dest_addr}: reply timeout");
+    let conn2 = conn.clone();
+    let permit = match Arc::clone(&worker_limiter).try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            warn!(
+                tag = %inbound_tag,
+                max = MAX_UDP_WORKERS_PER_CONN,
+                "Hysteria2 UDP worker limit reached; dropping datagram"
+            );
+            return;
+        }
+    };
+
+    tokio::spawn(async move {
+        let _permit = permit;
+        if let Err(e) = sock.send_to(payload.as_ref(), dest_addr).await {
+            warn!("Hysteria2 UDP send to {dest_addr}: {e}");
+            return;
+        }
+
+        let mut buf = vec![0u8; 65535];
+        match timeout(UDP_REPLY_TIMEOUT, sock.recv_from(&mut buf)).await {
+            Err(_) => {
+                warn!("Hysteria2 UDP recv from {dest_addr}: reply timeout");
+            }
+            Ok(Err(e)) => {
+                warn!("Hysteria2 UDP recv from {dest_addr}: {e}");
+            }
+            Ok(Ok((n, _src))) => {
+                let response_dg = UdpDatagram {
+                    session_id,
+                    packet_id,
+                    frag_id: 0,
+                    frag_num: 1,
+                    dest,
+                    data: bytes::Bytes::copy_from_slice(&buf[..n]),
+                };
+                let encoded = encode_udp_datagram(&response_dg);
+                let parity = fec_encoder
+                    .lock()
+                    .ok()
+                    .and_then(|mut encoder| encoder.protect(&response_dg, &encoded));
+                record_datagram_packet(DatagramLane::Unreliable.class(), "tx");
+                if let Err(e) = conn2.send_datagram(encoded) {
+                    warn!("Hysteria2 UDP: send_datagram failed: {e}");
                 }
-                Ok(Err(e)) => {
-                    warn!("Hysteria2 UDP recv from {dest_addr}: {e}");
-                }
-                Ok(Ok((n, _src))) => {
-                    let response_dg = UdpDatagram {
-                        session_id,
-                        packet_id,
-                        frag_id: 0,
-                        frag_num: 1,
-                        dest,
-                        data: bytes::Bytes::copy_from_slice(&buf[..n]),
-                    };
-                    let encoded = encode_udp_datagram(&response_dg);
-                    if let Err(e) = conn2.send_datagram(encoded) {
-                        warn!("Hysteria2 UDP: send_datagram failed: {e}");
+                if let Some(parity) = parity {
+                    if let Err(e) = conn2.send_datagram(parity) {
+                        warn!("Hysteria2 UDP: send FEC datagram failed: {e}");
                     }
                 }
             }
-        });
-    }
+        }
+    });
 }
 
 async fn handle_h3_auth_request(
