@@ -14,7 +14,15 @@ python3 - "$WORK_DIR/html" <<'PY'
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
-sizes = {"index.html": 1024, "1k": 1024, "4k": 4 * 1024, "16k": 16 * 1024, "64k": 64 * 1024, "1m": 1024 * 1024}
+sizes = {
+    "index.html": 1024,
+    "1k": 1024,
+    "4k": 4 * 1024,
+    "16k": 16 * 1024,
+    "64k": 64 * 1024,
+    "1m": 1024 * 1024,
+    "64m": 64 * 1024 * 1024,
+}
 for name, size in sizes.items():
     (root / name).write_bytes(b"x" * size)
 PY
