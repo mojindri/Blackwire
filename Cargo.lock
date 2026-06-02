@@ -658,6 +658,7 @@ dependencies = [
  "tun",
  "x25519-dalek",
  "x509-parser",
+ "xdp",
 ]
 
 [[package]]
@@ -5378,6 +5379,12 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
 ]
+
+[[package]]
+name = "xdp"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21a573b5aa423fecf27e2dc9c4009db67cd2f35718c2a859d7352ee3fe0d1780"
 
 [[package]]
 name = "yasna"
