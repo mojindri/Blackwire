@@ -276,6 +276,29 @@ impl Instance {
                 udp_max_sessions: tun_cfg.sessions.udp_max,
                 udp_idle_timeout: Duration::from_secs(tun_cfg.sessions.udp_idle_timeout_sec),
                 tcp_max_sessions: tun_cfg.sessions.tcp_max,
+                linux: tun_cfg
+                    .linux
+                    .as_ref()
+                    .map(|linux| blackwire_transport::TunLinuxConfig {
+                        backend: match linux.backend {
+                            blackwire_config::schema::TunLinuxBackend::Tun => {
+                                blackwire_transport::TunLinuxBackend::Tun
+                            }
+                            blackwire_config::schema::TunLinuxBackend::Afxdp => {
+                                blackwire_transport::TunLinuxBackend::AfXdp
+                            }
+                        },
+                        af_xdp: blackwire_transport::TunAfXdpConfig {
+                            interface: linux.af_xdp.interface.clone(),
+                            queue_id: linux.af_xdp.queue_id,
+                            ring_entries: linux.af_xdp.ring_entries,
+                            frame_count: linux.af_xdp.frame_count,
+                            frame_size: linux.af_xdp.frame_size,
+                            force_copy: linux.af_xdp.force_copy,
+                            force_zerocopy: linux.af_xdp.force_zerocopy,
+                        },
+                    })
+                    .unwrap_or_default(),
             };
             let device =
                 create_tun(&tc).context("TUN device creation failed (are we running as root?)")?;

@@ -49,6 +49,58 @@ pub struct TunConfig {
     pub udp_idle_timeout: Duration,
     /// Maximum concurrent packet-level TCP bridge flows.
     pub tcp_max_sessions: usize,
+    /// Linux-only packet backend experiments.
+    pub linux: TunLinuxConfig,
+}
+
+/// Linux-only packet backend settings carried alongside the TUN runtime config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TunLinuxConfig {
+    pub backend: TunLinuxBackend,
+    pub af_xdp: TunAfXdpConfig,
+}
+
+impl Default for TunLinuxConfig {
+    fn default() -> Self {
+        Self {
+            backend: TunLinuxBackend::default(),
+            af_xdp: TunAfXdpConfig::default(),
+        }
+    }
+}
+
+/// Linux packet backend selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TunLinuxBackend {
+    #[default]
+    Tun,
+    AfXdp,
+}
+
+/// AF_XDP backend options for Linux experiments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TunAfXdpConfig {
+    pub interface: Option<String>,
+    pub queue_id: u32,
+    pub ring_entries: u32,
+    pub frame_count: u32,
+    pub frame_size: u32,
+    pub force_copy: bool,
+    pub force_zerocopy: bool,
+}
+
+impl Default for TunAfXdpConfig {
+    fn default() -> Self {
+        Self {
+            interface: None,
+            queue_id: 0,
+            ring_entries: 1024,
+            frame_count: 4096,
+            frame_size: 2048,
+            force_copy: true,
+            force_zerocopy: false,
+        }
+    }
 }
 
 impl Default for TunConfig {
@@ -73,6 +125,7 @@ impl Default for TunConfig {
             udp_max_sessions: 4096,
             udp_idle_timeout: Duration::from_secs(60),
             tcp_max_sessions: 4096,
+            linux: TunLinuxConfig::default(),
         }
     }
 }
