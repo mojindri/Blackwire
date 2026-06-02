@@ -13,6 +13,7 @@
 //! - [`buf`]       — a buffer pool for reusing memory allocations
 
 pub mod address;
+pub mod af_xdp;
 pub mod buf;
 pub mod connect;
 pub mod error;
@@ -20,6 +21,7 @@ pub mod relay;
 pub mod socks5_address;
 pub mod splice;
 pub mod stream;
+pub mod zerocopy;
 
 // Re-export the most commonly used items so callers can write
 // `use blackwire_common::Address` instead of `use blackwire_common::address::Address`.
