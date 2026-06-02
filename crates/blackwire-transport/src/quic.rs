@@ -16,15 +16,37 @@ pub use badnet::{
 };
 pub use brutal_cc::{BrutalCC, BrutalCCFactory};
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
-use quinn::{ClientConfig, Endpoint, ServerConfig, TransportConfig};
+use quinn::{
+    default_runtime, ClientConfig, Endpoint, EndpointConfig, ServerConfig, TransportConfig,
+};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::RootCertStore;
+use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuicSocketConfig {
+    pub reuse_port: bool,
+    pub endpoint_count: usize,
+    pub recv_buffer_bytes: usize,
+    pub send_buffer_bytes: usize,
+}
+
+impl Default for QuicSocketConfig {
+    fn default() -> Self {
+        Self {
+            reuse_port: false,
+            endpoint_count: 1,
+            recv_buffer_bytes: 8 * 1024 * 1024,
+            send_buffer_bytes: 8 * 1024 * 1024,
+        }
+    }
+}
 
 /// Install the rustls crypto provider used by this workspace.
 ///
@@ -58,6 +80,22 @@ pub fn build_server_endpoint_with_alpn(
     key_pem: &str,
     alpn_protocols: &[Vec<u8>],
 ) -> Result<Endpoint> {
+    build_server_endpoint_with_alpn_and_socket(
+        addr,
+        cert_pem,
+        key_pem,
+        alpn_protocols,
+        QuicSocketConfig::default(),
+    )
+}
+
+pub fn build_server_endpoint_with_alpn_and_socket(
+    addr: SocketAddr,
+    cert_pem: &str,
+    key_pem: &str,
+    alpn_protocols: &[Vec<u8>],
+    socket_config: QuicSocketConfig,
+) -> Result<Endpoint> {
     ensure_crypto_provider();
 
     let (certs, key) = parse_cert_and_key(cert_pem, key_pem)?;
@@ -83,7 +121,8 @@ pub fn build_server_endpoint_with_alpn(
     transport.max_idle_timeout(Some(idle_timeout));
     server_config.transport_config(Arc::new(transport));
 
-    Endpoint::server(server_config, addr).context("failed to open QUIC server endpoint")
+    endpoint_server_with_socket(server_config, addr, socket_config)
+        .context("failed to open QUIC server endpoint")
 }
 
 /// Build a QUIC server endpoint for Hysteria2 inbounds.
@@ -113,6 +152,26 @@ pub fn build_hysteria2_server_endpoint_with_congestion(
     up_mbps: u64,
     down_mbps: u64,
     congestion: Option<CongestionConfig>,
+) -> Result<Endpoint> {
+    build_hysteria2_server_endpoint_with_congestion_and_socket(
+        addr,
+        cert_pem,
+        key_pem,
+        up_mbps,
+        down_mbps,
+        congestion,
+        QuicSocketConfig::default(),
+    )
+}
+
+pub fn build_hysteria2_server_endpoint_with_congestion_and_socket(
+    addr: SocketAddr,
+    cert_pem: &str,
+    key_pem: &str,
+    up_mbps: u64,
+    down_mbps: u64,
+    congestion: Option<CongestionConfig>,
+    socket_config: QuicSocketConfig,
 ) -> Result<Endpoint> {
     ensure_crypto_provider();
 
@@ -172,7 +231,8 @@ pub fn build_hysteria2_server_endpoint_with_congestion(
 
     server_config.transport_config(Arc::new(transport));
 
-    Endpoint::server(server_config, addr).context("failed to open Hysteria2 QUIC endpoint")
+    endpoint_server_with_socket(server_config, addr, socket_config)
+        .context("failed to open Hysteria2 QUIC endpoint")
 }
 
 pub(crate) fn bdp_windows(rx_mbps: u64, tx_mbps: u64) -> (quinn::VarInt, quinn::VarInt, u64) {
@@ -229,6 +289,18 @@ pub fn build_client_endpoint_with_alpn(
     skip_verify: bool,
     alpn_protocols: &[Vec<u8>],
 ) -> Result<Endpoint> {
+    build_client_endpoint_with_alpn_and_socket(
+        skip_verify,
+        alpn_protocols,
+        QuicSocketConfig::default(),
+    )
+}
+
+pub fn build_client_endpoint_with_alpn_and_socket(
+    skip_verify: bool,
+    alpn_protocols: &[Vec<u8>],
+    socket_config: QuicSocketConfig,
+) -> Result<Endpoint> {
     ensure_crypto_provider();
 
     let mut tls_config = if skip_verify {
@@ -247,7 +319,8 @@ pub fn build_client_endpoint_with_alpn(
     let bind_addr = "0.0.0.0:0"
         .parse()
         .context("invalid client bind address literal")?;
-    let mut endpoint = Endpoint::client(bind_addr).context("failed to open client socket")?;
+    let mut endpoint = endpoint_client_with_socket(bind_addr, socket_config)
+        .context("failed to open client socket")?;
     endpoint.set_default_client_config(client_config);
 
     Ok(endpoint)
@@ -275,6 +348,89 @@ pub fn dev_self_signed_for_names(names: &[String]) -> Result<(String, String)> {
 }
 
 // ── Private helpers ────────────────────────────────────────────────────────────
+
+fn endpoint_server_with_socket(
+    server_config: ServerConfig,
+    addr: SocketAddr,
+    socket_config: QuicSocketConfig,
+) -> Result<Endpoint> {
+    let socket = tuned_udp_socket(addr, socket_config)?;
+    let runtime = default_runtime().ok_or_else(|| anyhow::anyhow!("no async runtime found"))?;
+    Endpoint::new(
+        EndpointConfig::default(),
+        Some(server_config),
+        socket,
+        runtime,
+    )
+    .context("constructing Quinn endpoint from tuned UDP socket")
+}
+
+fn endpoint_client_with_socket(
+    addr: SocketAddr,
+    socket_config: QuicSocketConfig,
+) -> Result<Endpoint> {
+    let socket = tuned_udp_socket(addr, socket_config)?;
+    let runtime = default_runtime().ok_or_else(|| anyhow::anyhow!("no async runtime found"))?;
+    Endpoint::new(EndpointConfig::default(), None, socket, runtime)
+        .context("constructing Quinn client endpoint from tuned UDP socket")
+}
+
+fn tuned_udp_socket(addr: SocketAddr, cfg: QuicSocketConfig) -> Result<UdpSocket> {
+    let socket = Socket::new(
+        Domain::for_address(addr),
+        Type::DGRAM,
+        Some(SocketProtocol::UDP),
+    )
+    .context("creating UDP socket")?;
+    if addr.is_ipv6() {
+        let _ = socket.set_only_v6(false);
+    }
+    socket
+        .set_reuse_address(true)
+        .context("setting SO_REUSEADDR")?;
+    if cfg.reuse_port {
+        #[cfg(unix)]
+        socket
+            .set_reuse_port(true)
+            .context("setting SO_REUSEPORT")?;
+        #[cfg(not(unix))]
+        tracing::debug!("SO_REUSEPORT requested but unsupported on this target");
+    }
+    let _ = socket.set_recv_buffer_size(cfg.recv_buffer_bytes);
+    let _ = socket.set_send_buffer_size(cfg.send_buffer_bytes);
+    socket
+        .bind(&addr.into())
+        .with_context(|| format!("binding UDP socket {addr}"))?;
+
+    let actual_recv = socket.recv_buffer_size().unwrap_or(0);
+    let actual_send = socket.send_buffer_size().unwrap_or(0);
+    record_socket_metrics(&cfg, actual_recv, actual_send);
+
+    Ok(socket.into())
+}
+
+fn record_socket_metrics(cfg: &QuicSocketConfig, actual_recv: usize, actual_send: usize) {
+    metrics::counter!("blackwire_quic_endpoint_active_total").increment(1);
+    metrics::counter!("blackwire_quic_socket_drops_total").increment(0);
+    metrics::gauge!("blackwire_quic_recv_buffer_bytes").set(actual_recv as f64);
+    metrics::gauge!("blackwire_quic_send_buffer_bytes").set(actual_send as f64);
+    metrics::gauge!("blackwire_quic_endpoint_shards").set(cfg.endpoint_count as f64);
+}
+
+pub fn record_endpoint_io(endpoint: &'static str, direction: &'static str, bytes: usize) {
+    metrics::counter!(
+        "blackwire_quic_endpoint_packets_total",
+        "endpoint" => endpoint,
+        "direction" => direction
+    )
+    .increment(1);
+    metrics::counter!(
+        "blackwire_quic_endpoint_bytes_total",
+        "endpoint" => endpoint,
+        "direction" => direction
+    )
+    .increment(bytes as u64);
+}
 
 /// Parse PEM cert chain + PEM private key into rustls types.
 fn parse_cert_and_key(
@@ -395,5 +551,20 @@ mod tests {
         let ctrl = Arc::clone(&factory).build(std::time::Instant::now(), 1200);
         // Window must be at least MIN_WINDOW (32 KiB).
         assert!(ctrl.window() >= 32 * 1024);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tuned_udp_socket_allows_reuse_port_shards() {
+        let cfg = QuicSocketConfig {
+            reuse_port: true,
+            endpoint_count: 2,
+            recv_buffer_bytes: 1024 * 1024,
+            send_buffer_bytes: 1024 * 1024,
+        };
+        let first = tuned_udp_socket("127.0.0.1:0".parse().unwrap(), cfg).unwrap();
+        let addr = first.local_addr().unwrap();
+        let second = tuned_udp_socket(addr, cfg).unwrap();
+        assert_eq!(second.local_addr().unwrap(), addr);
     }
 }
