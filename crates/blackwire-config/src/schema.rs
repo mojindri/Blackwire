@@ -18,8 +18,9 @@ mod vision;
 pub use endpoint::{InboundConfig, InboundLimitsConfig, OutboundConfig};
 pub use logging_dns::{DnsConfig, FakeIpConfig, LogConfig};
 pub use profile::{
-    validate_fast_profile, FastConfig, FastPoolPolicy, FastRelayConfig, FastRelayEngine,
-    FastRelayFlushPolicy, FastSplicePolicy, ProfileMode, ProfileViolation,
+    explain_cost, validate_fast_profile, BudgetConfig, CopyMode, CostClass, CostReport, FastConfig,
+    FastPoolPolicy, FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy,
+    ProfileMode, ProfileViolation, ProtocolCost,
 };
 pub use protocol::{NetworkType, Protocol, SecurityType};
 pub use routing::{
@@ -49,6 +50,10 @@ pub struct Config {
     /// Extra settings that apply only when `profile = "fast"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast: Option<FastConfig>,
+
+    /// Performance budget used by `blackwire explain-cost`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<BudgetConfig>,
 
     /// XTLS Vision optimization policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
