@@ -9,8 +9,11 @@ pub const DEFAULT_ZEROCOPY_MIN_BYTES: usize = 16 * 1024;
 /// Result details for a single write operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZeroCopyWriteReport {
+    /// Number of bytes written.
     pub bytes: usize,
+    /// True if MSG_ZEROCOPY was used for this write.
     pub used_zerocopy: bool,
+    /// True if a non-zerocopy fallback write was used instead.
     pub fallback_used: bool,
 }
 
@@ -26,6 +29,7 @@ mod imp {
 
     const CONTROL_BYTES: usize = 256;
 
+    /// Enables `SO_ZEROCOPY` on the socket. Returns `false` if the kernel does not support it.
     pub fn enable_tcp_zerocopy(stream: &TcpStream) -> io::Result<bool> {
         let value: libc::c_int = 1;
         let rc = unsafe {
@@ -49,6 +53,7 @@ mod imp {
         }
     }
 
+    /// Writes `buf` to `stream`, using `MSG_ZEROCOPY` when enabled and above the `min_bytes` threshold.
     pub async fn write_all_maybe_zerocopy(
         stream: &mut TcpStream,
         buf: &[u8],
@@ -167,6 +172,7 @@ mod imp {
         matches!(err.raw_os_error(), Some(libc::ENOBUFS | libc::ENOMEM))
     }
 
+    /// Returns `min_bytes`, substituting the default threshold when zero.
     pub fn normalized_min_bytes(min_bytes: usize) -> usize {
         if min_bytes == 0 {
             DEFAULT_ZEROCOPY_MIN_BYTES
