@@ -390,7 +390,7 @@ impl FecConfig {
 
     pub fn effective_mode(&self) -> FecMode {
         match self.mode {
-            FecMode::Auto => FecMode::Off,
+            FecMode::Auto => FecMode::Xor1OfN,
             mode => mode,
         }
     }
@@ -409,8 +409,15 @@ impl FecConfig {
         if self.mode != FecMode::Auto {
             return self.effective_mode();
         }
-        let _ = loss_percent;
-        FecMode::Off
+        if loss_percent < 1.0 {
+            FecMode::Off
+        } else if loss_percent < 5.0 {
+            FecMode::Xor1OfN
+        } else if loss_percent < 10.0 {
+            FecMode::ReedSolomon
+        } else {
+            FecMode::RaptorLike
+        }
     }
 }
 
