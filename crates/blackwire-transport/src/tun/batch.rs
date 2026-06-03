@@ -79,15 +79,18 @@ impl TunPacketBatch {
             .is_some_and(|first| now.duration_since(first) >= self.config.max_delay)
     }
 
+    /// Drain all buffered packets and reset the batch, returning them as an iterator.
     pub fn drain(&mut self) -> impl Iterator<Item = Vec<u8>> + '_ {
         self.first_packet_at = None;
         self.packets.drain(..)
     }
 
+    /// Returns the number of packets currently buffered in the batch.
     pub fn len(&self) -> usize {
         self.packets.len()
     }
 
+    /// Returns `true` if the batch contains no buffered packets.
     pub fn is_empty(&self) -> bool {
         self.packets.is_empty()
     }
