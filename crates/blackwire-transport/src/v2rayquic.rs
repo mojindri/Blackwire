@@ -86,6 +86,7 @@ pub async fn quic_connect(
     .await
 }
 
+/// Dial a QUIC server with explicit socket configuration and open one bidirectional stream.
 pub async fn quic_connect_with_socket_config(
     server: SocketAddr,
     server_name: &str,
@@ -125,6 +126,7 @@ pub fn quic_server_endpoint(
     build_server_endpoint_with_alpn(addr, cert_pem, key_pem, &[V2RAY_QUIC_ALPN.to_vec()])
 }
 
+/// Build a server QUIC endpoint with explicit socket configuration for stream-based v2ray protocols.
 pub fn quic_server_endpoint_with_socket_config(
     addr: SocketAddr,
     cert_pem: &str,

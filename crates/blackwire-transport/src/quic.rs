@@ -29,11 +29,16 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::RootCertStore;
 use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 
+/// Tuning knobs applied when opening a QUIC UDP socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuicSocketConfig {
+    /// Whether to set `SO_REUSEPORT` so multiple endpoints can share one address.
     pub reuse_port: bool,
+    /// Number of parallel Quinn endpoint shards (unused by the socket itself; passed through for metrics).
     pub endpoint_count: usize,
+    /// Requested kernel UDP receive-buffer size in bytes.
     pub recv_buffer_bytes: usize,
+    /// Requested kernel UDP send-buffer size in bytes.
     pub send_buffer_bytes: usize,
 }
 
@@ -89,6 +94,7 @@ pub fn build_server_endpoint_with_alpn(
     )
 }
 
+/// Build a QUIC server endpoint with explicit ALPN values and socket configuration.
 pub fn build_server_endpoint_with_alpn_and_socket(
     addr: SocketAddr,
     cert_pem: &str,
@@ -145,6 +151,7 @@ pub fn build_hysteria2_server_endpoint(
     )
 }
 
+/// Build a Hysteria2 server endpoint with a specific congestion configuration.
 pub fn build_hysteria2_server_endpoint_with_congestion(
     addr: SocketAddr,
     cert_pem: &str,
@@ -164,6 +171,7 @@ pub fn build_hysteria2_server_endpoint_with_congestion(
     )
 }
 
+/// Build a Hysteria2 server endpoint with congestion configuration and socket tuning.
 pub fn build_hysteria2_server_endpoint_with_congestion_and_socket(
     addr: SocketAddr,
     cert_pem: &str,
@@ -296,6 +304,7 @@ pub fn build_client_endpoint_with_alpn(
     )
 }
 
+/// Build a QUIC client endpoint with explicit ALPN values and socket configuration.
 pub fn build_client_endpoint_with_alpn_and_socket(
     skip_verify: bool,
     alpn_protocols: &[Vec<u8>],
@@ -417,6 +426,7 @@ fn record_socket_metrics(cfg: &QuicSocketConfig, actual_recv: usize, actual_send
     metrics::gauge!("blackwire_quic_endpoint_shards").set(cfg.endpoint_count as f64);
 }
 
+/// Record bytes transferred through a named QUIC endpoint for metrics.
 pub fn record_endpoint_io(endpoint: &'static str, direction: &'static str, bytes: usize) {
     metrics::counter!(
         "blackwire_quic_endpoint_packets_total",
