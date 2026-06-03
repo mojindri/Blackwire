@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use crate::meta::{CloseReason, Protocol, Transport};
 
+/// Register descriptions for all blackwire-connmgr metrics with the metrics recorder.
 pub fn describe_metrics() {
     metrics::describe_gauge!(
         "blackwire_connections_active",
@@ -25,10 +26,12 @@ pub fn describe_metrics() {
     );
 }
 
+/// Increment the active-connections gauge when a connection is accepted.
 pub fn record_open() {
     metrics::gauge!("blackwire_connections_active").increment(1.0);
 }
 
+/// Decrement the active-connections gauge and record close reason + lifetime on connection close.
 pub fn record_close(reason: CloseReason, lifetime: Duration) {
     metrics::gauge!("blackwire_connections_active").decrement(1.0);
     metrics::counter!(
@@ -39,6 +42,7 @@ pub fn record_close(reason: CloseReason, lifetime: Duration) {
     metrics::histogram!("blackwire_connections_lifetime_seconds").record(lifetime.as_secs_f64());
 }
 
+/// Record bytes transferred for a connection, broken down by direction, protocol, and transport.
 pub fn record_bytes(protocol: Protocol, transport: Transport, up: u64, down: u64) {
     metrics::counter!(
         "blackwire_connections_bytes_total",
