@@ -575,18 +575,21 @@ pub struct TunBatchConfig {
         rename = "maxPackets",
         alias = "max_packets"
     )]
+    /// Maximum number of packets to batch before flushing.
     pub max_packets: usize,
     #[serde(
         default = "default_tun_batch_max_delay_us",
         rename = "maxDelayUs",
         alias = "max_delay_us"
     )]
+    /// Maximum time in microseconds to hold a batch before flushing.
     pub max_delay_us: u64,
     #[serde(
         default = "default_tun_batch_latency_flush_bytes",
         rename = "latencyFlushBytes",
         alias = "latency_flush_bytes"
     )]
+    /// Flush the batch immediately when buffered bytes exceed this threshold.
     pub latency_flush_bytes: usize,
 }
 
@@ -609,18 +612,21 @@ pub struct TunSessionConfig {
         rename = "udpMax",
         alias = "udp_max"
     )]
+    /// Maximum concurrent UDP NAT sessions.
     pub udp_max: usize,
     #[serde(
         default = "default_tun_udp_idle_timeout_secs",
         rename = "udpIdleTimeoutSec",
         alias = "udp_idle_timeout_sec"
     )]
+    /// Idle timeout in seconds before a UDP session is evicted.
     pub udp_idle_timeout_sec: u64,
     #[serde(
         default = "default_tun_tcp_max_sessions",
         rename = "tcpMax",
         alias = "tcp_max"
     )]
+    /// Maximum concurrent TCP proxy sessions.
     pub tcp_max: usize,
 }
 
