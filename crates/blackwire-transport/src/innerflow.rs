@@ -76,6 +76,7 @@ pub struct InnerFlowPacket {
 }
 
 impl InnerFlowPacket {
+    /// Construct a new packet with the given class, flow key, and payload, timestamped now.
     pub fn new(class: PacketClass, flow: InnerFlowKey, payload: Bytes) -> Self {
         Self {
             class,
@@ -87,6 +88,7 @@ impl InnerFlowPacket {
     }
 }
 
+/// Deficit-round-robin scheduler that prioritises latency-sensitive packet classes over bulk traffic.
 #[derive(Debug)]
 pub struct InnerFlowScheduler {
     queues: HashMap<PacketClass, VecDeque<InnerFlowPacket>>,
@@ -101,6 +103,7 @@ impl Default for InnerFlowScheduler {
 }
 
 impl InnerFlowScheduler {
+    /// Create a scheduler with the given per-flow quantum (bytes) and maximum per-class queue depth.
     pub fn new(quantum_bytes: usize, max_packets_per_flow: usize) -> Self {
         Self {
             queues: HashMap::new(),
@@ -109,6 +112,7 @@ impl InnerFlowScheduler {
         }
     }
 
+    /// Enqueue a packet; drops the oldest packet in its class queue if the queue is full.
     pub fn enqueue(&mut self, packet: InnerFlowPacket) {
         let class = packet.class;
         let queue = self.queues.entry(class).or_default();
@@ -120,6 +124,7 @@ impl InnerFlowScheduler {
         queue.push_back(packet);
     }
 
+    /// Dequeue the next packet according to priority order, dropping any stale packets first.
     pub fn dequeue(&mut self) -> Option<InnerFlowPacket> {
         self.drop_stale();
         for class in PacketClass::dequeue_order() {
@@ -140,6 +145,7 @@ impl InnerFlowScheduler {
         None
     }
 
+    /// Returns `true` if all per-class queues are empty.
     pub fn is_empty(&self) -> bool {
         self.queues.values().all(VecDeque::is_empty)
     }
@@ -163,6 +169,7 @@ impl InnerFlowScheduler {
     }
 }
 
+/// Record the scheduling queue delay for a packet class as a metrics histogram observation.
 pub fn record_queue_delay(class: PacketClass, enqueued_at: Instant) {
     let delay_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
     metrics::histogram!(
