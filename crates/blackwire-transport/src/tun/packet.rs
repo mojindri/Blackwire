@@ -379,6 +379,7 @@ pub fn build_tcp_packet(
     }
 }
 
+/// Build a TCP packet with custom TCP options appended before the payload.
 #[allow(clippy::too_many_arguments)]
 pub fn build_tcp_packet_with_options(
     src: SocketAddr,
