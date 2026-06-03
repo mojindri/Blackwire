@@ -422,7 +422,10 @@ impl FecPolicy {
                 true,
             )
             .min(estimate_parity_datagram_len(
-                encoded_len, group_size, None, false,
+                encoded_len,
+                group_size,
+                None,
+                false,
             ));
             if parity_len * 100 <= payload_len * group_size * overhead {
                 break;
@@ -431,7 +434,6 @@ impl FecPolicy {
         }
         group_size as u8
     }
-
 }
 
 #[derive(Debug)]
@@ -613,14 +615,14 @@ impl FecDecoder {
         let base = dg.packet_id - (dg.packet_id % group_size as u16);
         let idx = (dg.packet_id - base) as usize;
         let recovered_raw = {
-            let group = self
-                .groups
-                .entry((dg.session_id, base))
-                .or_insert_with(|| FecDecodeGroup {
-                    created: Instant::now(),
-                    slots: vec![None; group_size as usize],
-                    parity: None,
-                });
+            let group =
+                self.groups
+                    .entry((dg.session_id, base))
+                    .or_insert_with(|| FecDecodeGroup {
+                        created: Instant::now(),
+                        slots: vec![None; group_size as usize],
+                        parity: None,
+                    });
             if idx < group.slots.len() {
                 group.slots[idx] = Some(raw);
             }
@@ -752,9 +754,7 @@ fn build_parity(
                 .is_some()
                 .then_some(FEC_FLAG_COMPACT_PAYLOAD)
                 .unwrap_or(0)
-            | fixed_lengths
-                .then_some(FEC_FLAG_FIXED_LENGTHS)
-                .unwrap_or(0),
+            | fixed_lengths.then_some(FEC_FLAG_FIXED_LENGTHS).unwrap_or(0),
     );
     payload.put_u16(base_packet_id);
     payload.put_u8(slots.len() as u8);
