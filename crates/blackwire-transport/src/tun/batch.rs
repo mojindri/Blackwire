@@ -4,8 +4,11 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TunBatchConfig {
     pub enabled: bool,
+    /// Maximum number of packets to accumulate before flushing.
     pub max_packets: usize,
+    /// Maximum time to hold a batch before flushing regardless of packet count.
     pub max_delay: Duration,
+    /// Flush immediately when a single packet exceeds this byte threshold (0 = disabled).
     pub latency_flush_bytes: usize,
 }
 
@@ -21,6 +24,7 @@ impl Default for TunBatchConfig {
 }
 
 impl TunBatchConfig {
+    /// Return a copy of this config with all fields clamped to safe operating ranges.
     pub fn normalized(self) -> Self {
         Self {
             enabled: self.enabled,
@@ -44,6 +48,7 @@ pub struct TunPacketBatch {
 }
 
 impl TunPacketBatch {
+    /// Create a new batch using the given config (normalized on construction).
     pub fn new(config: TunBatchConfig) -> Self {
         let config = config.normalized();
         Self {
@@ -53,6 +58,7 @@ impl TunPacketBatch {
         }
     }
 
+    /// Append a packet to the batch, recording the arrival time of the first packet.
     pub fn push(&mut self, packet: Vec<u8>, now: Instant) {
         if self.packets.is_empty() {
             self.first_packet_at = Some(now);
@@ -60,6 +66,7 @@ impl TunPacketBatch {
         self.packets.push(packet);
     }
 
+    /// Returns `true` if the batch should be flushed now based on packet count, delay, or size.
     pub fn should_flush(&self, now: Instant) -> bool {
         if self.packets.is_empty() {
             return false;
