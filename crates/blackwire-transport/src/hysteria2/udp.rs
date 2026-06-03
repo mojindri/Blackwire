@@ -685,7 +685,7 @@ impl FecDecoder {
             return false;
         }
         self.seen_order.push_back(key);
-        let limit = self.policy.dedup_window_packets.max(1).min(FEC_SEEN_LIMIT);
+        let limit = self.policy.dedup_window_packets.clamp(1, FEC_SEEN_LIMIT);
         while self.seen_order.len() > limit {
             if let Some(old) = self.seen_order.pop_front() {
                 self.seen.remove(&old);
@@ -750,11 +750,16 @@ fn build_parity(
     payload.put_slice(FEC_MAGIC);
     payload.put_u8(
         mode_byte(mode)
-            | compact_dest
-                .is_some()
-                .then_some(FEC_FLAG_COMPACT_PAYLOAD)
-                .unwrap_or(0)
-            | fixed_lengths.then_some(FEC_FLAG_FIXED_LENGTHS).unwrap_or(0),
+            | if compact_dest.is_some() {
+                FEC_FLAG_COMPACT_PAYLOAD
+            } else {
+                0
+            }
+            | if fixed_lengths {
+                FEC_FLAG_FIXED_LENGTHS
+            } else {
+                0
+            },
     );
     payload.put_u16(base_packet_id);
     payload.put_u8(slots.len() as u8);

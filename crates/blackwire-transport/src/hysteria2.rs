@@ -243,10 +243,7 @@ impl Drop for Hysteria2ClientSession {
 impl Hysteria2Client {
     /// Build a Hysteria2 client from static config.
     pub fn new(config: Hysteria2ClientConfig) -> Self {
-        let shard_count = config
-            .endpoint_shards
-            .max(1)
-            .min(MAX_HYSTERIA2_CLIENT_SHARDS);
+        let shard_count = config.endpoint_shards.clamp(1, MAX_HYSTERIA2_CLIENT_SHARDS);
         let sessions = (0..shard_count).map(|_| Mutex::new(None)).collect();
         Self {
             config,
@@ -801,69 +798,6 @@ impl rustls::client::danger::ServerCertVerifier for SkipVerifier {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn congestion(mode: CongestionMode) -> CongestionConfig {
-        CongestionConfig {
-            mode,
-            up_mbps: 10,
-            down_mbps: 100,
-            min_ack_rate: 0.8,
-            ..CongestionConfig::default()
-        }
-    }
-
-    #[test]
-    fn standard_quic_keeps_pacing_disabled_for_control_rows() {
-        let cfg = congestion(CongestionMode::StandardQuic);
-        assert!(pacer_for_config(&cfg, CongestionDirection::ClientUpload, "test").is_none());
-    }
-
-    #[test]
-    fn badnet_low_latency_uses_small_burst_cap() {
-        let mut cfg = congestion(CongestionMode::BadNetLowLatency);
-        cfg.up_mbps = 100;
-        let pacer = pacer_for_config(&cfg, CongestionDirection::ClientUpload, "test")
-            .expect("badnet low latency enables pacing");
-
-        assert_eq!(pacer.burst_bytes, LOW_LATENCY_PACER_BURST);
-        assert_eq!(pacer.rate_bps, 15_625_000);
-    }
-
-    #[test]
-    fn badnet_throughput_uses_larger_burst_cap() {
-        let cfg = congestion(CongestionMode::BadNetThroughput);
-        let pacer = pacer_for_config(&cfg, CongestionDirection::ServerDownload, "test")
-            .expect("badnet throughput enables pacing");
-
-        assert_eq!(pacer.burst_bytes, THROUGHPUT_PACER_BURST);
-        assert_eq!(pacer.rate_bps, 15_625_000);
-    }
-
-    #[test]
-    fn server_download_pacer_uses_downlink_rate() {
-        let cfg = congestion(CongestionMode::NovaCc);
-        let pacer = server_download_pacer(&cfg).expect("nova enables pacing");
-
-        assert_eq!(pacer.rate_bps, 15_625_000);
-    }
-
-    #[test]
-    fn badnet_low_latency_window_profile_is_smaller_than_throughput() {
-        let low = congestion(CongestionMode::BadNetLowLatency).window_profile();
-        let throughput = congestion(CongestionMode::BadNetThroughput).window_profile();
-
-        assert_eq!(low.bdp_rtt, Duration::from_millis(150));
-        assert_eq!(low.min_window_bytes, 1024 * 1024);
-        assert_eq!(low.max_window_bytes, 32 * 1024 * 1024);
-        assert_eq!(low.conn_window_multiplier, 2);
-        assert!(low.max_window_bytes < throughput.max_window_bytes);
-        assert!(low.bdp_rtt < throughput.bdp_rtt);
-    }
-}
-
 /// A client-side Hysteria2 UDP session.
 ///
 /// Wraps the QUIC connection for sending and receiving UDP datagrams.
@@ -1014,5 +948,68 @@ impl Hysteria2UdpSession {
             stale_drops: decoder.stale_drops,
             duplicate_safe_skips: encoder.duplicate_safe_skips,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn congestion(mode: CongestionMode) -> CongestionConfig {
+        CongestionConfig {
+            mode,
+            up_mbps: 10,
+            down_mbps: 100,
+            min_ack_rate: 0.8,
+            ..CongestionConfig::default()
+        }
+    }
+
+    #[test]
+    fn standard_quic_keeps_pacing_disabled_for_control_rows() {
+        let cfg = congestion(CongestionMode::StandardQuic);
+        assert!(pacer_for_config(&cfg, CongestionDirection::ClientUpload, "test").is_none());
+    }
+
+    #[test]
+    fn badnet_low_latency_uses_small_burst_cap() {
+        let mut cfg = congestion(CongestionMode::BadNetLowLatency);
+        cfg.up_mbps = 100;
+        let pacer = pacer_for_config(&cfg, CongestionDirection::ClientUpload, "test")
+            .expect("badnet low latency enables pacing");
+
+        assert_eq!(pacer.burst_bytes, LOW_LATENCY_PACER_BURST);
+        assert_eq!(pacer.rate_bps, 15_625_000);
+    }
+
+    #[test]
+    fn badnet_throughput_uses_larger_burst_cap() {
+        let cfg = congestion(CongestionMode::BadNetThroughput);
+        let pacer = pacer_for_config(&cfg, CongestionDirection::ServerDownload, "test")
+            .expect("badnet throughput enables pacing");
+
+        assert_eq!(pacer.burst_bytes, THROUGHPUT_PACER_BURST);
+        assert_eq!(pacer.rate_bps, 15_625_000);
+    }
+
+    #[test]
+    fn server_download_pacer_uses_downlink_rate() {
+        let cfg = congestion(CongestionMode::NovaCc);
+        let pacer = server_download_pacer(&cfg).expect("nova enables pacing");
+
+        assert_eq!(pacer.rate_bps, 15_625_000);
+    }
+
+    #[test]
+    fn badnet_low_latency_window_profile_is_smaller_than_throughput() {
+        let low = congestion(CongestionMode::BadNetLowLatency).window_profile();
+        let throughput = congestion(CongestionMode::BadNetThroughput).window_profile();
+
+        assert_eq!(low.bdp_rtt, Duration::from_millis(150));
+        assert_eq!(low.min_window_bytes, 1024 * 1024);
+        assert_eq!(low.max_window_bytes, 32 * 1024 * 1024);
+        assert_eq!(low.conn_window_multiplier, 2);
+        assert!(low.max_window_bytes < throughput.max_window_bytes);
+        assert!(low.bdp_rtt < throughput.bdp_rtt);
     }
 }
