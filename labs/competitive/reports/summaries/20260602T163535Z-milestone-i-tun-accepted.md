@@ -8,8 +8,8 @@ Finalized Milestone I by closing the TCP/bulk harness gap and fixing the Linux T
 
 VPS role split used for the accepted TCP/bulk rows:
 
-- TUN client: `91.107.164.107`
-- Control/upstream host: `91.107.176.118`
+- TUN client: `<server-host>`
+- Control/upstream host: `<client-host>`
 - External bulk target: `http://80.249.99.148/50MB.zip`
 
 ## Final Fixes

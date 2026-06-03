@@ -13,11 +13,11 @@ make competitive-clean competitive-report
 
 ## Environment
 
-- Server VPS: `91.107.164.107`
-- Client VPS: `91.107.176.118`
+- Server VPS: `<server-host>`
+- Client VPS: `<client-host>`
 - Upstream: native nginx stream/static HTTP on server port `18080`
 - Baseline binary: `target/linux-amd64/blackwire`
-- Candidate binary: natively built on `91.107.164.107`, fetched to `target/linux-amd64/blackwire-candidate-relay-v2`
+- Candidate binary: natively built on `<server-host>`, fetched to `target/linux-amd64/blackwire-candidate-relay-v2`
 - Candidate policy: `fast.relay.engine=v2`, `fast.relay.flush=deferred`, `initialBuffer=16384`, `maxBuffer=262144`
 
 ## Result File

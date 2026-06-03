@@ -15,8 +15,8 @@ make competitive-expensive competitive-report
 
 ## Environment
 
-- Server VPS: `91.107.164.107`
-- Client VPS: `91.107.176.118`
+- Server VPS: `<server-host>`
+- Client VPS: `<client-host>`
 - Candidate binary: native Linux x86_64 release build at `target/linux-amd64/blackwire-candidate-vision-direct`
 - Upstream: `https://www.microsoft.com`
 - REALITY fallback/camouflage path: nginx `stream` listener on server `127.0.0.1:18443` forwarding to `www.microsoft.com:443`

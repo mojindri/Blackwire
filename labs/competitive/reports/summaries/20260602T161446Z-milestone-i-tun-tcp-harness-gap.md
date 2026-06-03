@@ -4,17 +4,17 @@ Date: 2026-06-02
 
 ## Scope
 
-Closed the TUN TCP/bulk benchmark harness gap so TCP rows no longer depend on the broken `91.107.176.118` outbound-TCP client role or on same-destination TUN recursion.
+Closed the TUN TCP/bulk benchmark harness gap so TCP rows no longer depend on the broken `<client-host>` outbound-TCP client role or on same-destination TUN recursion.
 
 The usable TCP/bulk role split is:
 
-- TCP-capable TUN client: `91.107.164.107`
-- Remote UDP/nginx control host: `91.107.176.118`
+- TCP-capable TUN client: `<server-host>`
+- Remote UDP/nginx control host: `<client-host>`
 - External IP bulk target: `http://80.249.99.148/50MB.zip`
 
 ## Harness Fixes
 
-- Reversed the usable benchmark role for TCP/bulk because `91.107.176.118` still cannot open ordinary outbound TCP connections.
+- Reversed the usable benchmark role for TCP/bulk because `<client-host>` still cannot open ordinary outbound TCP connections.
 - Added nginx readiness fallback to accept a listening socket when local curl is unavailable on the TCP-restricted VPS.
 - Added bounded TUN TCP curl probes via `TUN_TCP_TIMEOUT_SEC` so failed TCP rows cannot hang the harness or leave TUN policy routes active.
 - Added `TUN_TCP_TARGET_URL` so TCP/bulk can use an external target instead of the same host used for control/upstream setup.

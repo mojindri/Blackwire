@@ -6,8 +6,8 @@ Date: 2026-06-02
 
 Validated the Milestone I TUN UDP p99 regression after adding latency-sized TUN write flushes. The run used native Linux binaries on the Hetzner VPS pair:
 
-- Server: `91.107.164.107`
-- Client: `91.107.176.118`
+- Server: `<server-host>`
+- Client: `<client-host>`
 - Candidate binary: `target/linux-amd64/blackwire-candidate-milestone-i-latency-flush`
 
 ## Implementation Change
@@ -23,8 +23,8 @@ Command shape:
 ```bash
 COMPETITIVE_MODE=remote \
 BLACKWIRE_CANDIDATE_BIN=$PWD/target/linux-amd64/blackwire-candidate-milestone-i-latency-flush \
-COMPETITIVE_SERVER_HOST=91.107.164.107 \
-COMPETITIVE_CLIENT_HOST=91.107.176.118 \
+COMPETITIVE_SERVER_HOST=<server-host> \
+COMPETITIVE_CLIENT_HOST=<client-host> \
 COMPETITIVE_SSH_KEY=id_hetzner \
 COMPETITIVE_DURATION=10 \
 TUN_UDP_COUNT=500 \

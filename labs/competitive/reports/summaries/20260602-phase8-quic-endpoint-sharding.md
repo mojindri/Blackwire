@@ -50,7 +50,7 @@ Local macOS validation:
 
 Native VPS validation:
 
-- Server VPS: `91.107.164.107`
+- Server VPS: `<server-host>`
 - SSH key: `id_hetzner`
 - OS: Linux x86_64, kernel `7.0.0-15-generic`
 - Rust toolchain: `rustc 1.93.1`
@@ -75,8 +75,8 @@ cargo test -p integration-tests --test e2e_hysteria2_udp -- --nocapture
 Remote:
 
 ```bash
-rsync -az --delete --exclude target --exclude .git --exclude perf.data -e 'ssh -i id_hetzner -o StrictHostKeyChecking=accept-new' ./ root@91.107.164.107:/root/v2ray-phase8/
-ssh -i id_hetzner root@91.107.164.107 'cd /root/v2ray-phase8 && cargo test -p blackwire-transport tuned_udp_socket_allows_reuse_port_shards -- --nocapture && cargo test -p integration-tests --test e2e_hysteria2_udp -- --nocapture'
+rsync -az --delete --exclude target --exclude .git --exclude perf.data -e 'ssh -i id_hetzner -o StrictHostKeyChecking=accept-new' ./ root@<server-host>:/root/v2ray-phase8/
+ssh -i id_hetzner root@<server-host> 'cd /root/v2ray-phase8 && cargo test -p blackwire-transport tuned_udp_socket_allows_reuse_port_shards -- --nocapture && cargo test -p integration-tests --test e2e_hysteria2_udp -- --nocapture'
 ```
 
 ## Result
