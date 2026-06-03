@@ -69,8 +69,11 @@ pub enum RelayFlushPolicy {
 /// Options for [`copy_bidirectional_v2`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RelayV2Options {
+    /// Initial ring-buffer capacity in bytes.
     pub initial_buffer: usize,
+    /// Maximum ring-buffer capacity in bytes; the buffer will not grow beyond this.
     pub max_buffer: usize,
+    /// When to flush the write side of the relay.
     pub flush_policy: RelayFlushPolicy,
 }
 
@@ -87,15 +90,22 @@ impl Default for RelayV2Options {
 /// Runtime counters returned by [`copy_bidirectional_v2`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RelayV2Stats {
+    /// Bytes relayed from stream A to stream B.
     pub bytes_a_to_b: u64,
+    /// Bytes relayed from stream B to stream A.
     pub bytes_b_to_a: u64,
+    /// Total number of read syscalls issued.
     pub read_ops: u64,
+    /// Total number of write syscalls issued.
     pub write_ops: u64,
+    /// Total number of flush calls issued.
     pub flush_ops: u64,
+    /// Number of times the ring buffer grew to accommodate more data.
     pub buffer_grow_events: u64,
 }
 
 impl RelayV2Stats {
+    /// Returns `(bytes_a_to_b, bytes_b_to_a)` as a tuple.
     pub fn byte_totals(&self) -> (u64, u64) {
         (self.bytes_a_to_b, self.bytes_b_to_a)
     }
@@ -109,6 +119,7 @@ pub struct RelayRingBuffer {
 }
 
 impl RelayRingBuffer {
+    /// Create a new buffer with the given initial and maximum capacities.
     pub fn new(initial_capacity: usize, max_capacity: usize) -> Self {
         let initial_capacity = initial_capacity.max(1);
         let max_capacity = max_capacity.max(initial_capacity);
@@ -118,37 +129,45 @@ impl RelayRingBuffer {
         }
     }
 
+    /// Number of bytes currently held in the buffer.
     pub fn len(&self) -> usize {
         self.buf.len()
     }
 
+    /// Current allocated capacity of the buffer.
     pub fn capacity(&self) -> usize {
         self.buf.capacity()
     }
 
+    /// Number of bytes that can be pushed before the buffer is full.
     pub fn remaining_capacity(&self) -> usize {
         self.capacity().saturating_sub(self.len())
     }
 
+    /// True if the buffer holds no bytes.
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()
     }
 
+    /// Append as many bytes from `bytes` as fit; returns the number appended.
     pub fn push_slice(&mut self, bytes: &[u8]) -> usize {
         let n = bytes.len().min(self.remaining_capacity());
         self.buf.extend(&bytes[..n]);
         n
     }
 
+    /// A contiguous view of the leading bytes in the buffer (may not be all bytes).
     pub fn front_slice(&self) -> &[u8] {
         self.buf.as_slices().0
     }
 
+    /// Remove the first `n` bytes from the front of the buffer.
     pub fn consume(&mut self, n: usize) {
         let n = n.min(self.buf.len());
         self.buf.drain(..n);
     }
 
+    /// Attempt to double the buffer capacity up to `max_capacity`. Returns `false` if already at max.
     pub fn grow(&mut self) -> bool {
         let capacity = self.capacity();
         if capacity >= self.max_capacity {
