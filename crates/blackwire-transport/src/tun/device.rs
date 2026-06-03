@@ -56,7 +56,9 @@ pub struct TunConfig {
 /// Linux-only packet backend settings carried alongside the TUN runtime config.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TunLinuxConfig {
+    /// Packet backend to use for Linux TUN operation.
     pub backend: TunLinuxBackend,
+    /// AF_XDP configuration, used only when `backend` is `TunLinuxBackend::AfXdp`.
     pub af_xdp: TunAfXdpConfig,
 }
 
@@ -64,7 +66,9 @@ pub struct TunLinuxConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TunLinuxBackend {
     #[default]
+    /// Standard TUN device via the kernel tun driver.
     Tun,
+    /// AF_XDP socket for high-performance zero-copy packet I/O.
     AfXdp,
 }
 
