@@ -288,7 +288,6 @@ pub enum DatagramPolicy {
     H2Plus,
 }
 
-
 impl DatagramConfig {
     fn default_max_queue_delay_ms() -> u64 {
         25
@@ -340,6 +339,24 @@ pub struct FecConfig {
 
     #[serde(default = "default_true")]
     pub avoid_bulk_tcp: bool,
+
+    #[serde(default = "default_true")]
+    pub disable_for_sequential_dns: bool,
+
+    #[serde(default = "FecConfig::default_min_concurrency_for_block_fec")]
+    pub min_concurrency_for_block_fec: usize,
+
+    #[serde(default = "FecConfig::default_max_generation_packets")]
+    pub max_generation_packets: u8,
+
+    #[serde(default = "FecConfig::default_max_generation_delay_ms")]
+    pub max_generation_delay_ms: u64,
+
+    #[serde(default = "FecConfig::default_recovery_deadline_ms")]
+    pub recovery_deadline_ms: u64,
+
+    #[serde(default = "FecConfig::default_dedup_window_packets")]
+    pub dedup_window_packets: usize,
 }
 
 impl FecConfig {
@@ -351,9 +368,28 @@ impl FecConfig {
         vec!["dns".into(), "interactive".into(), "control".into()]
     }
 
+    fn default_min_concurrency_for_block_fec() -> usize {
+        4
+    }
+
+    fn default_max_generation_packets() -> u8 {
+        4
+    }
+
+    fn default_max_generation_delay_ms() -> u64 {
+        20
+    }
+
+    fn default_recovery_deadline_ms() -> u64 {
+        100
+    }
+
+    fn default_dedup_window_packets() -> usize {
+        1024
+    }
+
     pub fn effective_mode(&self) -> FecMode {
         match self.mode {
-            FecMode::Auto if self.max_overhead_percent >= 20 => FecMode::Xor1OfN,
             FecMode::Auto => FecMode::Off,
             mode => mode,
         }
@@ -373,15 +409,8 @@ impl FecConfig {
         if self.mode != FecMode::Auto {
             return self.effective_mode();
         }
-        if loss_percent < 1.0 || self.max_overhead_percent < 20 {
-            FecMode::Off
-        } else if loss_percent < 3.0 {
-            FecMode::Xor1OfN
-        } else if loss_percent <= 8.0 {
-            FecMode::ReedSolomon
-        } else {
-            FecMode::RaptorLike
-        }
+        let _ = loss_percent;
+        FecMode::Off
     }
 }
 
@@ -392,6 +421,12 @@ impl Default for FecConfig {
             max_overhead_percent: Self::default_max_overhead_percent(),
             protect_classes: Self::default_protect_classes(),
             avoid_bulk_tcp: true,
+            disable_for_sequential_dns: true,
+            min_concurrency_for_block_fec: Self::default_min_concurrency_for_block_fec(),
+            max_generation_packets: Self::default_max_generation_packets(),
+            max_generation_delay_ms: Self::default_max_generation_delay_ms(),
+            recovery_deadline_ms: Self::default_recovery_deadline_ms(),
+            dedup_window_packets: Self::default_dedup_window_packets(),
         }
     }
 }

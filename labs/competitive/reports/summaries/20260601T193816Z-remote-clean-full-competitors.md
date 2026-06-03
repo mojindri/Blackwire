@@ -13,7 +13,7 @@
 
 ## Run Notes
 
-- Native VPS run using server `91.107.164.107` and client `91.107.176.118`.
+- Native VPS run using server `<server-host>` and client `<client-host>`.
 - Upstream: isolated native nginx on server port `18080`.
 - Load: `hey`, duration 3s, concurrency 8, payload `1k`.
 - Blackwire row used temporary upload of `target/linux-amd64/blackwire`; no Blackwire service was reinstalled.

@@ -534,6 +534,11 @@ fn describe_metrics() {
         "Stale FEC decode groups dropped before recovery"
     );
     metrics::describe_counter!(
+        "blackwire_fec_duplicate_safe_skip_total",
+        metrics::Unit::Count,
+        "FEC protection skipped by duplicate-safe policy"
+    );
+    metrics::describe_counter!(
         "blackwire_datagram_packets_total",
         metrics::Unit::Count,
         "QUIC DATAGRAM packets by traffic class and direction"

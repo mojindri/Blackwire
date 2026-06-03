@@ -20,11 +20,11 @@ make competitive-smoke
 make competitive-report
 ```
 
-VPS defaults are wired for the current real hosts:
+VPS defaults are intentionally left unset in-repo; provide hosts via environment:
 
 ```bash
-COMPETITIVE_SERVER_HOST=91.107.164.107
-COMPETITIVE_CLIENT_HOST=91.107.176.118
+export COMPETITIVE_SERVER_HOST=<server-host>
+export COMPETITIVE_CLIENT_HOST=<client-host>
 COMPETITIVE_SSH_KEY=id_hetzner
 ```
 
