@@ -47,7 +47,7 @@ export function UsersPage({
     <div className="page">
       <div className="page-title">
         <h1>Users</h1>
-        <p>One panel user maps to one VLESS client.</p>
+        <p>One panel user maps to one managed credential on one inbound.</p>
       </div>
       <UserTable
         users={filtered}
