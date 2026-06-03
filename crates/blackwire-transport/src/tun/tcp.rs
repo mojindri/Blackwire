@@ -220,6 +220,7 @@ impl TcpBridgeTable {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn send_control(
     tun_tx: TunTx,
     src: SocketAddr,
