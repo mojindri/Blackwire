@@ -73,9 +73,12 @@ impl Default for FirstPacketBoostConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FirstPacketPriority {
+    /// Standard OS scheduling priority.
     Normal,
     #[default]
+    /// Elevated scheduling priority (default).
     High,
+    /// Highest scheduling priority; use for latency-critical deployments.
     Critical,
 }
 
@@ -117,18 +120,25 @@ impl std::str::FromStr for ProfileMode {
 #[serde(rename_all = "camelCase")]
 pub struct BudgetConfig {
     #[serde(default = "BudgetConfig::default_max_protocol_layers")]
+    /// Maximum number of hot-path protocol layers before a violation is raised.
     pub max_protocol_layers: usize,
     #[serde(default)]
+    /// Whether protocol sniffing is permitted within budget.
     pub allow_sniffing: bool,
     #[serde(default)]
+    /// Whether fake-IP DNS is permitted within budget.
     pub allow_fake_ip: bool,
     #[serde(default = "BudgetConfig::default_max_route_rules")]
+    /// Maximum number of routing rules before a violation is raised.
     pub max_route_rules: usize,
     #[serde(default = "BudgetConfig::default_max_handshake_ms")]
+    /// Maximum acceptable TLS/QUIC handshake time in milliseconds.
     pub max_handshake_ms: u64,
     #[serde(default = "BudgetConfig::default_true")]
+    /// Prefer zero-copy / splice paths when available.
     pub prefer_direct_copy: bool,
     #[serde(default = "BudgetConfig::default_true")]
+    /// Prefer QUIC datagram lane for UDP flows when available.
     pub prefer_datagram_for_udp: bool,
 }
 
@@ -381,10 +391,14 @@ pub enum ProfileViolation {
     Warning(String),
 }
 
+/// Relative cost class for a protocol dimension (cpu, allocations, latency).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CostClass {
+    /// Negligible overhead.
     Low,
+    /// Moderate overhead acceptable for most deployments.
     Medium,
+    /// Significant overhead; may violate a strict budget.
     High,
 }
 
@@ -398,11 +412,16 @@ impl std::fmt::Display for CostClass {
     }
 }
 
+/// Data-copy strategy used by a protocol layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyMode {
+    /// Zero-copy via splice / sendfile.
     Direct,
+    /// One extra copy through a wrapper buffer.
     Wrapped,
+    /// Copy through a length-prefixed framing layer.
     Framed,
+    /// Packet-by-packet copy (e.g. UDP datagram relay).
     Packet,
 }
 
@@ -417,30 +436,48 @@ impl std::fmt::Display for CopyMode {
     }
 }
 
+/// Aggregate cost estimate for a protocol configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolCost {
+    /// CPU overhead class for the hot path.
     pub cpu: CostClass,
+    /// Memory allocation overhead class.
     pub allocations: CostClass,
+    /// Added per-packet latency class.
     pub latency: CostClass,
+    /// Copy strategy used by the innermost data layer.
     pub copy_mode: CopyMode,
+    /// Whether zero-copy (splice/sendfile) is available for this config.
     pub supports_direct_copy: bool,
+    /// Whether `splice(2)` can be used on this platform/config.
     pub supports_splice: bool,
+    /// Whether TLS early data (0-RTT) is enabled.
     pub supports_early_data: bool,
+    /// Whether QUIC datagram relay is available.
     pub supports_datagram: bool,
 }
 
+/// Cost and compliance report produced by [`explain_cost`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CostReport {
+    /// Active performance profile.
     pub profile: ProfileMode,
+    /// Budget constraints applied during analysis.
     pub budget: BudgetConfig,
+    /// Number of hot-path protocol layers in the config.
     pub layer_count: usize,
+    /// Names of the hot-path protocol layers.
     pub layers: Vec<String>,
+    /// Aggregate protocol cost for the active config.
     pub cost: ProtocolCost,
+    /// Profile violations found, if any.
     pub findings: Vec<ProfileViolation>,
+    /// Suggested changes to bring the config within profile.
     pub suggestions: Vec<String>,
 }
 
 impl CostReport {
+    /// Render a human-readable cost report summary.
     pub fn render_text(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!("Profile: {}\n", self.profile));
@@ -755,6 +792,7 @@ fn apply_transport_cost(
     }
 }
 
+/// Compute a [`CostReport`] summarising the protocol cost and profile compliance of `config`.
 pub fn explain_cost(config: &Config) -> CostReport {
     let budget = config.budget.unwrap_or_else(|| match config.profile {
         ProfileMode::Latency | ProfileMode::Fast => BudgetConfig {
