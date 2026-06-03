@@ -36,6 +36,7 @@ pub struct OutboundConnectResult {
 }
 
 impl OutboundConnectResult {
+    /// Constructs a result wrapping a plain stream with no early-payload handling.
     pub fn stream(stream: BoxedStream) -> Self {
         Self {
             stream,
