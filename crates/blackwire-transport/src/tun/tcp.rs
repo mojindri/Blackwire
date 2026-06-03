@@ -52,10 +52,12 @@ pub struct TcpBridgeTable {
 }
 
 impl TcpBridgeTable {
+    /// Create a NAT table with default capacity and the given redirect port and idle timeout.
     pub fn with_defaults(redirect_port: u16, idle_timeout: Duration) -> Self {
         Self::new(redirect_port, idle_timeout, DEFAULT_MAX_TCP_ENTRIES)
     }
 
+    /// Create a NAT table with explicit capacity and the given redirect port and idle timeout.
     pub fn new(redirect_port: u16, idle_timeout: Duration, max_entries: usize) -> Self {
         Self {
             entries: HashMap::new(),
@@ -65,6 +67,7 @@ impl TcpBridgeTable {
         }
     }
 
+    /// Forward an inbound TCP packet through the NAT table, rewriting addresses as needed.
     pub async fn forward(&mut self, packet: &IpPacket, raw: &[u8], tun_tx: &TunTx) -> Result<()> {
         if packet.protocol != TransportProtocol::Tcp {
             return Ok(());
@@ -199,6 +202,7 @@ impl TcpBridgeTable {
         Ok(())
     }
 
+    /// Evict idle NAT entries that have exceeded the idle timeout; returns the number evicted.
     pub fn evict_idle(&mut self) -> usize {
         let now = Instant::now();
         let timeout = self.idle_timeout;
