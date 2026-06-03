@@ -14,10 +14,12 @@ use crate::metrics;
 
 static GLOBAL_MANAGER: Lazy<ConnectionManager> = Lazy::new(ConnectionManager::default);
 
+/// Returns a reference to the process-wide singleton connection manager.
 pub fn global_manager() -> &'static ConnectionManager {
     &GLOBAL_MANAGER
 }
 
+/// Registry of all currently active managed connections.
 pub struct ConnectionManager {
     next_id: AtomicU64,
     active: DashMap<u64, Arc<ConnectionMeta>>,
@@ -33,6 +35,7 @@ impl Default for ConnectionManager {
 }
 
 impl ConnectionManager {
+    /// Begin tracking a new connection, returning a guard that records its lifetime.
     pub fn track(
         &self,
         inbound: impl Into<Arc<str>>,
@@ -67,20 +70,24 @@ impl ConnectionManager {
         }
     }
 
+    /// Returns a sorted snapshot of all currently tracked connections.
     pub fn list(&self) -> Vec<ConnectionSnapshot> {
         let mut snapshots: Vec<_> = self.active.iter().map(|entry| entry.snapshot()).collect();
         snapshots.sort_by_key(|snapshot| snapshot.id);
         snapshots
     }
 
+    /// Returns the number of currently active connections.
     pub fn len(&self) -> usize {
         self.active.len()
     }
 
+    /// Returns `true` if there are no active connections.
     pub fn is_empty(&self) -> bool {
         self.active.is_empty()
     }
 
+    /// Cancel all connections matching `selector` and return how many were matched.
     pub fn close(&self, selector: CloseSelector) -> ConnectionCommandResult {
         let reason = selector.reason();
         let mut matched = 0;
@@ -115,6 +122,7 @@ impl ConnectionManager {
     }
 }
 
+/// RAII guard for a tracked connection; finalises metrics on drop.
 pub struct ConnectionGuard<'a> {
     manager: &'a ConnectionManager,
     id: u64,
@@ -123,19 +131,23 @@ pub struct ConnectionGuard<'a> {
 }
 
 impl<'a> ConnectionGuard<'a> {
+    /// Returns the unique identifier assigned to this connection.
     pub fn id(&self) -> u64 {
         self.id
     }
 
+    /// Returns a clone of the cancellation token; cancelling it tears down the connection.
     pub fn cancellation_token(&self) -> CancellationToken {
         self.meta.cancellation.clone()
     }
 
+    /// Atomically accumulates bytes transferred in both directions.
     pub fn add_bytes(&self, up: u64, down: u64) {
         self.meta.bytes_up.fetch_add(up, Ordering::Relaxed);
         self.meta.bytes_down.fetch_add(down, Ordering::Relaxed);
     }
 
+    /// Finalise the connection with cumulative byte counts and an explicit close reason.
     pub fn finish(mut self, up: u64, down: u64, reason: CloseReason) {
         self.finished = true;
         self.manager.finish(&self.meta, up, down, reason);
