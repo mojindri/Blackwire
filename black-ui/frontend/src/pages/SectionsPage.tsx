@@ -14,7 +14,6 @@ import {
   syncSectionState,
   validateSectionState,
   type AdvancedConfigEditorState,
-  type DnsHostEditor,
   type DnsServerEditor,
   type RoutingBalancerEditor,
   type RoutingBalancerProfileEditor,
@@ -22,10 +21,9 @@ import {
 } from "../lib/advancedConfigConfigurator";
 import type { CapabilityMap, ConfigSection, Outbound } from "../lib/types";
 
-const profileOptions = ["compat", "fast"];
-const routingStrategies = ["adaptive", "random", "roundRobin", "leastPing", "leastLoad"];
-const dnsQueryStrategies = ["", "UseIP", "UseIPv4", "UseIPv6", "UseSystem"];
-const fastPoolOptions = ["", "disabled", "auto", "always"];
+const profileOptions = ["compat", "fast", "latency", "throughput", "badnet", "mobile", "stealth"];
+const routingStrategies = ["adaptive", "random", "roundRobin", "latency"];
+const fastPoolOptions = ["", "disabled", "adaptive", "fixed"];
 const fastSpliceOptions = ["", "disabled", "adaptive", "always"];
 
 export function SectionsPage({
@@ -121,7 +119,7 @@ export function SectionsPage({
                     <strong>{editor.name}</strong>
                     <span>{isStructuredSection(editor.name) ? "Structured editor with advanced fallback" : "Raw JSON editor"}</span>
                   </div>
-                  <Switch checked={editor.enabled} onChange={(enabled) => setEditor((current) => (current ? { ...current, enabled } : current))} label={editor.enabled ? "Enabled" : "Disabled"} />
+                  <Switch checked={editor.enabled} onChange={(enabled) => setEditor((current) => (current ? syncSectionState({ ...current, enabled }) : current))} label={editor.enabled ? "Enabled" : "Disabled"} />
                 </div>
                 <div className="summary-badges">
                   <span className="summary-chip">{isStructuredSection(editor.name) ? "Structured" : "Raw JSON"}</span>
@@ -451,51 +449,14 @@ function DnsEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; on
       ...editor,
       dnsServers: editor.dnsServers.map((server, current) => (current === index ? { ...server, ...patch } : server))
     });
-  const setHost = (index: number, patch: Partial<DnsHostEditor>) =>
-    onChange({
-      ...editor,
-      dnsHosts: editor.dnsHosts.map((host, current) => (current === index ? { ...host, ...patch } : host))
-    });
 
   return (
     <>
       <section className="drawer-card configurator-section">
         <div className="section-editor-head">
           <div>
-            <h3>DNS basics</h3>
-            <p>Set top-level strategy, cache behavior, and fallback handling here.</p>
-          </div>
-        </div>
-        <div className="configurator-grid">
-          <Field label="Query strategy">
-            <Select value={editor.dnsQueryStrategy} onChange={(e) => onChange({ ...editor, dnsQueryStrategy: e.target.value })}>
-              {dnsQueryStrategies.map((item) => (
-                <option key={item} value={item}>
-                  {item || "default"}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Client IP">
-            <Input value={editor.dnsClientIp} onChange={(e) => onChange({ ...editor, dnsClientIp: e.target.value })} placeholder="1.1.1.1" />
-          </Field>
-          <Switch checked={editor.dnsDisableCache} onChange={(dnsDisableCache) => onChange({ ...editor, dnsDisableCache })} label="Disable cache" />
-          <Switch checked={editor.dnsDisableFallback} onChange={(dnsDisableFallback) => onChange({ ...editor, dnsDisableFallback })} label="Disable fallback" />
-          <Switch checked={editor.dnsDisableFallbackIfMatch} onChange={(dnsDisableFallbackIfMatch) => onChange({ ...editor, dnsDisableFallbackIfMatch })} label="Disable fallback if match" />
-          <Switch checked={editor.dnsEnableParallelQuery} onChange={(dnsEnableParallelQuery) => onChange({ ...editor, dnsEnableParallelQuery })} label="Enable parallel query" />
-          <Switch checked={editor.dnsUseSystemHosts} onChange={(dnsUseSystemHosts) => onChange({ ...editor, dnsUseSystemHosts })} label="Use system hosts" />
-          <Switch checked={editor.dnsServeStale} onChange={(dnsServeStale) => onChange({ ...editor, dnsServeStale })} label="Serve stale" />
-          <Field label="Serve expired TTL">
-            <Input value={editor.dnsServeExpiredTTL} onChange={(e) => onChange({ ...editor, dnsServeExpiredTTL: e.target.value })} placeholder="0" />
-          </Field>
-        </div>
-      </section>
-
-      <section className="drawer-card configurator-section">
-        <div className="section-editor-head">
-          <div>
-            <h3>Servers</h3>
-            <p>Use simple string entries or richer object entries depending on how much control you need.</p>
+            <h3>DNS servers</h3>
+            <p>Blackwire currently supports string server entries here. Rich per-server objects stay available through Advanced JSON.</p>
           </div>
           <div className="button-row">
             <Button
@@ -511,22 +472,7 @@ function DnsEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; on
                 })
               }
             >
-              Add String Server
-            </Button>
-            <Button
-              variant="secondary"
-              icon={<Plus size={16} />}
-              onClick={() =>
-                onChange({
-                  ...editor,
-                  dnsServers: [
-                    ...editor.dnsServers,
-                    { mode: "object", value: "", address: "", port: "", domains: "", expectedIPs: "", tag: "", clientIP: "", queryStrategy: "", skipFallback: false, finalQuery: false, disableCache: false, timeoutMs: "4000", serveStale: false, serveExpiredTTL: "" }
-                  ]
-                })
-              }
-            >
-              Add Object Server
+              Add Server
             </Button>
           </div>
         </div>
@@ -535,60 +481,13 @@ function DnsEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; on
           <div className="drawer-card advanced-config-subcard" key={`dns-server-${index}`}>
             <div className="section-editor-head">
               <h3>Server {index + 1}</h3>
-              <div className="button-row">
-                <Button variant="ghost" onClick={() => setServer(index, { mode: server.mode === "string" ? "object" : "string" })}>
-                  {server.mode === "string" ? "Use Object" : "Use String"}
-                </Button>
-                <Button variant="ghost" icon={<Trash2 size={16} />} onClick={() => onChange({ ...editor, dnsServers: editor.dnsServers.filter((_, current) => current !== index) })}>
-                  Remove
-                </Button>
-              </div>
+              <Button variant="ghost" icon={<Trash2 size={16} />} onClick={() => onChange({ ...editor, dnsServers: editor.dnsServers.filter((_, current) => current !== index) })}>
+                Remove
+              </Button>
             </div>
-            {server.mode === "string" ? (
-              <Field label="Server value">
-                <Input value={server.value} onChange={(e) => setServer(index, { value: e.target.value })} placeholder="1.1.1.1" />
-              </Field>
-            ) : (
-              <div className="configurator-grid">
-                <Field label="Address">
-                  <Input value={server.address} onChange={(e) => setServer(index, { address: e.target.value })} placeholder="https://1.1.1.1/dns-query" />
-                </Field>
-                <Field label="Port">
-                  <Input value={server.port} onChange={(e) => setServer(index, { port: e.target.value })} placeholder="53" />
-                </Field>
-                <Field label="Domains CSV">
-                  <Input value={server.domains} onChange={(e) => setServer(index, { domains: e.target.value })} placeholder="geosite:google" />
-                </Field>
-                <Field label="Expected IPs CSV">
-                  <Input value={server.expectedIPs} onChange={(e) => setServer(index, { expectedIPs: e.target.value })} placeholder="1.1.1.1, 1.0.0.1" />
-                </Field>
-                <Field label="Tag">
-                  <Input value={server.tag} onChange={(e) => setServer(index, { tag: e.target.value })} placeholder="cloudflare" />
-                </Field>
-                <Field label="Client IP">
-                  <Input value={server.clientIP} onChange={(e) => setServer(index, { clientIP: e.target.value })} placeholder="1.1.1.1" />
-                </Field>
-                <Field label="Query strategy">
-                  <Select value={server.queryStrategy} onChange={(e) => setServer(index, { queryStrategy: e.target.value })}>
-                    {dnsQueryStrategies.map((item) => (
-                      <option key={item} value={item}>
-                        {item || "default"}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="Timeout ms">
-                  <Input value={server.timeoutMs} onChange={(e) => setServer(index, { timeoutMs: e.target.value })} placeholder="4000" />
-                </Field>
-                <Switch checked={server.skipFallback} onChange={(skipFallback) => setServer(index, { skipFallback })} label="Skip fallback" />
-                <Switch checked={server.finalQuery} onChange={(finalQuery) => setServer(index, { finalQuery })} label="Final query" />
-                <Switch checked={server.disableCache} onChange={(disableCache) => setServer(index, { disableCache })} label="Disable cache" />
-                <Switch checked={server.serveStale} onChange={(serveStale) => setServer(index, { serveStale })} label="Serve stale" />
-                <Field label="Serve expired TTL">
-                  <Input value={server.serveExpiredTTL} onChange={(e) => setServer(index, { serveExpiredTTL: e.target.value })} placeholder="0" />
-                </Field>
-              </div>
-            )}
+            <Field label="Server value">
+              <Input value={server.mode === "string" ? server.value : server.address} onChange={(e) => setServer(index, { mode: "string", value: e.target.value })} placeholder="1.1.1.1" />
+            </Field>
           </div>
         ))}
       </section>
@@ -596,30 +495,16 @@ function DnsEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; on
       <section className="drawer-card configurator-section">
         <div className="section-editor-head">
           <div>
-            <h3>Hosts</h3>
-            <p>Map domains to one or many fixed IP or hostname values.</p>
+            <h3>Fake IP</h3>
+            <p>Use FakeIP mode when you want synthetic DNS answers for transparent proxy workflows.</p>
           </div>
-          <Button
-            variant="secondary"
-            icon={<Plus size={16} />}
-            onClick={() => onChange({ ...editor, dnsHosts: [...editor.dnsHosts, { domain: "", values: "" }] })}
-          >
-            Add Host
-          </Button>
         </div>
-        {editor.dnsHosts.map((host, index) => (
-          <div className="configurator-grid advanced-config-inline-row" key={`dns-host-${index}`}>
-            <Field label={`Host ${index + 1} domain`}>
-              <Input value={host.domain} onChange={(e) => setHost(index, { domain: e.target.value })} placeholder="example.com" />
-            </Field>
-            <Field label="Values CSV">
-              <Input value={host.values} onChange={(e) => setHost(index, { values: e.target.value })} placeholder="1.1.1.1, 1.0.0.1" />
-            </Field>
-            <Button variant="ghost" icon={<Trash2 size={16} />} onClick={() => onChange({ ...editor, dnsHosts: editor.dnsHosts.filter((_, current) => current !== index) })}>
-              Remove
-            </Button>
-          </div>
-        ))}
+        <div className="configurator-grid">
+          <Switch checked={editor.dnsFakeIpEnabled} onChange={(dnsFakeIpEnabled) => onChange({ ...editor, dnsFakeIpEnabled })} label="Enable FakeIP" />
+          <Field label="FakeIP pool">
+            <Input value={editor.dnsFakeIpPool} onChange={(e) => onChange({ ...editor, dnsFakeIpPool: e.target.value })} placeholder="198.18.0.0/15" />
+          </Field>
+        </div>
       </section>
     </>
   );
