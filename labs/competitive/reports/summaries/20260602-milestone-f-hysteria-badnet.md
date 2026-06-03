@@ -23,8 +23,8 @@ Scope:
 
 Validation:
 - Local targeted regression checks were run for Hysteria2 UDP relay, TLS hostility fail-closed behavior, config fail-closed behavior, and badnet policy compilation.
-- Linux x86_64 candidate binary was built natively on VPS `91.107.164.107`.
-- Remote benchmarks ran from client VPS `91.107.176.118` to server VPS `91.107.164.107` using `ssh -i id_hetzner`.
+- Linux x86_64 candidate binary was built natively on VPS `<server-host>`.
+- Remote benchmarks ran from client VPS `<client-host>` to server VPS `<server-host>` using `ssh -i id_hetzner`.
 - Remote upstream was nginx on the server VPS.
 - Final candidate binary: `target/linux-amd64/blackwire-candidate-milestone-f`.
 - Baseline/current binary: `target/linux-amd64/blackwire-before-f`.

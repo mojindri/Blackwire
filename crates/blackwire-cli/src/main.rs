@@ -175,7 +175,7 @@ struct ExplainCostArgs {
 /// Arguments for the `hy2-udp-bench` subcommand.
 #[derive(clap::Args)]
 struct Hy2UdpBenchArgs {
-    /// Hysteria2 server UDP socket, e.g. 91.107.164.107:10310.
+    /// Hysteria2 server UDP socket, e.g. <server-host>:10310.
     #[arg(long = "server", value_name = "ADDR")]
     server: std::net::SocketAddr,
 
@@ -976,6 +976,7 @@ async fn cmd_hy2_udp_bench(args: Hy2UdpBenchArgs) -> Result<()> {
         0,
     )
     .await?;
+    let fec_snapshot = session.fec_snapshot();
 
     let row = serde_json::json!({
         "variant": args.variant,
@@ -1002,6 +1003,11 @@ async fn cmd_hy2_udp_bench(args: Hy2UdpBenchArgs) -> Result<()> {
         "fast_dns_retry": args.fast_dns_retry,
         "fec_mode": format!("{:?}", fec_mode),
         "fec_overhead_percent": args.fec_overhead_percent,
+        "fec_client_parity_packets": fec_snapshot.parity_packets,
+        "fec_client_overhead_bytes": fec_snapshot.overhead_bytes,
+        "fec_client_recovered_packets": fec_snapshot.recovered_packets,
+        "fec_client_stale_drops": fec_snapshot.stale_drops,
+        "fec_client_duplicate_safe_skips": fec_snapshot.duplicate_safe_skips,
     });
     println!("{}", serde_json::to_string(&row)?);
     Ok(())
@@ -1021,6 +1027,7 @@ async fn cmd_hy2_udp_mix_bench(args: Hy2UdpMixBenchArgs) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Hysteria2 UDP connect failed: {e}"))?;
 
     let stats = run_udp_mixed_probe_set(&session, &args).await?;
+    let fec_snapshot = session.fec_snapshot();
     let row = serde_json::json!({
         "variant": args.common.variant,
         "scenario": args.common.scenario,
@@ -1055,6 +1062,11 @@ async fn cmd_hy2_udp_mix_bench(args: Hy2UdpMixBenchArgs) -> Result<()> {
         "fast_dns_retry": args.common.fast_dns_retry,
         "fec_mode": format!("{:?}", fec_mode),
         "fec_overhead_percent": args.common.fec_overhead_percent,
+        "fec_client_parity_packets": fec_snapshot.parity_packets,
+        "fec_client_overhead_bytes": fec_snapshot.overhead_bytes,
+        "fec_client_recovered_packets": fec_snapshot.recovered_packets,
+        "fec_client_stale_drops": fec_snapshot.stale_drops,
+        "fec_client_duplicate_safe_skips": fec_snapshot.duplicate_safe_skips,
     });
     println!("{}", serde_json::to_string(&row)?);
     Ok(())
@@ -1088,7 +1100,10 @@ fn hy2_udp_bench_config(
         fec: blackwire_transport::FecPolicy {
             mode: fec_mode,
             max_overhead_percent: args.fec_overhead_percent,
-            group_size: 4,
+            group_size: (100usize.div_ceil(args.fec_overhead_percent.max(1) as usize))
+                .max(2)
+                .min(u8::MAX as usize) as u8,
+            ..blackwire_transport::FecPolicy::default()
         },
         datagram_policy: blackwire_transport::DatagramPolicy {
             mode: datagram_mode,

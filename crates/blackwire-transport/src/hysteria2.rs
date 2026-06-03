@@ -995,4 +995,24 @@ impl Hysteria2UdpSession {
             Err(ProxyError::Transport("received only FEC metadata".into()))
         }
     }
+
+    pub fn fec_snapshot(&self) -> udp::FecSnapshot {
+        let encoder = self
+            .fec_encoder
+            .lock()
+            .map(|encoder| encoder.snapshot())
+            .unwrap_or_default();
+        let decoder = self
+            .fec_decoder
+            .lock()
+            .map(|decoder| decoder.snapshot())
+            .unwrap_or_default();
+        udp::FecSnapshot {
+            parity_packets: encoder.parity_packets,
+            overhead_bytes: encoder.overhead_bytes,
+            recovered_packets: decoder.recovered_packets,
+            stale_drops: decoder.stale_drops,
+            duplicate_safe_skips: encoder.duplicate_safe_skips,
+        }
+    }
 }

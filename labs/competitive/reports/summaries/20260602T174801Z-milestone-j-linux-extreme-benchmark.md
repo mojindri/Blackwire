@@ -4,7 +4,7 @@ Date: 2026-06-02 17:48:01 UTC
 
 ## Host
 
-- VPS: `91.107.164.107`
+- VPS: `<server-host>`
 - Kernel: `Linux ubuntu-4gb-fsn1-2 7.0.0-15-generic #15-Ubuntu SMP PREEMPT_DYNAMIC Wed Apr 22 16:06:43 UTC 2026 x86_64 GNU/Linux`
 - NIC: `eth0`, `virtio_net`
 - Runner: native root shell, release profile

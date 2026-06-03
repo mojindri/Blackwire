@@ -3,7 +3,7 @@
 Date: 2026-06-02
 
 Scope
-- Scope is limited to the candidate modes executed in the latest remote run on `91.107.164.107` → `91.107.176.118`.
+- Scope is limited to the candidate modes executed in the latest remote run on `<server-host>` → `<client-host>`.
 - Access used: `ssh -i id_hetzner` and native Linux binaries.
 - Upstream path used on server: nginx (as required).
 - Local scope includes functionality checks already captured in earlier tests and firewall-tcp/udp allowances for benchmark traffic.

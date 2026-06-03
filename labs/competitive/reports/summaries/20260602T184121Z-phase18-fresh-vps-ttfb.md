@@ -7,18 +7,18 @@ Goal:
 - Compare the pre-Phase-18/21 Linux binary against the fresh native Linux candidate binary.
 
 Environment:
-- VPS used for completed native run: `91.107.164.107`.
+- VPS used for completed native run: `<server-host>`.
 - Native nginx upstream, restarted under `/var/tmp/blackwire-ttfb-nginx-20260602T184121Z`.
 - Old binary: `target/linux-amd64/blackwire-before-phase18-21-ttfb`.
-- Candidate binary: `target/linux-amd64/blackwire-phase18-21-ttfb`, built natively on `91.107.164.107`.
+- Candidate binary: `target/linux-amd64/blackwire-phase18-21-ttfb`, built natively on `<server-host>`.
 - Candidate config enabled `firstPacketBoost` with `priority = critical`.
 - Probe: `curl -w %{time_starttransfer}`, 30 warmup requests and 300 measured fresh requests per variant.
 
 VPS networking note:
-- The intended two-VPS run was attempted first with server `91.107.164.107` and client `91.107.176.118`.
-- Direct TCP from `91.107.176.118` to `91.107.164.107` on benchmark ports `18080`, `10080`, and `10090` returned `Connection refused`, even though the same ports were reachable from the local machine and UFW allowed them.
-- Reverse arbitrary TCP from `91.107.164.107` to `91.107.176.118` also timed out.
-- Because peer-to-peer VPS TCP was blocked, the completed evidence is a same-host native VPS run on `91.107.164.107`.
+- The intended two-VPS run was attempted first with server `<server-host>` and client `<client-host>`.
+- Direct TCP from `<client-host>` to `<server-host>` on benchmark ports `18080`, `10080`, and `10090` returned `Connection refused`, even though the same ports were reachable from the local machine and UFW allowed them.
+- Reverse arbitrary TCP from `<server-host>` to `<client-host>` also timed out.
+- Because peer-to-peer VPS TCP was blocked, the completed evidence is a same-host native VPS run on `<server-host>`.
 
 Results:
 

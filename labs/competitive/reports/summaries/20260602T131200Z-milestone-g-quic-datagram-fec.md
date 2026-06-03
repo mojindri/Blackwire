@@ -33,8 +33,8 @@ Implemented/updated:
 
 Environment:
 
-- Server VPS: `91.107.164.107`
-- Client VPS: `91.107.176.118`
+- Server VPS: `<server-host>`
+- Client VPS: `<client-host>`
 - SSH key: `id_hetzner`
 - UDP echo destination: server loopback `127.0.0.1:1053`
 - Probe count: 200

@@ -280,11 +280,52 @@ fn parse_fec_policy(
         {
             cfg.avoid_bulk_tcp = avoid;
         }
+        if let Some(disable) = overrides
+            .get("disableForSequentialDns")
+            .and_then(serde_json::Value::as_bool)
+        {
+            cfg.disable_for_sequential_dns = disable;
+        }
+        if let Some(min) = overrides
+            .get("minConcurrencyForBlockFec")
+            .and_then(serde_json::Value::as_u64)
+        {
+            cfg.min_concurrency_for_block_fec = min as usize;
+        }
+        if let Some(max) = overrides
+            .get("maxGenerationPackets")
+            .and_then(serde_json::Value::as_u64)
+        {
+            cfg.max_generation_packets = max.min(u8::MAX as u64) as u8;
+        }
+        if let Some(delay) = overrides
+            .get("maxGenerationDelayMs")
+            .and_then(serde_json::Value::as_u64)
+        {
+            cfg.max_generation_delay_ms = delay;
+        }
+        if let Some(deadline) = overrides
+            .get("recoveryDeadlineMs")
+            .and_then(serde_json::Value::as_u64)
+        {
+            cfg.recovery_deadline_ms = deadline;
+        }
+        if let Some(window) = overrides
+            .get("dedupWindowPackets")
+            .and_then(serde_json::Value::as_u64)
+        {
+            cfg.dedup_window_packets = window as usize;
+        }
     }
     blackwire_transport::FecPolicy {
         mode: map_fec_mode(cfg.effective_mode()),
         max_overhead_percent: cfg.max_overhead_percent,
-        group_size: 4,
+        group_size: cfg.max_generation_packets.max(2),
+        disable_for_sequential_dns: cfg.disable_for_sequential_dns,
+        min_concurrency_for_block_fec: cfg.min_concurrency_for_block_fec,
+        max_generation_delay: std::time::Duration::from_millis(cfg.max_generation_delay_ms),
+        recovery_deadline: std::time::Duration::from_millis(cfg.recovery_deadline_ms),
+        dedup_window_packets: cfg.dedup_window_packets,
     }
 }
 
