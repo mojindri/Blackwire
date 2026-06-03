@@ -16,7 +16,7 @@ Execution (local, non-benchmark):
 - `cargo test -p blackwire-transport fec_recovers -- --nocapture`
 - `cargo test -p blackwire-core --test reload_listeners -- --nocapture`
 - `cargo test -p integration-tests --test e2e_hysteria2_udp -- --nocapture`
-- `ssh -i id_hetzner root@91.107.164.107 'hostname'` (baseline SSH reachability check before running against remote milestone scripts)
+- `ssh -i id_hetzner root@<server-host> 'hostname'` (baseline SSH reachability check before running against remote milestone scripts)
 - `cargo test -p blackwire-transport --lib -- --nocapture`
 
 Results:

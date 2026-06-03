@@ -3,7 +3,7 @@
 - Timestamp: `2026-06-02T17:21:33Z`
 - Branch: `feature/log_readme`
 - Commit: `76df02e1`
-- VPS: `91.107.164.107`
+- VPS: `<server-host>`
 - Kernel: `Linux 7.0.0-15-generic`
 - Interface: `eth0`
 
