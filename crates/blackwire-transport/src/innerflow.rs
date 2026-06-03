@@ -4,16 +4,23 @@ use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
+/// Latency class assigned to a packet, used to prioritise traffic in the inner-flow scheduler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PacketClass {
+    /// Highest-priority control-plane traffic (e.g. handshakes, keepalives).
     Control,
+    /// DNS query/response traffic.
     Dns,
+    /// Interactive traffic requiring low latency (e.g. SSH keystrokes, VoIP).
     Interactive,
+    /// First-byte traffic for web requests where TTFB matters.
     WebFirstByte,
+    /// Background bulk data transfer with no strict latency requirement.
     Bulk,
 }
 
 impl PacketClass {
+    /// Return a short ASCII label used in metrics and log output.
     pub fn as_label(self) -> &'static str {
         match self {
             Self::Control => "control",
@@ -24,6 +31,7 @@ impl PacketClass {
         }
     }
 
+    /// Maximum time a packet of this class may wait in the scheduler queue before being dropped.
     pub fn deadline(self) -> Option<Duration> {
         match self {
             Self::Control => Some(Duration::from_millis(50)),
