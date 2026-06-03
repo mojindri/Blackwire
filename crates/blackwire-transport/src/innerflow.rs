@@ -45,13 +45,20 @@ impl PacketClass {
     }
 }
 
+/// Five-tuple flow identifier used to classify packets into per-flow scheduler queues.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InnerFlowKey {
+    /// Source IP address, or `None` for non-IP traffic.
     pub src_ip: Option<IpAddr>,
+    /// Destination IP address, or `None` for non-IP traffic.
     pub dst_ip: Option<IpAddr>,
+    /// Source transport port (0 for protocols without ports).
     pub src_port: u16,
+    /// Destination transport port (0 for protocols without ports).
     pub dst_port: u16,
+    /// IP protocol number (e.g. 6 = TCP, 17 = UDP).
     pub protocol: u8,
+    /// Optional per-user hash used to separate flows by authenticated identity.
     pub user_hash: Option<u64>,
 }
 
@@ -66,12 +73,18 @@ impl Hash for InnerFlowKey {
     }
 }
 
+/// A packet buffered inside the inner-flow scheduler, carrying its class, flow key, and payload.
 #[derive(Debug, Clone)]
 pub struct InnerFlowPacket {
+    /// Latency class that determines scheduler priority for this packet.
     pub class: PacketClass,
+    /// Flow key used to group this packet with others from the same connection.
     pub flow: InnerFlowKey,
+    /// Primary packet payload bytes.
     pub payload: Bytes,
+    /// Additional payload chunks to be sent after the primary payload.
     pub followups: Vec<Bytes>,
+    /// Instant at which this packet was placed into the scheduler queue.
     pub enqueued_at: Instant,
 }
 
