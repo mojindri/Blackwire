@@ -187,6 +187,7 @@ async fn serve_udp_sessions(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_udp_datagram(
     _conn: Connection,
     inbound_tag: String,
