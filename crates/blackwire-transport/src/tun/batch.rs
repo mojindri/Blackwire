@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 /// Runtime knobs for batching packets written back to the TUN device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TunBatchConfig {
+    /// Whether packet batching is active; when `false` each packet is flushed immediately.
     pub enabled: bool,
     /// Maximum number of packets to accumulate before flushing.
     pub max_packets: usize,
