@@ -4,8 +4,8 @@ Date: 2026-06-02
 
 Scope:
 - Dedicated UDP/DNS-sized Hysteria2 QUIC DATAGRAM benchmark on VPS.
-- Server: `91.107.164.107`
-- Client: `91.107.176.118`
+- Server: `<server-host>`
+- Client: `<client-host>`
 - Access: `ssh -i id_hetzner`
 - Upstream UDP echo: server loopback `127.0.0.1:1053`
 - Probe shape: 200 sequential UDP probes, 64 byte payload, 500 ms per-probe timeout.

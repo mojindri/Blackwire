@@ -6,8 +6,8 @@ Date: 2026-06-02 14:32:56 UTC
 
 Run the missing privileged TUN acceptance benchmark on the VPS pair:
 
-- Server: `91.107.164.107`
-- Client: `91.107.176.118`
+- Server: `<server-host>`
+- Client: `<client-host>`
 
 Acceptance target:
 
@@ -45,7 +45,7 @@ cargo test -p blackwire-transport tun:: -- --nocapture
 Native Linux candidate build:
 
 ```text
-ssh -i id_hetzner root@91.107.164.107 \
+ssh -i id_hetzner root@<server-host> \
   'cd /root/blackwire-milestone-i-build; cargo build --release -p blackwire --bin blackwire'
 ```
 
@@ -62,8 +62,8 @@ Command:
 ```text
 COMPETITIVE_MODE=remote \
 BLACKWIRE_CANDIDATE_BIN=$PWD/target/linux-amd64/blackwire-candidate-milestone-i \
-COMPETITIVE_SERVER_HOST=91.107.164.107 \
-COMPETITIVE_CLIENT_HOST=91.107.176.118 \
+COMPETITIVE_SERVER_HOST=<server-host> \
+COMPETITIVE_CLIENT_HOST=<client-host> \
 COMPETITIVE_SSH_KEY=id_hetzner \
 COMPETITIVE_DURATION=10 \
 TUN_UDP_COUNT=500 \
@@ -95,10 +95,10 @@ Milestone I is not accepted.
 
 The acceptance comparison was not produced because both TUN rows failed before UDP/TCP/CPU measurements were available.
 
-After the failed run, the client VPS `91.107.176.118` became unreachable over IPv4 SSH and ICMP from both the local machine and the server VPS. This is consistent with a broken runtime TUN route/rule state on the client. The local environment does not have `hcloud` or a Hetzner API token configured, so provider-level reboot could not be issued from this workspace.
+After the failed run, the client VPS `<client-host>` became unreachable over IPv4 SSH and ICMP from both the local machine and the server VPS. This is consistent with a broken runtime TUN route/rule state on the client. The local environment does not have `hcloud` or a Hetzner API token configured, so provider-level reboot could not be issued from this workspace.
 
 ## Recovery Needed
 
-Reboot client VPS `91.107.176.118` from Hetzner Cloud Console or API. Runtime route/ip rule state should clear on reboot.
+Reboot client VPS `<client-host>` from Hetzner Cloud Console or API. Runtime route/ip rule state should clear on reboot.
 
 After recovery, rerun the updated `competitive-tun` harness. The harness now wraps TUN runtimes in a `timeout 120s` self-cleanup path to reduce the chance of another persistent route lockout.

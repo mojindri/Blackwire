@@ -54,7 +54,7 @@ Local validation:
 
 Native VPS validation:
 
-- Server VPS: `91.107.164.107`
+- Server VPS: `<server-host>`
 - SSH key: `id_hetzner`
 - Native Linux codec tests passed for XOR and Reed-Solomon FEC.
 - Native Linux Hysteria2 UDP integration passed with default and XOR-FEC-enabled datagram paths.
@@ -77,8 +77,8 @@ cargo fmt --check
 Remote:
 
 ```bash
-rsync -az --delete --exclude target --exclude .git --exclude perf.data -e 'ssh -i id_hetzner -o StrictHostKeyChecking=accept-new' ./ root@91.107.164.107:/root/v2ray-phase9/
-ssh -i id_hetzner root@91.107.164.107 'cd /root/v2ray-phase9 && cargo test -p blackwire-transport fec_recovers -- --nocapture && cargo test -p integration-tests --test e2e_hysteria2_udp -- --nocapture'
+rsync -az --delete --exclude target --exclude .git --exclude perf.data -e 'ssh -i id_hetzner -o StrictHostKeyChecking=accept-new' ./ root@<server-host>:/root/v2ray-phase9/
+ssh -i id_hetzner root@<server-host> 'cd /root/v2ray-phase9 && cargo test -p blackwire-transport fec_recovers -- --nocapture && cargo test -p integration-tests --test e2e_hysteria2_udp -- --nocapture'
 ```
 
 ## Result
