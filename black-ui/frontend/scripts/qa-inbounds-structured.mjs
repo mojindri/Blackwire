@@ -360,6 +360,7 @@ const cases = [
 ];
 
 const results = [];
+const skippedCases = [];
 
 await main();
 
@@ -428,7 +429,25 @@ async function main() {
       await restoreOriginalSettings(page, originalSettings);
     }
 
-    await writeFile(screenshotPath, `${JSON.stringify(results, null, 2)}\n`, "utf8");
+    await writeFile(
+      screenshotPath,
+      `${JSON.stringify(
+        {
+          generatedAt: new Date().toISOString(),
+          configPath: runConfigPath,
+          counts: {
+            passed: results.filter((item) => item.status === "PASS").length,
+            skipped: results.filter((item) => item.status === "SKIPPED").length,
+            failed: results.filter((item) => item.status === "FAILED").length
+          },
+          results,
+          skippedCases
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
     printSummary();
 
     const failed = results.filter((item) => item.status === "FAILED" || item.status === "SKIPPED");
@@ -456,6 +475,10 @@ async function runCase(page, testCase, configPath) {
       status: "SKIPPED",
       details: `${testCase.network} transport not exposed by the current UI`
     });
+    skippedCases.push({
+      name: testCase.name,
+      reason: `${testCase.network} transport not exposed by the current UI`
+    });
     return;
   }
   if (testCase.optional && !(await isTransportAvailable(page, testCase.network))) {
@@ -463,6 +486,10 @@ async function runCase(page, testCase, configPath) {
       name: testCase.name,
       status: "SKIPPED",
       details: `${testCase.network} transport not exposed by current capabilities`
+    });
+    skippedCases.push({
+      name: testCase.name,
+      reason: `${testCase.network} transport not exposed by current capabilities`
     });
     return;
   }
@@ -988,6 +1015,12 @@ function printSummary() {
   const grouped = results.sort((a, b) => statusOrder.indexOf(b.status) - statusOrder.indexOf(a.status));
   for (const item of grouped) {
     console.log(`${item.status.padEnd(8)} ${item.name} - ${item.details}`);
+  }
+  if (skippedCases.length > 0) {
+    console.log("\nSkipped cases:");
+    for (const item of skippedCases) {
+      console.log(`- ${item.name}: ${item.reason}`);
+    }
   }
 }
 
