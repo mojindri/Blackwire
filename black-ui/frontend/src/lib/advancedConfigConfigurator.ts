@@ -80,6 +80,8 @@ export interface AdvancedConfigEditorState {
   dnsServeExpiredTTL: string;
   dnsServers: DnsServerEditor[];
   dnsHosts: DnsHostEditor[];
+  dnsFakeIpEnabled: boolean;
+  dnsFakeIpPool: string;
   tunName: string;
   tunAddress: string;
   tunNetmask: string;
@@ -102,7 +104,7 @@ export interface AdvancedConfigValidationIssue {
 }
 
 const STRUCTURED_SECTIONS = new Set<StructuredSectionName>(["routing", "dns", "tun", "api", "metricsAddr", "profile", "fast"]);
-const PROFILE_OPTIONS = new Set(["compat", "fast"]);
+const PROFILE_OPTIONS = new Set(["compat", "fast", "latency", "throughput", "badnet", "mobile", "stealth"]);
 
 export function isStructuredSection(name: string): name is StructuredSectionName {
   return STRUCTURED_SECTIONS.has(name as StructuredSectionName);
@@ -139,6 +141,8 @@ export function createSectionEditorState(section: ConfigSection | null): Advance
       domain,
       values: Array.isArray(hostValue) ? hostValue.filter((item) => typeof item === "string").join(", ") : typeof hostValue === "string" ? hostValue : ""
     })),
+    dnsFakeIpEnabled: boolValue(asObject(asObject(value).fake_ip).enabled),
+    dnsFakeIpPool: stringValue(asObject(asObject(value).fake_ip).pool),
     tunName: stringValue(asObject(value).name),
     tunAddress: stringValue(asObject(value).address),
     tunNetmask: stringValue(asObject(value).netmask),
@@ -195,8 +199,8 @@ export function validateSectionState(state: AdvancedConfigEditorState): Advanced
 
   if (state.name === "routing") {
     state.routingRules.forEach((rule, index) => {
-      if (!rule.outboundTag.trim() && !rule.balancerTag.trim()) {
-        issues.push({ field: `routingRules.${index}`, message: "Each routing rule needs an outbound tag or a balancer tag." });
+      if (!(rule.outboundTag || rule.balancerTag).trim()) {
+        issues.push({ field: `routingRules.${index}`, message: "Each routing rule needs an outbound tag." });
       }
     });
     state.routingBalancers.forEach((balancer, index) => {
@@ -213,13 +217,9 @@ export function validateSectionState(state: AdvancedConfigEditorState): Advanced
     state.dnsServers.forEach((server, index) => {
       if (server.mode === "string") {
         if (!server.value.trim()) issues.push({ field: `dnsServers.${index}`, message: "DNS server entries cannot be empty." });
-      } else if (!server.address.trim()) {
-        issues.push({ field: `dnsServers.${index}`, message: "DNS server objects need an address." });
+      } else {
+        issues.push({ field: `dnsServers.${index}`, message: "Structured DNS currently supports string server entries only." });
       }
-    });
-    state.dnsHosts.forEach((host, index) => {
-      if (!host.domain.trim()) issues.push({ field: `dnsHosts.${index}`, message: "Host rows need a domain." });
-      if (!csvValues(host.values).length) issues.push({ field: `dnsHosts.${index}`, message: "Host rows need at least one value." });
     });
   }
 
@@ -292,13 +292,10 @@ function buildSectionObject(state: AdvancedConfigEditorState, base: unknown): un
       setOrDelete(next, "domain", csvValues(rule.domain));
       setOrDelete(next, "ip", csvValues(rule.ip));
       setOrDelete(next, "port", rule.port.trim());
-      setOrDelete(next, "network", rule.network.trim());
-      setOrDelete(next, "sourceIP", csvValues(rule.sourceIP));
       setOrDelete(next, "inboundTag", csvValues(rule.inboundTag));
       setOrDelete(next, "protocol", csvValues(rule.protocol));
       setOrDelete(next, "user", csvValues(rule.user));
-      setOrDelete(next, "outboundTag", rule.outboundTag.trim());
-      setOrDelete(next, "balancerTag", rule.balancerTag.trim());
+      setOrDelete(next, "outboundTag", (rule.outboundTag || rule.balancerTag).trim());
       return next;
     });
     root.balancers = state.routingBalancers.map((balancer) => {
@@ -334,41 +331,22 @@ function buildSectionObject(state: AdvancedConfigEditorState, base: unknown): un
     return root;
   }
   if (state.name === "dns") {
-    setOrDelete(root, "queryStrategy", state.dnsQueryStrategy.trim());
-    setOrDelete(root, "clientIp", state.dnsClientIp.trim());
-    setOrDeleteBool(root, "disableCache", state.dnsDisableCache);
-    setOrDeleteBool(root, "disableFallback", state.dnsDisableFallback);
-    setOrDeleteBool(root, "disableFallbackIfMatch", state.dnsDisableFallbackIfMatch);
-    setOrDeleteBool(root, "enableParallelQuery", state.dnsEnableParallelQuery);
-    setOrDeleteBool(root, "useSystemHosts", state.dnsUseSystemHosts);
-    setOrDeleteBool(root, "serveStale", state.dnsServeStale);
-    setOrDeleteNumber(root, "serveExpiredTTL", state.dnsServeExpiredTTL);
-    root.servers = state.dnsServers.map((server) => {
-      if (server.mode === "string") return server.value.trim();
-      const next = asObject({});
-      setOrDelete(next, "address", server.address.trim());
-      setOrDeleteNumber(next, "port", server.port);
-      setOrDelete(next, "domains", csvValues(server.domains));
-      setOrDelete(next, "expectedIPs", csvValues(server.expectedIPs));
-      setOrDelete(next, "tag", server.tag.trim());
-      setOrDelete(next, "clientIP", server.clientIP.trim());
-      setOrDelete(next, "queryStrategy", server.queryStrategy.trim());
-      setOrDeleteBool(next, "skipFallback", server.skipFallback);
-      setOrDeleteBool(next, "finalQuery", server.finalQuery);
-      setOrDeleteBool(next, "disableCache", server.disableCache);
-      setOrDeleteNumber(next, "timeoutMs", server.timeoutMs);
-      setOrDeleteBool(next, "serveStale", server.serveStale);
-      setOrDeleteNumber(next, "serveExpiredTTL", server.serveExpiredTTL);
-      return next;
-    });
-    root.hosts = Object.fromEntries(
-      state.dnsHosts
-        .filter((host) => host.domain.trim() && csvValues(host.values).length > 0)
-        .map((host) => {
-          const values = csvValues(host.values);
-          return [host.domain.trim(), values.length === 1 ? values[0] : values];
-        })
-    );
+    root.servers = state.dnsServers.map((server) => server.value.trim()).filter(Boolean);
+    const fakeIp = asObject(root.fake_ip);
+    setOrDeleteBool(fakeIp, "enabled", state.dnsFakeIpEnabled);
+    setOrDelete(fakeIp, "pool", state.dnsFakeIpPool.trim());
+    if (Object.keys(fakeIp).length > 0) root.fake_ip = fakeIp;
+    else delete root.fake_ip;
+    delete root.hosts;
+    delete root.queryStrategy;
+    delete root.clientIp;
+    delete root.disableCache;
+    delete root.disableFallback;
+    delete root.disableFallbackIfMatch;
+    delete root.enableParallelQuery;
+    delete root.useSystemHosts;
+    delete root.serveStale;
+    delete root.serveExpiredTTL;
     return root;
   }
   if (state.name === "tun") {
@@ -386,7 +364,7 @@ function buildSectionObject(state: AdvancedConfigEditorState, base: unknown): un
     return root;
   }
   if (state.name === "fast") {
-    setOrDeleteBool(root, "strictProduction", state.fastStrictProduction);
+    root.strictProduction = state.fastStrictProduction;
     setOrDelete(root, "pool", state.fastPool.trim());
     setOrDelete(root, "splice", state.fastSplice.trim());
     return root;
