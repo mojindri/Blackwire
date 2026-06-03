@@ -219,6 +219,7 @@ impl QuicConfig {
         serde_json::Value::String("auto".into())
     }
 
+    /// Returns the number of QUIC endpoints, clamped to 1–64.
     pub fn endpoint_count(&self) -> usize {
         match &self.endpoints {
             serde_json::Value::String(s) if s.eq_ignore_ascii_case("cpu") => {
@@ -279,12 +280,15 @@ pub struct DatagramConfig {
     pub fast_dns_retry_delay_ms: u64,
 }
 
+/// H2+ lane policy for QUIC DATAGRAM traffic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[derive(Default)]
 pub enum DatagramPolicy {
+    /// Standard unchanged DATAGRAM behavior.
     #[default]
     Standard,
+    /// Priority-lane + DNS retry knobs enabled.
     H2Plus,
 }
 
@@ -316,11 +320,16 @@ impl Default for DatagramConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum FecMode {
+    /// FEC disabled.
     #[default]
     Off,
+    /// XOR 1-of-N recovery — low overhead, single-loss recovery.
     Xor1OfN,
+    /// Reed-Solomon — recovers multiple losses per group.
     ReedSolomon,
+    /// Raptor-like fountain code — high-loss environments.
     RaptorLike,
+    /// Automatically selected based on measured loss.
     Auto,
 }
 
@@ -328,33 +337,43 @@ pub enum FecMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FecConfig {
+    /// FEC algorithm to apply.
     #[serde(default)]
     pub mode: FecMode,
 
+    /// Maximum FEC packet overhead as a percentage of original traffic.
     #[serde(default = "FecConfig::default_max_overhead_percent")]
     pub max_overhead_percent: u8,
 
+    /// Packet classes that FEC should protect (e.g. "dns", "interactive").
     #[serde(default = "FecConfig::default_protect_classes")]
     pub protect_classes: Vec<String>,
 
+    /// Skip FEC for bulk TCP relay flows to avoid double-overhead.
     #[serde(default = "default_true")]
     pub avoid_bulk_tcp: bool,
 
+    /// Disable FEC for sequential DNS queries where retransmit is cheaper.
     #[serde(default = "default_true")]
     pub disable_for_sequential_dns: bool,
 
+    /// Minimum concurrent flows required before block-FEC is enabled.
     #[serde(default = "FecConfig::default_min_concurrency_for_block_fec")]
     pub min_concurrency_for_block_fec: usize,
 
+    /// Maximum packets per FEC generation block.
     #[serde(default = "FecConfig::default_max_generation_packets")]
     pub max_generation_packets: u8,
 
+    /// Maximum milliseconds to wait before closing a partial FEC generation.
     #[serde(default = "FecConfig::default_max_generation_delay_ms")]
     pub max_generation_delay_ms: u64,
 
+    /// Deadline in milliseconds for a FEC recovery attempt before giving up.
     #[serde(default = "FecConfig::default_recovery_deadline_ms")]
     pub recovery_deadline_ms: u64,
 
+    /// Sliding-window size in packets for duplicate suppression.
     #[serde(default = "FecConfig::default_dedup_window_packets")]
     pub dedup_window_packets: usize,
 }
@@ -388,6 +407,7 @@ impl FecConfig {
         1024
     }
 
+    /// Returns the resolved [`FecMode`], mapping [`FecMode::Auto`] to [`FecMode::Xor1OfN`].
     pub fn effective_mode(&self) -> FecMode {
         match self.mode {
             FecMode::Auto => FecMode::Xor1OfN,
@@ -395,6 +415,7 @@ impl FecConfig {
         }
     }
 
+    /// Selects the FEC mode appropriate for the measured loss rate and packet class.
     pub fn mode_for_loss(&self, loss_percent: f64, packet_class: &str, bulk_tcp: bool) -> FecMode {
         if bulk_tcp && self.avoid_bulk_tcp {
             return FecMode::Off;
@@ -568,6 +589,7 @@ impl Default for TunAfXdpConfig {
 /// Packet batching controls for TUN writeback.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TunBatchConfig {
+    /// Enable TUN writeback batching.
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(
