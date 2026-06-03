@@ -41,5 +41,7 @@ uuid.workspace               = true
 num_cpus.workspace           = true
 metrics-exporter-prometheus.workspace = true
 axum.workspace               = true
-tikv-jemallocator = { workspace = true, optional = true }
 mimalloc = { workspace = true, optional = true }
+
+[target.'cfg(not(windows))'.dependencies]
+tikv-jemallocator = { workspace = true, optional = true }

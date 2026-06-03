@@ -24,10 +24,10 @@
 //!   5. Install signal handlers for SIGTERM / SIGINT.
 //!   6. Wait for either the instance to exit or a shutdown signal.
 
-#[cfg(all(feature = "jemalloc", feature = "mimalloc"))]
+#[cfg(all(feature = "jemalloc", feature = "mimalloc", not(windows)))]
 compile_error!("enable at most one allocator feature: jemalloc or mimalloc");
 
-#[cfg(feature = "jemalloc")]
+#[cfg(all(feature = "jemalloc", not(windows)))]
 #[global_allocator]
 static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
