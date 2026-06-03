@@ -704,13 +704,20 @@ async function runNoEnabledFallback(page, configPath) {
     toggled.push(outbound);
   }
 
-  const config = await readConfig(configPath);
+  const settled = await waitForNoEnabledOutbounds(page, configPath);
+  const config = settled.config;
   const fallback = config.outbounds || [];
-  const passed = fallback.length === 1 && fallback[0].tag === "freedom" && fallback[0].protocol === "freedom";
+  const passed =
+    settled.enabledTags.length === 0 &&
+    fallback.length === 1 &&
+    fallback[0].tag === "freedom" &&
+    fallback[0].protocol === "freedom";
   results.push({
     name: "No-enabled fallback",
     status: passed ? "PASS" : "FAILED",
-    details: passed ? "generated config fell back to synthetic freedom outbound" : `unexpected outbounds array: ${JSON.stringify(fallback)}`
+    details: passed
+      ? "generated config fell back to synthetic freedom outbound"
+      : `enabled tags still present: ${JSON.stringify(settled.enabledTags)} | outbounds array: ${JSON.stringify(fallback)}`
   });
 
   for (const outbound of toggled) {
@@ -1009,6 +1016,28 @@ async function currentDrawerErrors(page) {
 async function readConfig(configPath) {
   const raw = await readFile(configPath, "utf8");
   return JSON.parse(raw);
+}
+
+async function waitForNoEnabledOutbounds(page, configPath, timeout = 15000) {
+  const deadline = Date.now() + timeout;
+  let lastEnabledTags = [];
+  let lastConfig = null;
+
+  while (Date.now() < deadline) {
+    const outbounds = await listOutbounds(page);
+    lastEnabledTags = outbounds.filter((item) => item.enabled).map((item) => item.tag);
+    lastConfig = await readConfig(configPath).catch(() => null);
+    const fallback = lastConfig?.outbounds || [];
+    if (lastEnabledTags.length === 0 && fallback.length === 1 && fallback[0].tag === "freedom" && fallback[0].protocol === "freedom") {
+      return { enabledTags: lastEnabledTags, config: lastConfig };
+    }
+    await page.waitForTimeout(250);
+  }
+
+  return {
+    enabledTags: lastEnabledTags,
+    config: lastConfig || { outbounds: [] }
+  };
 }
 
 async function listOutbounds(page) {

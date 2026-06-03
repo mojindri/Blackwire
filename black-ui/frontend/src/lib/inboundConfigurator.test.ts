@@ -120,4 +120,149 @@ describe("inboundConfigurator", () => {
     expect(streamSettings.realitySettings.fingerprint).toBe("chrome");
     expect(streamSettings.realitySettings.spiderX).toBe("/");
   });
+
+  it("serializes websocket and TLS fields for common VLESS structured setups", () => {
+    const state = syncAfterStructuredChange({
+      ...createInboundEditorState(),
+      protocol: "vless",
+      network: "ws",
+      security: "tls",
+      wsPath: "/tls",
+      wsHost: "tls.example.com",
+      tlsServerName: "tls.example.com",
+      tlsAlpn: "h2, http/1.1",
+      tlsCertificateFile: "/etc/blackwire/fullchain.pem",
+      tlsKeyFile: "/etc/blackwire/privkey.pem"
+    });
+
+    const built = buildInboundInput(state);
+    const streamSettings = parseObject(built.streamSettings);
+
+    expect(built.transport).toBe("ws");
+    expect(streamSettings).toEqual({
+      network: "ws",
+      security: "tls",
+      wsSettings: {
+        path: "/tls",
+        headers: {
+          Host: "tls.example.com"
+        }
+      },
+      tlsSettings: {
+        serverName: "tls.example.com",
+        alpn: ["h2", "http/1.1"],
+        certificateFile: "/etc/blackwire/fullchain.pem",
+        keyFile: "/etc/blackwire/privkey.pem"
+      }
+    });
+  });
+
+  it("serializes gRPC, HTTPUpgrade, and SplitHTTP transport helpers", () => {
+    const grpcBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState(),
+        network: "grpc",
+        grpcServiceName: "GunService"
+      })
+    );
+    const httpUpgradeBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState(),
+        network: "httpupgrade",
+        httpupgradePath: "/upgrade",
+        httpupgradeHost: "edge.example.com"
+      })
+    );
+    const splitHttpBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState(),
+        network: "splithttp",
+        splitHttpPath: "/packet"
+      })
+    );
+
+    expect(parseObject(grpcBuilt.streamSettings)).toMatchObject({
+      network: "grpc",
+      grpcSettings: { serviceName: "GunService" }
+    });
+    expect(parseObject(httpUpgradeBuilt.streamSettings)).toMatchObject({
+      network: "httpupgrade",
+      httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" }
+    });
+    expect(parseObject(splitHttpBuilt.streamSettings)).toMatchObject({
+      network: "splithttp",
+      splithttpSettings: { path: "/packet" }
+    });
+  });
+
+  it("serializes sniffing and limits while clearing them when no longer needed", () => {
+    const enabledState = syncAfterStructuredChange({
+      ...createInboundEditorState(),
+      sniffingEnabled: true,
+      sniffingDestOverride: ["http", "tls"],
+      sniffingMetadataOnly: true,
+      maxConnections: "8000",
+      maxHandshakeSeconds: "12"
+    });
+    const enabledBuilt = buildInboundInput(enabledState);
+
+    expect(parseObject(enabledBuilt.sniffing)).toEqual({
+      enabled: true,
+      destOverride: ["http", "tls"],
+      metadataOnly: true
+    });
+    expect(parseObject(enabledBuilt.limits)).toEqual({
+      maxConnections: 8000,
+      maxHandshakeSeconds: 12
+    });
+
+    const clearedBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...enabledState,
+        sniffingEnabled: false,
+        sniffingDestOverride: [],
+        sniffingMetadataOnly: false,
+        sniffingRouteOnly: false,
+        maxConnections: "",
+        maxHandshakeSeconds: ""
+      })
+    );
+
+    expect(clearedBuilt.sniffing).toBe("");
+    expect(clearedBuilt.limits).toBe("");
+  });
+
+  it("keeps Shadowsocks method only for shadowsocks protocol", () => {
+    const ssBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState(),
+        protocol: "shadowsocks",
+        shadowsocksMethod: "2022-blake3-aes-128-gcm"
+      })
+    );
+    const switchedBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState({
+          id: 9,
+          tag: "ss-main",
+          listen: "0.0.0.0",
+          port: 443,
+          protocol: "shadowsocks",
+          enabled: true,
+          transport: "tcp",
+          settings: JSON.stringify({ method: "2022-blake3-aes-128-gcm", extra: "keep-me" }),
+          streamSettings: "{}",
+          sniffing: "{}",
+          limits: "{}",
+          createdAt: "",
+          updatedAt: ""
+        }),
+        protocol: "vless"
+      })
+    );
+
+    expect(parseObject(ssBuilt.settings).method).toBe("2022-blake3-aes-128-gcm");
+    expect(parseObject(switchedBuilt.settings).method).toBeUndefined();
+    expect(parseObject(switchedBuilt.settings).extra).toBe("keep-me");
+  });
 });
