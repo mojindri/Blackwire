@@ -78,9 +78,10 @@ export default function App() {
   }, [refresh, token]);
 
   const run = useCallback(
-    async (action: () => Promise<unknown>, success: string) => {
+    async (action: () => Promise<unknown>, success: string, pending = "Working...") => {
       setBusy(true);
       setError("");
+      setMessage(pending);
       try {
         const result = await action();
         const resultMessage = typeof result === "object" && result && "message" in result ? String(result.message) : success;
@@ -114,30 +115,34 @@ export default function App() {
   const actions = useMemo(
     () => ({
       saveUser: (id: number | null, input: UserInput) =>
-        run(() => (id ? api.updateUser(id, input) : api.createUser(input)), "User saved"),
+        run(() => (id ? api.updateUser(id, input) : api.createUser(input)), "User saved", id ? "Saving user..." : "Creating user..."),
       toggleUser: (user: ManagedUser) =>
-        run(() => (user.enabled ? api.disableUser(user.id) : api.enableUser(user.id)), user.enabled ? "User disabled" : "User enabled"),
+        run(
+          () => (user.enabled ? api.disableUser(user.id) : api.enableUser(user.id)),
+          user.enabled ? "User disabled" : "User enabled",
+          user.enabled ? "Disabling user..." : "Enabling user..."
+        ),
       deleteUser: (user: ManagedUser) => {
-        if (window.confirm(`Delete ${user.email}?`)) run(() => api.deleteUser(user.id), "User deleted");
+        if (window.confirm(`Delete ${user.email}?`)) run(() => api.deleteUser(user.id), "User deleted", "Deleting user...");
       },
-      resetUsage: (user: ManagedUser) => run(() => api.resetUsage(user.id), "Usage reset"),
-      rotateUuid: (user: ManagedUser) => run(() => api.rotateUuid(user.id), "UUID rotated"),
-      rotateToken: (user: ManagedUser) => run(() => api.rotateSubToken(user.id), "Subscription token rotated"),
+      resetUsage: (user: ManagedUser) => run(() => api.resetUsage(user.id), "Usage reset", "Resetting usage..."),
+      rotateUuid: (user: ManagedUser) => run(() => api.rotateUuid(user.id), "UUID rotated", "Rotating UUID..."),
+      rotateToken: (user: ManagedUser) => run(() => api.rotateSubToken(user.id), "Subscription token rotated", "Rotating token..."),
       bulk: (ids: number[], action: string) => {
         if (ids.length === 0) return setMessage("Select at least one user first.");
-        return run(() => api.bulkUsers({ userIds: ids, action }), "Bulk action applied");
+        return run(() => api.bulkUsers({ userIds: ids, action }), "Bulk action applied", "Applying bulk action...");
       },
-      createInbound: (input: InboundInput) => run(() => api.createInbound(input), "Inbound saved"),
-      updateInbound: (id: number, input: InboundInput) => run(() => api.updateInbound(id, input), "Inbound saved"),
-      deleteInbound: (id: number) => run(() => api.deleteInbound(id), "Inbound deleted"),
-      createOutbound: (input: OutboundInput) => run(() => api.createOutbound(input), "Outbound saved"),
-      updateOutbound: (id: number, input: OutboundInput) => run(() => api.updateOutbound(id, input), "Outbound saved"),
-      deleteOutbound: (id: number) => run(() => api.deleteOutbound(id), "Outbound deleted"),
+      createInbound: (input: InboundInput) => run(() => api.createInbound(input), "Inbound saved", "Creating inbound..."),
+      updateInbound: (id: number, input: InboundInput) => run(() => api.updateInbound(id, input), "Inbound saved", "Saving inbound..."),
+      deleteInbound: (id: number) => run(() => api.deleteInbound(id), "Inbound deleted", "Deleting inbound..."),
+      createOutbound: (input: OutboundInput) => run(() => api.createOutbound(input), "Outbound saved", "Creating outbound..."),
+      updateOutbound: (id: number, input: OutboundInput) => run(() => api.updateOutbound(id, input), "Outbound saved", "Saving outbound..."),
+      deleteOutbound: (id: number) => run(() => api.deleteOutbound(id), "Outbound deleted", "Deleting outbound..."),
       saveSection: (name: string, enabled: boolean, value: string) =>
-        run(() => api.updateSection(name, { enabled, value }), "Config section saved"),
-      importConfig: (value: unknown) => run(() => api.configImport(value), "Config imported"),
-      restartBlackwire: () => run(api.serviceRestartBlackwire, "Blackwire restarted"),
-      saveSettings: (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved"),
+        run(() => api.updateSection(name, { enabled, value }), "Advanced config saved", "Saving advanced config..."),
+      importConfig: (value: unknown) => run(() => api.configImport(value), "Config imported", "Importing config..."),
+      restartBlackwire: () => run(api.serviceRestartBlackwire, "Blackwire restarted", "Restarting Blackwire..."),
+      saveSettings: (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved", "Saving settings..."),
       uuid: async () => (await api.uuid()).uuid
     }),
     [run]
@@ -154,8 +159,8 @@ export default function App() {
       message={error || message}
       busy={busy}
       onPage={setPage}
-      onRefresh={() => run(refresh, "Refreshed")}
-      onApply={() => run(api.configApply, "Config applied")}
+      onRefresh={() => run(refresh, "Refreshed", "Refreshing...")}
+      onApply={() => run(api.configApply, "Config applied", "Applying config...")}
       onLogout={logout}
     >
       {page === "dashboard" ? <DashboardPage data={data} /> : null}
@@ -205,9 +210,9 @@ export default function App() {
       {page === "config" ? (
         <ConfigPage
           busy={busy}
-          onValidate={() => run(api.configValidate, "Config valid")}
-          onWrite={() => run(api.configWrite, "Config written")}
-          onApply={() => run(api.configApply, "Config applied")}
+          onValidate={() => run(api.configValidate, "Config valid", "Validating config...")}
+          onWrite={() => run(api.configWrite, "Config written", "Writing config...")}
+          onApply={() => run(api.configApply, "Config applied", "Applying config...")}
           onImport={actions.importConfig}
         />
       ) : null}
