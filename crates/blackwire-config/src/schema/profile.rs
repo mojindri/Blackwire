@@ -889,23 +889,19 @@ pub fn explain_cost(config: &Config) -> CostReport {
                 protocol_name(&outbound.protocol)
             ),
         );
-        if let Some(ss) = stream_settings_for_cost(
-            config
-                .inbounds
-                .first()
-                .expect("validated config has inbound"),
-            outbound,
-        ) {
-            if outbound.stream_settings.is_some() {
-                add_unique(
-                    &mut layers,
-                    format!("outbound transport {}", network_name(&ss.network)),
-                );
-                if ss.security != SecurityType::None {
+        if let Some(first_inbound) = config.inbounds.first() {
+            if let Some(ss) = stream_settings_for_cost(first_inbound, outbound) {
+                if outbound.stream_settings.is_some() {
                     add_unique(
                         &mut layers,
-                        format!("outbound security {}", security_name(&ss.security)),
+                        format!("outbound transport {}", network_name(&ss.network)),
                     );
+                    if ss.security != SecurityType::None {
+                        add_unique(
+                            &mut layers,
+                            format!("outbound security {}", security_name(&ss.security)),
+                        );
+                    }
                 }
             }
         }
