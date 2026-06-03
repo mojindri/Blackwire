@@ -16,10 +16,15 @@ use super::device::TunAfXdpConfig;
 /// Snapshot of the NIC capabilities observed while opening an AF_XDP backend.
 #[derive(Debug, Clone)]
 pub struct AfXdpCapabilities {
+    /// Name of the network interface the AF_XDP socket is bound to.
     pub interface: String,
+    /// Kernel interface index for the bound network interface.
     pub interface_index: u32,
+    /// Number of hardware RX/TX queues available on the interface.
     pub queue_count: u32,
+    /// Hardware queue index this socket is pinned to.
     pub queue_id: u32,
+    /// Whether the driver reported zero-copy DMA support.
     pub zero_copy_available: bool,
 }
 
@@ -133,6 +138,7 @@ impl AfXdpBackend {
         })
     }
 
+    /// Return the NIC capabilities snapshot recorded when this backend was opened.
     pub fn capabilities(&self) -> &AfXdpCapabilities {
         &self.capabilities
     }
