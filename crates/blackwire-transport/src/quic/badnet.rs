@@ -16,24 +16,35 @@ const DEFAULT_INITIAL_RTT: Duration = Duration::from_millis(100);
 const LOSS_WINDOW_SECS: usize = 5;
 const IDLE_RESET_AFTER: Duration = Duration::from_secs(2);
 
+/// Which direction a congestion controller manages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CongestionDirection {
+    /// Client → server traffic (uploads).
     ClientUpload,
+    /// Server → client traffic (downloads).
     ServerDownload,
 }
 
+/// Congestion control algorithm to use for a Hysteria2 connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CongestionMode {
+    /// Standard QUIC congestion control (no Brutal/BadNet override).
     StandardQuic,
+    /// Brutal-compatible fixed-rate congestion control.
     #[default]
     BrutalCompatible,
+    /// NovaCc — adaptive pacing with loss-fingerprint scoring.
     NovaCc,
+    /// BadNet tuned for low-latency networks with random loss.
     BadNetLowLatency,
+    /// BadNet tuned for high-throughput over lossy links.
     BadNetThroughput,
+    /// Auto-probe mode that switches strategy based on observed conditions.
     AutoProbe,
 }
 
 impl CongestionMode {
+    /// Returns a stable lowercase ASCII label for use in metrics and config.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::StandardQuic => "standard-quic",
@@ -62,22 +73,32 @@ impl std::str::FromStr for CongestionMode {
     }
 }
 
+/// Configuration for the BadNet / Brutal congestion controller.
 #[derive(Debug, Clone)]
 pub struct CongestionConfig {
+    /// Congestion control algorithm to apply.
     pub mode: CongestionMode,
+    /// Client upload bandwidth limit in Mbit/s.
     pub up_mbps: u64,
+    /// Server download bandwidth limit in Mbit/s.
     pub down_mbps: u64,
+    /// Minimum acknowledged-packet ratio before pacing rate is clamped.
     pub min_ack_rate: f64,
+    /// Queue delay budget; delays above this indicate bufferbloat.
     pub max_queue_delay: Duration,
+    /// Pacing gain multiplier applied to the target rate.
     pub pacing_gain: f64,
+    /// Whether to inflate the pacing rate to compensate for random packet loss.
     pub loss_compensation: bool,
 }
 
 impl CongestionConfig {
+    /// Returns the upload target in bytes per second.
     pub fn target_bps(&self) -> u64 {
         self.target_bps_for(CongestionDirection::ClientUpload)
     }
 
+    /// Returns the target bandwidth in bytes per second for the given direction.
     pub fn target_bps_for(&self, direction: CongestionDirection) -> u64 {
         let mbps = match direction {
             CongestionDirection::ClientUpload => self.up_mbps,
@@ -86,6 +107,7 @@ impl CongestionConfig {
         mbps.saturating_mul(1_000_000 / 8)
     }
 
+    /// Returns the QUIC flow-control window profile appropriate for this congestion mode.
     pub fn window_profile(&self) -> WindowProfile {
         match self.mode {
             CongestionMode::BadNetLowLatency => WindowProfile {
@@ -104,11 +126,16 @@ impl CongestionConfig {
     }
 }
 
+/// Parameters for sizing QUIC flow-control windows based on bandwidth-delay product.
 #[derive(Debug, Clone, Copy)]
 pub struct WindowProfile {
+    /// RTT used to compute the BDP window size.
     pub bdp_rtt: Duration,
+    /// Minimum per-stream receive window in bytes.
     pub min_window_bytes: u64,
+    /// Maximum per-stream receive window in bytes.
     pub max_window_bytes: u64,
+    /// Multiplier applied to the stream window to compute the connection window.
     pub conn_window_multiplier: u64,
 }
 
@@ -126,16 +153,23 @@ impl Default for CongestionConfig {
     }
 }
 
+/// Classified network condition inferred from recent packet loss and queue delay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LossFingerprint {
+    /// Negligible loss and low queue delay — healthy network.
     Clean,
+    /// Moderate random loss typical of wireless links, without bufferbloat.
     WirelessRandomLoss,
+    /// Low loss but high queue delay — bottleneck buffer is full.
     Bufferbloat,
+    /// High packet loss rate that overwhelms compensation.
     SevereLoss,
+    /// Condition does not match any known fingerprint.
     Unknown,
 }
 
 impl LossFingerprint {
+    /// Returns a stable lowercase ASCII label for use in metrics.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Clean => "clean",
@@ -153,18 +187,27 @@ impl fmt::Display for LossFingerprint {
     }
 }
 
+/// Snapshot of per-path delivery and loss statistics for one congestion decision.
 #[derive(Debug, Clone, Copy)]
 pub struct PathSample {
+    /// Total bytes acknowledged in the measurement window.
     pub acked_bytes: u64,
+    /// Total bytes reported lost in the measurement window.
     pub lost_bytes: u64,
+    /// Total packets acknowledged in the measurement window.
     pub acked_packets: u64,
+    /// Total packets reported lost in the measurement window.
     pub lost_packets: u64,
+    /// Minimum observed RTT over the connection lifetime.
     pub min_rtt: Duration,
+    /// Smoothed RTT estimate.
     pub srtt: Duration,
+    /// Estimated delivery rate in bytes per second.
     pub delivery_rate_bps: u64,
 }
 
 impl PathSample {
+    /// Returns the fraction of packets (or bytes) that were lost in this sample.
     pub fn loss_rate(self) -> f64 {
         let total = self.acked_packets.saturating_add(self.lost_packets);
         if total == 0 {
@@ -179,15 +222,18 @@ impl PathSample {
         }
     }
 
+    /// Returns `1.0 - loss_rate()`.
     pub fn ack_rate(self) -> f64 {
         1.0 - self.loss_rate()
     }
 
+    /// Returns the estimated queue delay as `srtt - min_rtt`.
     pub fn queue_delay(self) -> Duration {
         self.srtt.saturating_sub(self.min_rtt)
     }
 }
 
+/// Classify the network condition from a path sample and a queue delay budget.
 pub fn classify_loss(sample: PathSample, queue_budget: Duration) -> LossFingerprint {
     let loss_rate = sample.loss_rate();
     let queue_delay = sample.queue_delay();
@@ -204,16 +250,24 @@ pub fn classify_loss(sample: PathSample, queue_budget: Duration) -> LossFingerpr
     }
 }
 
+/// Output of a single congestion-control computation step.
 #[derive(Debug, Clone, Copy)]
 pub struct ControlDecision {
+    /// Effective acknowledge rate used to compute the pacing rate.
     pub ack_rate: f64,
+    /// Measured packet loss rate in this decision interval.
     pub loss_rate: f64,
+    /// Estimated queue delay at the bottleneck.
     pub queue_delay: Duration,
+    /// Target pacing rate in bytes per second.
     pub pacing_rate_bps: u64,
+    /// Congestion window in bytes.
     pub cwnd_bytes: u64,
+    /// Network condition fingerprint used to select the gain strategy.
     pub fingerprint: LossFingerprint,
 }
 
+/// Compute a Brutal-compatible congestion decision: scale pacing rate by inverse ack rate.
 pub fn brutal_compatible_decision(
     cfg: &CongestionConfig,
     direction: CongestionDirection,
@@ -234,6 +288,7 @@ pub fn brutal_compatible_decision(
     }
 }
 
+/// Compute a NovaCc congestion decision: adapt pacing gain based on loss fingerprint.
 pub fn nova_decision(
     cfg: &CongestionConfig,
     direction: CongestionDirection,
@@ -260,12 +315,14 @@ pub fn nova_decision(
     decision
 }
 
+/// Quinn `ControllerFactory` that builds `BadNetController` instances.
 pub struct BadNetControllerFactory {
     cfg: CongestionConfig,
     direction: CongestionDirection,
 }
 
 impl BadNetControllerFactory {
+    /// Create a factory for client-upload direction with the given config.
     pub fn new(cfg: CongestionConfig) -> Self {
         Self {
             cfg,
@@ -273,6 +330,7 @@ impl BadNetControllerFactory {
         }
     }
 
+    /// Create a factory for a specific traffic direction.
     pub fn new_for_direction(cfg: CongestionConfig, direction: CongestionDirection) -> Self {
         Self { cfg, direction }
     }
@@ -307,6 +365,7 @@ impl ControllerFactory for BadNetControllerFactory {
     }
 }
 
+/// Quinn `Controller` implementing the BadNet / Brutal congestion strategy.
 #[derive(Clone)]
 pub struct BadNetController {
     cfg: CongestionConfig,
@@ -476,10 +535,12 @@ impl LossWindow {
     }
 }
 
+/// Record the active congestion mode in metrics.
 pub fn record_mode(mode: CongestionMode) {
     metrics::counter!("blackwire_quic_congestion_mode_total", "mode" => mode.as_str()).increment(1);
 }
 
+/// Record the number of active QUIC endpoint shards in metrics.
 pub fn record_endpoint_shards(shards: usize) {
     metrics::gauge!("blackwire_quic_endpoint_shards").set(shards as f64);
 }
