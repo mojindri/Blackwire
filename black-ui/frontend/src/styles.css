@@ -162,6 +162,10 @@ button {
   text-overflow: ellipsis;
 }
 
+.spinner {
+  animation: spin 0.9s linear infinite;
+}
+
 .page {
   padding: 30px 28px 42px;
 }
@@ -493,6 +497,21 @@ tr.row-selected {
   color: #4b5563;
 }
 
+.quota-line-unlimited {
+  margin-bottom: 0;
+}
+
+.quota-state {
+  font-weight: 700;
+  color: #334155;
+}
+
+.quota-unlimited {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+}
+
 .quota-track {
   height: 5px;
   display: block;
@@ -525,22 +544,18 @@ tr.row-selected {
 }
 
 .actions-menu {
-  position: absolute;
-  right: 0;
-  top: 40px;
-  display: none;
+  display: grid;
   min-width: 140px;
   background: white;
   border: 1px solid var(--line);
   border-radius: 7px;
   box-shadow: var(--shadow);
   padding: 6px;
-  z-index: 5;
+  z-index: 40;
 }
 
-.actions:hover .actions-menu,
-.actions:focus-within .actions-menu {
-  display: grid;
+.actions-menu-open {
+  position: fixed;
 }
 
 .actions-menu button {
@@ -571,6 +586,10 @@ tr.row-selected {
   z-index: 30;
   display: grid;
   grid-template-rows: auto 1fr auto;
+}
+
+.drawer-wide {
+  width: min(760px, 100vw);
 }
 
 .drawer-head,
@@ -609,6 +628,10 @@ tr.row-selected {
   overflow: auto;
 }
 
+.drawer-body-configurator {
+  gap: 14px;
+}
+
 .section-editor-head {
   display: flex;
   align-items: center;
@@ -622,6 +645,129 @@ tr.row-selected {
   padding: 14px;
   display: grid;
   gap: 12px;
+}
+
+.drawer-summary-card {
+  gap: 14px;
+}
+
+.summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.summary-head strong,
+.summary-head span {
+  display: block;
+}
+
+.summary-head strong {
+  font-size: 16px;
+}
+
+.summary-head span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.summary-badges,
+.table-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.summary-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 7px;
+  padding: 0 10px;
+  background: #eff5f9;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.summary-chip-soft {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+
+.configurator-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.configurator-tab {
+  border: 1px solid var(--line);
+  background: white;
+  color: #425066;
+  height: 36px;
+  border-radius: 7px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.configurator-tab-active {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+
+.configurator-section {
+  gap: 16px;
+}
+
+.configurator-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.toggle-grid {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.toggle-chip {
+  border: 1px solid var(--line);
+  background: white;
+  color: #374151;
+  min-height: 36px;
+  border-radius: 7px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.toggle-chip-active {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+
+.advanced-slice {
+  display: grid;
+  gap: 8px;
+}
+
+.field-error {
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.inline-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .copy-row .input,
@@ -684,6 +830,11 @@ tr.row-selected {
   gap: 18px;
 }
 
+.advanced-config-layout {
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  align-items: start;
+}
+
 .split-panel {
   padding: 18px;
 }
@@ -712,6 +863,12 @@ tr.row-selected {
   text-align: left;
 }
 
+.stack-row-active {
+  border-color: var(--teal);
+  background: #f2fbfb;
+  box-shadow: inset 2px 0 0 var(--teal);
+}
+
 .stack-row span {
   display: grid;
   gap: 4px;
@@ -719,6 +876,14 @@ tr.row-selected {
 
 .stack-row small {
   color: var(--muted);
+}
+
+.advanced-config-subcard {
+  background: #fbfcfd;
+}
+
+.advanced-config-inline-row {
+  align-items: end;
 }
 
 .command-box,
@@ -781,6 +946,16 @@ tr.row-selected {
   font-size: 13px;
 }
 
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 1020px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -839,6 +1014,15 @@ tr.row-selected {
 
   .metric-grid {
     gap: 10px;
+  }
+
+  .configurator-grid,
+  .summary-head {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-head {
+    display: grid;
   }
 
   .search-bar,

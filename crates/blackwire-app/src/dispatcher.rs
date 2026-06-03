@@ -991,13 +991,10 @@ mod tests {
     use super::*;
     use crate::dns::DnsModuleConfig;
     use crate::router::{Route, RoutingContext};
-    use blackwire_common::{PooledStream, PrependedStream};
     use blackwire_config::schema::{
         FastLinuxConfig, FastPoolPolicy, FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy,
         FastSplicePolicy, VisionConfig, VisionDirectCopyPolicy,
     };
-    use tokio::io::AsyncReadExt;
-    use tokio::net::{TcpListener, TcpStream};
 
     struct StaticRouter;
 
@@ -1130,6 +1127,10 @@ mod tests {
     #[tokio::test]
     async fn pooled_first_write_retries_stale_socket_with_early_payload() {
         use std::os::fd::AsRawFd;
+
+        use blackwire_common::{PooledStream, PrependedStream};
+        use tokio::io::AsyncReadExt;
+        use tokio::net::{TcpListener, TcpStream};
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

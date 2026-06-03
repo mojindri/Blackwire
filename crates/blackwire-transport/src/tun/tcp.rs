@@ -13,7 +13,9 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
 use super::nat::TunTx;
-use super::packet::{build_tcp_packet, build_tcp_packet_with_options, IpPacket, TransportProtocol};
+use super::packet::{
+    build_tcp_packet, build_tcp_packet_with_options, IpPacket, TcpPacketSpec, TransportProtocol,
+};
 
 const TCP_FIN: u8 = 0x01;
 const TCP_SYN: u8 = 0x02;
@@ -134,13 +136,15 @@ impl TcpBridgeTable {
 
             send_control(
                 tun_tx.clone(),
-                remote,
-                client,
-                server_seq,
-                client_next_seq,
-                TCP_SYN | TCP_ACK,
-                65535,
-                &[0x01, 0x03, 0x03, TCP_WINDOW_SCALE],
+                TcpControlPacket {
+                    src: remote,
+                    dst: client,
+                    seq: server_seq,
+                    ack: client_next_seq,
+                    flags: TCP_SYN | TCP_ACK,
+                    window: 65535,
+                    options: &[0x01, 0x03, 0x03, TCP_WINDOW_SCALE],
+                },
             )
             .await;
             return Ok(());
@@ -162,13 +166,15 @@ impl TcpBridgeTable {
             entry.client_next_seq = tcp.seq.wrapping_add(1);
             send_control(
                 tun_tx.clone(),
-                remote,
-                client,
-                entry.server_seq.load(Ordering::Relaxed),
-                entry.client_next_seq,
-                TCP_ACK,
-                65535,
-                &[],
+                TcpControlPacket {
+                    src: remote,
+                    dst: client,
+                    seq: entry.server_seq.load(Ordering::Relaxed),
+                    ack: entry.client_next_seq,
+                    flags: TCP_ACK,
+                    window: 65535,
+                    options: &[],
+                },
             )
             .await;
             self.entries.remove(&key);
@@ -185,13 +191,15 @@ impl TcpBridgeTable {
         entry.client_next_seq = tcp.seq.wrapping_add(payload.len() as u32);
         send_control(
             tun_tx.clone(),
-            remote,
-            client,
-            entry.server_seq.load(Ordering::Relaxed),
-            entry.client_next_seq,
-            TCP_ACK,
-            65535,
-            &[],
+            TcpControlPacket {
+                src: remote,
+                dst: client,
+                seq: entry.server_seq.load(Ordering::Relaxed),
+                ack: entry.client_next_seq,
+                flags: TCP_ACK,
+                window: 65535,
+                options: &[],
+            },
         )
         .await;
 
@@ -225,19 +233,27 @@ impl TcpBridgeTable {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn send_control(
-    tun_tx: TunTx,
+struct TcpControlPacket<'a> {
     src: SocketAddr,
     dst: SocketAddr,
     seq: u32,
     ack: u32,
     flags: u8,
     window: u16,
-    options: &[u8],
-) {
-    if let Some(packet) =
-        build_tcp_packet_with_options(src, dst, seq, ack, flags, window, options, &[])
-    {
+    options: &'a [u8],
+}
+
+async fn send_control(tun_tx: TunTx, control: TcpControlPacket<'_>) {
+    if let Some(packet) = build_tcp_packet_with_options(TcpPacketSpec {
+        src: control.src,
+        dst: control.dst,
+        seq: control.seq,
+        ack: control.ack,
+        flags: control.flags,
+        window: control.window,
+        options: control.options,
+        payload: &[],
+    }) {
         let _ = tun_tx.send(packet).await;
     }
 }

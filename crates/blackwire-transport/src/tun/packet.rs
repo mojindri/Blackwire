@@ -381,40 +381,42 @@ pub fn build_tcp_packet(
 
 /// Build a TCP packet with custom TCP options appended before the payload.
 #[allow(clippy::too_many_arguments)]
-pub fn build_tcp_packet_with_options(
-    src: SocketAddr,
-    dst: SocketAddr,
-    seq: u32,
-    ack: u32,
-    flags: u8,
-    window: u16,
-    options: &[u8],
-    payload: &[u8],
-) -> Option<Vec<u8>> {
-    match (src, dst) {
+pub struct TcpPacketSpec<'a> {
+    pub src: SocketAddr,
+    pub dst: SocketAddr,
+    pub seq: u32,
+    pub ack: u32,
+    pub flags: u8,
+    pub window: u16,
+    pub options: &'a [u8],
+    pub payload: &'a [u8],
+}
+
+pub fn build_tcp_packet_with_options(spec: TcpPacketSpec<'_>) -> Option<Vec<u8>> {
+    match (spec.src, spec.dst) {
         (SocketAddr::V4(src), SocketAddr::V4(dst)) => build_ipv4_tcp_packet(
             *src.ip(),
             *dst.ip(),
             src.port(),
             dst.port(),
-            seq,
-            ack,
-            flags,
-            window,
-            options,
-            payload,
+            spec.seq,
+            spec.ack,
+            spec.flags,
+            spec.window,
+            spec.options,
+            spec.payload,
         ),
         (SocketAddr::V6(src), SocketAddr::V6(dst)) => build_ipv6_tcp_packet(
             *src.ip(),
             *dst.ip(),
             src.port(),
             dst.port(),
-            seq,
-            ack,
-            flags,
-            window,
-            options,
-            payload,
+            spec.seq,
+            spec.ack,
+            spec.flags,
+            spec.window,
+            spec.options,
+            spec.payload,
         ),
         _ => None,
     }
