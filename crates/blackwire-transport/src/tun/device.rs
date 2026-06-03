@@ -71,12 +71,19 @@ pub enum TunLinuxBackend {
 /// AF_XDP backend options for Linux experiments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TunAfXdpConfig {
+    /// Network interface to attach the AF_XDP socket to, or `None` to use the TUN interface.
     pub interface: Option<String>,
+    /// Hardware queue index to bind the AF_XDP socket to.
     pub queue_id: u32,
+    /// Number of descriptors in each AF_XDP ring (RX/TX/fill/completion).
     pub ring_entries: u32,
+    /// Total number of frames in the UMEM region.
     pub frame_count: u32,
+    /// Size in bytes of each frame in the UMEM region.
     pub frame_size: u32,
+    /// Force copy mode even when zero-copy is available.
     pub force_copy: bool,
+    /// Force zero-copy mode; fails if the driver does not support it.
     pub force_zerocopy: bool,
 }
 
