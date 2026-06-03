@@ -188,6 +188,7 @@ async fn hysteria2_udp_relay_roundtrip_with_xor_fec_enabled() {
         mode: blackwire_transport::FecMode::Xor1OfN,
         max_overhead_percent: 25,
         group_size: 4,
+        ..blackwire_transport::FecPolicy::default()
     };
 
     let session = timeout(

@@ -22,8 +22,7 @@ pub enum CongestionDirection {
     ServerDownload,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CongestionMode {
     StandardQuic,
     #[default]
@@ -46,7 +45,6 @@ impl CongestionMode {
         }
     }
 }
-
 
 impl std::str::FromStr for CongestionMode {
     type Err = String;
