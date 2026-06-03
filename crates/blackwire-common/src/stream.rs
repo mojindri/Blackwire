@@ -88,64 +88,100 @@ pub type BoxedStream = Box<dyn AsyncReadWrite + Send + Unpin + 'static>;
 /// High-level stream capability used by relay decision metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayCapability {
+    /// Plain TCP socket — eligible for splice(2) on Linux.
     RawTcp,
+    /// Generic wrapped byte stream (TLS, WebSocket, etc.).
     WrappedByteStream,
+    /// WebSocket-framed byte stream.
     WebSocketFrames,
+    /// HTTP/2 DATA frames carrying proxy payload.
     Http2Data,
+    /// QUIC stream (reliable, ordered).
     QuicStream,
+    /// QUIC DATAGRAM (unreliable, unordered).
     QuicDatagram,
+    /// Raw packet mode (UDP-like encapsulation).
     Packet,
 }
 
 /// Relay implementation selected for a stream pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayPath {
+    /// Standard tokio async copy.
     Copy,
+    /// Async copy with growable ring buffer (v2 relay).
     CopyV2,
+    /// Linux splice(2) zero-copy relay.
     Splice,
+    /// Async copy with XTLS Vision unwrapping.
     VisionCopy,
+    /// Ring-buffered async copy with Vision unwrapping.
     VisionCopyV2,
+    /// splice(2) relay after Vision direct-copy handoff.
     VisionSplice,
 }
 
 /// Relay profile used for metrics and future tuning decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayProfile {
+    /// Low-latency interactive flow (e.g. SSH, gaming).
     Interactive,
+    /// Mixed latency/throughput (default for most proxy flows).
     Balanced,
+    /// High-throughput bulk transfer (large file downloads).
     Bulk,
 }
 
 /// Relay decision emitted by lowering-aware dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RelayDecision {
+    /// The relay implementation to use.
     pub path: RelayPath,
+    /// Throughput/latency profile for this connection.
     pub profile: RelayProfile,
+    /// True if Linux splice(2) is eligible for this pair.
     pub splice_eligible: bool,
+    /// True if MSG_ZEROCOPY is eligible for this pair.
     pub zero_copy_eligible: bool,
 }
 
 /// Whether a wrapped stream can be lowered into a cheaper transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LowerState {
+    /// This stream can never be lowered.
     Never,
+    /// Lowering is not yet possible — handshake still in progress.
     NotYet,
+    /// Stream is ready to lower after the next handshake boundary.
     AfterHandshake,
+    /// Stream can be lowered immediately.
     Now,
 }
 
 /// Result of lowering a boxed stream.
 #[cfg(target_os = "linux")]
 pub enum LoweredStream {
+    /// Stream was fully lowered to a raw TCP socket.
     RawTcp(TcpStream),
-    TcpWithPrefix { stream: TcpStream, prefix: Vec<u8> },
+    /// Stream lowered to TCP but has unread bytes that must be drained first.
+    TcpWithPrefix {
+        /// The underlying raw TCP socket.
+        stream: TcpStream,
+        /// Buffered bytes that precede the raw TCP data.
+        prefix: Vec<u8>,
+    },
+    /// Stream could not be lowered; returned as the original boxed stream.
     Wrapped(BoxedStream),
 }
 
 /// Common lowering hook for stream wrappers that can exit expensive processing.
 pub trait LowerableStream {
+    /// Returns the current lowering readiness of this stream.
     fn lower_state(&self) -> LowerState;
 
+    /// Attempt to lower this stream into a cheaper representation.
+    ///
+    /// Returns `Ok(LoweredStream)` on success, or `Err(self)` if lowering is not yet possible.
     #[cfg(target_os = "linux")]
     fn try_lower(self: Box<Self>) -> Result<LoweredStream, Box<Self>>;
 }
