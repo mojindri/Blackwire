@@ -551,7 +551,7 @@ impl Instance {
             let handshake_timeout = handshake_timeout_for(in_cfg, &config.limits);
 
             let handler: Arc<dyn InboundHandler> = match in_cfg.protocol {
-                Protocol::Socks => Socks5Inbound::new(&in_cfg.tag),
+                Protocol::Socks => Socks5Inbound::new(in_cfg.tag.as_str()),
                 Protocol::Vless => {
                     build_vless_inbound(in_cfg, &vless_registries, handshake_timeout)
                         .with_context(|| format!("building VLESS inbound '{}'", in_cfg.tag))?

@@ -15,5 +15,5 @@ pub(crate) fn build_http_inbound(
     cfg: &blackwire_config::schema::InboundConfig,
     handshake_timeout: Option<Duration>,
 ) -> Result<Arc<dyn InboundHandler>> {
-    Ok(HttpConnectInbound::new(&cfg.tag, handshake_timeout))
+    Ok(HttpConnectInbound::new(cfg.tag.as_str(), handshake_timeout))
 }
