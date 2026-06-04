@@ -100,39 +100,58 @@ pub enum OutboundKind {
     ShadowTls,
 }
 
+/// The combined network and security layer kind for a transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportKind {
+    /// Underlying network transport (TCP, WebSocket, gRPC, etc.).
     pub network: NetworkType,
+    /// Security layer applied on top of the network transport (TLS, REALITY, etc.).
     pub security: SecurityType,
 }
 
+/// Whether protocol sniffing is active and how its results are used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SniffPlan {
+    /// True if deep-packet-inspection sniffing is enabled for this listener.
     pub enabled: bool,
+    /// When true, sniffed domain names are used only for routing, not rewriting the target.
     pub route_only: bool,
 }
 
+/// Compiled routing configuration derived from the active rule set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutePlan {
+    /// Domain-resolution strategy used during route evaluation (e.g. `"IPIfNonMatch"`).
     pub strategy: Arc<str>,
+    /// Number of routing rules compiled from the configuration.
     pub rule_count: usize,
 }
 
+/// Relay-layer capabilities negotiated for a connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RelayPlan {
+    /// I/O copy strategy to use when forwarding bytes between the two halves.
     pub copy_mode: CopyMode,
+    /// Whether the kernel `splice(2)` zero-copy path is available for this relay.
     pub supports_splice: bool,
+    /// Whether 0-RTT / TLS early-data can be used on the outbound leg.
     pub supports_early_data: bool,
+    /// Whether the outbound supports UDP datagram forwarding.
     pub supports_datagram: bool,
 }
 
+/// Connection-level resource limits applied to inbound sessions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LimitPlan {
+    /// Maximum number of simultaneous inbound connections; `None` means unlimited.
     pub max_connections: Option<usize>,
+    /// Maximum seconds allowed for a TLS or protocol handshake to complete.
     pub max_handshake_seconds: Option<u64>,
+    /// Maximum seconds a connection may be idle before being force-closed.
     pub max_idle_seconds: Option<u64>,
 }
 
+/// Build a `DataPlane` from the given configuration, computing listener and outbound plans.
 pub fn compile_data_plane(config: &Config) -> Arc<DataPlane> {
     let cost = explain_cost(config).cost;
     let route_strategy: Arc<str> = config
