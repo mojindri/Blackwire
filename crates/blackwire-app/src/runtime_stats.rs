@@ -180,7 +180,9 @@ pub fn record_connection_accepted(inbound: &str, protocol: &str) {
             let c = counter(&format!(
                 "inbound>>>{inbound}>>>protocol>>>{protocol}>>>connections>>>total"
             ));
-            handles.protocol_conns.insert(protocol.into(), Arc::clone(&c));
+            handles
+                .protocol_conns
+                .insert(protocol.into(), Arc::clone(&c));
             c
         }
     };
