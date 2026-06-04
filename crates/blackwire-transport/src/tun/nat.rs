@@ -134,6 +134,16 @@ impl UdpNatTable {
         before - self.entries.len()
     }
 
+    /// Drop every active NAT flow after a network/interface change.
+    ///
+    /// Existing bypass sockets are tied to the old route/interface state, so
+    /// keeping them after a mobile network handoff risks black-holing packets.
+    pub fn clear_for_network_change(&mut self) -> usize {
+        let removed = self.entries.len();
+        self.entries.clear();
+        removed
+    }
+
     fn evict_oldest(&mut self) {
         if let Some(oldest_key) = self
             .entries
@@ -268,5 +278,12 @@ mod tests {
         assert_eq!(parsed.src_port, remote.port());
         assert_eq!(parsed.dst_port, client.port());
         assert_eq!(parsed.payload(&pkt).unwrap(), payload);
+    }
+
+    #[test]
+    fn clear_for_network_change_drops_tracked_entries() {
+        let mut table = UdpNatTable::new(0x1234, Duration::from_secs(60), 64);
+        assert_eq!(table.clear_for_network_change(), 0);
+        assert!(table.is_empty());
     }
 }

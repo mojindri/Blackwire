@@ -1,4 +1,4 @@
-import { CheckCircle2, LogOut, RefreshCw, ServerCog, XCircle } from "lucide-react";
+import { CheckCircle2, LoaderCircle, LogOut, RefreshCw, ServerCog, XCircle } from "lucide-react";
 import { Button } from "../atoms/Button";
 import { StatusDot } from "../atoms/StatusDot";
 import type { Status } from "../../lib/types";
@@ -26,11 +26,12 @@ export function TopStatusStrip({
           tone={status?.grpcReachable ? "green" : "amber"}
           label={status?.grpcReachable ? "gRPC connected" : "gRPC unavailable"}
         />
+        {busy ? <LoaderCircle size={16} className="spinner" /> : null}
         <span className="strip-sep" />
         {message ? <span className="strip-message">{message}</span> : <span>Config path: {status?.configPath ?? "loading"}</span>}
       </div>
       <div className="top-actions">
-        <Button variant="ghost" icon={<RefreshCw size={16} />} onClick={onRefresh} disabled={busy}>
+        <Button variant="ghost" icon={<RefreshCw size={16} className={busy ? "spinner" : ""} />} onClick={onRefresh} disabled={busy}>
           Refresh
         </Button>
         <Button variant="secondary" icon={status?.grpcReachable ? <CheckCircle2 size={16} /> : <XCircle size={16} />} onClick={onApply} disabled={busy}>

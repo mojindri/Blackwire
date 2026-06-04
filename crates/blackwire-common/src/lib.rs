@@ -13,6 +13,7 @@
 //! - [`buf`]       — a buffer pool for reusing memory allocations
 
 pub mod address;
+pub mod af_xdp;
 pub mod buf;
 pub mod connect;
 pub mod error;
@@ -20,11 +21,15 @@ pub mod relay;
 pub mod socks5_address;
 pub mod splice;
 pub mod stream;
+pub mod zerocopy;
 
 // Re-export the most commonly used items so callers can write
 // `use blackwire_common::Address` instead of `use blackwire_common::address::Address`.
 pub use address::{Address, Network};
-pub use buf::BufferPool;
+pub use buf::{
+    BufferPool, BULK_RELAY_BUFFER_SIZE, CONTROL_BUFFER_SIZE, DEFAULT_RELAY_BUFFER_SIZE,
+    QUIC_BULK_BUFFER_SIZE,
+};
 pub use connect::{
     clear_outbound_bypass_mark, clear_outbound_interface_index, outbound_bypass_mark,
     outbound_interface_index, protect_udp_socket, protect_udp_socket_with_bypass_mark,
@@ -40,8 +45,9 @@ pub use socks5_address::{
     ATYP_IPV6,
 };
 pub use stream::{
-    wrap_vision_stream, AsyncReadWrite, BoxedStream, Link, PooledStream, PrependedStream,
-    ReunionStream, VisionStream,
+    wrap_vision_inbound_stream, wrap_vision_stream, AsyncReadWrite, BoxedStream, Link, LowerState,
+    LowerableStream, PooledStream, PrependedStream, RelayCapability, RelayDecision, RelayPath,
+    RelayProfile, ReunionStream, VisionStream,
 };
 
 // Linux-only relay optimization support.
@@ -56,3 +62,5 @@ pub use stream::try_into_tcp_stream;
 pub use stream::try_into_tcp_stream_with_prefix;
 #[cfg(target_os = "linux")]
 pub use stream::try_into_vision_stream;
+#[cfg(target_os = "linux")]
+pub use stream::LoweredStream;

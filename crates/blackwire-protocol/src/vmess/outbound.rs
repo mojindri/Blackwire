@@ -17,7 +17,7 @@ use tokio::io::AsyncWriteExt;
 use tracing::debug;
 
 use blackwire_app::context::Context;
-use blackwire_app::features::OutboundHandler;
+use blackwire_app::features::{OutboundConnectResult, OutboundHandler};
 use blackwire_common::{tcp_connect, Address, BoxedStream, ProxyError};
 
 use super::auth::{cmd_key, generate_auth_id};
@@ -75,6 +75,26 @@ impl OutboundHandler for VmessOutbound {
 
         connect_vmess_on_stream(Box::new(tcp), &self.uuid, &self.cmd_key, dest).await
     }
+
+    async fn connect_with_early_payload(
+        &self,
+        _ctx: &Context,
+        dest: &Address,
+        early_payload: Option<Vec<u8>>,
+    ) -> Result<OutboundConnectResult, ProxyError> {
+        debug!(server = %self.server, dest = %dest, "VMess outbound connecting with early payload");
+
+        let tcp = tcp_connect(self.server).await?;
+        tcp.set_nodelay(true)?;
+        connect_vmess_on_stream_with_early_payload(
+            Box::new(tcp),
+            &self.uuid,
+            &self.cmd_key,
+            dest,
+            early_payload,
+        )
+        .await
+    }
 }
 
 /// Send the VMess AEAD handshake over an already-established stream.
@@ -116,6 +136,33 @@ pub async fn connect_vmess_on_stream(
 
     let _ = uuid; // uuid is only used to derive cmd_key
     Ok(wrapped)
+}
+
+/// Send the VMess AEAD handshake and optional first payload over an established stream.
+pub async fn connect_vmess_on_stream_with_early_payload(
+    stream: BoxedStream,
+    uuid: &[u8; 16],
+    cmd_key_bytes: &[u8; 16],
+    dest: &Address,
+    early_payload: Option<Vec<u8>>,
+) -> Result<OutboundConnectResult, ProxyError> {
+    let mut stream = connect_vmess_on_stream(stream, uuid, cmd_key_bytes, dest).await?;
+    let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+        if !payload.is_empty() {
+            stream.write_all(payload).await?;
+            stream.flush().await?;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    Ok(OutboundConnectResult {
+        stream,
+        wrote_early_payload,
+        returned_early_response: None,
+    })
 }
 
 #[cfg(test)]

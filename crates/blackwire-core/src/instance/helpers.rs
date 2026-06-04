@@ -389,6 +389,7 @@ pub(crate) fn build_rules(
                 port_ranges,
                 inbound_tags: r.inbound_tag.clone(),
                 protocols: r.protocol.clone(),
+                users: r.user.clone(),
             })
         })
         .collect()

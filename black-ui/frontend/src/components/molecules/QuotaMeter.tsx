@@ -11,17 +11,27 @@ export function QuotaMeter({
 }) {
   const pct = quotaPercent(upload, download, limit);
   const tone = pct >= 95 ? "danger" : pct >= 75 ? "warn" : "ok";
+  const total = formatBytes(upload + download);
+
+  if (!limit) {
+    return (
+      <div className="quota quota-unlimited">
+        <div className="quota-line quota-line-unlimited">
+          <span className="quota-state">Unlimited</span>
+          <span>{total} used</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="quota">
       <div className="quota-line">
-        <span>{limit ? `${pct}%` : "Unlimited"}</span>
-        <span>
-          {formatBytes(upload + download)}
-          {limit ? ` / ${formatBytes(limit)}` : ""}
-        </span>
+        <span className="quota-state">{pct}%</span>
+        <span>{total} / {formatBytes(limit)}</span>
       </div>
       <span className="quota-track">
-        <span className={`quota-fill quota-${tone}`} style={{ width: `${limit ? pct : 12}%` }} />
+        <span className={`quota-fill quota-${tone}`} style={{ width: `${pct}%` }} />
       </span>
     </div>
   );

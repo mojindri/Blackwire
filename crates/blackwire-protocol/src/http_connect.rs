@@ -86,13 +86,15 @@ impl InboundHandler for HttpConnectInbound {
         source: SocketAddr,
         dispatcher: Arc<dyn Dispatcher>,
     ) -> Result<(), ProxyError> {
-        let (dest, mut stream) =
-            with_handshake_timeout(self.handshake_timeout, parse_connect_request(stream))
-                .await
-                .map_err(|e| {
-                    debug!(source = %source, error = %e, "HTTP CONNECT parse failed");
-                    e
-                })?;
+        let (dest, mut stream, early_payload) = with_handshake_timeout(
+            self.handshake_timeout,
+            parse_connect_request_with_early_payload(stream),
+        )
+        .await
+        .map_err(|e| {
+            debug!(source = %source, error = %e, "HTTP CONNECT parse failed");
+            e
+        })?;
 
         debug!(source = %source, dest = %dest, "HTTP CONNECT tunnel established");
 
@@ -103,7 +105,9 @@ impl InboundHandler for HttpConnectInbound {
         stream.flush().await?;
 
         let ctx = Context::new(&self.tag, source);
-        dispatcher.dispatch(ctx, dest, stream).await
+        dispatcher
+            .dispatch_with_early_payload(ctx, dest, stream, early_payload)
+            .await
     }
 }
 
@@ -119,6 +123,20 @@ impl InboundHandler for HttpConnectInbound {
 pub async fn parse_connect_request(
     stream: BoxedStream,
 ) -> Result<(Address, BoxedStream), ProxyError> {
+    let (dest, inner, early_payload) = parse_connect_request_with_early_payload(stream).await?;
+    let stream = match early_payload {
+        Some(payload) if !payload.is_empty() => {
+            Box::new(PrependedStream::new(inner, payload)) as BoxedStream
+        }
+        _ => inner,
+    };
+    Ok((dest, stream))
+}
+
+/// Parse an HTTP CONNECT request and return bytes buffered after the header block.
+pub async fn parse_connect_request_with_early_payload(
+    stream: BoxedStream,
+) -> Result<(Address, BoxedStream, Option<Vec<u8>>), ProxyError> {
     let mut reader = BufReader::new(stream);
     let mut total_bytes = 0usize;
     let mut first_line = String::new();
@@ -156,15 +174,15 @@ pub async fn parse_connect_request(
     let dest = parse_request_line(first_line.trim())?;
 
     // Preserve any bytes already read past the header block (Xray BufferedReader).
-    let remainder = reader.buffer().to_vec();
+    let early_payload = reader.buffer().to_vec();
     let inner = reader.into_inner();
-    let stream = if remainder.is_empty() {
-        inner
+    let early_payload = if early_payload.is_empty() {
+        None
     } else {
-        Box::new(PrependedStream::new(inner, remainder)) as BoxedStream
+        Some(early_payload)
     };
 
-    Ok((dest, stream))
+    Ok((dest, inner, early_payload))
 }
 
 /// Parse the request line `CONNECT host:port HTTP/1.1` into an `Address`.

@@ -4,8 +4,12 @@
 //! an OS TUN device: device creation, packet parsing, UDP NAT, runtime loop,
 //! and platform route helpers.
 
+/// Experimental Linux AF_XDP socket backend.
+pub mod af_xdp;
 /// Platform support contract for the TUN runtime.
 pub mod backend;
+/// Packet batching helpers for the TUN runtime.
+pub mod batch;
 /// TUN device creation and configuration.
 pub mod device;
 /// UDP NAT table used by the runtime.
@@ -19,13 +23,17 @@ pub mod runtime;
 /// Session/flow tracking helpers.
 pub mod session;
 /// Packet-level TCP bridge used by Windows Wintun.
-#[cfg(any(test, target_os = "windows"))]
+#[cfg(any(test, target_os = "linux", target_os = "windows"))]
 pub mod tcp;
 
+pub use af_xdp::{AfXdpBackend, AfXdpCapabilities};
 pub use backend::{current_tun_support, ensure_tun_runtime_supported, TunPlatformSupport};
+pub use batch::{TunBatchConfig, TunPacketBatch};
 #[cfg(target_os = "macos")]
 pub use device::tun_device_name;
-pub use device::{create_tun, TunConfig, TunDevice};
+pub use device::{
+    create_tun, TunAfXdpConfig, TunConfig, TunDevice, TunLinuxBackend, TunLinuxConfig,
+};
 pub use nat::UdpNatTable;
 pub use packet::{
     build_tcp_packet, build_tcp_rst, build_udp_response_packet, parse_ip_packet, IpPacket,
@@ -33,5 +41,5 @@ pub use packet::{
 };
 pub use runtime::TunRuntime;
 pub use session::{FlowKey, TunSession, TunSessionTable};
-#[cfg(any(test, target_os = "windows"))]
+#[cfg(any(test, target_os = "linux", target_os = "windows"))]
 pub use tcp::TcpBridgeTable;
