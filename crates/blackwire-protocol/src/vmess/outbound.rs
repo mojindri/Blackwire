@@ -13,12 +13,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, BufReader};
 use tracing::debug;
 
 use blackwire_app::context::Context;
 use blackwire_app::features::{OutboundConnectResult, OutboundHandler};
-use blackwire_common::{tcp_connect, Address, BoxedStream, ProxyError};
+use blackwire_common::{tcp_connect, Address, BoxedStream, PrependedStream, ProxyError};
 
 use super::auth::{cmd_key, generate_auth_id};
 use super::codec::{
@@ -121,7 +121,16 @@ pub async fn connect_vmess_on_stream(
 
     let resp_key = response_body_key(&key);
     let resp_iv = response_body_iv(&iv);
-    read_response_header(&mut stream, v, &resp_key, &resp_iv).await?;
+
+    // Buffer the response header reads (enc_len 18B + enc_hdr variable) to reduce
+    // syscalls. Leftover bytes are recovered via PrependedStream for the AEAD relay.
+    let mut buf_reader = BufReader::with_capacity(64, &mut stream);
+    read_response_header(&mut buf_reader, v, &resp_key, &resp_iv).await?;
+    let leftover = buf_reader.buffer().to_vec();
+    drop(buf_reader);
+    if !leftover.is_empty() {
+        stream = Box::new(PrependedStream::new(stream, leftover));
+    }
 
     // Wrap in VMess body framing.
     let wrapped: BoxedStream = Box::new(VmessStream::new_bidir(
