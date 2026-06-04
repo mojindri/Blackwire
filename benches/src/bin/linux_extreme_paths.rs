@@ -1,3 +1,5 @@
+//! Benchmarks for Linux-specific extreme data-plane code paths (AF_XDP, splice, etc.).
+
 #[cfg(target_os = "linux")]
 mod linux {
     use std::env;
