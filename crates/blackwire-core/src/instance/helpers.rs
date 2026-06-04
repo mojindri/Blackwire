@@ -252,6 +252,7 @@ pub(crate) fn build_vless_inbound(
     cfg: &blackwire_config::schema::InboundConfig,
     registries: &Arc<DashMap<String, Arc<VlessUserRegistry>>>,
     handshake_timeout: Option<Duration>,
+    dns: Option<Arc<DnsModule>>,
 ) -> Result<Arc<dyn InboundHandler>> {
     #[allow(clippy::unwrap_or_default)]
     let registry = registries
@@ -269,6 +270,7 @@ pub(crate) fn build_vless_inbound(
         registry,
         fallback,
         handshake_timeout,
+        dns,
     ))
 }
 
