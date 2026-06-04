@@ -25,6 +25,7 @@ const profileOptions = ["compat", "fast", "latency", "throughput", "badnet", "mo
 const routingStrategies = ["adaptive", "random", "roundRobin", "latency"];
 const fastPoolOptions = ["", "disabled", "adaptive", "fixed"];
 const fastSpliceOptions = ["", "disabled", "adaptive", "always"];
+const fastLinuxIoUringOptions = ["", "disabled", "auto", "require"];
 
 export function SectionsPage({
   sections,
@@ -603,7 +604,7 @@ function FastEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; o
           <Select value={editor.fastPool} onChange={(e) => onChange({ ...editor, fastPool: e.target.value })}>
             {fastPoolOptions.map((item) => (
               <option key={item} value={item}>
-                {item || "default"}
+                {item || "default (adaptive)"}
               </option>
             ))}
           </Select>
@@ -612,7 +613,16 @@ function FastEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; o
           <Select value={editor.fastSplice} onChange={(e) => onChange({ ...editor, fastSplice: e.target.value })}>
             {fastSpliceOptions.map((item) => (
               <option key={item} value={item}>
-                {item || "default"}
+                {item || "default (adaptive)"}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Linux io_uring" hint="Leave empty to use the runtime default (disabled). Set to auto to opt in.">
+          <Select value={editor.fastLinuxIoUring} onChange={(e) => onChange({ ...editor, fastLinuxIoUring: e.target.value })}>
+            {fastLinuxIoUringOptions.map((item) => (
+              <option key={item} value={item}>
+                {item || "default (disabled)"}
               </option>
             ))}
           </Select>
