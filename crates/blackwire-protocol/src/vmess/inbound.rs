@@ -104,13 +104,13 @@ impl Default for VmessUserRegistry {
 
 /// VMess inbound handler that authenticates and dispatches TCP streams.
 pub struct VmessInbound {
-    tag: String,
+    tag: Arc<str>,
     registry: Arc<VmessUserRegistry>,
 }
 
 impl VmessInbound {
     /// Build a VMess inbound handler with a tag and user registry.
-    pub fn new(tag: impl Into<String>, registry: Arc<VmessUserRegistry>) -> Arc<Self> {
+    pub fn new(tag: impl Into<Arc<str>>, registry: Arc<VmessUserRegistry>) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
             registry,
@@ -204,7 +204,7 @@ impl InboundHandler for VmessInbound {
 
         let vmess_stream: BoxedStream = Box::new(vmess_stream);
 
-        let ctx = Context::new(&self.tag, source).with_user(user.email);
+        let ctx = Context::new(self.tag.clone(), source).with_user(user.email);
         dispatcher.dispatch(ctx, request.dest, vmess_stream).await
     }
 }

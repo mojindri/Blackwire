@@ -46,14 +46,14 @@ const TYPE_TCP: u8 = 0x00;
 const TYPE_SERVER: u8 = 0x01;
 /// SS-2022 inbound handler that accepts encrypted TCP sessions.
 pub struct Ss2022Inbound {
-    tag: String,
+    tag: Arc<str>,
     psk: [u8; 32],
     replay: SaltReplay,
 }
 
 impl Ss2022Inbound {
     /// Build a new SS-2022 inbound handler from tag and password.
-    pub fn new(tag: impl Into<String>, password: &str) -> Arc<Self> {
+    pub fn new(tag: impl Into<Arc<str>>, password: &str) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
             psk: password_to_psk(password),
@@ -166,7 +166,7 @@ impl InboundHandler for Ss2022Inbound {
             None,
         );
 
-        let ctx = Context::new(&self.tag, source);
+        let ctx = Context::new(self.tag.clone(), source);
         dispatcher.dispatch(ctx, dest, Box::new(vm)).await
     }
 }
