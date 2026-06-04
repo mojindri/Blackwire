@@ -470,7 +470,11 @@ impl Instance {
 
         if config.profile == ProfileMode::Fast {
             let fast = config.fast.as_ref().cloned().unwrap_or_default();
-            let adaptive_pool = PoolConfig::default();
+            let adaptive_pool = match fast.pool {
+                FastPoolPolicy::Adaptive => PoolConfig::fast_profile(),
+                FastPoolPolicy::Fixed => PoolConfig::fixed(8),
+                FastPoolPolicy::Disabled => PoolConfig::default(),
+            };
             info!(
                 pool_policy = ?fast.pool,
                 adaptive_pool_max_per_dest = adaptive_pool.max_per_dest,
