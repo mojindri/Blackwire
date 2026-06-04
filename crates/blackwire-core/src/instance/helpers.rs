@@ -265,7 +265,7 @@ pub(crate) fn build_vless_inbound(
         .and_then(|s| s.parse::<SocketAddr>().ok());
 
     Ok(VlessInbound::new(
-        &cfg.tag,
+        cfg.tag.as_str(),
         registry,
         fallback,
         handshake_timeout,
