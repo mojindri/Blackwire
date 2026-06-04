@@ -24,6 +24,7 @@ pub mod tcp;
 
 // QUIC and Hysteria2
 pub mod hysteria2;
+/// Packet classification and deficit-round-robin scheduler for TUN inner flows.
 pub mod innerflow;
 pub mod quic;
 
