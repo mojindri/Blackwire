@@ -13,6 +13,8 @@ use tracing::{debug, info, warn};
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use super::backend::ensure_tun_runtime_supported;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+use super::batch::TunPacketBatch;
 #[cfg(target_os = "macos")]
 use super::device::tun_device_name;
 use super::device::{TunConfig, TunDevice};
@@ -20,7 +22,9 @@ use super::device::{TunConfig, TunDevice};
 use super::nat::{TunTx, UdpNatTable};
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use super::packet::{parse_ip_packet, TransportProtocol};
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+use super::session::TunSessionTable;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use super::tcp::TcpBridgeTable;
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -34,13 +38,17 @@ const EVICT_INTERVAL: Duration = Duration::from_secs(30);
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 const UDP_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Idle timeout for Windows packet-level TCP bridge flows.
-#[cfg(target_os = "windows")]
+/// Idle timeout for packet-level TCP bridge flows.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Depth of the internal TUN-write channel.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 const WRITE_CHAN_CAP: usize = 1024;
+
+/// Maximum cadence used to flush partial TUN write batches.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+const BATCH_FLUSH_INTERVAL: Duration = Duration::from_millis(1);
 
 /// The TUN packet processing runtime.
 ///
@@ -117,14 +125,31 @@ impl TunRuntime {
     ) -> Result<()> {
         let (mut reader, mut writer) = tokio::io::split(device);
         let (tun_tx, mut tun_rx) = mpsc::channel::<Vec<u8>>(WRITE_CHAN_CAP);
-        let mut nat = UdpNatTable::with_defaults(self.config.bypass_mark, UDP_IDLE_TIMEOUT);
-        #[cfg(target_os = "windows")]
-        let mut tcp = TcpBridgeTable::with_defaults(self.config.redirect_port, TCP_IDLE_TIMEOUT);
+        let udp_idle_timeout = if self.config.udp_idle_timeout.is_zero() {
+            UDP_IDLE_TIMEOUT
+        } else {
+            self.config.udp_idle_timeout
+        };
+        let mut nat = UdpNatTable::new(
+            self.config.bypass_mark,
+            udp_idle_timeout,
+            self.config.udp_max_sessions,
+        );
+        let mut sessions = TunSessionTable::with_max_sessions(self.config.udp_max_sessions);
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        let mut tcp = TcpBridgeTable::new(
+            self.config.redirect_port,
+            TCP_IDLE_TIMEOUT,
+            self.config.tcp_max_sessions,
+        );
         let mut read_buf = vec![0u8; 65536];
+        let mut write_batch = TunPacketBatch::new(self.config.batch);
         let mut evict_tick = tokio::time::interval(EVICT_INTERVAL);
+        let mut batch_tick = tokio::time::interval(BATCH_FLUSH_INTERVAL);
         // Skip the immediate first tick so eviction doesn't run before any
         // flows are even established.
         evict_tick.tick().await;
+        batch_tick.tick().await;
 
         info!(name = %self.config.name, "TUN runtime started");
 
@@ -141,7 +166,8 @@ impl TunRuntime {
                             self.dispatch(
                                 &read_buf[..n],
                                 &mut nat,
-                                #[cfg(target_os = "windows")]
+                                &mut sessions,
+                                #[cfg(any(target_os = "linux", target_os = "windows"))]
                                 &mut tcp,
                                 &tun_tx,
                             ).await;
@@ -155,8 +181,28 @@ impl TunRuntime {
 
                 // ── Write synthesized response packets back to TUN ────────────
                 Some(pkt) = tun_rx.recv() => {
-                    if let Err(e) = writer.write_all(&pkt).await {
-                        warn!(%e, "TUN device write error");
+                    let now = std::time::Instant::now();
+                    write_batch.push(pkt, now);
+                    while !write_batch.should_flush(std::time::Instant::now()) {
+                        match tun_rx.try_recv() {
+                            Ok(pkt) => write_batch.push(pkt, std::time::Instant::now()),
+                            Err(mpsc::error::TryRecvError::Empty) => break,
+                            Err(mpsc::error::TryRecvError::Disconnected) => break,
+                        }
+                    }
+                    if write_batch.should_flush(std::time::Instant::now()) {
+                        if let Err(e) = flush_tun_batch(&mut writer, &mut write_batch).await {
+                            warn!(%e, "TUN device write error");
+                        }
+                    }
+                }
+
+                // ── Flush partial write batches after bounded delay ───────────
+                _ = batch_tick.tick(), if !write_batch.is_empty() => {
+                    if write_batch.should_flush(std::time::Instant::now()) {
+                        if let Err(e) = flush_tun_batch(&mut writer, &mut write_batch).await {
+                            warn!(%e, "TUN device write error");
+                        }
                     }
                 }
 
@@ -166,7 +212,11 @@ impl TunRuntime {
                     if n > 0 {
                         debug!(evicted = n, "removed idle UDP NAT flows");
                     }
-                    #[cfg(target_os = "windows")]
+                    let n = sessions.remove_expired(std::time::Instant::now(), udp_idle_timeout);
+                    if n > 0 {
+                        debug!(evicted = n, "removed idle TUN sessions");
+                    }
+                    #[cfg(any(target_os = "linux", target_os = "windows"))]
                     {
                         let n = tcp.evict_idle();
                         if n > 0 {
@@ -185,6 +235,10 @@ impl TunRuntime {
             }
         }
 
+        if !write_batch.is_empty() {
+            let _ = flush_tun_batch(&mut writer, &mut write_batch).await;
+        }
+
         info!(name = %self.config.name, "TUN runtime stopped");
         Ok(())
     }
@@ -194,7 +248,8 @@ impl TunRuntime {
         &self,
         raw: &[u8],
         nat: &mut UdpNatTable,
-        #[cfg(target_os = "windows")] tcp: &mut TcpBridgeTable,
+        sessions: &mut TunSessionTable,
+        #[cfg(any(target_os = "linux", target_os = "windows"))] tcp: &mut TcpBridgeTable,
         tun_tx: &TunTx,
     ) {
         let Some(packet) = parse_ip_packet(raw) else {
@@ -203,6 +258,7 @@ impl TunRuntime {
 
         match packet.protocol {
             TransportProtocol::Udp => {
+                sessions.observe_packet(&packet, std::time::Instant::now());
                 // Port-53 DNS is redirected by iptables/PF to the proxy's DNS
                 // listener; the TUN device should not see it, but skip just
                 // in case the kernel sends it before the redirect rule lands.
@@ -213,9 +269,9 @@ impl TunRuntime {
                     debug!(%e, src = %packet.src, dst = %packet.dst, "UDP NAT forward failed");
                 }
             }
-            TransportProtocol::Tcp =>
-            {
-                #[cfg(target_os = "windows")]
+            TransportProtocol::Tcp => {
+                sessions.observe_packet(&packet, std::time::Instant::now());
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 if let Err(e) = tcp.forward(&packet, raw, tun_tx).await {
                     debug!(%e, src = %packet.src, dst = %packet.dst, "TCP bridge forward failed");
                 }
@@ -223,4 +279,17 @@ impl TunRuntime {
             TransportProtocol::Other(_) => {}
         }
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+async fn flush_tun_batch<W>(writer: &mut W, batch: &mut TunPacketBatch) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let count = batch.len();
+    for pkt in batch.drain() {
+        writer.write_all(&pkt).await?;
+    }
+    debug!(packets = count, "flushed TUN write batch");
+    Ok(())
 }

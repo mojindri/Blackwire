@@ -122,6 +122,35 @@ async fn socks5_connect(socks_port: u16, dest: &str, dest_port: u16) -> tokio::n
     stream
 }
 
+async fn socks5_connect_with_coalesced_payload(
+    socks_port: u16,
+    dest: &str,
+    dest_port: u16,
+    payload: &[u8],
+) -> tokio::net::TcpStream {
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", socks_port))
+        .await
+        .unwrap();
+
+    stream.write_all(&[5, 1, 0]).await.unwrap();
+    let mut resp = [0u8; 2];
+    stream.read_exact(&mut resp).await.unwrap();
+    assert_eq!(resp, [5, 0], "SOCKS5 auth reply mismatch");
+
+    let host = dest.as_bytes();
+    let mut req = vec![5, 1, 0, 3, host.len() as u8];
+    req.extend_from_slice(host);
+    req.extend_from_slice(&dest_port.to_be_bytes());
+    req.extend_from_slice(payload);
+    stream.write_all(&req).await.unwrap();
+
+    let mut reply = [0u8; 10];
+    stream.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply[1], 0, "SOCKS5 CONNECT failed");
+
+    stream
+}
+
 // ── Integration tests ─────────────────────────────────────────────────────────
 
 /// Full chain: SOCKS5 → SS-2022 outbound → SS-2022 inbound → Freedom → echo server.
@@ -181,6 +210,34 @@ async fn ss2022_large_payload_echo() {
     let mut got = vec![0u8; payload.len()];
     stream.read_exact(&mut got).await.unwrap();
     assert_eq!(got, payload);
+
+    echo_task.abort();
+}
+
+/// SS-2022 preserves first payload bytes coalesced with the SOCKS5 CONNECT request.
+#[tokio::test]
+async fn ss2022_coalesced_first_payload_echo() {
+    let (ss_port, ss_reservation) = reserve_local_port();
+    let (socks_port, socks_reservation) = reserve_local_port();
+    let (echo_port, echo_task) = spawn_echo_server().await;
+
+    drop(ss_reservation);
+    drop(socks_reservation);
+    let _server = blackwire_core::Instance::from_config(ss2022_server_config(ss_port))
+        .await
+        .unwrap();
+    let _client = blackwire_core::Instance::from_config(ss2022_client_config(socks_port, ss_port))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let payload = b"ss2022 coalesced first payload";
+    let mut stream =
+        socks5_connect_with_coalesced_payload(socks_port, "127.0.0.1", echo_port, payload).await;
+
+    let mut got = vec![0u8; payload.len()];
+    stream.read_exact(&mut got).await.unwrap();
+    assert_eq!(got, payload, "echo mismatch");
 
     echo_task.abort();
 }

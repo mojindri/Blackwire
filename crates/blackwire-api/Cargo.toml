@@ -9,6 +9,7 @@ authors.workspace = true
 [dependencies]
 blackwire-common    = { path = "../blackwire-common" }
 blackwire-app       = { path = "../blackwire-app" }
+blackwire-connmgr   = { path = "../blackwire-connmgr" }
 tonic.workspace = true
 tonic-prost.workspace = true
 prost.workspace = true

@@ -41,7 +41,7 @@ use super::codec::{decode_request, encode_response, Command};
 use super::mux::{is_mux_request, relay_mux_cool};
 use super::registry::VlessUserRegistry;
 use super::udp::relay_vless_udp;
-use super::vision::wrap_vision_stream;
+use super::vision::wrap_vision_inbound_stream;
 
 /// The VLESS inbound handler.
 pub struct VlessInbound {
@@ -161,7 +161,7 @@ impl InboundHandler for VlessInbound {
                                 user = %user.email,
                                 "XTLS Vision flow — unpadding reader (Xray-compatible passthrough)"
                             );
-                            relay_stream = wrap_vision_stream(relay_stream, req.uuid);
+                            relay_stream = wrap_vision_inbound_stream(relay_stream, req.uuid);
                         }
 
                         let ctx = Context::new(&self.tag, source)

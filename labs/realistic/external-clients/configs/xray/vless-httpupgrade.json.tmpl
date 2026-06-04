@@ -21,7 +21,7 @@
       "streamSettings": {
         "network": "httpupgrade",
         "security": "tls",
-        "tlsSettings": { "serverName": "${EXTERNAL_TLS_SERVER_NAME}", "allowInsecure": true },
+        "tlsSettings": { "serverName": "${EXTERNAL_TLS_SERVER_NAME}", "pinnedPeerCertSha256": "${EXTERNAL_TLS_CERT_SHA256}" },
         "httpupgradeSettings": {
           "path": "/proxy",
           "host": "${EXTERNAL_TLS_SERVER_NAME}"

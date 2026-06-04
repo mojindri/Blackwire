@@ -13,12 +13,15 @@ mod profile;
 mod protocol;
 mod routing;
 mod transport;
+mod vision;
 
 pub use endpoint::{InboundConfig, InboundLimitsConfig, OutboundConfig};
 pub use logging_dns::{DnsConfig, FakeIpConfig, LogConfig};
 pub use profile::{
-    validate_fast_profile, FastConfig, FastPoolPolicy, FastSplicePolicy, ProfileMode,
-    ProfileViolation,
+    explain_cost, validate_fast_profile, BudgetConfig, CopyMode, CostClass, CostReport, FastConfig,
+    FastExperimentalBackendPolicy, FastLinuxConfig, FastPoolPolicy, FastRelayConfig,
+    FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy, FastZerocopyPolicy,
+    FirstPacketBoostConfig, FirstPacketPriority, ProfileMode, ProfileViolation, ProtocolCost,
 };
 pub use protocol::{NetworkType, Protocol, SecurityType};
 pub use routing::{
@@ -29,6 +32,7 @@ pub use transport::{
     GrpcConfig, Hysteria2Config, KcpConfig, RealityConfig, ShadowTlsConfig, SniffingConfig,
     SplitHttpConfig, StreamSettingsConfig, TlsConfig, WsConfig,
 };
+pub use vision::{VisionConfig, VisionDirectCopyPolicy};
 
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -47,6 +51,35 @@ pub struct Config {
     /// Extra settings that apply only when `profile = "fast"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast: Option<FastConfig>,
+
+    /// Performance budget used by `blackwire explain-cost`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<BudgetConfig>,
+
+    /// XTLS Vision optimization policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<VisionConfig>,
+
+    /// First-packet latency acceleration policy.
+    #[serde(
+        default,
+        rename = "firstPacketBoost",
+        alias = "first_packet_boost",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub first_packet_boost: Option<FirstPacketBoostConfig>,
+
+    /// QUIC socket tuning used by QUIC/Hysteria2 endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quic: Option<QuicConfig>,
+
+    /// QUIC DATAGRAM lane policy for unreliable traffic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datagram: Option<DatagramConfig>,
+
+    /// Forward error correction policy for lossy/mobile datagram traffic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fec: Option<FecConfig>,
 
     /// Logging settings.
     #[serde(default)]
@@ -148,6 +181,288 @@ pub struct LimitsConfig {
     pub max_idle_seconds: Option<u64>,
 }
 
+/// QUIC UDP socket tuning.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuicConfig {
+    /// Enable SO_REUSEPORT where supported so multiple server endpoints can bind the same UDP port.
+    #[serde(default)]
+    pub reuse_port: bool,
+
+    /// Endpoint shard count: integer string/number or "cpu".
+    #[serde(default = "QuicConfig::default_endpoints")]
+    pub endpoints: serde_json::Value,
+
+    /// Requested UDP receive buffer size.
+    #[serde(default = "QuicConfig::default_buffer_bytes")]
+    pub recv_buffer_bytes: usize,
+
+    /// Requested UDP send buffer size.
+    #[serde(default = "QuicConfig::default_buffer_bytes")]
+    pub send_buffer_bytes: usize,
+
+    /// Maximum datagram size hint. Current transport accepts the field for config parity.
+    #[serde(default = "QuicConfig::default_max_datagram_size")]
+    pub max_datagram_size: serde_json::Value,
+}
+
+impl QuicConfig {
+    fn default_endpoints() -> serde_json::Value {
+        serde_json::Value::String("1".into())
+    }
+
+    fn default_buffer_bytes() -> usize {
+        8 * 1024 * 1024
+    }
+
+    fn default_max_datagram_size() -> serde_json::Value {
+        serde_json::Value::String("auto".into())
+    }
+
+    /// Returns the number of QUIC endpoints, clamped to 1–64.
+    pub fn endpoint_count(&self) -> usize {
+        match &self.endpoints {
+            serde_json::Value::String(s) if s.eq_ignore_ascii_case("cpu") => {
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1)
+            }
+            serde_json::Value::String(s) => s.parse::<usize>().unwrap_or(1),
+            serde_json::Value::Number(n) => n.as_u64().unwrap_or(1) as usize,
+            _ => 1,
+        }
+        .clamp(1, 64)
+    }
+}
+
+impl Default for QuicConfig {
+    fn default() -> Self {
+        Self {
+            reuse_port: false,
+            endpoints: Self::default_endpoints(),
+            recv_buffer_bytes: Self::default_buffer_bytes(),
+            send_buffer_bytes: Self::default_buffer_bytes(),
+            max_datagram_size: Self::default_max_datagram_size(),
+        }
+    }
+}
+
+/// QUIC DATAGRAM lane policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatagramConfig {
+    /// Enable QUIC DATAGRAM support for unreliable traffic.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Send UDP relay payloads over QUIC DATAGRAM instead of reliable streams.
+    #[serde(default = "default_true")]
+    pub udp_over_datagram: bool,
+
+    /// Reserved for TUN packet DATAGRAM mode.
+    #[serde(default = "default_true")]
+    pub tun_packets_over_datagram: bool,
+
+    /// H2+ lane policy (standard = unchanged behavior, h2-plus = priority lane + DNS retry knobs).
+    #[serde(default)]
+    pub policy: DatagramPolicy,
+
+    /// H2+ queue delay budget for delayed non-priority packets.
+    #[serde(default = "DatagramConfig::default_max_queue_delay_ms")]
+    pub max_queue_delay_ms: u64,
+
+    /// Enable DNS shadow retry in H2+ mode.
+    #[serde(default)]
+    pub fast_dns_retry: bool,
+
+    /// DNS shadow retry delay in H2+ mode.
+    #[serde(default = "DatagramConfig::default_fast_dns_retry_delay_ms")]
+    pub fast_dns_retry_delay_ms: u64,
+}
+
+/// H2+ lane policy for QUIC DATAGRAM traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[derive(Default)]
+pub enum DatagramPolicy {
+    /// Standard unchanged DATAGRAM behavior.
+    #[default]
+    Standard,
+    /// Priority-lane + DNS retry knobs enabled.
+    H2Plus,
+}
+
+impl DatagramConfig {
+    fn default_max_queue_delay_ms() -> u64 {
+        25
+    }
+
+    fn default_fast_dns_retry_delay_ms() -> u64 {
+        20
+    }
+}
+
+impl Default for DatagramConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            udp_over_datagram: true,
+            tun_packets_over_datagram: true,
+            policy: DatagramPolicy::Standard,
+            max_queue_delay_ms: Self::default_max_queue_delay_ms(),
+            fast_dns_retry: false,
+            fast_dns_retry_delay_ms: Self::default_fast_dns_retry_delay_ms(),
+        }
+    }
+}
+
+/// Forward error correction mode for QUIC DATAGRAM traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum FecMode {
+    /// FEC disabled.
+    #[default]
+    Off,
+    /// XOR 1-of-N recovery — low overhead, single-loss recovery.
+    Xor1OfN,
+    /// Reed-Solomon — recovers multiple losses per group.
+    ReedSolomon,
+    /// Raptor-like fountain code — high-loss environments.
+    RaptorLike,
+    /// Automatically selected based on measured loss.
+    Auto,
+}
+
+/// FEC policy for unreliable datagram classes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FecConfig {
+    /// FEC algorithm to apply.
+    #[serde(default)]
+    pub mode: FecMode,
+
+    /// Maximum FEC packet overhead as a percentage of original traffic.
+    #[serde(default = "FecConfig::default_max_overhead_percent")]
+    pub max_overhead_percent: u8,
+
+    /// Packet classes that FEC should protect (e.g. "dns", "interactive").
+    #[serde(default = "FecConfig::default_protect_classes")]
+    pub protect_classes: Vec<String>,
+
+    /// Skip FEC for bulk TCP relay flows to avoid double-overhead.
+    #[serde(default = "default_true")]
+    pub avoid_bulk_tcp: bool,
+
+    /// Disable FEC for sequential DNS queries where retransmit is cheaper.
+    #[serde(default = "default_true")]
+    pub disable_for_sequential_dns: bool,
+
+    /// Minimum concurrent flows required before block-FEC is enabled.
+    #[serde(default = "FecConfig::default_min_concurrency_for_block_fec")]
+    pub min_concurrency_for_block_fec: usize,
+
+    /// Maximum packets per FEC generation block.
+    #[serde(default = "FecConfig::default_max_generation_packets")]
+    pub max_generation_packets: u8,
+
+    /// Maximum milliseconds to wait before closing a partial FEC generation.
+    #[serde(default = "FecConfig::default_max_generation_delay_ms")]
+    pub max_generation_delay_ms: u64,
+
+    /// Deadline in milliseconds for a FEC recovery attempt before giving up.
+    #[serde(default = "FecConfig::default_recovery_deadline_ms")]
+    pub recovery_deadline_ms: u64,
+
+    /// Sliding-window size in packets for duplicate suppression.
+    #[serde(default = "FecConfig::default_dedup_window_packets")]
+    pub dedup_window_packets: usize,
+}
+
+impl FecConfig {
+    fn default_max_overhead_percent() -> u8 {
+        20
+    }
+
+    fn default_protect_classes() -> Vec<String> {
+        vec!["dns".into(), "interactive".into(), "control".into()]
+    }
+
+    fn default_min_concurrency_for_block_fec() -> usize {
+        4
+    }
+
+    fn default_max_generation_packets() -> u8 {
+        4
+    }
+
+    fn default_max_generation_delay_ms() -> u64 {
+        20
+    }
+
+    fn default_recovery_deadline_ms() -> u64 {
+        100
+    }
+
+    fn default_dedup_window_packets() -> usize {
+        1024
+    }
+
+    /// Returns the resolved [`FecMode`], mapping [`FecMode::Auto`] to [`FecMode::Xor1OfN`].
+    pub fn effective_mode(&self) -> FecMode {
+        match self.mode {
+            FecMode::Auto => FecMode::Xor1OfN,
+            mode => mode,
+        }
+    }
+
+    /// Selects the FEC mode appropriate for the measured loss rate and packet class.
+    pub fn mode_for_loss(&self, loss_percent: f64, packet_class: &str, bulk_tcp: bool) -> FecMode {
+        if bulk_tcp && self.avoid_bulk_tcp {
+            return FecMode::Off;
+        }
+        if !self
+            .protect_classes
+            .iter()
+            .any(|class| class.eq_ignore_ascii_case(packet_class))
+        {
+            return FecMode::Off;
+        }
+        if self.mode != FecMode::Auto {
+            return self.effective_mode();
+        }
+        if loss_percent < 1.0 {
+            FecMode::Off
+        } else if loss_percent < 5.0 {
+            FecMode::Xor1OfN
+        } else if loss_percent < 10.0 {
+            FecMode::ReedSolomon
+        } else {
+            FecMode::RaptorLike
+        }
+    }
+}
+
+impl Default for FecConfig {
+    fn default() -> Self {
+        Self {
+            mode: FecMode::Off,
+            max_overhead_percent: Self::default_max_overhead_percent(),
+            protect_classes: Self::default_protect_classes(),
+            avoid_bulk_tcp: true,
+            disable_for_sequential_dns: true,
+            min_concurrency_for_block_fec: Self::default_min_concurrency_for_block_fec(),
+            max_generation_packets: Self::default_max_generation_packets(),
+            max_generation_delay_ms: Self::default_max_generation_delay_ms(),
+            recovery_deadline_ms: Self::default_recovery_deadline_ms(),
+            dedup_window_packets: Self::default_dedup_window_packets(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// Top-level TUN interception settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TunConfig {
@@ -196,6 +511,155 @@ pub struct TunConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub wintun_file: Option<String>,
+    /// Packet batching controls for TUN writeback.
+    #[serde(default, rename = "batch")]
+    pub batch: TunBatchConfig,
+    /// TUN session/NAT table limits and timeouts.
+    #[serde(default, rename = "sessions")]
+    pub sessions: TunSessionConfig,
+    /// Linux-only packet backend experiments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux: Option<TunLinuxConfig>,
+}
+
+/// Linux-only TUN/runtime packet backend selection.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TunLinuxConfig {
+    /// Packet backend used for Linux transparent-path experiments.
+    #[serde(default)]
+    pub backend: TunLinuxBackend,
+    /// AF_XDP socket configuration. Ignored unless `backend = "afxdp"`.
+    #[serde(default, rename = "afXdp", alias = "af_xdp")]
+    pub af_xdp: TunAfXdpConfig,
+}
+
+/// Linux packet backend selection for transparent path experiments.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TunLinuxBackend {
+    /// Default TUN device runtime.
+    #[default]
+    Tun,
+    /// Experimental AF_XDP socket backend.
+    Afxdp,
+}
+
+/// AF_XDP socket bring-up options for Linux benchmark and backend experiments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunAfXdpConfig {
+    /// Physical interface name to bind, e.g. `eth0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface: Option<String>,
+    /// NIC RX/TX queue id to bind.
+    #[serde(default)]
+    pub queue_id: u32,
+    /// Ring size for RX/TX/fill/completion rings. Must be a power of two.
+    #[serde(default = "default_tun_af_xdp_ring_entries")]
+    pub ring_entries: u32,
+    /// Number of UMEM frames to map. Must be a power of two.
+    #[serde(default = "default_tun_af_xdp_frame_count")]
+    pub frame_count: u32,
+    /// UMEM frame size in bytes.
+    #[serde(default = "default_tun_af_xdp_frame_size")]
+    pub frame_size: u32,
+    /// Force AF_XDP copy mode for broad driver compatibility.
+    #[serde(default = "default_true")]
+    pub force_copy: bool,
+    /// Force AF_XDP zerocopy mode. Incompatible with `forceCopy`.
+    #[serde(default)]
+    pub force_zerocopy: bool,
+}
+
+impl Default for TunAfXdpConfig {
+    fn default() -> Self {
+        Self {
+            interface: None,
+            queue_id: 0,
+            ring_entries: default_tun_af_xdp_ring_entries(),
+            frame_count: default_tun_af_xdp_frame_count(),
+            frame_size: default_tun_af_xdp_frame_size(),
+            force_copy: true,
+            force_zerocopy: false,
+        }
+    }
+}
+
+/// Packet batching controls for TUN writeback.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunBatchConfig {
+    /// Enable TUN writeback batching.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(
+        default = "default_tun_batch_max_packets",
+        rename = "maxPackets",
+        alias = "max_packets"
+    )]
+    /// Maximum number of packets to batch before flushing.
+    pub max_packets: usize,
+    #[serde(
+        default = "default_tun_batch_max_delay_us",
+        rename = "maxDelayUs",
+        alias = "max_delay_us"
+    )]
+    /// Maximum time in microseconds to hold a batch before flushing.
+    pub max_delay_us: u64,
+    #[serde(
+        default = "default_tun_batch_latency_flush_bytes",
+        rename = "latencyFlushBytes",
+        alias = "latency_flush_bytes"
+    )]
+    /// Flush the batch immediately when buffered bytes exceed this threshold.
+    pub latency_flush_bytes: usize,
+}
+
+impl Default for TunBatchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_packets: default_tun_batch_max_packets(),
+            max_delay_us: default_tun_batch_max_delay_us(),
+            latency_flush_bytes: default_tun_batch_latency_flush_bytes(),
+        }
+    }
+}
+
+/// TUN session and NAT table sizing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunSessionConfig {
+    #[serde(
+        default = "default_tun_udp_max_sessions",
+        rename = "udpMax",
+        alias = "udp_max"
+    )]
+    /// Maximum concurrent UDP NAT sessions.
+    pub udp_max: usize,
+    #[serde(
+        default = "default_tun_udp_idle_timeout_secs",
+        rename = "udpIdleTimeoutSec",
+        alias = "udp_idle_timeout_sec"
+    )]
+    /// Idle timeout in seconds before a UDP session is evicted.
+    pub udp_idle_timeout_sec: u64,
+    #[serde(
+        default = "default_tun_tcp_max_sessions",
+        rename = "tcpMax",
+        alias = "tcp_max"
+    )]
+    /// Maximum concurrent TCP proxy sessions.
+    pub tcp_max: usize,
+}
+
+impl Default for TunSessionConfig {
+    fn default() -> Self {
+        Self {
+            udp_max: default_tun_udp_max_sessions(),
+            udp_idle_timeout_sec: default_tun_udp_idle_timeout_secs(),
+            tcp_max: default_tun_tcp_max_sessions(),
+        }
+    }
 }
 
 fn default_tun_name() -> String {
@@ -224,6 +688,42 @@ fn default_tun_redirect_port() -> u16 {
 
 fn default_tun_dns_port() -> u16 {
     5300
+}
+
+fn default_tun_batch_max_packets() -> usize {
+    32
+}
+
+fn default_tun_batch_max_delay_us() -> u64 {
+    750
+}
+
+fn default_tun_batch_latency_flush_bytes() -> usize {
+    256
+}
+
+fn default_tun_af_xdp_ring_entries() -> u32 {
+    1024
+}
+
+fn default_tun_af_xdp_frame_count() -> u32 {
+    4096
+}
+
+fn default_tun_af_xdp_frame_size() -> u32 {
+    2048
+}
+
+fn default_tun_udp_max_sessions() -> usize {
+    4096
+}
+
+fn default_tun_udp_idle_timeout_secs() -> u64 {
+    60
+}
+
+fn default_tun_tcp_max_sessions() -> usize {
+    4096
 }
 
 #[cfg(test)]
@@ -263,11 +763,50 @@ mod tests {
     }
 
     #[test]
+    fn vision_policy_deserialises() {
+        let json = r#"{
+            "vision": {
+                "directCopy": "disabled",
+                "maxPacketsToFilter": 4,
+                "allowSpliceAfterDirect": false
+            },
+            "inbounds": [{
+                "tag": "socks",
+                "protocol": "socks",
+                "listen": "127.0.0.1",
+                "port": 1080
+            }],
+            "outbounds": [{
+                "tag": "direct",
+                "protocol": "freedom"
+            }]
+        }"#;
+
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        let vision = cfg.vision.unwrap();
+        assert_eq!(vision.direct_copy, VisionDirectCopyPolicy::Disabled);
+        assert_eq!(vision.max_packets_to_filter, 4);
+        assert!(!vision.allow_splice_after_direct);
+    }
+
+    #[test]
     fn tun_platform_fields_accept_camel_and_snake_case() {
         let camel: TunConfig = serde_json::from_str(
             r#"{
                 "outboundInterface": "en0",
-                "wintunFile": "C:\\Program Files\\Blackwire\\wintun.dll"
+                "wintunFile": "C:\\Program Files\\Blackwire\\wintun.dll",
+                "linux": {
+                    "backend": "afxdp",
+                    "afXdp": {
+                        "interface": "eth0",
+                        "queueId": 2,
+                        "ringEntries": 2048,
+                        "frameCount": 8192,
+                        "frameSize": 4096,
+                        "forceCopy": false,
+                        "forceZerocopy": true
+                    }
+                }
             }"#,
         )
         .unwrap();
@@ -276,16 +815,59 @@ mod tests {
             camel.wintun_file.as_deref(),
             Some(r#"C:\Program Files\Blackwire\wintun.dll"#)
         );
+        assert!(camel.batch.enabled);
+        assert_eq!(camel.batch.max_packets, 32);
+        assert_eq!(camel.batch.latency_flush_bytes, 256);
+        assert_eq!(camel.sessions.udp_max, 4096);
+        let linux = camel.linux.expect("linux config should deserialize");
+        assert_eq!(linux.backend, TunLinuxBackend::Afxdp);
+        assert_eq!(linux.af_xdp.interface.as_deref(), Some("eth0"));
+        assert_eq!(linux.af_xdp.queue_id, 2);
+        assert_eq!(linux.af_xdp.ring_entries, 2048);
+        assert_eq!(linux.af_xdp.frame_count, 8192);
+        assert_eq!(linux.af_xdp.frame_size, 4096);
+        assert!(!linux.af_xdp.force_copy);
+        assert!(linux.af_xdp.force_zerocopy);
 
         let snake: TunConfig = serde_json::from_str(
             r#"{
                 "outbound_interface": "Ethernet",
-                "wintun_file": ".\\wintun.dll"
+                "wintun_file": ".\\wintun.dll",
+                "batch": {
+                    "enabled": false,
+                    "max_packets": 16,
+                    "max_delay_us": 500,
+                    "latency_flush_bytes": 128
+                },
+                "sessions": {
+                    "udp_max": 128,
+                    "udp_idle_timeout_sec": 30,
+                    "tcp_max": 256
+                },
+                "linux": {
+                    "backend": "tun",
+                    "af_xdp": {
+                        "interface": "ens3"
+                    }
+                }
             }"#,
         )
         .unwrap();
         assert_eq!(snake.outbound_interface.as_deref(), Some("Ethernet"));
         assert_eq!(snake.wintun_file.as_deref(), Some(r#".\wintun.dll"#));
+        assert!(!snake.batch.enabled);
+        assert_eq!(snake.batch.max_packets, 16);
+        assert_eq!(snake.batch.max_delay_us, 500);
+        assert_eq!(snake.batch.latency_flush_bytes, 128);
+        assert_eq!(snake.sessions.udp_max, 128);
+        assert_eq!(snake.sessions.udp_idle_timeout_sec, 30);
+        assert_eq!(snake.sessions.tcp_max, 256);
+        let linux = snake.linux.expect("linux config should deserialize");
+        assert_eq!(linux.backend, TunLinuxBackend::Tun);
+        assert_eq!(linux.af_xdp.interface.as_deref(), Some("ens3"));
+        assert_eq!(linux.af_xdp.queue_id, 0);
+        assert!(linux.af_xdp.force_copy);
+        assert!(!linux.af_xdp.force_zerocopy);
     }
 
     #[test]
@@ -357,6 +939,85 @@ mod tests {
         assert_eq!(cfg.sc_max_buffered_posts, 12);
         assert!(cfg.xmux.is_some());
         assert!(cfg.download_settings.is_some());
+    }
+
+    #[test]
+    fn quic_socket_tuning_deserialises() {
+        let json = r#"{
+            "quic": {
+                "reusePort": true,
+                "endpoints": "cpu",
+                "recvBufferBytes": 8388608,
+                "sendBufferBytes": 8388608,
+                "maxDatagramSize": "auto"
+            },
+            "inbounds": [{
+                "tag": "socks",
+                "protocol": "socks",
+                "listen": "127.0.0.1",
+                "port": 1080
+            }],
+            "outbounds": [{"tag": "d", "protocol": "freedom"}]
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        let quic = cfg.quic.expect("quic config");
+        assert!(quic.reuse_port);
+        assert!(quic.endpoint_count() >= 1);
+        assert_eq!(quic.recv_buffer_bytes, 8 * 1024 * 1024);
+        assert_eq!(quic.send_buffer_bytes, 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn datagram_and_fec_policy_deserialise() {
+        let json = r#"{
+            "datagram": {
+                "enabled": true,
+                "udpOverDatagram": true,
+                "tunPacketsOverDatagram": true
+            },
+            "fec": {
+                "mode": "auto",
+                "maxOverheadPercent": 20,
+                "protectClasses": ["dns", "interactive", "control"],
+                "avoidBulkTcp": true
+            },
+            "inbounds": [{
+                "tag": "socks",
+                "protocol": "socks",
+                "listen": "127.0.0.1",
+                "port": 1080
+            }],
+            "outbounds": [{"tag": "d", "protocol": "freedom"}]
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        let datagram = cfg.datagram.expect("datagram config");
+        assert!(datagram.enabled);
+        assert!(datagram.udp_over_datagram);
+        let fec = cfg.fec.expect("fec config");
+        assert_eq!(fec.mode, FecMode::Auto);
+        assert_eq!(fec.effective_mode(), FecMode::Xor1OfN);
+        assert_eq!(fec.max_overhead_percent, 20);
+        assert!(fec.avoid_bulk_tcp);
+    }
+
+    #[test]
+    fn fec_auto_policy_tracks_loss_and_packet_class() {
+        let fec = FecConfig {
+            mode: FecMode::Auto,
+            ..FecConfig::default()
+        };
+        assert_eq!(fec.mode_for_loss(0.5, "dns", false), FecMode::Off);
+        assert_eq!(fec.mode_for_loss(2.0, "dns", false), FecMode::Xor1OfN);
+        assert_eq!(
+            fec.mode_for_loss(5.0, "interactive", false),
+            FecMode::ReedSolomon
+        );
+        assert_eq!(
+            fec.mode_for_loss(10.0, "control", false),
+            FecMode::RaptorLike
+        );
+        assert_eq!(fec.mode_for_loss(5.0, "bulk", false), FecMode::Off);
+        assert_eq!(fec.mode_for_loss(5.0, "dns", true), FecMode::Off);
     }
 
     /// `protocol: shadowtls` on an inbound must be rejected with a clear error

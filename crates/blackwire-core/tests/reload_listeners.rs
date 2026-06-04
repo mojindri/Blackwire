@@ -1,7 +1,8 @@
 use std::net::IpAddr;
 
 use blackwire_config::schema::{
-    Config, InboundConfig, LimitsConfig, LogConfig, OutboundConfig, ProfileMode, Protocol,
+    Config, DatagramConfig, FecConfig, FecMode, InboundConfig, LimitsConfig, LogConfig,
+    OutboundConfig, ProfileMode, Protocol, QuicConfig,
 };
 use blackwire_core::{inbound_listener_changes, requires_instance_restart};
 
@@ -9,6 +10,12 @@ fn minimal_config(port: u16) -> Config {
     Config {
         profile: ProfileMode::default(),
         fast: None,
+        budget: None,
+        vision: None,
+        first_packet_boost: None,
+        quic: None,
+        datagram: None,
+        fec: None,
         log: LogConfig::default(),
         dns: None,
         routing: None,
@@ -72,6 +79,31 @@ fn requires_instance_restart_for_outbound_changes() {
         protocol: Protocol::Freedom,
         settings: serde_json::json!({}),
         stream_settings: None,
+    });
+
+    assert!(requires_instance_restart(&old, &new));
+}
+
+#[test]
+fn requires_instance_restart_for_quic_socket_tuning_changes() {
+    let old = minimal_config(1080);
+    let mut new = minimal_config(1080);
+    new.quic = Some(QuicConfig {
+        reuse_port: true,
+        ..QuicConfig::default()
+    });
+
+    assert!(requires_instance_restart(&old, &new));
+}
+
+#[test]
+fn requires_instance_restart_for_datagram_fec_changes() {
+    let old = minimal_config(1080);
+    let mut new = minimal_config(1080);
+    new.datagram = Some(DatagramConfig::default());
+    new.fec = Some(FecConfig {
+        mode: FecMode::Xor1OfN,
+        ..FecConfig::default()
     });
 
     assert!(requires_instance_restart(&old, &new));

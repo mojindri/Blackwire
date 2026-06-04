@@ -84,6 +84,39 @@ message OutboundHandlerConfig {
   string comment = 5;
 }
 
+message ListConnectionsRequest {}
+
+message ConnectionEntry {
+  uint64 id = 1;
+  string inbound = 2;
+  string outbound = 3;
+  string user = 4;
+  string protocol = 5;
+  string transport = 6;
+  double age_seconds = 7;
+  uint64 bytes_up = 8;
+  uint64 bytes_down = 9;
+  string relay_path = 10;
+  string close_reason = 11;
+}
+
+message ListConnectionsResponse {
+  repeated ConnectionEntry connections = 1;
+}
+
+message CloseConnectionsRequest {
+  oneof selector {
+    uint64 id = 1;
+    string user = 2;
+    string inbound = 3;
+    string outbound = 4;
+  }
+}
+
+message CloseConnectionsResponse {
+  uint64 matched = 1;
+}
+
 service HandlerService {
   rpc AddInbound(AddInboundRequest) returns (AddInboundResponse) {}
   rpc RemoveInbound(RemoveInboundRequest) returns (RemoveInboundResponse) {}
@@ -95,4 +128,6 @@ service HandlerService {
   rpc RemoveOutbound(RemoveOutboundRequest) returns (RemoveOutboundResponse) {}
   rpc AlterOutbound(AlterOutboundRequest) returns (AlterOutboundResponse) {}
   rpc ListOutbounds(ListOutboundsRequest) returns (ListOutboundsResponse) {}
+  rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse) {}
+  rpc CloseConnections(CloseConnectionsRequest) returns (CloseConnectionsResponse) {}
 }

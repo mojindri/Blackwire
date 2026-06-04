@@ -139,6 +139,45 @@ async fn http_connect_ipv4_echo_roundtrip() {
     echo_task.abort();
 }
 
+/// CONNECT request and first tunnel bytes may arrive in the same TCP packet.
+#[tokio::test]
+async fn http_connect_coalesced_first_payload_roundtrip() {
+    let (echo_port, echo_task) = spawn_echo_server().await;
+    let proxy_port = unused_local_port();
+
+    let _proxy = blackwire_core::Instance::from_config(http_connect_config(proxy_port))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", proxy_port))
+        .await
+        .unwrap();
+    let payload = b"coalesced first payload";
+    let req =
+        format!("CONNECT 127.0.0.1:{echo_port} HTTP/1.1\r\nHost: 127.0.0.1:{echo_port}\r\n\r\n");
+    let mut wire = req.into_bytes();
+    wire.extend_from_slice(payload);
+    stream.write_all(&wire).await.unwrap();
+
+    let mut response = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        stream.read_exact(&mut byte).await.unwrap();
+        response.push(byte[0]);
+        if response.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+    assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 200"));
+
+    let mut got = vec![0u8; payload.len()];
+    stream.read_exact(&mut got).await.unwrap();
+    assert_eq!(got, payload);
+
+    echo_task.abort();
+}
+
 /// CONNECT with a domain name resolves and forwards correctly.
 #[tokio::test]
 async fn http_connect_domain_echo_roundtrip() {
