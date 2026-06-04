@@ -163,14 +163,19 @@ const FEC_RECOVERY_DEADLINE: Duration = Duration::from_millis(100);
 const FEC_SEEN_LIMIT: usize = 4096;
 const FEC_GENERATION_DELAY: Duration = Duration::from_millis(20);
 
+/// Logical lane used when scheduling a Hysteria2 datagram for transmission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatagramLane {
+    /// Datagrams that must be delivered reliably (retransmitted on loss).
     Reliable,
+    /// Best-effort datagrams with no retransmission.
     Unreliable,
+    /// High-priority datagrams sent ahead of the normal unreliable queue.
     Priority,
 }
 
 impl DatagramLane {
+    /// Return the metrics/debug label string for this lane.
     pub fn class(self) -> &'static str {
         match self {
             Self::Reliable => "reliable",
@@ -180,18 +185,26 @@ impl DatagramLane {
     }
 }
 
+/// Selects which prioritisation algorithm is applied when choosing a datagram lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DatagramPriorityMode {
+    /// Use a single unreliable lane for all datagrams (no prioritisation).
     #[default]
     Standard,
+    /// Promote small/DNS datagrams to the priority lane (HTTP/2+ optimisation).
     H2Plus,
 }
 
+/// Runtime policy controlling how UDP datagrams are classified and queued.
 #[derive(Debug, Clone, Copy)]
 pub struct DatagramPolicy {
+    /// Priority mode used to select the lane for each outbound datagram.
     pub mode: DatagramPriorityMode,
+    /// Maximum time in milliseconds a datagram may wait in the queue before being dropped.
     pub max_queue_delay_ms: u64,
+    /// When true, small DNS responses are immediately retried on a faster path.
     pub fast_dns_retry: bool,
+    /// Delay in milliseconds before the fast DNS retry is attempted.
     pub fast_dns_retry_delay_ms: u64,
 }
 
@@ -207,6 +220,7 @@ impl Default for DatagramPolicy {
 }
 
 impl DatagramPolicy {
+    /// Choose the appropriate `DatagramLane` for a datagram to the given destination.
     pub fn lane_for(&self, dest: &Destination, payload_len: usize) -> DatagramLane {
         match self.mode {
             DatagramPriorityMode::Standard => DatagramLane::Unreliable,
@@ -220,11 +234,13 @@ impl DatagramPolicy {
         }
     }
 
+    /// Return true if a DNS datagram to this destination should be fast-retried.
     pub fn should_fast_retry_dns(&self, dest: &Destination) -> bool {
         self.mode == DatagramPriorityMode::H2Plus && self.fast_dns_retry && is_dns_like(dest)
     }
 }
 
+/// Classify a UDP packet into a `PacketClass` based on its destination and size.
 pub fn packet_class_for(dest: &Destination, payload_len: usize) -> PacketClass {
     if is_dns_like(dest) {
         PacketClass::Dns
@@ -235,6 +251,7 @@ pub fn packet_class_for(dest: &Destination, payload_len: usize) -> PacketClass {
     }
 }
 
+/// Build an `InnerFlowKey` from a UDP destination and Hysteria2 session identifier.
 pub fn flow_key_for(dest: &Destination, session_id: u32) -> InnerFlowKey {
     let (dst_ip, dst_port) = match dest {
         Destination::V4(ip, port) => (Some(IpAddr::V4(*ip)), *port),
@@ -327,6 +344,7 @@ fn decode_destination(data: &mut &[u8]) -> Option<Destination> {
     }
 }
 
+/// Forward-error-correction algorithm to apply to outbound UDP datagrams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FecMode {
     /// Disable forward-error-correction parity generation.
@@ -362,6 +380,7 @@ impl FecMode {
     }
 }
 
+/// Combined policy driving the FEC encoder: algorithm, overhead limits, and timing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FecPolicy {
     /// Selected parity algorithm.
