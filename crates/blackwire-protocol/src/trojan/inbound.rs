@@ -165,7 +165,7 @@ mod tests {
     /// Validate that a correct token is accepted and a wrong one is rejected.
     #[test]
     fn token_validation() {
-        let handler = TrojanInbound::new("test", &["correct-password".to_string()]);
+        let handler = TrojanInbound::new("test", &["correct-password".to_string()], None);
 
         let good = compute_token("correct-password");
         let mut good_arr = [0u8; TOKEN_LEN];
@@ -182,7 +182,7 @@ mod tests {
     /// Multiple passwords: any valid one is accepted.
     #[test]
     fn multi_password_validation() {
-        let handler = TrojanInbound::new("test", &["pass1".to_string(), "pass2".to_string()]);
+        let handler = TrojanInbound::new("test", &["pass1".to_string(), "pass2".to_string()], None);
 
         for pw in &["pass1", "pass2"] {
             let token_str = compute_token(pw);
