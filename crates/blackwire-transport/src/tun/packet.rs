@@ -382,16 +382,25 @@ pub fn build_tcp_packet(
 /// Build a TCP packet with custom TCP options appended before the payload.
 #[allow(clippy::too_many_arguments)]
 pub struct TcpPacketSpec<'a> {
+    /// Source socket address placed into the TCP/IP headers.
     pub src: SocketAddr,
+    /// Destination socket address placed into the TCP/IP headers.
     pub dst: SocketAddr,
+    /// TCP sequence number.
     pub seq: u32,
+    /// TCP acknowledgement number.
     pub ack: u32,
+    /// Raw TCP flags byte.
     pub flags: u8,
+    /// Advertised TCP receive window.
     pub window: u16,
+    /// Encoded TCP options, without automatic padding.
     pub options: &'a [u8],
+    /// TCP payload bytes to append after the header.
     pub payload: &'a [u8],
 }
 
+/// Build a TCP packet from a higher-level TCP packet specification.
 pub fn build_tcp_packet_with_options(spec: TcpPacketSpec<'_>) -> Option<Vec<u8>> {
     match (spec.src, spec.dst) {
         (SocketAddr::V4(src), SocketAddr::V4(dst)) => build_ipv4_tcp_packet(
