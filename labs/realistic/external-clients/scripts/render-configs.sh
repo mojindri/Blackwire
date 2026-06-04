@@ -99,6 +99,13 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
     -addext "subjectAltName=DNS:blackwire.local,DNS:blackwire-server" \
     >/dev/null 2>&1
 
+export EXTERNAL_TLS_CERT_SHA256="$(
+    openssl x509 -noout -fingerprint -sha256 -in "$OUT_DIR/certs/cert.pem" \
+        | sed 's/^.*=//' \
+        | tr -d ':' \
+        | tr 'A-F' 'a-f'
+)"
+
 cat > "$OUT_DIR/hiddify/vless-reality.txt" <<EOF
 vless://${VLESS_UUID}@${SERVER_HOST}:10443?encryption=none&security=reality&type=tcp&sni=${REALITY_SERVER_NAME}&fp=chrome&pbk=${REALITY_PUBLIC_KEY_XRAY}&sid=${REALITY_SHORT_ID}#blackwire-vless-reality
 EOF
