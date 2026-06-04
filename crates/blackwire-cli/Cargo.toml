@@ -8,6 +8,12 @@ authors.workspace = true
 
 [features]
 default = []
+# Optional global allocators. mimalloc is cross-platform (Linux + Windows);
+# jemalloc is non-Windows only. Both are off by default: local micro-benchmarks
+# showed no throughput gain over system malloc and a small RSS increase, so
+# enabling one should be a deliberate, load-tested choice for a given
+# deployment rather than a baked-in default.
+#   build with:  --features mimalloc   (or, non-Windows)  --features jemalloc
 jemalloc = ["dep:tikv-jemallocator"]
 mimalloc = ["dep:mimalloc"]
 
