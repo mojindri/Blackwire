@@ -10,6 +10,7 @@ authors.workspace = true
 blackwire-common          = { path = "../blackwire-common" }
 blackwire-config          = { path = "../blackwire-config" }
 blackwire-app             = { path = "../blackwire-app" }
+blackwire-connmgr         = { path = "../blackwire-connmgr" }
 blackwire-transport       = { path = "../blackwire-transport" }
 blackwire-protocol        = { path = "../blackwire-protocol" }
 blackwire-api             = { path = "../blackwire-api" }

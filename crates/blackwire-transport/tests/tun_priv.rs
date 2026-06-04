@@ -39,6 +39,8 @@ use tokio::time::timeout;
 use blackwire_transport::tun::tun_device_name;
 use blackwire_transport::tun::{create_tun, TunConfig, TunRuntime};
 use blackwire_transport::tun::{parse_ip_packet, UdpNatTable};
+#[cfg(target_os = "linux")]
+use blackwire_transport::tun::{AfXdpBackend, TunAfXdpConfig};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -144,6 +146,7 @@ async fn tun_device_creates_and_is_up() {
         redirect_port: 17890,
         dns_port: 15300,
         wintun_file: None,
+        ..TunConfig::default()
     };
     let _dev = create_tun(&cfg).expect("TUN device creation failed — is this running as root?");
 
@@ -182,6 +185,7 @@ async fn tun_runtime_starts_and_shuts_down() {
         redirect_port: 17891,
         dns_port: 15301,
         wintun_file: None,
+        ..TunConfig::default()
     };
     let device = create_tun(&cfg).expect("TUN device creation failed");
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -214,6 +218,34 @@ async fn tun_runtime_starts_and_shuts_down() {
         .expect("runtime task panicked");
 }
 
+/// Opens the experimental AF_XDP backend on a real Linux interface.
+///
+/// Set `BLACKWIRE_AF_XDP_IFACE` to a physical interface name before running.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[cfg_attr(
+    not(feature = "priv-test"),
+    ignore = "requires root + priv-test feature"
+)]
+async fn af_xdp_backend_opens_on_configured_interface() {
+    let Some(interface) = std::env::var("BLACKWIRE_AF_XDP_IFACE").ok() else {
+        eprintln!("BLACKWIRE_AF_XDP_IFACE not set; skipping AF_XDP smoke test");
+        return;
+    };
+
+    let backend = AfXdpBackend::open(&TunAfXdpConfig {
+        interface: Some(interface.clone()),
+        force_copy: true,
+        force_zerocopy: false,
+        ..TunAfXdpConfig::default()
+    })
+    .expect("AF_XDP backend open failed");
+
+    let caps = backend.capabilities();
+    assert_eq!(caps.interface, interface);
+    assert!(caps.queue_count >= 1);
+}
+
 /// Starts the macOS utun runtime long enough to create the device, resolve the
 /// OS-assigned utun name, install split routes/PF state, and clean up.
 #[cfg(target_os = "macos")]
@@ -236,6 +268,7 @@ async fn macos_tun_runtime_privileged_smoke() {
         redirect_port: 17893,
         dns_port: 15303,
         wintun_file: None,
+        ..TunConfig::default()
     };
     let device = create_tun(&cfg).expect("macOS utun creation failed");
     // macOS only assigns utun<N> names; the requested name may be ignored by the
@@ -267,6 +300,7 @@ async fn windows_tun_runtime_privileged_smoke() {
         redirect_port: 17894,
         dns_port: 15304,
         wintun_file: Some(wintun_file),
+        ..TunConfig::default()
     };
     let device = create_tun(&cfg).expect("Windows Wintun creation failed");
     run_windows_runtime_with_route_asserts(cfg, device).await;
@@ -451,6 +485,7 @@ async fn route_setup_and_cleanup_are_symmetric() {
         redirect_port: 17892,
         dns_port: 15302,
         wintun_file: None,
+        ..TunConfig::default()
     };
 
     // Create TUN device so the route can reference the interface.

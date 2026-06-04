@@ -236,6 +236,17 @@ impl blackwire_api::management::InboundManagement for ReloadState {
             ))
         }
     }
+
+    async fn list_connections(&self) -> Vec<blackwire_connmgr::ConnectionSnapshot> {
+        blackwire_connmgr::global_manager().list()
+    }
+
+    async fn close_connections(
+        &self,
+        selector: blackwire_connmgr::CloseSelector,
+    ) -> Result<usize, String> {
+        Ok(blackwire_connmgr::global_manager().close(selector).matched)
+    }
 }
 
 impl ReloadState {
@@ -348,7 +359,12 @@ pub fn requires_instance_restart(old: &Config, new: &Config) -> bool {
         return true;
     }
 
-    if old.metrics_addr != new.metrics_addr || old.api != new.api {
+    if old.metrics_addr != new.metrics_addr
+        || old.api != new.api
+        || old.quic != new.quic
+        || old.datagram != new.datagram
+        || old.fec != new.fec
+    {
         return true;
     }
 

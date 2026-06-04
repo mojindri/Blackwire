@@ -18,11 +18,12 @@ use crate::handler_proto::handler_service_server::HandlerService;
 use crate::handler_proto::{
     AddInboundRequest, AddInboundResponse, AddOutboundRequest, AddOutboundResponse,
     AddUserOperation, AlterInboundRequest, AlterInboundResponse, AlterOutboundRequest,
-    AlterOutboundResponse, GetInboundUserRequest, GetInboundUserResponse,
-    GetInboundUsersCountResponse, InboundHandlerConfig, ListInboundsRequest, ListInboundsResponse,
-    ListOutboundsRequest, ListOutboundsResponse, OutboundHandlerConfig, RemoveInboundRequest,
-    RemoveInboundResponse, RemoveOutboundRequest, RemoveOutboundResponse, RemoveUserOperation,
-    TypedMessage, User,
+    AlterOutboundResponse, CloseConnectionsRequest, CloseConnectionsResponse, ConnectionEntry,
+    GetInboundUserRequest, GetInboundUserResponse, GetInboundUsersCountResponse,
+    InboundHandlerConfig, ListConnectionsRequest, ListConnectionsResponse, ListInboundsRequest,
+    ListInboundsResponse, ListOutboundsRequest, ListOutboundsResponse, OutboundHandlerConfig,
+    RemoveInboundRequest, RemoveInboundResponse, RemoveOutboundRequest, RemoveOutboundResponse,
+    RemoveUserOperation, TypedMessage, User,
 };
 use crate::management::ManagementHandle;
 use crate::management::NativeEndpointConfig;
@@ -325,5 +326,65 @@ impl HandlerService for HandlerServiceImpl {
             .await
             .map_err(Status::failed_precondition)?;
         Ok(Response::new(AlterOutboundResponse {}))
+    }
+
+    async fn list_connections(
+        &self,
+        _request: Request<ListConnectionsRequest>,
+    ) -> Result<Response<ListConnectionsResponse>, Status> {
+        let connections = self
+            .management
+            .list_connections()
+            .await
+            .into_iter()
+            .map(|snapshot| ConnectionEntry {
+                id: snapshot.id,
+                inbound: snapshot.inbound,
+                outbound: snapshot.outbound,
+                user: snapshot.user.unwrap_or_default(),
+                protocol: snapshot.protocol.as_str().to_string(),
+                transport: snapshot.transport.as_str().to_string(),
+                age_seconds: snapshot.age_secs,
+                bytes_up: snapshot.bytes_up,
+                bytes_down: snapshot.bytes_down,
+                relay_path: snapshot.relay_path.as_str().to_string(),
+                close_reason: snapshot.close_reason.as_str().to_string(),
+            })
+            .collect();
+        Ok(Response::new(ListConnectionsResponse { connections }))
+    }
+
+    async fn close_connections(
+        &self,
+        request: Request<CloseConnectionsRequest>,
+    ) -> Result<Response<CloseConnectionsResponse>, Status> {
+        let req = request.into_inner();
+        let selector = match req.selector {
+            Some(crate::handler_proto::close_connections_request::Selector::Id(id)) => {
+                blackwire_connmgr::CloseSelector::Id(id)
+            }
+            Some(crate::handler_proto::close_connections_request::Selector::User(user)) => {
+                blackwire_connmgr::CloseSelector::User(user)
+            }
+            Some(crate::handler_proto::close_connections_request::Selector::Inbound(inbound)) => {
+                blackwire_connmgr::CloseSelector::Inbound(inbound)
+            }
+            Some(crate::handler_proto::close_connections_request::Selector::Outbound(outbound)) => {
+                blackwire_connmgr::CloseSelector::Outbound(outbound)
+            }
+            None => {
+                return Err(Status::invalid_argument(
+                    "CloseConnections requires one selector",
+                ));
+            }
+        };
+        let matched = self
+            .management
+            .close_connections(selector)
+            .await
+            .map_err(Status::failed_precondition)?;
+        Ok(Response::new(CloseConnectionsResponse {
+            matched: matched as u64,
+        }))
     }
 }

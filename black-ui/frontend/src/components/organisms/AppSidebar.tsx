@@ -6,7 +6,7 @@ const items: Array<{ key: PageKey; label: string; icon: typeof Gauge }> = [
   { key: "users", label: "Users", icon: Users },
   { key: "inbounds", label: "Inbounds", icon: Waypoints },
   { key: "outbounds", label: "Outbounds", icon: Route },
-  { key: "sections", label: "Config Sections", icon: SlidersHorizontal },
+  { key: "sections", label: "Advanced Config", icon: SlidersHorizontal },
   { key: "config", label: "Config", icon: FileJson },
   { key: "service", label: "Service", icon: ServerCog },
   { key: "settings", label: "Settings", icon: Settings }

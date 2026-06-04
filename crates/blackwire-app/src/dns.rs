@@ -51,6 +51,9 @@ pub use cache::DnsCache;
 pub use fakeip::FakeIpPool;
 pub use resolver::DnsResolver;
 
+const DNS_POSITIVE_TTL_SECS: u64 = 300;
+const DNS_NEGATIVE_TTL_SECS: u64 = 5;
+
 /// Configuration for the `DnsModule`.
 #[derive(Debug, Clone)]
 pub struct DnsModuleConfig {
@@ -118,10 +121,23 @@ impl DnsModule {
         if let Some(cached) = self.cache.get(domain) {
             return Ok(cached);
         }
+        if self.cache.is_negative_cached(domain) {
+            return Err(ProxyError::DnsResolutionFailed(format!(
+                "{domain} (negative cache)"
+            )));
+        }
 
-        let ips = self.resolver.resolve(domain).await?;
-        self.cache.insert(domain, ips.clone(), 300); // 5-minute TTL
-        Ok(ips)
+        match self.resolver.resolve(domain).await {
+            Ok(ips) => {
+                self.cache
+                    .insert(domain, ips.clone(), DNS_POSITIVE_TTL_SECS);
+                Ok(ips)
+            }
+            Err(e) => {
+                self.cache.insert_negative(domain, DNS_NEGATIVE_TTL_SECS);
+                Err(e)
+            }
+        }
     }
 
     /// Assign or retrieve the FakeIP for a domain.

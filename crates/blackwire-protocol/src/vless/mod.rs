@@ -45,5 +45,8 @@ pub mod udp;
 pub mod vision;
 
 pub use inbound::VlessInbound;
-pub use outbound::{connect_vless_on_stream, VlessOutbound, VlessOutboundConfig};
+pub use outbound::{
+    connect_vless_on_stream, connect_vless_on_stream_with_early_payload, VlessOutbound,
+    VlessOutboundConfig,
+};
 pub use registry::{VlessUser, VlessUserRegistry};

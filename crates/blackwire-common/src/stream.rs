@@ -85,6 +85,107 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> AsyncReadWrite for T {
 /// reading/writing network data.
 pub type BoxedStream = Box<dyn AsyncReadWrite + Send + Unpin + 'static>;
 
+/// High-level stream capability used by relay decision metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayCapability {
+    /// Plain TCP socket — eligible for splice(2) on Linux.
+    RawTcp,
+    /// Generic wrapped byte stream (TLS, WebSocket, etc.).
+    WrappedByteStream,
+    /// WebSocket-framed byte stream.
+    WebSocketFrames,
+    /// HTTP/2 DATA frames carrying proxy payload.
+    Http2Data,
+    /// QUIC stream (reliable, ordered).
+    QuicStream,
+    /// QUIC DATAGRAM (unreliable, unordered).
+    QuicDatagram,
+    /// Raw packet mode (UDP-like encapsulation).
+    Packet,
+}
+
+/// Relay implementation selected for a stream pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayPath {
+    /// Standard tokio async copy.
+    Copy,
+    /// Async copy with growable ring buffer (v2 relay).
+    CopyV2,
+    /// Linux splice(2) zero-copy relay.
+    Splice,
+    /// Async copy with XTLS Vision unwrapping.
+    VisionCopy,
+    /// Ring-buffered async copy with Vision unwrapping.
+    VisionCopyV2,
+    /// splice(2) relay after Vision direct-copy handoff.
+    VisionSplice,
+}
+
+/// Relay profile used for metrics and future tuning decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayProfile {
+    /// Low-latency interactive flow (e.g. SSH, gaming).
+    Interactive,
+    /// Mixed latency/throughput (default for most proxy flows).
+    Balanced,
+    /// High-throughput bulk transfer (large file downloads).
+    Bulk,
+}
+
+/// Relay decision emitted by lowering-aware dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelayDecision {
+    /// The relay implementation to use.
+    pub path: RelayPath,
+    /// Throughput/latency profile for this connection.
+    pub profile: RelayProfile,
+    /// True if Linux splice(2) is eligible for this pair.
+    pub splice_eligible: bool,
+    /// True if MSG_ZEROCOPY is eligible for this pair.
+    pub zero_copy_eligible: bool,
+}
+
+/// Whether a wrapped stream can be lowered into a cheaper transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LowerState {
+    /// This stream can never be lowered.
+    Never,
+    /// Lowering is not yet possible — handshake still in progress.
+    NotYet,
+    /// Stream is ready to lower after the next handshake boundary.
+    AfterHandshake,
+    /// Stream can be lowered immediately.
+    Now,
+}
+
+/// Result of lowering a boxed stream.
+#[cfg(target_os = "linux")]
+pub enum LoweredStream {
+    /// Stream was fully lowered to a raw TCP socket.
+    RawTcp(TcpStream),
+    /// Stream lowered to TCP but has unread bytes that must be drained first.
+    TcpWithPrefix {
+        /// The underlying raw TCP socket.
+        stream: TcpStream,
+        /// Buffered bytes that precede the raw TCP data.
+        prefix: Vec<u8>,
+    },
+    /// Stream could not be lowered; returned as the original boxed stream.
+    Wrapped(BoxedStream),
+}
+
+/// Common lowering hook for stream wrappers that can exit expensive processing.
+pub trait LowerableStream {
+    /// Returns the current lowering readiness of this stream.
+    fn lower_state(&self) -> LowerState;
+
+    /// Attempt to lower this stream into a cheaper representation.
+    ///
+    /// Returns `Ok(LoweredStream)` on success, or `Err(self)` if lowering is not yet possible.
+    #[cfg(target_os = "linux")]
+    fn try_lower(self: Box<Self>) -> Result<LoweredStream, Box<Self>>;
+}
+
 const VISION_INITIAL: i32 = -1;
 const VISION_COMMAND_PADDING_CONTINUE: i32 = 0;
 const VISION_COMMAND_PADDING_END: i32 = 1;
@@ -98,6 +199,8 @@ struct VisionUnpaddingState {
     remaining_content: i32,
     remaining_padding: i32,
     current_command: i32,
+    pending_initial: Vec<u8>,
+    finished: bool,
 }
 
 impl VisionUnpaddingState {
@@ -112,6 +215,11 @@ impl VisionUnpaddingState {
 
     /// Feed bytes into `out`; returns `true` when the stream should switch to direct copy.
     fn feed(&mut self, uuid: &[u8; 16], input: &[u8], out: &mut Vec<u8>) -> bool {
+        if self.finished {
+            out.extend_from_slice(input);
+            return false;
+        }
+
         let mut switch_to_direct = false;
         let mut pos = 0usize;
         while pos < input.len() {
@@ -119,11 +227,31 @@ impl VisionUnpaddingState {
                 && self.remaining_content == VISION_INITIAL
                 && self.remaining_padding == VISION_INITIAL
             {
-                if input.len().saturating_sub(pos) >= 21 && input[pos..pos + 16] == uuid[..] {
-                    pos += 16;
-                    self.remaining_command = 5;
+                if self.pending_initial.is_empty() && input.len().saturating_sub(pos) >= 21 {
+                    if input[pos..pos + 16] == uuid[..] {
+                        pos += 16;
+                        self.remaining_command = 5;
+                    } else {
+                        self.finished = true;
+                        out.extend_from_slice(&input[pos..]);
+                        return switch_to_direct;
+                    }
                 } else {
-                    out.extend_from_slice(&input[pos..]);
+                    self.pending_initial.extend_from_slice(&input[pos..]);
+                    if self.pending_initial.len() < 21 {
+                        return switch_to_direct;
+                    }
+
+                    if self.pending_initial[..16] == uuid[..] {
+                        self.remaining_command = 5;
+                        let pending = std::mem::take(&mut self.pending_initial);
+                        switch_to_direct = self.feed(uuid, &pending[16..], out);
+                        return switch_to_direct;
+                    }
+
+                    self.finished = true;
+                    out.extend_from_slice(&self.pending_initial);
+                    self.pending_initial.clear();
                     return switch_to_direct;
                 }
             }
@@ -159,6 +287,7 @@ impl VisionUnpaddingState {
                     self.remaining_command = 5;
                 } else {
                     switch_to_direct = self.current_command == VISION_COMMAND_PADDING_DIRECT;
+                    self.finished = true;
                     self.remaining_command = VISION_INITIAL;
                     self.remaining_content = VISION_INITIAL;
                     self.remaining_padding = VISION_INITIAL;
@@ -189,6 +318,8 @@ pub struct VisionStream<S> {
     write_direct_copy: bool,
     write_buf: Vec<u8>,
     write_pos: usize,
+    write_pending_consumed: usize,
+    write_pending_direct: bool,
 }
 
 impl<S> VisionStream<S> {
@@ -205,7 +336,22 @@ impl<S> VisionStream<S> {
             write_direct_copy: false,
             write_buf: Vec::new(),
             write_pos: 0,
+            write_pending_consumed: 0,
+            write_pending_direct: false,
         }
+    }
+
+    /// Wrap a server-side inbound Vision stream.
+    ///
+    /// Xray clients accept raw downlink bytes when no Vision UUID padding frame
+    /// is present, while uplink still needs Vision unpadding. This keeps the
+    /// server path compatible with Xray and lets direct copy become ready after
+    /// the client switches its uplink to direct mode.
+    pub fn new_server_inbound(inner: S, uuid: [u8; 16]) -> Self {
+        let mut stream = Self::new(inner, uuid);
+        stream.write_uuid_once = false;
+        stream.write_direct_copy = true;
+        stream
     }
 
     /// Unwrap the underlying stream after Vision processing.
@@ -220,6 +366,17 @@ impl<S> VisionStream<S> {
             && self.read_buf.is_empty()
             && self.write_buf.is_empty()
     }
+
+    /// Current lowering state for XTLS Vision.
+    pub fn lower_state(&self) -> LowerState {
+        if self.is_direct_copy_ready() {
+            LowerState::Now
+        } else if self.read_direct_copy || self.write_direct_copy {
+            LowerState::AfterHandshake
+        } else {
+            LowerState::NotYet
+        }
+    }
 }
 
 impl VisionStream<BoxedStream> {
@@ -227,6 +384,26 @@ impl VisionStream<BoxedStream> {
     #[cfg(target_os = "linux")]
     pub fn inner_is_tcp_like(&self) -> bool {
         boxed_stream_is_tcp_like(&self.inner)
+    }
+}
+
+impl LowerableStream for VisionStream<BoxedStream> {
+    fn lower_state(&self) -> LowerState {
+        VisionStream::lower_state(self)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn try_lower(self: Box<Self>) -> Result<LoweredStream, Box<Self>> {
+        if !self.is_direct_copy_ready() {
+            return Err(self);
+        }
+
+        let inner = (*self).into_inner();
+        match try_into_tcp_stream_with_prefix(inner) {
+            Ok((stream, prefix)) if prefix.is_empty() => Ok(LoweredStream::RawTcp(stream)),
+            Ok((stream, prefix)) => Ok(LoweredStream::TcpWithPrefix { stream, prefix }),
+            Err(inner) => Ok(LoweredStream::Wrapped(inner)),
+        }
     }
 }
 
@@ -302,6 +479,10 @@ impl<S: AsyncWrite + Unpin> VisionStream<S> {
         }
         self.write_buf.clear();
         self.write_pos = 0;
+        if self.write_pending_direct {
+            self.write_direct_copy = true;
+            self.write_pending_direct = false;
+        }
         Poll::Ready(Ok(()))
     }
 }
@@ -314,7 +495,13 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for VisionStream<S> {
     ) -> Poll<io::Result<usize>> {
         if !self.write_buf.is_empty() {
             match self.as_mut().poll_drain_write_buf(cx) {
-                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Ok(())) => {
+                    if self.write_pending_consumed > 0 {
+                        let consumed = self.write_pending_consumed;
+                        self.write_pending_consumed = 0;
+                        return Poll::Ready(Ok(consumed));
+                    }
+                }
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Pending => return Poll::Pending,
             }
@@ -338,12 +525,12 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for VisionStream<S> {
         };
         self.write_buf = vision_pad_chunk(&self.uuid, buf, command, include_uuid);
         self.write_pos = 0;
+        self.write_pending_consumed = buf.len();
+        self.write_pending_direct = command == VISION_COMMAND_PADDING_DIRECT as u8;
 
         match self.as_mut().poll_drain_write_buf(cx) {
             Poll::Ready(Ok(())) => {
-                if command == VISION_COMMAND_PADDING_DIRECT as u8 {
-                    self.write_direct_copy = true;
-                }
+                self.write_pending_consumed = 0;
                 Poll::Ready(Ok(buf.len()))
             }
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
@@ -369,6 +556,11 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for VisionStream<S> {
 /// Wrap a boxed stream for Vision flow.
 pub fn wrap_vision_stream(stream: BoxedStream, uuid: [u8; 16]) -> BoxedStream {
     Box::new(VisionStream::new(stream, uuid))
+}
+
+/// Wrap a server-side inbound boxed stream for Vision flow.
+pub fn wrap_vision_inbound_stream(stream: BoxedStream, uuid: [u8; 16]) -> BoxedStream {
+    Box::new(VisionStream::new_server_inbound(stream, uuid))
 }
 
 fn vision_pad_chunk(uuid: &[u8; 16], content: &[u8], command: u8, include_uuid: bool) -> Vec<u8> {
@@ -793,6 +985,49 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncWrite for ReunionStream<R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    struct PartialPendingWriter {
+        calls: usize,
+        written: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl AsyncRead for PartialPendingWriter {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for PartialPendingWriter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.calls += 1;
+            if self.calls == 1 {
+                self.written.lock().unwrap().push(buf[0]);
+                Poll::Ready(Ok(1))
+            } else if self.calls == 2 {
+                Poll::Pending
+            } else {
+                self.written.lock().unwrap().extend_from_slice(buf);
+                Poll::Ready(Ok(buf.len()))
+            }
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     // Checks that PrependedStream returns the prefix bytes first, then the
     // bytes from the inner stream.
@@ -830,8 +1065,8 @@ mod tests {
         let mut st = VisionUnpaddingState::new();
         let uuid = [0u8; 16];
         let mut out = Vec::new();
-        let direct = st.feed(&uuid, b"hello world", &mut out);
-        assert_eq!(out, b"hello world");
+        let direct = st.feed(&uuid, b"hello world, this is raw", &mut out);
+        assert_eq!(out, b"hello world, this is raw");
         assert!(!direct);
     }
 
@@ -856,6 +1091,89 @@ mod tests {
         let direct = st.feed(&uuid, &frame, &mut out);
         assert_eq!(out, b"abctail");
         assert!(direct);
+    }
+
+    #[test]
+    fn vision_buffers_fragmented_initial_frame() {
+        let uuid = [4u8; 16];
+        let mut frame = uuid.to_vec();
+        frame.extend_from_slice(&[
+            VISION_COMMAND_PADDING_END as u8,
+            0,
+            3,
+            0,
+            0,
+            b'a',
+            b'b',
+            b'c',
+        ]);
+
+        let mut st = VisionUnpaddingState::new();
+        let mut out = Vec::new();
+        let direct = st.feed(&uuid, &frame[..10], &mut out);
+        assert!(out.is_empty());
+        assert!(!direct);
+
+        let direct = st.feed(&uuid, &frame[10..], &mut out);
+        assert_eq!(out, b"abc");
+        assert!(!direct);
+    }
+
+    #[test]
+    fn vision_end_command_leaves_following_bytes_raw() {
+        let uuid = [5u8; 16];
+        let mut frame = uuid.to_vec();
+        frame.extend_from_slice(&[
+            VISION_COMMAND_PADDING_END as u8,
+            0,
+            3,
+            0,
+            0,
+            b'a',
+            b'b',
+            b'c',
+        ]);
+
+        let mut st = VisionUnpaddingState::new();
+        let mut out = Vec::new();
+        let direct = st.feed(&uuid, &frame, &mut out);
+        assert_eq!(out, b"abc");
+        assert!(!direct);
+
+        let direct = st.feed(&uuid, b"raw", &mut out);
+        assert_eq!(out, b"abcraw");
+        assert!(!direct);
+    }
+
+    #[test]
+    fn vision_pending_write_does_not_duplicate_frame() {
+        let uuid = [6u8; 16];
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let inner = PartialPendingWriter {
+            calls: 0,
+            written: Arc::clone(&written),
+        };
+        let mut stream = VisionStream::new(inner, uuid);
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
+
+        let first = Pin::new(&mut stream).poll_write(&mut cx, b"abc");
+        assert!(matches!(first, Poll::Pending));
+
+        let second = Pin::new(&mut stream).poll_write(&mut cx, b"abc");
+        assert!(matches!(second, Poll::Ready(Ok(3))));
+
+        let bytes = written.lock().unwrap();
+        assert_eq!(&bytes[..16], &uuid);
+        assert_eq!(&bytes[21..], b"abc");
+        assert_eq!(bytes.len(), 24);
+    }
+
+    #[test]
+    fn vision_lower_state_tracks_direct_copy_readiness() {
+        let uuid = [9u8; 16];
+        let stream = VisionStream::new(std::io::Cursor::new(Vec::<u8>::new()), uuid);
+        assert_eq!(stream.lower_state(), LowerState::NotYet);
     }
 
     #[test]

@@ -65,6 +65,23 @@ for path in sorted(out_dir.glob("server-*.json")):
     path.write_text(json.dumps(cfg, indent=2) + "\n")
 PY
 
+# Generate the TLS certificate first so EXTERNAL_TLS_CERT_SHA256 is available
+# when xray client templates are rendered (xray uses pinnedPeerCertSha256).
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -nodes -days 2 \
+    -keyout "$OUT_DIR/certs/key.pem" \
+    -out "$OUT_DIR/certs/cert.pem" \
+    -subj "/CN=blackwire.local" \
+    -addext "subjectAltName=DNS:blackwire.local,DNS:blackwire-server" \
+    >/dev/null 2>&1
+
+export EXTERNAL_TLS_CERT_SHA256="$(
+    openssl x509 -noout -fingerprint -sha256 -in "$OUT_DIR/certs/cert.pem" \
+        | sed 's/^.*=//' \
+        | tr -d ':' \
+        | tr 'A-F' 'a-f'
+)"
+
 for tpl in "$LAB_DIR/configs/xray"/*.json.tmpl; do
     envsubst < "$tpl" > "$OUT_DIR/xray/$(basename "$tpl" .tmpl)"
 done
@@ -90,14 +107,6 @@ done
         envsubst < "$tpl" > "$OUT_DIR/sing-box-negative/$(basename "$tpl" .tmpl)"
     done
 )
-
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-    -nodes -days 2 \
-    -keyout "$OUT_DIR/certs/key.pem" \
-    -out "$OUT_DIR/certs/cert.pem" \
-    -subj "/CN=blackwire.local" \
-    -addext "subjectAltName=DNS:blackwire.local,DNS:blackwire-server" \
-    >/dev/null 2>&1
 
 cat > "$OUT_DIR/hiddify/vless-reality.txt" <<EOF
 vless://${VLESS_UUID}@${SERVER_HOST}:10443?encryption=none&security=reality&type=tcp&sni=${REALITY_SERVER_NAME}&fp=chrome&pbk=${REALITY_PUBLIC_KEY_XRAY}&sid=${REALITY_SHORT_ID}#blackwire-vless-reality

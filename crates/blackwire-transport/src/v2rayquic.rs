@@ -14,7 +14,10 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use blackwire_common::{BoxedStream, ProxyError, ReunionStream};
 
-use crate::quic::{build_client_endpoint_with_alpn, build_server_endpoint_with_alpn};
+use crate::quic::{
+    build_client_endpoint_with_alpn_and_socket, build_server_endpoint_with_alpn,
+    build_server_endpoint_with_alpn_and_socket, QuicSocketConfig,
+};
 
 const V2RAY_QUIC_ALPN: &[u8] = b"h3";
 
@@ -74,8 +77,28 @@ pub async fn quic_connect(
     server_name: &str,
     skip_verify: bool,
 ) -> Result<BoxedStream, ProxyError> {
-    let endpoint = build_client_endpoint_with_alpn(skip_verify, &[V2RAY_QUIC_ALPN.to_vec()])
-        .map_err(|e| ProxyError::Transport(format!("QUIC client endpoint: {e}")))?;
+    quic_connect_with_socket_config(
+        server,
+        server_name,
+        skip_verify,
+        QuicSocketConfig::default(),
+    )
+    .await
+}
+
+/// Dial a QUIC server with explicit socket configuration and open one bidirectional stream.
+pub async fn quic_connect_with_socket_config(
+    server: SocketAddr,
+    server_name: &str,
+    skip_verify: bool,
+    socket_config: QuicSocketConfig,
+) -> Result<BoxedStream, ProxyError> {
+    let endpoint = build_client_endpoint_with_alpn_and_socket(
+        skip_verify,
+        &[V2RAY_QUIC_ALPN.to_vec()],
+        socket_config,
+    )
+    .map_err(|e| ProxyError::Transport(format!("QUIC client endpoint: {e}")))?;
     let connecting = endpoint
         .connect(server, server_name)
         .map_err(|e| ProxyError::Transport(format!("QUIC connect setup: {e}")))?;
@@ -101,6 +124,22 @@ pub fn quic_server_endpoint(
     key_pem: &str,
 ) -> anyhow::Result<Endpoint> {
     build_server_endpoint_with_alpn(addr, cert_pem, key_pem, &[V2RAY_QUIC_ALPN.to_vec()])
+}
+
+/// Build a server QUIC endpoint with explicit socket configuration for stream-based v2ray protocols.
+pub fn quic_server_endpoint_with_socket_config(
+    addr: SocketAddr,
+    cert_pem: &str,
+    key_pem: &str,
+    socket_config: QuicSocketConfig,
+) -> anyhow::Result<Endpoint> {
+    build_server_endpoint_with_alpn_and_socket(
+        addr,
+        cert_pem,
+        key_pem,
+        &[V2RAY_QUIC_ALPN.to_vec()],
+        socket_config,
+    )
 }
 
 /// Wrap an accepted QUIC stream pair for protocol handling.

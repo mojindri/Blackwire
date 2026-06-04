@@ -7,19 +7,51 @@
 //! This module provides helpers to build Quinn QUIC server and client endpoints
 //! with the TLS configuration required for Hysteria2.
 
+pub mod badnet;
 mod brutal_cc;
 
+pub use badnet::{
+    BadNetControllerFactory, CongestionConfig, CongestionDirection, CongestionMode,
+    LossFingerprint, PathSample,
+};
 pub use brutal_cc::{BrutalCC, BrutalCCFactory};
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
-use quinn::{ClientConfig, Endpoint, ServerConfig, TransportConfig};
+use quinn::{
+    default_runtime, ClientConfig, Endpoint, EndpointConfig, ServerConfig, TransportConfig,
+};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::RootCertStore;
+use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
+
+/// Tuning knobs applied when opening a QUIC UDP socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuicSocketConfig {
+    /// Whether to set `SO_REUSEPORT` so multiple endpoints can share one address.
+    pub reuse_port: bool,
+    /// Number of parallel Quinn endpoint shards (unused by the socket itself; passed through for metrics).
+    pub endpoint_count: usize,
+    /// Requested kernel UDP receive-buffer size in bytes.
+    pub recv_buffer_bytes: usize,
+    /// Requested kernel UDP send-buffer size in bytes.
+    pub send_buffer_bytes: usize,
+}
+
+impl Default for QuicSocketConfig {
+    fn default() -> Self {
+        Self {
+            reuse_port: false,
+            endpoint_count: 1,
+            recv_buffer_bytes: 8 * 1024 * 1024,
+            send_buffer_bytes: 8 * 1024 * 1024,
+        }
+    }
+}
 
 /// Install the rustls crypto provider used by this workspace.
 ///
@@ -53,6 +85,23 @@ pub fn build_server_endpoint_with_alpn(
     key_pem: &str,
     alpn_protocols: &[Vec<u8>],
 ) -> Result<Endpoint> {
+    build_server_endpoint_with_alpn_and_socket(
+        addr,
+        cert_pem,
+        key_pem,
+        alpn_protocols,
+        QuicSocketConfig::default(),
+    )
+}
+
+/// Build a QUIC server endpoint with explicit ALPN values and socket configuration.
+pub fn build_server_endpoint_with_alpn_and_socket(
+    addr: SocketAddr,
+    cert_pem: &str,
+    key_pem: &str,
+    alpn_protocols: &[Vec<u8>],
+    socket_config: QuicSocketConfig,
+) -> Result<Endpoint> {
     ensure_crypto_provider();
 
     let (certs, key) = parse_cert_and_key(cert_pem, key_pem)?;
@@ -78,7 +127,8 @@ pub fn build_server_endpoint_with_alpn(
     transport.max_idle_timeout(Some(idle_timeout));
     server_config.transport_config(Arc::new(transport));
 
-    Endpoint::server(server_config, addr).context("failed to open QUIC server endpoint")
+    endpoint_server_with_socket(server_config, addr, socket_config)
+        .context("failed to open QUIC server endpoint")
 }
 
 /// Build a QUIC server endpoint for Hysteria2 inbounds.
@@ -95,6 +145,41 @@ pub fn build_hysteria2_server_endpoint(
     key_pem: &str,
     up_mbps: u64,
     down_mbps: u64,
+) -> Result<Endpoint> {
+    build_hysteria2_server_endpoint_with_congestion(
+        addr, cert_pem, key_pem, up_mbps, down_mbps, None,
+    )
+}
+
+/// Build a Hysteria2 server endpoint with a specific congestion configuration.
+pub fn build_hysteria2_server_endpoint_with_congestion(
+    addr: SocketAddr,
+    cert_pem: &str,
+    key_pem: &str,
+    up_mbps: u64,
+    down_mbps: u64,
+    congestion: Option<CongestionConfig>,
+) -> Result<Endpoint> {
+    build_hysteria2_server_endpoint_with_congestion_and_socket(
+        addr,
+        cert_pem,
+        key_pem,
+        up_mbps,
+        down_mbps,
+        congestion,
+        QuicSocketConfig::default(),
+    )
+}
+
+/// Build a Hysteria2 server endpoint with congestion configuration and socket tuning.
+pub fn build_hysteria2_server_endpoint_with_congestion_and_socket(
+    addr: SocketAddr,
+    cert_pem: &str,
+    key_pem: &str,
+    up_mbps: u64,
+    down_mbps: u64,
+    congestion: Option<CongestionConfig>,
+    socket_config: QuicSocketConfig,
 ) -> Result<Endpoint> {
     ensure_crypto_provider();
 
@@ -119,37 +204,77 @@ pub fn build_hysteria2_server_endpoint(
     transport.max_idle_timeout(Some(idle_timeout));
     transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
     transport.datagram_send_buffer_size(2 * 1024 * 1024);
+    if let Some(cfg) = congestion.as_ref() {
+        match cfg.mode {
+            CongestionMode::StandardQuic => {}
+            CongestionMode::BrutalCompatible => {
+                transport.congestion_controller_factory(Arc::new(BrutalCCFactory::new(
+                    cfg.target_bps_for(CongestionDirection::ServerDownload),
+                )));
+            }
+            CongestionMode::NovaCc
+            | CongestionMode::BadNetLowLatency
+            | CongestionMode::BadNetThroughput
+            | CongestionMode::AutoProbe => {
+                transport.congestion_controller_factory(Arc::new(
+                    BadNetControllerFactory::new_for_direction(
+                        cfg.clone(),
+                        CongestionDirection::ServerDownload,
+                    ),
+                ));
+            }
+        }
+    }
 
     // Size QUIC flow-control windows to the configured bandwidth × 500 ms RTT
     // (BDP for a satellite/high-latency link). This prevents BrutalCC from being
     // stalled by the flow-control window before the congestion window fills.
-    let (stream_rx, conn_rx, conn_tx) = bdp_windows(up_mbps, down_mbps);
+    let (stream_rx, conn_rx, conn_tx) = congestion
+        .as_ref()
+        .map(|cfg| bdp_windows_with_profile(up_mbps, down_mbps, cfg.window_profile()))
+        .unwrap_or_else(|| bdp_windows(up_mbps, down_mbps));
     transport.stream_receive_window(stream_rx);
     transport.receive_window(conn_rx);
     transport.send_window(conn_tx);
 
     server_config.transport_config(Arc::new(transport));
 
-    Endpoint::server(server_config, addr).context("failed to open Hysteria2 QUIC endpoint")
+    endpoint_server_with_socket(server_config, addr, socket_config)
+        .context("failed to open Hysteria2 QUIC endpoint")
+}
+
+pub(crate) fn bdp_windows(rx_mbps: u64, tx_mbps: u64) -> (quinn::VarInt, quinn::VarInt, u64) {
+    bdp_windows_with_profile(
+        rx_mbps,
+        tx_mbps,
+        badnet::WindowProfile {
+            bdp_rtt: Duration::from_millis(500),
+            min_window_bytes: 8 * 1024 * 1024,
+            max_window_bytes: 128 * 1024 * 1024,
+            conn_window_multiplier: 3,
+        },
+    )
 }
 
 /// Compute (stream_receive_window, connection_receive_window, connection_send_window)
-/// from configured bandwidth limits.
-///
-/// Uses a 500 ms target RTT (satellite/intercontinental worst-case) to size the
-/// bandwidth-delay product. Windows are clamped to a [8 MB, 128 MB] range.
-pub(crate) fn bdp_windows(rx_mbps: u64, tx_mbps: u64) -> (quinn::VarInt, quinn::VarInt, u64) {
-    const RTT_MS: u64 = 500;
-    const MIN_BYTES: u64 = 8 * 1024 * 1024; // 8 MB floor
-    const MAX_BYTES: u64 = 128 * 1024 * 1024; // 128 MB ceiling
-
+/// from configured bandwidth limits and a congestion-mode window profile.
+pub(crate) fn bdp_windows_with_profile(
+    rx_mbps: u64,
+    tx_mbps: u64,
+    profile: badnet::WindowProfile,
+) -> (quinn::VarInt, quinn::VarInt, u64) {
     let rx_bps = rx_mbps.saturating_mul(1_000_000 / 8);
     let tx_bps = tx_mbps.saturating_mul(1_000_000 / 8);
+    let rtt_ms = profile.bdp_rtt.as_millis().try_into().unwrap_or(u64::MAX);
 
-    let stream_rx = (rx_bps.saturating_mul(RTT_MS) / 1000).clamp(MIN_BYTES, MAX_BYTES);
+    let stream_rx = (rx_bps.saturating_mul(rtt_ms) / 1000)
+        .clamp(profile.min_window_bytes, profile.max_window_bytes);
     // Connection receive window covers multiple concurrent streams.
-    let conn_rx = stream_rx.saturating_mul(3).min(MAX_BYTES);
-    let conn_tx = (tx_bps.saturating_mul(RTT_MS) / 1000).clamp(MIN_BYTES, MAX_BYTES);
+    let conn_rx = stream_rx
+        .saturating_mul(profile.conn_window_multiplier)
+        .min(profile.max_window_bytes);
+    let conn_tx = (tx_bps.saturating_mul(rtt_ms) / 1000)
+        .clamp(profile.min_window_bytes, profile.max_window_bytes);
 
     (
         quinn::VarInt::from_u64(stream_rx).unwrap_or(quinn::VarInt::MAX),
@@ -172,6 +297,19 @@ pub fn build_client_endpoint_with_alpn(
     skip_verify: bool,
     alpn_protocols: &[Vec<u8>],
 ) -> Result<Endpoint> {
+    build_client_endpoint_with_alpn_and_socket(
+        skip_verify,
+        alpn_protocols,
+        QuicSocketConfig::default(),
+    )
+}
+
+/// Build a QUIC client endpoint with explicit ALPN values and socket configuration.
+pub fn build_client_endpoint_with_alpn_and_socket(
+    skip_verify: bool,
+    alpn_protocols: &[Vec<u8>],
+    socket_config: QuicSocketConfig,
+) -> Result<Endpoint> {
     ensure_crypto_provider();
 
     let mut tls_config = if skip_verify {
@@ -190,7 +328,8 @@ pub fn build_client_endpoint_with_alpn(
     let bind_addr = "0.0.0.0:0"
         .parse()
         .context("invalid client bind address literal")?;
-    let mut endpoint = Endpoint::client(bind_addr).context("failed to open client socket")?;
+    let mut endpoint = endpoint_client_with_socket(bind_addr, socket_config)
+        .context("failed to open client socket")?;
     endpoint.set_default_client_config(client_config);
 
     Ok(endpoint)
@@ -218,6 +357,90 @@ pub fn dev_self_signed_for_names(names: &[String]) -> Result<(String, String)> {
 }
 
 // ── Private helpers ────────────────────────────────────────────────────────────
+
+fn endpoint_server_with_socket(
+    server_config: ServerConfig,
+    addr: SocketAddr,
+    socket_config: QuicSocketConfig,
+) -> Result<Endpoint> {
+    let socket = tuned_udp_socket(addr, socket_config)?;
+    let runtime = default_runtime().ok_or_else(|| anyhow::anyhow!("no async runtime found"))?;
+    Endpoint::new(
+        EndpointConfig::default(),
+        Some(server_config),
+        socket,
+        runtime,
+    )
+    .context("constructing Quinn endpoint from tuned UDP socket")
+}
+
+fn endpoint_client_with_socket(
+    addr: SocketAddr,
+    socket_config: QuicSocketConfig,
+) -> Result<Endpoint> {
+    let socket = tuned_udp_socket(addr, socket_config)?;
+    let runtime = default_runtime().ok_or_else(|| anyhow::anyhow!("no async runtime found"))?;
+    Endpoint::new(EndpointConfig::default(), None, socket, runtime)
+        .context("constructing Quinn client endpoint from tuned UDP socket")
+}
+
+fn tuned_udp_socket(addr: SocketAddr, cfg: QuicSocketConfig) -> Result<UdpSocket> {
+    let socket = Socket::new(
+        Domain::for_address(addr),
+        Type::DGRAM,
+        Some(SocketProtocol::UDP),
+    )
+    .context("creating UDP socket")?;
+    if addr.is_ipv6() {
+        let _ = socket.set_only_v6(false);
+    }
+    socket
+        .set_reuse_address(true)
+        .context("setting SO_REUSEADDR")?;
+    if cfg.reuse_port {
+        #[cfg(unix)]
+        socket
+            .set_reuse_port(true)
+            .context("setting SO_REUSEPORT")?;
+        #[cfg(not(unix))]
+        tracing::debug!("SO_REUSEPORT requested but unsupported on this target");
+    }
+    let _ = socket.set_recv_buffer_size(cfg.recv_buffer_bytes);
+    let _ = socket.set_send_buffer_size(cfg.send_buffer_bytes);
+    socket
+        .bind(&addr.into())
+        .with_context(|| format!("binding UDP socket {addr}"))?;
+
+    let actual_recv = socket.recv_buffer_size().unwrap_or(0);
+    let actual_send = socket.send_buffer_size().unwrap_or(0);
+    record_socket_metrics(&cfg, actual_recv, actual_send);
+
+    Ok(socket.into())
+}
+
+fn record_socket_metrics(cfg: &QuicSocketConfig, actual_recv: usize, actual_send: usize) {
+    metrics::counter!("blackwire_quic_endpoint_active_total").increment(1);
+    metrics::counter!("blackwire_quic_socket_drops_total").increment(0);
+    metrics::gauge!("blackwire_quic_recv_buffer_bytes").set(actual_recv as f64);
+    metrics::gauge!("blackwire_quic_send_buffer_bytes").set(actual_send as f64);
+    metrics::gauge!("blackwire_quic_endpoint_shards").set(cfg.endpoint_count as f64);
+}
+
+/// Record bytes transferred through a named QUIC endpoint for metrics.
+pub fn record_endpoint_io(endpoint: &'static str, direction: &'static str, bytes: usize) {
+    metrics::counter!(
+        "blackwire_quic_endpoint_packets_total",
+        "endpoint" => endpoint,
+        "direction" => direction
+    )
+    .increment(1);
+    metrics::counter!(
+        "blackwire_quic_endpoint_bytes_total",
+        "endpoint" => endpoint,
+        "direction" => direction
+    )
+    .increment(bytes as u64);
+}
 
 /// Parse PEM cert chain + PEM private key into rustls types.
 fn parse_cert_and_key(
@@ -338,5 +561,20 @@ mod tests {
         let ctrl = Arc::clone(&factory).build(std::time::Instant::now(), 1200);
         // Window must be at least MIN_WINDOW (32 KiB).
         assert!(ctrl.window() >= 32 * 1024);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tuned_udp_socket_allows_reuse_port_shards() {
+        let cfg = QuicSocketConfig {
+            reuse_port: true,
+            endpoint_count: 2,
+            recv_buffer_bytes: 1024 * 1024,
+            send_buffer_bytes: 1024 * 1024,
+        };
+        let first = tuned_udp_socket("127.0.0.1:0".parse().unwrap(), cfg).unwrap();
+        let addr = first.local_addr().unwrap();
+        let second = tuned_udp_socket(addr, cfg).unwrap();
+        assert_eq!(second.local_addr().unwrap(), addr);
     }
 }
