@@ -5,6 +5,7 @@
 //! `\r\n` + payload (max 8192 bytes per packet). See
 //! <https://github.com/XTLS/Xray-core/tree/main/proxy/trojan>.
 
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,12 +13,16 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
+use blackwire_app::dns::DnsModule;
 use blackwire_common::{Address, BoxedStream, ProxyError};
 
 use super::codec::{encode_udp_datagram, parse_udp_datagram};
 
 /// Relay Trojan UDP datagrams until the control stream closes.
-pub async fn relay_trojan_udp(stream: BoxedStream) -> Result<(), ProxyError> {
+pub async fn relay_trojan_udp(
+    stream: BoxedStream,
+    dns: Option<Arc<DnsModule>>,
+) -> Result<(), ProxyError> {
     let (mut reader, mut writer) = tokio::io::split(stream);
     let (reply_tx, mut reply_rx) = mpsc::channel::<Vec<u8>>(16);
     let udp = Arc::new(
@@ -62,7 +67,7 @@ pub async fn relay_trojan_udp(stream: BoxedStream) -> Result<(), ProxyError> {
                         if payload.is_empty() {
                             continue;
                         }
-                        let upstream = resolve_udp_dest(&dest).await?;
+                        let upstream = resolve_udp_dest(&dest, dns.as_deref()).await?;
                         if let Some(reply_payload) =
                             exchange_udp_datagram(&udp, upstream, payload).await?
                         {
@@ -123,11 +128,20 @@ async fn exchange_udp_datagram(
     }
 }
 
-async fn resolve_udp_dest(dest: &Address) -> Result<std::net::SocketAddr, ProxyError> {
+async fn resolve_udp_dest(
+    dest: &Address,
+    dns: Option<&DnsModule>,
+) -> Result<std::net::SocketAddr, ProxyError> {
     match dest {
-        Address::Ipv4(ip, port) => Ok(std::net::SocketAddr::new((*ip).into(), *port)),
-        Address::Ipv6(ip, port) => Ok(std::net::SocketAddr::new((*ip).into(), *port)),
+        Address::Ipv4(ip, port) => Ok(std::net::SocketAddr::new(IpAddr::V4(*ip), *port)),
+        Address::Ipv6(ip, port) => Ok(std::net::SocketAddr::new(IpAddr::V6(*ip), *port)),
         Address::Domain(name, port) => {
+            if let Some(dns) = dns {
+                let ip = dns.resolve(name).await?.into_iter().next().ok_or_else(|| {
+                    ProxyError::DnsResolutionFailed(format!("{name}: no records"))
+                })?;
+                return Ok(std::net::SocketAddr::new(ip, *port));
+            }
             let mut addrs = tokio::net::lookup_host((name.as_str(), *port))
                 .await
                 .map_err(|e| ProxyError::DnsResolutionFailed(format!("{name}: {e}")))?;
@@ -159,7 +173,7 @@ mod tests {
         let dest = Address::Ipv4(std::net::Ipv4Addr::LOCALHOST, port);
         let dg = encode_udp_datagram(&dest, b"ping").unwrap();
         let relay = tokio::spawn(async move {
-            relay_trojan_udp(Box::new(server) as BoxedStream)
+            relay_trojan_udp(Box::new(server) as BoxedStream, None)
                 .await
                 .unwrap();
         });

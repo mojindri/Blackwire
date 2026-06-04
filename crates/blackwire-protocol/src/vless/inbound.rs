@@ -31,6 +31,7 @@ use tracing::{debug, warn};
 
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
+use blackwire_app::dns::DnsModule;
 use blackwire_app::features::InboundHandler;
 use blackwire_common::{
     copy_bidirectional_with_idle, tcp_connect, with_handshake_timeout, BoxedStream, Network,
@@ -57,6 +58,9 @@ pub struct VlessInbound {
     fallback: Option<SocketAddr>,
     /// Optional limit for reading the VLESS request header (Xray `Handshake`).
     handshake_timeout: Option<Duration>,
+    /// DNS module for UDP relay domain resolution. When present, UDP DNS
+    /// queries route through the configured resolver instead of the OS resolver.
+    dns: Option<Arc<DnsModule>>,
 }
 
 impl VlessInbound {
@@ -66,17 +70,20 @@ impl VlessInbound {
     /// * `tag`      — the inbound's unique name from config.json
     /// * `registry` — the user UUID registry
     /// * `fallback` — optional fallback backend address for failed auth
+    /// * `dns`      — optional DNS module for UDP relay resolution
     pub fn new(
         tag: impl Into<Arc<str>>,
         registry: Arc<VlessUserRegistry>,
         fallback: Option<SocketAddr>,
         handshake_timeout: Option<Duration>,
+        dns: Option<Arc<DnsModule>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
             registry,
             fallback,
             handshake_timeout,
+            dns,
         })
     }
 }
@@ -164,7 +171,7 @@ impl InboundHandler for VlessInbound {
                         stream.flush().await?;
 
                         if req.command == Command::Udp {
-                            return relay_vless_udp(stream).await;
+                            return relay_vless_udp(stream, self.dns.clone()).await;
                         }
 
                         let mut relay_stream = stream;
