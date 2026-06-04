@@ -116,6 +116,35 @@ async fn socks5_connect(socks_port: u16, dest: &str, dest_port: u16) -> tokio::n
     stream
 }
 
+async fn socks5_connect_with_coalesced_payload(
+    socks_port: u16,
+    dest: &str,
+    dest_port: u16,
+    payload: &[u8],
+) -> tokio::net::TcpStream {
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", socks_port))
+        .await
+        .unwrap();
+
+    stream.write_all(&[5, 1, 0]).await.unwrap();
+    let mut resp = [0u8; 2];
+    stream.read_exact(&mut resp).await.unwrap();
+    assert_eq!(resp, [5, 0]);
+
+    let host = dest.as_bytes();
+    let mut req = vec![5, 1, 0, 3, host.len() as u8];
+    req.extend_from_slice(host);
+    req.extend_from_slice(&dest_port.to_be_bytes());
+    req.extend_from_slice(payload);
+    stream.write_all(&req).await.unwrap();
+
+    let mut reply = [0u8; 10];
+    stream.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply[1], 0, "SOCKS5 CONNECT failed");
+
+    stream
+}
+
 // ── End-to-end tests ──────────────────────────────────────────────────────────
 
 /// VMess outbound connects to VMess inbound and data echoes.
@@ -174,6 +203,33 @@ async fn vmess_large_payload_echo() {
     let mut stream = socks5_connect(socks_port, "127.0.0.1", echo_port).await;
     let payload = vec![0xABu8; 4096];
     stream.write_all(&payload).await.unwrap();
+
+    let mut got = vec![0u8; payload.len()];
+    stream.read_exact(&mut got).await.unwrap();
+    assert_eq!(got, payload);
+
+    echo_task.abort();
+}
+
+/// VMess preserves first payload bytes coalesced with the SOCKS5 CONNECT request.
+#[tokio::test]
+async fn vmess_coalesced_first_payload_echo() {
+    let vmess_port = unused_local_port();
+    let socks_port = unused_local_port();
+    let (echo_port, echo_task) = spawn_echo_server().await;
+
+    let _server = blackwire_core::Instance::from_config(vmess_server_config(vmess_port))
+        .await
+        .unwrap();
+    let _client =
+        blackwire_core::Instance::from_config(vmess_client_config(socks_port, vmess_port))
+            .await
+            .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let payload = b"vmess coalesced first payload";
+    let mut stream =
+        socks5_connect_with_coalesced_payload(socks_port, "127.0.0.1", echo_port, payload).await;
 
     let mut got = vec![0u8; payload.len()];
     stream.read_exact(&mut got).await.unwrap();

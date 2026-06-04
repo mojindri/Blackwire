@@ -16,6 +16,7 @@
 members = [
     "benches",
     "crates/blackwire-cli",
+    "crates/blackwire-connmgr",
     "crates/blackwire-core",
     "crates/blackwire-common",
     "crates/blackwire-config",
@@ -126,6 +127,8 @@ metrics             = "0.24"
 metrics-exporter-prometheus = "0.18"
 axum                = "0.8"
 tower-http          = { version = "0.6", features = ["cors", "fs", "trace"] }
+tikv-jemallocator   = "0.6"
+mimalloc            = "0.1"
 
 # ── Concurrency ────────────────────────────────────────────────────────────────
 dashmap     = "6"
@@ -142,6 +145,7 @@ socket2     = { version = "0.6", features = ["all"] }
 nix         = { version = "0.31", features = ["socket", "net", "sched", "user"] }
 libc        = "0.2"
 io-uring    = "0.7"
+xdp         = "0.7.3"
 windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
 
 # ── Security ───────────────────────────────────────────────────────────────────
@@ -153,6 +157,7 @@ clap        = { version = "4", features = ["derive", "env"] }
 
 # ── Misc utilities ─────────────────────────────────────────────────────────────
 rand        = { version = "0.10", features = ["std", "std_rng", "thread_rng", "sys_rng"] }
+reed-solomon-erasure = "6.0.0"
 rand_core   = "0.6"
 hex         = "0.4"
 base64      = "0.22"

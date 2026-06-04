@@ -12,12 +12,13 @@
 //! the pool. When it is done, it returns the buffer to the pool instead of
 //! freeing it. The next request reuses the same memory.
 //!
-//! # Three size classes
+//! # Size classes
 //!
-//! We maintain three sizes:
+//! We maintain bounded sizes matching the hot proxy paths:
 //!   - **Small** (4 KiB): for protocol headers and control data
 //!   - **Medium** (16 KiB): for typical payload chunks
 //!   - **Large** (64 KiB): for high-throughput relay (the maximum Shadowsocks-2022 chunk size)
+//!   - **Huge** (256 KiB): for QUIC/Hysteria bulk, TUN batches, and large frames
 //!
 //! If the pool is empty (all buffers are in use), a new buffer is allocated.
 //! If the pool is full when a buffer is returned, the buffer is simply dropped
@@ -25,6 +26,7 @@
 
 use bytes::BytesMut;
 use crossbeam_queue::ArrayQueue;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// The number of buffers to keep in each size class per CPU core.
@@ -32,10 +34,43 @@ use std::sync::Arc;
 const SMALL_PER_CPU: usize = 8;
 const MEDIUM_PER_CPU: usize = 4;
 const LARGE_PER_CPU: usize = 2;
+const HUGE_PER_CPU: usize = 1;
 
-const SMALL_SIZE: usize = 4 * 1024; // 4 KiB
-const MEDIUM_SIZE: usize = 16 * 1024; // 16 KiB
-const LARGE_SIZE: usize = 64 * 1024; // 64 KiB
+/// 4 KiB control buffer size class.
+pub const CONTROL_BUFFER_SIZE: usize = 4 * 1024;
+/// 16 KiB default relay buffer size class.
+pub const DEFAULT_RELAY_BUFFER_SIZE: usize = 16 * 1024;
+/// 64 KiB bulk relay buffer size class.
+pub const BULK_RELAY_BUFFER_SIZE: usize = 64 * 1024;
+/// 256 KiB QUIC/Hysteria/TUN bulk buffer size class.
+pub const QUIC_BULK_BUFFER_SIZE: usize = 256 * 1024;
+
+static POOL_BYTES_ACTIVE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PoolClass {
+    size: usize,
+    label: &'static str,
+}
+
+impl PoolClass {
+    const CONTROL: Self = Self {
+        size: CONTROL_BUFFER_SIZE,
+        label: "4k",
+    };
+    const RELAY: Self = Self {
+        size: DEFAULT_RELAY_BUFFER_SIZE,
+        label: "16k",
+    };
+    const BULK: Self = Self {
+        size: BULK_RELAY_BUFFER_SIZE,
+        label: "64k",
+    };
+    const HUGE: Self = Self {
+        size: QUIC_BULK_BUFFER_SIZE,
+        label: "256k",
+    };
+}
 
 /// A pool of reusable byte buffers, shared across tasks via `Arc`.
 ///
@@ -55,6 +90,8 @@ pub struct BufferPool {
     medium: ArrayQueue<BytesMut>,
     /// Pre-allocated 64 KiB buffers.
     large: ArrayQueue<BytesMut>,
+    /// Pre-allocated 256 KiB buffers.
+    huge: ArrayQueue<BytesMut>,
 }
 
 impl BufferPool {
@@ -65,6 +102,7 @@ impl BufferPool {
             small: ArrayQueue::new(cpus * SMALL_PER_CPU),
             medium: ArrayQueue::new(cpus * MEDIUM_PER_CPU),
             large: ArrayQueue::new(cpus * LARGE_PER_CPU),
+            huge: ArrayQueue::new(cpus * HUGE_PER_CPU),
         })
     }
 
@@ -75,11 +113,23 @@ impl BufferPool {
     ///
     /// The returned buffer is cleared (zero length, capacity preserved).
     pub fn acquire(&self, hint: usize) -> BytesMut {
-        let pool = self.pool_for(hint);
-        pool.pop().unwrap_or_else(|| {
-            // Pool empty — allocate a new buffer.
-            BytesMut::with_capacity(capacity_for(hint))
-        })
+        let class = class_for(hint);
+        metrics::counter!("blackwire_pool_acquire_total", "size" => class.label).increment(1);
+
+        let mut buf = if class.size > QUIC_BULK_BUFFER_SIZE {
+            metrics::counter!("blackwire_pool_miss_total", "size" => class.label).increment(1);
+            BytesMut::with_capacity(class.size)
+        } else {
+            self.pool_for_class(class).pop().unwrap_or_else(|| {
+                metrics::counter!("blackwire_pool_miss_total", "size" => class.label).increment(1);
+                BytesMut::with_capacity(class.size)
+            })
+        };
+        buf.clear();
+        let active = POOL_BYTES_ACTIVE.fetch_add(buf.capacity() as u64, Ordering::Relaxed)
+            + buf.capacity() as u64;
+        metrics::gauge!("blackwire_pool_bytes_active").set(active as f64);
+        buf
     }
 
     /// Return a buffer to the pool so it can be reused.
@@ -87,21 +137,40 @@ impl BufferPool {
     /// The buffer is cleared before being pooled. If the pool is full,
     /// the buffer is dropped (freed) silently.
     pub fn release(&self, mut buf: BytesMut) {
+        let cap = buf.capacity();
+        if cap == 0 {
+            return;
+        }
+        let class = class_for(cap);
+        metrics::counter!("blackwire_pool_release_total", "size" => class.label).increment(1);
+        let active = POOL_BYTES_ACTIVE
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(cap as u64))
+            })
+            .unwrap_or(0)
+            .saturating_sub(cap as u64);
+        metrics::gauge!("blackwire_pool_bytes_active").set(active as f64);
+
         buf.clear();
-        let pool = self.pool_for(buf.capacity());
+        if cap > QUIC_BULK_BUFFER_SIZE {
+            return;
+        }
+        let pool = self.pool_for_class(class);
         // `push` returns `Err(buf)` if the queue is full — we ignore the error
         // because dropping the buffer is the correct behaviour when the pool is full.
         let _ = pool.push(buf);
     }
 
     /// Select which pool to use based on the requested/actual size.
-    fn pool_for(&self, size: usize) -> &ArrayQueue<BytesMut> {
-        if size <= SMALL_SIZE {
+    fn pool_for_class(&self, class: PoolClass) -> &ArrayQueue<BytesMut> {
+        if class.size == CONTROL_BUFFER_SIZE {
             &self.small
-        } else if size <= MEDIUM_SIZE {
+        } else if class.size == DEFAULT_RELAY_BUFFER_SIZE {
             &self.medium
-        } else {
+        } else if class.size == BULK_RELAY_BUFFER_SIZE {
             &self.large
+        } else {
+            &self.huge
         }
     }
 }
@@ -113,18 +182,25 @@ impl Default for BufferPool {
             small: ArrayQueue::new(cpus * SMALL_PER_CPU),
             medium: ArrayQueue::new(cpus * MEDIUM_PER_CPU),
             large: ArrayQueue::new(cpus * LARGE_PER_CPU),
+            huge: ArrayQueue::new(cpus * HUGE_PER_CPU),
         }
     }
 }
 
-/// Returns the buffer capacity for the appropriate size class.
-fn capacity_for(hint: usize) -> usize {
-    if hint <= SMALL_SIZE {
-        SMALL_SIZE
-    } else if hint <= MEDIUM_SIZE {
-        MEDIUM_SIZE
+fn class_for(hint: usize) -> PoolClass {
+    if hint <= CONTROL_BUFFER_SIZE {
+        PoolClass::CONTROL
+    } else if hint <= DEFAULT_RELAY_BUFFER_SIZE {
+        PoolClass::RELAY
+    } else if hint <= BULK_RELAY_BUFFER_SIZE {
+        PoolClass::BULK
+    } else if hint <= QUIC_BULK_BUFFER_SIZE {
+        PoolClass::HUGE
     } else {
-        LARGE_SIZE
+        PoolClass {
+            size: hint,
+            label: "oversize",
+        }
     }
 }
 
@@ -147,15 +223,19 @@ mod tests {
 
         let small = pool.acquire(100);
         assert!(small.capacity() >= 100);
-        assert_eq!(small.capacity(), SMALL_SIZE); // small class
+        assert_eq!(small.capacity(), CONTROL_BUFFER_SIZE);
 
         let medium = pool.acquire(5000);
         assert!(medium.capacity() >= 5000);
-        assert_eq!(medium.capacity(), MEDIUM_SIZE); // medium class
+        assert_eq!(medium.capacity(), DEFAULT_RELAY_BUFFER_SIZE);
 
         let large = pool.acquire(20000);
         assert!(large.capacity() >= 20000);
-        assert_eq!(large.capacity(), LARGE_SIZE); // large class
+        assert_eq!(large.capacity(), BULK_RELAY_BUFFER_SIZE);
+
+        let huge = pool.acquire(128 * 1024);
+        assert!(huge.capacity() >= 128 * 1024);
+        assert_eq!(huge.capacity(), QUIC_BULK_BUFFER_SIZE);
     }
 
     // Checks that a buffer returned to the pool can be re-acquired without
@@ -184,13 +264,16 @@ mod tests {
             small: ArrayQueue::new(1),
             medium: ArrayQueue::new(1),
             large: ArrayQueue::new(1),
+            huge: ArrayQueue::new(1),
         };
 
         // Fill the small pool.
-        let _ = pool.small.push(BytesMut::with_capacity(SMALL_SIZE));
+        let _ = pool
+            .small
+            .push(BytesMut::with_capacity(CONTROL_BUFFER_SIZE));
 
         // Releasing another buffer into a full pool should not panic.
-        let extra = BytesMut::with_capacity(SMALL_SIZE);
+        let extra = BytesMut::with_capacity(CONTROL_BUFFER_SIZE);
         pool.release(extra); // silently dropped — this must not panic
     }
 
@@ -209,5 +292,20 @@ mod tests {
         // Re-acquire — it should be empty even though it held data before.
         let buf2 = pool.acquire(100);
         assert_eq!(buf2.len(), 0);
+    }
+
+    #[test]
+    fn release_reuses_huge_buffers() {
+        let pool = BufferPool::default();
+        let buf = pool.acquire(QUIC_BULK_BUFFER_SIZE);
+        assert_eq!(buf.capacity(), QUIC_BULK_BUFFER_SIZE);
+        pool.release(buf);
+        assert!(pool.huge.pop().is_some());
+    }
+
+    #[test]
+    fn class_for_oversized_uses_huge_class() {
+        assert_eq!(class_for(1024 * 1024).size, 1024 * 1024);
+        assert_eq!(class_for(1024 * 1024).label, "oversize");
     }
 }

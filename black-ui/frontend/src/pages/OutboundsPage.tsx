@@ -1,19 +1,11 @@
-import { useEffect, useState } from "react";
-import { Plus, Save, Trash2 } from "lucide-react";
-import type { CapabilityMap, Outbound, OutboundInput } from "../lib/types";
-import { Button } from "../components/atoms/Button";
-import { Input, Select, Textarea } from "../components/atoms/Input";
-import { Switch } from "../components/atoms/Switch";
+import { Plus } from "lucide-react";
+import { useMemo, useState } from "react";
 import { Badge } from "../components/atoms/Badge";
-import { Field } from "../components/molecules/Field";
-
-const defaultOutbound: OutboundInput = {
-  tag: "freedom",
-  protocol: "freedom",
-  enabled: true,
-  settings: "{}",
-  streamSettings: ""
-};
+import { Button } from "../components/atoms/Button";
+import { SearchBar } from "../components/molecules/SearchBar";
+import { OutboundDrawer } from "../components/organisms/OutboundDrawer";
+import { outboundSummary } from "../lib/outboundConfigurator";
+import type { CapabilityMap, Outbound, OutboundInput } from "../lib/types";
 
 export function OutboundsPage({
   outbounds,
@@ -30,88 +22,95 @@ export function OutboundsPage({
   onUpdate: (id: number, input: OutboundInput) => void;
   onDelete: (id: number) => void;
 }) {
+  const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<Outbound | null>(null);
-  const [form, setForm] = useState<OutboundInput>(defaultOutbound);
-  const protocols = capabilities?.protocols.filter((p) => ["freedom", "vless", "vmess", "trojan", "shadowsocks", "hysteria2"].includes(p.key)) ?? [
-    { key: "freedom", label: "Freedom", status: "supported", notes: "" },
-    { key: "vless", label: "VLESS", status: "supported", notes: "" },
-    { key: "trojan", label: "Trojan", status: "supported", notes: "" }
-  ];
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  useEffect(() => {
-    if (!editing) return;
-    setForm({
-      tag: editing.tag,
-      protocol: editing.protocol,
-      enabled: editing.enabled,
-      settings: editing.settings,
-      streamSettings: editing.streamSettings
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return outbounds;
+    return outbounds.filter((outbound) => {
+      const summary = outboundSummary(outbound);
+      return [outbound.tag, outbound.protocol, summary.network, summary.security, summary.detail]
+        .join(" ")
+        .toLowerCase()
+        .includes(needle);
     });
-  }, [editing]);
+  }, [outbounds, query]);
 
-  const submit = () => {
-    editing ? onUpdate(editing.id, form) : onCreate(form);
-    if (!editing) setForm(defaultOutbound);
+  const openEditor = (outbound: Outbound | null) => {
+    setEditing(outbound);
+    setDrawerOpen(true);
   };
 
   return (
     <div className="page">
       <div className="page-title">
         <h1>Outbounds</h1>
-        <p>Blackwire outbound definitions. Advanced protocol settings are stored as validated JSON.</p>
+        <p>Structured outbound definitions with protocol-aware destination, transport, and security controls.</p>
       </div>
-      <div className="two-column">
-        <section className="work-panel">
-          <div className="panel-toolbar">
-            <h2>Outbound list</h2>
-            <Button variant="secondary" icon={<Plus size={16} />} onClick={() => { setEditing(null); setForm(defaultOutbound); }}>
-              New
-            </Button>
-          </div>
-          <div className="stack-list">
-            {outbounds.map((outbound) => (
-              <button className="stack-row" key={outbound.id} onClick={() => setEditing(outbound)} type="button">
-                <span>
-                  <strong>{outbound.tag}</strong>
-                  <small>{outbound.protocol}</small>
-                </span>
-                <Badge tone={outbound.enabled ? "green" : "gray"}>{outbound.enabled ? "enabled" : "disabled"}</Badge>
-              </button>
-            ))}
-            {outbounds.length === 0 ? <div className="empty">Create the first outbound.</div> : null}
-          </div>
-        </section>
-        <section className="work-panel editor-panel">
-          <h2>{editing ? "Edit outbound" : "New outbound"}</h2>
-          <Field label="Tag">
-            <Input value={form.tag} onChange={(e) => setForm({ ...form, tag: e.target.value })} />
-          </Field>
-          <Field label="Protocol">
-            <Select value={form.protocol} onChange={(e) => setForm({ ...form, protocol: e.target.value })}>
-              {protocols.map((item) => (
-                <option key={item.key} value={item.key}>{item.label}</option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Settings JSON">
-            <Textarea rows={9} value={form.settings ?? ""} onChange={(e) => setForm({ ...form, settings: e.target.value })} placeholder='{"address":"example.com","port":443}' />
-          </Field>
-          <Field label="Stream settings JSON">
-            <Textarea rows={7} value={form.streamSettings ?? ""} onChange={(e) => setForm({ ...form, streamSettings: e.target.value })} placeholder='{"network":"tcp","security":"tls"}' />
-          </Field>
-          <Switch checked={form.enabled} onChange={(enabled) => setForm({ ...form, enabled })} label="Outbound enabled" />
-          <div className="button-row">
-            {editing ? (
-              <Button variant="danger" icon={<Trash2 size={16} />} onClick={() => onDelete(editing.id)} disabled={busy}>
-                Delete
-              </Button>
-            ) : null}
-            <Button variant="primary" icon={<Save size={16} />} onClick={submit} disabled={busy}>
-              Save Outbound
-            </Button>
-          </div>
-        </section>
-      </div>
+
+      <section className="work-panel">
+        <div className="panel-toolbar">
+          <SearchBar value={query} onChange={setQuery} />
+          <Button variant="primary" icon={<Plus size={16} />} onClick={() => openEditor(null)} disabled={busy}>
+            New Outbound
+          </Button>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Tag</th>
+                <th>Protocol</th>
+                <th>Transport</th>
+                <th>Security</th>
+                <th>Runtime Summary</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((outbound) => {
+                const summary = outboundSummary(outbound);
+                return (
+                  <tr key={outbound.id}>
+                    <td>
+                      <button className="link-cell" onClick={() => openEditor(outbound)} type="button">
+                        {outbound.tag}
+                      </button>
+                      <small>{summary.detail || outbound.protocol}</small>
+                    </td>
+                    <td>{outbound.protocol}</td>
+                    <td>{summary.network}</td>
+                    <td>
+                      <div className="table-chips">
+                        <Badge tone={summary.security === "none" ? "gray" : "cyan"}>{summary.security}</Badge>
+                      </div>
+                    </td>
+                    <td>{summary.detail || "custom"}</td>
+                    <td>
+                      <Badge tone={outbound.enabled ? "green" : "gray"}>{outbound.enabled ? "enabled" : "disabled"}</Badge>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {filtered.length === 0 ? <div className="empty">No outbounds match the current view.</div> : null}
+        </div>
+      </section>
+
+      {drawerOpen ? (
+        <OutboundDrawer
+          editing={editing}
+          capabilities={capabilities}
+          busy={busy}
+          onClose={() => setDrawerOpen(false)}
+          onCreate={onCreate}
+          onUpdate={onUpdate}
+          onDelete={onDelete}
+        />
+      ) : null}
     </div>
   );
 }

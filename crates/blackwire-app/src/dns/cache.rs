@@ -15,11 +15,27 @@ use std::time::{Duration, Instant};
 use lru::LruCache;
 
 /// A single cached DNS entry.
-struct CacheEntry {
-    /// The resolved IP addresses.
-    ips: Vec<IpAddr>,
-    /// When this entry expires.
-    expires: Instant,
+enum CacheEntry {
+    /// A successful DNS result.
+    Positive {
+        /// The resolved IP addresses.
+        ips: Vec<IpAddr>,
+        /// When this entry expires.
+        expires: Instant,
+    },
+    /// A short-lived failed DNS result.
+    Negative {
+        /// When this entry expires.
+        expires: Instant,
+    },
+}
+
+impl CacheEntry {
+    fn expires(&self) -> Instant {
+        match self {
+            CacheEntry::Positive { expires, .. } | CacheEntry::Negative { expires } => *expires,
+        }
+    }
 }
 
 /// A thread-safe DNS cache with per-entry TTL and LRU eviction.
@@ -48,10 +64,12 @@ impl DnsCache {
         // `LruCache::get` promotes the entry to MRU. We clone inside the map
         // closure so the borrow on `cache` ends before we might need `pop`.
         let result = cache.get(domain).map(|e| {
-            if e.expires >= Instant::now() {
-                Some(e.ips.clone())
-            } else {
-                None // expired
+            if e.expires() < Instant::now() {
+                return None;
+            }
+            match e {
+                CacheEntry::Positive { ips, .. } => Some(ips.clone()),
+                CacheEntry::Negative { .. } => None,
             }
         });
         match result {
@@ -65,6 +83,26 @@ impl DnsCache {
         }
     }
 
+    /// Returns `true` when a failed lookup is cached and still valid.
+    pub fn is_negative_cached(&self, domain: &str) -> bool {
+        let mut cache = self.inner.lock().unwrap();
+        let result = cache.get(domain).map(|e| {
+            if e.expires() < Instant::now() {
+                None
+            } else {
+                Some(matches!(e, CacheEntry::Negative { .. }))
+            }
+        });
+        match result {
+            Some(Some(is_negative)) => is_negative,
+            Some(None) => {
+                cache.pop(domain);
+                false
+            }
+            None => false,
+        }
+    }
+
     /// Insert a resolved entry into the cache.
     ///
     /// `ttl_secs` is how many seconds the entry should be considered valid.
@@ -75,7 +113,16 @@ impl DnsCache {
         self.inner
             .lock()
             .unwrap()
-            .put(domain.to_string(), CacheEntry { ips, expires });
+            .put(domain.to_string(), CacheEntry::Positive { ips, expires });
+    }
+
+    /// Cache a failed DNS result briefly to avoid repeated slow failures.
+    pub fn insert_negative(&self, domain: &str, ttl_secs: u64) {
+        let expires = Instant::now() + Duration::from_secs(ttl_secs);
+        self.inner
+            .lock()
+            .unwrap()
+            .put(domain.to_string(), CacheEntry::Negative { expires });
     }
 
     /// Remove all expired entries.
@@ -88,7 +135,7 @@ impl DnsCache {
         let mut cache = self.inner.lock().unwrap();
         let expired: Vec<String> = cache
             .iter()
-            .filter(|(_, v)| v.expires < now)
+            .filter(|(_, v)| v.expires() < now)
             .map(|(k, _)| k.clone())
             .collect();
         for key in expired {
@@ -137,6 +184,25 @@ mod tests {
         cache.insert("old.example.com", ips, 0);
         std::thread::sleep(std::time::Duration::from_millis(1));
         assert!(cache.get("old.example.com").is_none());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn negative_entry_is_reported_until_expiry() {
+        let cache = DnsCache::new(100);
+        cache.insert_negative("missing.example.com", 60);
+
+        assert!(cache.is_negative_cached("missing.example.com"));
+        assert!(cache.get("missing.example.com").is_none());
+    }
+
+    #[test]
+    fn expired_negative_entry_is_removed() {
+        let cache = DnsCache::new(100);
+        cache.insert_negative("old-missing.example.com", 0);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        assert!(!cache.is_negative_cached("old-missing.example.com"));
         assert_eq!(cache.len(), 0);
     }
 

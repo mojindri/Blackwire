@@ -1,0 +1,82 @@
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+ROOT := ../..
+REPORT_DIR ?= reports
+COMPETITIVE_MODE ?= local
+COMPETITIVE_SERVER_HOST ?=
+COMPETITIVE_CLIENT_HOST ?=
+COMPETITIVE_SSH_KEY ?= ../../id_hetzner
+COMPETITIVE_SSH_USER ?= root
+COMPETITIVE_DURATION ?= 10
+COMPETITIVE_CONCURRENCY ?= 16
+COMPETITIVE_PAYLOADS ?= 1k
+
+.PHONY: competitive-smoke competitive-clean competitive-loss competitive-mobile \
+	competitive-tun competitive-quic competitive-expensive competitive-all \
+	competitive-report clean
+
+competitive-smoke:
+	@REPORT_DIR="$(REPORT_DIR)" \
+	 COMPETITIVE_MODE="$(COMPETITIVE_MODE)" \
+	 COMPETITIVE_DURATION="$(COMPETITIVE_DURATION)" \
+	 COMPETITIVE_CONCURRENCY="$(COMPETITIVE_CONCURRENCY)" \
+	 COMPETITIVE_PAYLOADS="$(COMPETITIVE_PAYLOADS)" \
+	 bash scripts/run_matrix.sh smoke
+
+competitive-clean:
+	@REPORT_DIR="$(REPORT_DIR)" \
+	 COMPETITIVE_MODE="$(COMPETITIVE_MODE)" \
+	 COMPETITIVE_SERVER_HOST="$(COMPETITIVE_SERVER_HOST)" \
+	 COMPETITIVE_CLIENT_HOST="$(COMPETITIVE_CLIENT_HOST)" \
+	 COMPETITIVE_SSH_KEY="$(COMPETITIVE_SSH_KEY)" \
+	 COMPETITIVE_SSH_USER="$(COMPETITIVE_SSH_USER)" \
+	 COMPETITIVE_DURATION="$(COMPETITIVE_DURATION)" \
+	 COMPETITIVE_CONCURRENCY="$(COMPETITIVE_CONCURRENCY)" \
+	 COMPETITIVE_PAYLOADS="$(COMPETITIVE_PAYLOADS)" \
+	 bash scripts/run_matrix.sh clean
+
+competitive-loss:
+	@REPORT_DIR="$(REPORT_DIR)" \
+	 COMPETITIVE_MODE="$(COMPETITIVE_MODE)" \
+	 COMPETITIVE_SERVER_HOST="$(COMPETITIVE_SERVER_HOST)" \
+	 COMPETITIVE_CLIENT_HOST="$(COMPETITIVE_CLIENT_HOST)" \
+	 COMPETITIVE_SSH_KEY="$(COMPETITIVE_SSH_KEY)" \
+	 COMPETITIVE_SSH_USER="$(COMPETITIVE_SSH_USER)" \
+	 bash scripts/run_loss.sh
+
+competitive-mobile:
+	@REPORT_DIR="$(REPORT_DIR)" \
+	 COMPETITIVE_MODE="$(COMPETITIVE_MODE)" \
+	 COMPETITIVE_SERVER_HOST="$(COMPETITIVE_SERVER_HOST)" \
+	 COMPETITIVE_CLIENT_HOST="$(COMPETITIVE_CLIENT_HOST)" \
+	 COMPETITIVE_SSH_KEY="$(COMPETITIVE_SSH_KEY)" \
+	 COMPETITIVE_SSH_USER="$(COMPETITIVE_SSH_USER)" \
+	 bash scripts/run_mobile_roaming.sh
+
+competitive-tun:
+	@REPORT_DIR="$(REPORT_DIR)" bash scripts/run_matrix.sh tun
+
+competitive-quic:
+	@REPORT_DIR="$(REPORT_DIR)" bash scripts/run_matrix.sh quic
+
+competitive-expensive:
+	@REPORT_DIR="$(REPORT_DIR)" \
+	 COMPETITIVE_MODE="$(COMPETITIVE_MODE)" \
+	 COMPETITIVE_SERVER_HOST="$(COMPETITIVE_SERVER_HOST)" \
+	 COMPETITIVE_CLIENT_HOST="$(COMPETITIVE_CLIENT_HOST)" \
+	 COMPETITIVE_SSH_KEY="$(COMPETITIVE_SSH_KEY)" \
+	 COMPETITIVE_SSH_USER="$(COMPETITIVE_SSH_USER)" \
+	 COMPETITIVE_DURATION="$(COMPETITIVE_DURATION)" \
+	 COMPETITIVE_CONCURRENCY="$(COMPETITIVE_CONCURRENCY)" \
+	 COMPETITIVE_PAYLOADS="$(COMPETITIVE_PAYLOADS)" \
+	 BLACKWIRE_CANDIDATE_BIN="$${BLACKWIRE_CANDIDATE_BIN:-}" \
+	 bash scripts/run_matrix.sh expensive
+
+competitive-all: competitive-smoke competitive-clean competitive-loss competitive-mobile competitive-tun competitive-quic competitive-expensive
+
+competitive-report:
+	@python3 scripts/summarize.py --dir "$(REPORT_DIR)"
+
+clean:
+	rm -rf "$(REPORT_DIR)"/*.jsonl "$(REPORT_DIR)"/*.md "$(REPORT_DIR)"/*.log

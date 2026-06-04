@@ -13,7 +13,9 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
 use super::nat::TunTx;
-use super::packet::{build_tcp_packet, IpPacket, TransportProtocol};
+use super::packet::{
+    build_tcp_packet, build_tcp_packet_with_options, IpPacket, TcpPacketSpec, TransportProtocol,
+};
 
 const TCP_FIN: u8 = 0x01;
 const TCP_SYN: u8 = 0x02;
@@ -24,13 +26,18 @@ const TCP_ACK: u8 = 0x10;
 const FLOW_CHAN_CAP: usize = 256;
 const DEFAULT_MAX_TCP_ENTRIES: usize = 4096;
 const SERVER_ISN: u32 = 0x4257_0001;
+const TCP_SEND_WINDOW_CAP: u32 = 4 * 1024 * 1024;
+const TCP_WINDOW_SCALE: u8 = 7;
 
 struct TcpEntry {
     tx: mpsc::Sender<Vec<u8>>,
     _cancel: oneshot::Sender<()>,
     last_seen: Instant,
     server_seq: Arc<AtomicU32>,
+    client_ack_seen: Arc<AtomicU32>,
+    client_window_seen: Arc<AtomicU32>,
     client_next_seq: u32,
+    client_window_scale: u8,
 }
 
 /// Minimal packet-level TCP bridge used by Windows Wintun.
@@ -47,10 +54,12 @@ pub struct TcpBridgeTable {
 }
 
 impl TcpBridgeTable {
+    /// Create a NAT table with default capacity and the given redirect port and idle timeout.
     pub fn with_defaults(redirect_port: u16, idle_timeout: Duration) -> Self {
         Self::new(redirect_port, idle_timeout, DEFAULT_MAX_TCP_ENTRIES)
     }
 
+    /// Create a NAT table with explicit capacity and the given redirect port and idle timeout.
     pub fn new(redirect_port: u16, idle_timeout: Duration, max_entries: usize) -> Self {
         Self {
             entries: HashMap::new(),
@@ -60,12 +69,14 @@ impl TcpBridgeTable {
         }
     }
 
+    /// Forward an inbound TCP packet through the NAT table, rewriting addresses as needed.
     pub async fn forward(&mut self, packet: &IpPacket, raw: &[u8], tun_tx: &TunTx) -> Result<()> {
         if packet.protocol != TransportProtocol::Tcp {
             return Ok(());
         }
 
-        let tcp = TcpHeader::from_packet(packet).context("TCP bridge: missing TCP metadata")?;
+        let tcp =
+            TcpHeader::from_packet(packet, raw).context("TCP bridge: missing TCP metadata")?;
         let client = SocketAddr::new(packet.src, packet.src_port);
         let remote = SocketAddr::new(packet.dst, packet.dst_port);
         let key = (client, remote);
@@ -88,6 +99,11 @@ impl TcpBridgeTable {
             let client_next_seq = tcp.seq.wrapping_add(1);
             let server_seq = SERVER_ISN ^ u32::from(client.port());
             let server_next_seq = Arc::new(AtomicU32::new(server_seq.wrapping_add(1)));
+            let client_ack_seen = Arc::new(AtomicU32::new(server_seq.wrapping_add(1)));
+            let client_window_scale = tcp.window_scale.unwrap_or(0);
+            let client_window_seen = Arc::new(AtomicU32::new(
+                scaled_window(tcp.window, client_window_scale).max(1),
+            ));
             let (payload_tx, payload_rx) = mpsc::channel(FLOW_CHAN_CAP);
             let (cancel_tx, cancel_rx) = oneshot::channel();
 
@@ -95,6 +111,8 @@ impl TcpBridgeTable {
                 client,
                 remote,
                 server_seq: Arc::clone(&server_next_seq),
+                client_ack_seen: Arc::clone(&client_ack_seen),
+                client_window_seen: Arc::clone(&client_window_seen),
                 client_ack: client_next_seq,
                 redirect_port: self.redirect_port,
                 tun_tx: tun_tx.clone(),
@@ -109,17 +127,24 @@ impl TcpBridgeTable {
                     _cancel: cancel_tx,
                     last_seen: now,
                     server_seq: server_next_seq,
+                    client_ack_seen,
+                    client_window_seen,
                     client_next_seq,
+                    client_window_scale,
                 },
             );
 
             send_control(
                 tun_tx.clone(),
-                remote,
-                client,
-                server_seq,
-                client_next_seq,
-                TCP_SYN | TCP_ACK,
+                TcpControlPacket {
+                    src: remote,
+                    dst: client,
+                    seq: server_seq,
+                    ack: client_next_seq,
+                    flags: TCP_SYN | TCP_ACK,
+                    window: 65535,
+                    options: &[0x01, 0x03, 0x03, TCP_WINDOW_SCALE],
+                },
             )
             .await;
             return Ok(());
@@ -129,16 +154,27 @@ impl TcpBridgeTable {
             return Ok(());
         };
         entry.last_seen = now;
+        if tcp.flags & TCP_ACK != 0 {
+            entry.client_ack_seen.store(tcp.ack, Ordering::Relaxed);
+            entry.client_window_seen.store(
+                scaled_window(tcp.window, entry.client_window_scale).max(1),
+                Ordering::Relaxed,
+            );
+        }
 
         if tcp.flags & TCP_FIN != 0 {
             entry.client_next_seq = tcp.seq.wrapping_add(1);
             send_control(
                 tun_tx.clone(),
-                remote,
-                client,
-                entry.server_seq.load(Ordering::Relaxed),
-                entry.client_next_seq,
-                TCP_ACK,
+                TcpControlPacket {
+                    src: remote,
+                    dst: client,
+                    seq: entry.server_seq.load(Ordering::Relaxed),
+                    ack: entry.client_next_seq,
+                    flags: TCP_ACK,
+                    window: 65535,
+                    options: &[],
+                },
             )
             .await;
             self.entries.remove(&key);
@@ -155,11 +191,15 @@ impl TcpBridgeTable {
         entry.client_next_seq = tcp.seq.wrapping_add(payload.len() as u32);
         send_control(
             tun_tx.clone(),
-            remote,
-            client,
-            entry.server_seq.load(Ordering::Relaxed),
-            entry.client_next_seq,
-            TCP_ACK,
+            TcpControlPacket {
+                src: remote,
+                dst: client,
+                seq: entry.server_seq.load(Ordering::Relaxed),
+                ack: entry.client_next_seq,
+                flags: TCP_ACK,
+                window: 65535,
+                options: &[],
+            },
         )
         .await;
 
@@ -170,6 +210,7 @@ impl TcpBridgeTable {
         Ok(())
     }
 
+    /// Evict idle NAT entries that have exceeded the idle timeout; returns the number evicted.
     pub fn evict_idle(&mut self) -> usize {
         let now = Instant::now();
         let timeout = self.idle_timeout;
@@ -191,29 +232,55 @@ impl TcpBridgeTable {
     }
 }
 
-async fn send_control(
-    tun_tx: TunTx,
+#[allow(clippy::too_many_arguments)]
+struct TcpControlPacket<'a> {
     src: SocketAddr,
     dst: SocketAddr,
     seq: u32,
     ack: u32,
     flags: u8,
-) {
-    if let Some(packet) = build_tcp_packet(src, dst, seq, ack, flags, &[]) {
+    window: u16,
+    options: &'a [u8],
+}
+
+async fn send_control(tun_tx: TunTx, control: TcpControlPacket<'_>) {
+    if let Some(packet) = build_tcp_packet_with_options(TcpPacketSpec {
+        src: control.src,
+        dst: control.dst,
+        seq: control.seq,
+        ack: control.ack,
+        flags: control.flags,
+        window: control.window,
+        options: control.options,
+        payload: &[],
+    }) {
         let _ = tun_tx.send(packet).await;
     }
 }
 
 struct TcpHeader {
     seq: u32,
+    ack: u32,
     flags: u8,
+    window: u16,
+    window_scale: Option<u8>,
 }
 
 impl TcpHeader {
-    fn from_packet(packet: &IpPacket) -> Option<Self> {
+    fn from_packet(packet: &IpPacket, raw: &[u8]) -> Option<Self> {
+        let tcp = packet.transport_offset;
+        let header_len = packet.payload_offset.checked_sub(packet.transport_offset)?;
+        let window = u16::from_be_bytes([*raw.get(tcp + 14)?, *raw.get(tcp + 15)?]);
         Some(Self {
             seq: packet.tcp_seq?,
+            ack: packet.tcp_ack?,
             flags: packet.tcp_flags?,
+            window,
+            window_scale: if packet.tcp_flags? & TCP_SYN != 0 {
+                parse_window_scale(raw.get(tcp + 20..tcp + header_len)?)
+            } else {
+                None
+            },
         })
     }
 }
@@ -222,6 +289,8 @@ struct FlowTask {
     client: SocketAddr,
     remote: SocketAddr,
     server_seq: Arc<AtomicU32>,
+    client_ack_seen: Arc<AtomicU32>,
+    client_window_seen: Arc<AtomicU32>,
     client_ack: u32,
     redirect_port: u16,
     tun_tx: TunTx,
@@ -234,6 +303,8 @@ async fn flow_task(task: FlowTask) {
         client,
         remote,
         server_seq,
+        client_ack_seen,
+        client_window_seen,
         mut client_ack,
         redirect_port,
         tun_tx,
@@ -258,6 +329,7 @@ async fn flow_task(task: FlowTask) {
                         server_seq.store(seq.wrapping_add(1), Ordering::Relaxed);
                         break;
                     }
+                    wait_for_client_window(&server_seq, &client_ack_seen, &client_window_seen, n as u32).await;
                     send_tcp(&tun_tx, remote, client, seq, client_ack, TCP_PSH | TCP_ACK, &buf[..n]).await;
                     server_seq.store(seq.wrapping_add(n as u32), Ordering::Relaxed);
                 }
@@ -281,6 +353,51 @@ async fn flow_task(task: FlowTask) {
         )
         .await;
     }
+}
+
+async fn wait_for_client_window(
+    server_seq: &AtomicU32,
+    client_ack_seen: &AtomicU32,
+    client_window_seen: &AtomicU32,
+    payload_len: u32,
+) {
+    loop {
+        let seq = server_seq.load(Ordering::Relaxed);
+        let ack = client_ack_seen.load(Ordering::Relaxed);
+        let in_flight = seq.wrapping_sub(ack);
+        let recv_window = client_window_seen
+            .load(Ordering::Relaxed)
+            .min(TCP_SEND_WINDOW_CAP);
+        if in_flight.saturating_add(payload_len) <= recv_window {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+}
+
+fn scaled_window(window: u16, scale: u8) -> u32 {
+    (window as u32) << scale.min(14)
+}
+
+fn parse_window_scale(options: &[u8]) -> Option<u8> {
+    let mut i = 0usize;
+    while i < options.len() {
+        match options[i] {
+            0 => break,
+            1 => i += 1,
+            kind => {
+                let len = *options.get(i + 1)? as usize;
+                if len < 2 || i + len > options.len() {
+                    break;
+                }
+                if kind == 3 && len == 3 {
+                    return options.get(i + 2).copied();
+                }
+                i += len;
+            }
+        }
+    }
+    None
 }
 
 async fn connect_local_socks(remote: SocketAddr, redirect_port: u16) -> Result<TcpStream> {
@@ -373,7 +490,7 @@ mod tests {
         let dst: SocketAddr = "93.184.216.34:443".parse().unwrap();
         let raw = build_tcp_packet(src, dst, 7, 0, TCP_SYN, &[]).unwrap();
         let packet = parse_ip_packet(&raw).unwrap();
-        let tcp = TcpHeader::from_packet(&packet).unwrap();
+        let tcp = TcpHeader::from_packet(&packet, &raw).unwrap();
 
         assert_eq!(tcp.seq, 7);
         assert_eq!(tcp.flags, TCP_SYN);

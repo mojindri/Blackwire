@@ -53,12 +53,21 @@ pub struct TunSession {
 #[derive(Debug, Default)]
 pub struct TunSessionTable {
     sessions: HashMap<FlowKey, TunSession>,
+    max_sessions: usize,
 }
 
 impl TunSessionTable {
     /// Create an empty session table.
     pub fn new() -> Self {
-        Self::default()
+        Self::with_max_sessions(4096)
+    }
+
+    /// Create a session table with a hard cap on tracked flows.
+    pub fn with_max_sessions(max_sessions: usize) -> Self {
+        Self {
+            sessions: HashMap::new(),
+            max_sessions: max_sessions.max(1),
+        }
     }
 
     /// Track one outbound packet and refresh the flow timestamp.
@@ -66,6 +75,9 @@ impl TunSessionTable {
     /// Returns the stored session, or `None` when protocol is unsupported.
     pub fn observe_packet(&mut self, packet: &IpPacket, now: Instant) -> Option<&TunSession> {
         let flow = FlowKey::from_packet(packet)?;
+        if !self.sessions.contains_key(&flow) && self.sessions.len() >= self.max_sessions {
+            self.evict_oldest();
+        }
         let session = self.sessions.entry(flow.clone()).or_insert(TunSession {
             flow,
             last_seen: now,
@@ -89,6 +101,24 @@ impl TunSessionTable {
         self.sessions
             .retain(|_, session| now.duration_since(session.last_seen) <= idle_timeout);
         before - self.sessions.len()
+    }
+
+    /// Clear all sessions after a network change invalidates socket/interface state.
+    pub fn clear_for_network_change(&mut self) -> usize {
+        let removed = self.sessions.len();
+        self.sessions.clear();
+        removed
+    }
+
+    fn evict_oldest(&mut self) {
+        if let Some(oldest_key) = self
+            .sessions
+            .iter()
+            .min_by_key(|(_, session)| session.last_seen)
+            .map(|(key, _)| key.clone())
+        {
+            self.sessions.remove(&oldest_key);
+        }
     }
 
     /// Returns number of tracked sessions.
@@ -183,6 +213,35 @@ mod tests {
 
         let removed = table.remove_expired(now + Duration::from_secs(61), Duration::from_secs(60));
         assert_eq!(removed, 1);
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn session_table_caps_active_flows_and_clears_on_network_change() {
+        let now = Instant::now();
+        let mut table = TunSessionTable::with_max_sessions(1);
+        let first = packet(
+            [10, 0, 0, 2],
+            53000,
+            [8, 8, 8, 8],
+            53,
+            TransportProtocol::Udp,
+        );
+        let second = packet(
+            [10, 0, 0, 3],
+            53001,
+            [1, 1, 1, 1],
+            53,
+            TransportProtocol::Udp,
+        );
+
+        table.observe_packet(&first, now).unwrap();
+        table
+            .observe_packet(&second, now + Duration::from_secs(1))
+            .unwrap();
+
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.clear_for_network_change(), 1);
         assert!(table.is_empty());
     }
 }

@@ -22,18 +22,29 @@
 //! are already being processed keep a reference to the old router until they
 //! finish. New connections see the new router immediately.
 
-use std::collections::HashMap;
+use std::collections::{hash_map::DefaultHasher, HashMap};
+use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use aho_corasick::AhoCorasick;
 use arc_swap::ArcSwap;
+use dashmap::DashMap;
 use ipnet::IpNet;
 use regex::RegexSet;
 
 use blackwire_common::{Address, Network, ProxyError};
 
 use crate::geo::{GeoIpMatcher, GeoSiteMatcher};
+use crate::metrics::{
+    record_route_cache_hit, record_route_cache_miss, record_route_compiled_rules,
+    record_route_match,
+};
+
+const ROUTE_CACHE_TTL: Duration = Duration::from_secs(30);
+const ROUTE_CACHE_HEALTH_TTL: Duration = Duration::from_millis(250);
 
 /// The result of a routing decision: which outbound to use.
 #[derive(Debug, Clone)]
@@ -96,6 +107,8 @@ pub trait Router: Send + Sync + 'static {
 /// The live router, stored behind `ArcSwap` for hot-reload support.
 pub struct LiveRouter {
     inner: ArcSwap<RouterInner>,
+    cache: DashMap<RouteCacheKey, RouteCacheEntry>,
+    generation: AtomicU64,
 }
 
 impl LiveRouter {
@@ -113,6 +126,7 @@ impl LiveRouter {
         let has_ip_rules = rules
             .iter()
             .any(|r| r.ip_matcher.is_some() || !r.geoip_codes.is_empty());
+        record_compiled_rule_metrics(&rules);
         Arc::new(Self {
             inner: ArcSwap::from_pointee(RouterInner {
                 rules,
@@ -122,6 +136,8 @@ impl LiveRouter {
                 domain_strategy,
                 has_ip_rules,
             }),
+            cache: DashMap::new(),
+            generation: AtomicU64::new(0),
         })
     }
 
@@ -140,6 +156,9 @@ impl LiveRouter {
         let has_ip_rules = rules
             .iter()
             .any(|r| r.ip_matcher.is_some() || !r.geoip_codes.is_empty());
+        record_compiled_rule_metrics(&rules);
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.cache.clear();
         self.inner.store(Arc::new(RouterInner {
             rules,
             default_tag: default_tag.into(),
@@ -161,6 +180,37 @@ impl Router for LiveRouter {
     }
 
     fn pick_route_match(&self, ctx: &RoutingContext<'_>) -> (Route, bool) {
+        let key = RouteCacheKey::from_context(ctx);
+        let generation = self.generation.load(Ordering::Relaxed);
+        let now = Instant::now();
+        if let Some(entry) = self.cache.get(&key) {
+            if entry.generation == generation && entry.expires_at > now {
+                record_route_cache_hit();
+                return (entry.route.clone(), entry.matched);
+            }
+        }
+
+        record_route_cache_miss();
+        let start = Instant::now();
+        let decision = self.pick_route_match_uncached(ctx);
+        record_route_match(start.elapsed());
+
+        let expires_at = Instant::now() + route_cache_ttl(&decision.0);
+        self.cache.insert(
+            key,
+            RouteCacheEntry {
+                route: decision.0.clone(),
+                matched: decision.1,
+                expires_at,
+                generation,
+            },
+        );
+        decision
+    }
+}
+
+impl LiveRouter {
+    fn pick_route_match_uncached(&self, ctx: &RoutingContext<'_>) -> (Route, bool) {
         let inner = self.inner.load();
         for rule in &inner.rules {
             if rule.matches_with_geo(ctx, &inner.geoip, &inner.geosite) {
@@ -179,6 +229,85 @@ impl Router for LiveRouter {
             false,
         )
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RouteCacheKey {
+    dest_hash: u64,
+    port: u16,
+    network: Network,
+    inbound_tag: Arc<str>,
+    user: Option<Arc<str>>,
+    sniffed_protocol: Option<Arc<str>>,
+    sniffed_domain_hash: u64,
+}
+
+impl RouteCacheKey {
+    fn from_context(ctx: &RoutingContext<'_>) -> Self {
+        Self {
+            dest_hash: stable_hash(ctx.dest),
+            port: ctx.dest.port(),
+            network: ctx.network,
+            inbound_tag: Arc::from(ctx.inbound_tag),
+            user: ctx.user.map(Arc::from),
+            sniffed_protocol: ctx.sniffed_protocol.map(Arc::from),
+            sniffed_domain_hash: stable_hash(&ctx.sniffed_domain),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RouteCacheEntry {
+    route: Route,
+    matched: bool,
+    expires_at: Instant,
+    generation: u64,
+}
+
+fn stable_hash<T: Hash>(value: &T) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn route_cache_ttl(route: &Route) -> Duration {
+    let tag = route.outbound_tag.as_ref();
+    if tag.starts_with("auto-") || tag.contains("balancer") {
+        ROUTE_CACHE_HEALTH_TTL
+    } else {
+        ROUTE_CACHE_TTL
+    }
+}
+
+fn record_compiled_rule_metrics(rules: &[CompiledRule]) {
+    record_route_compiled_rules("total", rules.len());
+    record_route_compiled_rules(
+        "domain",
+        rules
+            .iter()
+            .filter(|r| r.domain_matcher.is_some() || !r.geosite_codes.is_empty())
+            .count(),
+    );
+    record_route_compiled_rules(
+        "cidr",
+        rules
+            .iter()
+            .filter(|r| r.ip_matcher.is_some() || !r.geoip_codes.is_empty())
+            .count(),
+    );
+    record_route_compiled_rules(
+        "port",
+        rules.iter().filter(|r| !r.port_ranges.is_empty()).count(),
+    );
+    record_route_compiled_rules(
+        "inbound_tag",
+        rules.iter().filter(|r| !r.inbound_tags.is_empty()).count(),
+    );
+    record_route_compiled_rules(
+        "protocol",
+        rules.iter().filter(|r| !r.protocols.is_empty()).count(),
+    );
+    record_route_compiled_rules("user", rules.iter().filter(|r| !r.users.is_empty()).count());
 }
 
 /// Normalize Xray `routing.domainStrategy` spelling.
@@ -252,6 +381,9 @@ pub struct CompiledRule {
 
     /// Protocol names from sniffing (e.g. `http`, `tls`). Empty means any.
     pub protocols: Vec<String>,
+
+    /// Authenticated users this rule applies to. Empty means any user.
+    pub users: Vec<String>,
 }
 
 impl CompiledRule {
@@ -283,6 +415,15 @@ impl CompiledRule {
                 return false;
             };
             if !self.protocols.iter().any(|p| p == proto) {
+                return false;
+            }
+        }
+
+        if !self.users.is_empty() {
+            let Some(user) = ctx.user else {
+                return false;
+            };
+            if !self.users.iter().any(|u| u == user) {
                 return false;
             }
         }
@@ -480,7 +621,8 @@ impl IpMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::time::Instant;
 
     // Checks that a domain full-match rule correctly accepts and rejects domains.
     #[test]
@@ -540,6 +682,7 @@ mod tests {
             port_ranges: vec![],
             inbound_tags: vec![],
             protocols: vec![],
+            users: vec![],
         };
         let router = LiveRouter::new(
             vec![rule],
@@ -602,6 +745,7 @@ mod tests {
             port_ranges: vec![],
             inbound_tags: vec![],
             protocols: vec![],
+            users: vec![],
         };
 
         let geosite_entry = GeoSite {
@@ -637,6 +781,7 @@ mod tests {
             port_ranges: vec![],
             inbound_tags: vec![],
             protocols: vec!["http".into(), "tls".into()],
+            users: vec![],
         };
 
         let dest = Address::Domain("example.com".into(), 443);
@@ -663,6 +808,7 @@ mod tests {
             port_ranges: vec![],
             inbound_tags: vec![],
             protocols: vec!["http".into()],
+            users: vec![],
         };
 
         let dest = Address::Domain("example.com".into(), 80);
@@ -716,5 +862,200 @@ mod tests {
         // Keyword: AhoCorasick with ascii_case_insensitive.
         assert!(matcher.matches("MyVPN.com"));
         assert!(matcher.matches("vpn-service.io"));
+    }
+
+    #[test]
+    fn ip_cidr_ipv6_match() {
+        let matcher = IpMatcher::new(vec!["2001:db8::/32".into()]).unwrap();
+
+        assert!(matcher.matches(IpAddr::V6("2001:db8::42".parse().unwrap())));
+        assert!(!matcher.matches(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    }
+
+    #[test]
+    fn port_inbound_and_user_restrictions_must_all_match() {
+        let rule = CompiledRule {
+            outbound_tag: "restricted".into(),
+            domain_matcher: Some(
+                DomainMatcher::new(vec!["example.com".into()], vec![], vec![], vec![]).unwrap(),
+            ),
+            geosite_codes: vec![],
+            ip_matcher: None,
+            geoip_codes: vec![],
+            port_ranges: vec![(443, 443)],
+            inbound_tags: vec!["vless-in".into()],
+            protocols: vec![],
+            users: vec!["alice@example.com".into()],
+        };
+
+        let good_dest = Address::Domain("example.com".into(), 443);
+        let good_ctx = RoutingContext {
+            dest: &good_dest,
+            network: Network::Tcp,
+            inbound_tag: "vless-in",
+            user: Some("alice@example.com"),
+            sniffed_protocol: None,
+            sniffed_domain: None,
+        };
+        assert!(rule.matches(&good_ctx));
+
+        let wrong_port = Address::Domain("example.com".into(), 80);
+        let wrong_port_ctx = RoutingContext {
+            dest: &wrong_port,
+            ..good_ctx
+        };
+        assert!(!rule.matches(&wrong_port_ctx));
+
+        let wrong_inbound_ctx = RoutingContext {
+            inbound_tag: "trojan-in",
+            ..good_ctx
+        };
+        assert!(!rule.matches(&wrong_inbound_ctx));
+
+        let wrong_user_ctx = RoutingContext {
+            user: Some("bob@example.com"),
+            ..good_ctx
+        };
+        assert!(!rule.matches(&wrong_user_ctx));
+    }
+
+    #[test]
+    fn route_cache_invalidates_on_reload() {
+        let rule = CompiledRule {
+            outbound_tag: "proxy".into(),
+            domain_matcher: Some(
+                DomainMatcher::new(vec!["example.com".into()], vec![], vec![], vec![]).unwrap(),
+            ),
+            geosite_codes: vec![],
+            ip_matcher: None,
+            geoip_codes: vec![],
+            port_ranges: vec![],
+            inbound_tags: vec![],
+            protocols: vec![],
+            users: vec![],
+        };
+        let router = LiveRouter::new(vec![rule], "direct", HashMap::new(), HashMap::new(), None);
+        let dest = Address::Domain("example.com".into(), 443);
+        let ctx = RoutingContext {
+            dest: &dest,
+            network: Network::Tcp,
+            inbound_tag: "in",
+            user: None,
+            sniffed_protocol: None,
+            sniffed_domain: None,
+        };
+
+        let (route, matched) = router.pick_route_match(&ctx);
+        assert!(matched);
+        assert_eq!(route.outbound_tag.as_ref(), "proxy");
+
+        router.swap(vec![], "direct", HashMap::new(), HashMap::new(), None);
+        let (route, matched) = router.pick_route_match(&ctx);
+        assert!(!matched);
+        assert_eq!(route.outbound_tag.as_ref(), "direct");
+    }
+
+    #[test]
+    fn health_dependent_route_uses_short_cache_ttl() {
+        let rule = CompiledRule {
+            outbound_tag: "auto-proxy".into(),
+            domain_matcher: Some(
+                DomainMatcher::new(vec!["example.com".into()], vec![], vec![], vec![]).unwrap(),
+            ),
+            geosite_codes: vec![],
+            ip_matcher: None,
+            geoip_codes: vec![],
+            port_ranges: vec![],
+            inbound_tags: vec![],
+            protocols: vec![],
+            users: vec![],
+        };
+        let router = LiveRouter::new(vec![rule], "direct", HashMap::new(), HashMap::new(), None);
+        let dest = Address::Domain("example.com".into(), 443);
+        let ctx = RoutingContext {
+            dest: &dest,
+            network: Network::Tcp,
+            inbound_tag: "in",
+            user: None,
+            sniffed_protocol: None,
+            sniffed_domain: None,
+        };
+        let before = Instant::now();
+        let key = RouteCacheKey::from_context(&ctx);
+
+        let (route, matched) = router.pick_route_match(&ctx);
+
+        assert!(matched);
+        assert_eq!(route.outbound_tag.as_ref(), "auto-proxy");
+        let entry = router.cache.get(&key).expect("cache entry");
+        assert!(entry.expires_at <= before + ROUTE_CACHE_HEALTH_TTL + Duration::from_millis(25));
+    }
+
+    #[test]
+    fn no_rules_fast_path_uses_default_and_caches_decision() {
+        let router = LiveRouter::new(vec![], "direct", HashMap::new(), HashMap::new(), None);
+        let dest = Address::Ipv4("203.0.113.10".parse().unwrap(), 443);
+        let ctx = RoutingContext {
+            dest: &dest,
+            network: Network::Tcp,
+            inbound_tag: "in",
+            user: None,
+            sniffed_protocol: None,
+            sniffed_domain: None,
+        };
+
+        let (route, matched) = router.pick_route_match(&ctx);
+        assert!(!matched);
+        assert_eq!(route.outbound_tag.as_ref(), "direct");
+        assert_eq!(router.cache.len(), 1);
+    }
+
+    #[test]
+    fn cached_route_typical_p99_under_50us() {
+        let rule = CompiledRule {
+            outbound_tag: "proxy".into(),
+            domain_matcher: Some(
+                DomainMatcher::new(
+                    vec!["example.com".into()],
+                    vec!["example.org".into()],
+                    vec!["video".into()],
+                    vec![r".*\.example\.net".into()],
+                )
+                .unwrap(),
+            ),
+            geosite_codes: vec![],
+            ip_matcher: Some(
+                IpMatcher::new(vec!["203.0.113.0/24".into(), "2001:db8::/32".into()]).unwrap(),
+            ),
+            geoip_codes: vec![],
+            port_ranges: vec![(1, 65535)],
+            inbound_tags: vec!["in".into()],
+            protocols: vec!["tls".into()],
+            users: vec!["alice".into()],
+        };
+        let router = LiveRouter::new(vec![rule], "direct", HashMap::new(), HashMap::new(), None);
+        let dest = Address::Ipv4("203.0.113.10".parse().unwrap(), 443);
+        let ctx = RoutingContext {
+            dest: &dest,
+            network: Network::Tcp,
+            inbound_tag: "in",
+            user: Some("alice"),
+            sniffed_protocol: Some("tls"),
+            sniffed_domain: Some("example.com"),
+        };
+
+        let _ = router.pick_route_match(&ctx);
+        let mut samples = Vec::with_capacity(20_000);
+        for _ in 0..20_000 {
+            let start = Instant::now();
+            let (route, matched) = router.pick_route_match(&ctx);
+            samples.push(start.elapsed().as_nanos());
+            assert!(matched);
+            assert_eq!(route.outbound_tag.as_ref(), "proxy");
+        }
+        samples.sort_unstable();
+        let p99 = samples[samples.len() * 99 / 100];
+        eprintln!("cached route p99: {p99} ns");
+        assert!(p99 < 50_000, "cached route p99 {p99} ns exceeded 50us");
     }
 }
