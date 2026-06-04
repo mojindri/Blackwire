@@ -8,69 +8,103 @@ use blackwire_config::schema::{
     Protocol, ProtocolCost, SecurityType, StreamSettingsConfig,
 };
 
+/// Compiled hot-path snapshot of all listeners, routes, and connection plans.
 #[derive(Debug, Clone)]
 pub struct DataPlane {
+    /// Compiled plan for every inbound listener.
     pub listeners: Arc<[ListenerPlan]>,
+    /// Active routing strategy tag (e.g. `"IPIfNonMatch"`).
     pub route_table: Arc<str>,
+    /// Compiled plan for every outbound handler.
     pub outbound_table: Arc<[OutboundPlan]>,
+    /// Per-inbound user/authentication table.
     pub user_table: Arc<UserTable>,
+    /// Per-protocol cost weights used for load-balancing decisions.
     pub protocol_costs: Arc<[ProtocolCost]>,
+    /// Pre-compiled per-connection plans derived from listener × outbound pairs.
     pub connection_plans: Arc<[ConnectionPlan]>,
 }
 
+/// Atomic store wrapping a `DataPlane` that supports lock-free hot-reload.
 #[derive(Debug)]
 pub struct DataPlaneStore {
     inner: ArcSwap<DataPlane>,
 }
 
 impl DataPlaneStore {
+    /// Create a new store from an initial `DataPlane`.
     pub fn new(data_plane: Arc<DataPlane>) -> Self {
         Self {
             inner: ArcSwap::from(data_plane),
         }
     }
 
+    /// Return a reference-counted handle to the current `DataPlane`.
     pub fn load(&self) -> Arc<DataPlane> {
         self.inner.load_full()
     }
 
+    /// Atomically replace the current `DataPlane` and return the old one.
     pub fn swap(&self, data_plane: Arc<DataPlane>) -> Arc<DataPlane> {
         self.inner.swap(data_plane)
     }
 }
 
+/// Compiled configuration for a single inbound listener.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListenerPlan {
+    /// Unique tag identifying this listener.
     pub tag: Arc<str>,
+    /// Address and port the listener is bound to.
     pub listen: Arc<str>,
+    /// Protocol handled by this listener.
     pub inbound: InboundKind,
+    /// Transport and security layer combination for this listener.
     pub transport: TransportKind,
+    /// Resource limits applied to connections accepted by this listener.
     pub limits: LimitPlan,
 }
 
+/// Compiled configuration for a single outbound connection handler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutboundPlan {
+    /// Unique tag identifying this outbound.
     pub tag: Arc<str>,
+    /// Protocol used by this outbound.
     pub outbound: OutboundKind,
+    /// Transport and security layer combination for this outbound.
     pub transport: TransportKind,
 }
 
+/// Mapping from inbound listener tags to their user/authentication records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserTable {
+    /// Tags of all inbound listeners that have user tables configured.
     pub inbound_tags: Arc<[Arc<str>]>,
 }
 
+/// Pre-compiled end-to-end plan for a single inbound → outbound connection path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionPlan {
+    /// Human-readable label for this connection path (used in logs and metrics).
     pub label: Arc<str>,
+    /// Tag of the inbound listener this plan was derived from.
     pub inbound_tag: Arc<str>,
+    /// Protocol of the inbound leg.
     pub inbound: InboundKind,
+    /// Transport and security layer of the inbound leg.
     pub transport: TransportKind,
+    /// Protocol sniffing behaviour for this connection.
     pub sniffing: SniffPlan,
+    /// Routing configuration applied when selecting an outbound.
     pub routing: RoutePlan,
+    /// Protocol of the outbound leg.
     pub outbound: OutboundKind,
+    /// Relay strategy and capability flags for byte-forwarding.
     pub relay: RelayPlan,
+    /// Resource limits applied to this connection.
     pub limits: LimitPlan,
+    /// Protocol cost weight used for load-balancing.
     pub cost: ProtocolCost,
 }
 
