@@ -14,7 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use aes::Aes256;
 use aes_gcm::{
-    aead::{generic_array::GenericArray, Aead, Payload},
+    aead::{generic_array::GenericArray, Aead, AeadInPlace, Payload},
     Aes256Gcm, KeyInit,
 };
 use cipher::{BlockDecrypt, BlockEncrypt};
@@ -177,7 +177,8 @@ pub fn decode_client_packet(
     Ok((client_session_id, packet_id, dest, payload))
 }
 
-/// Encode a SIP022 server → client UDP packet.
+/// Encode a SIP022 server → client UDP packet (allocating convenience wrapper).
+#[cfg(test)]
 fn encode_server_packet(
     psk: &[u8; 32],
     session: &ServerUdpSession,
@@ -185,40 +186,64 @@ fn encode_server_packet(
     dest: &Address,
     payload: &[u8],
 ) -> Result<Vec<u8>, ProxyError> {
+    let mut scratch = Vec::new();
+    let mut out = Vec::new();
+    encode_server_packet_into(
+        psk,
+        session,
+        server_packet_id,
+        dest,
+        payload,
+        &mut scratch,
+        &mut out,
+    )?;
+    Ok(out)
+}
+
+/// Zero-allocation variant: writes the encrypted packet into `out`, using `scratch` as
+/// a reusable plaintext/ciphertext buffer. Both buffers are cleared before use.
+fn encode_server_packet_into(
+    psk: &[u8; 32],
+    session: &ServerUdpSession,
+    server_packet_id: u64,
+    dest: &Address,
+    payload: &[u8],
+    scratch: &mut Vec<u8>,
+    out: &mut Vec<u8>,
+) -> Result<(), ProxyError> {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
 
-    let mut plain = Vec::with_capacity(128 + payload.len());
-    plain.push(TYPE_SERVER);
-    plain.extend_from_slice(&ts.to_be_bytes());
-    plain.extend_from_slice(&session.client_session_id.to_be_bytes());
-    plain.extend_from_slice(&0u16.to_be_bytes());
-    let mut addr_buf = bytes::BytesMut::new();
-    write_socks5_address(&mut addr_buf, dest)?;
-    plain.extend_from_slice(&addr_buf);
-    plain.extend_from_slice(payload);
+    // Build plaintext directly into the scratch buffer (no intermediate Vec).
+    scratch.clear();
+    scratch.push(TYPE_SERVER);
+    scratch.extend_from_slice(&ts.to_be_bytes());
+    scratch.extend_from_slice(&session.client_session_id.to_be_bytes());
+    scratch.extend_from_slice(&0u16.to_be_bytes());
+    write_socks5_address(scratch, dest)?; // Vec<u8> implements BufMut
+    scratch.extend_from_slice(payload);
 
     let mut sep_plain = [0u8; SEPARATE_HEADER_LEN];
     sep_plain[..8].copy_from_slice(&session.server_session_id.to_be_bytes());
     sep_plain[8..].copy_from_slice(&server_packet_id.to_be_bytes());
 
-    let ciphertext = session
+    // Encrypt in-place: appends the AEAD tag — no separate ciphertext Vec.
+    session
         .cipher()
-        .encrypt(
+        .encrypt_in_place(
             GenericArray::from_slice(&aead_nonce(&sep_plain)),
-            Payload {
-                msg: &plain,
-                aad: &[],
-            },
+            &[],
+            scratch,
         )
         .map_err(|_| ProxyError::Protocol("SS2022 UDP server encrypt failed".into()))?;
 
-    let mut pkt = Vec::with_capacity(SEPARATE_HEADER_LEN + ciphertext.len());
-    pkt.extend_from_slice(&encrypt_separate_header(psk, &sep_plain));
-    pkt.extend_from_slice(&ciphertext);
-    Ok(pkt)
+    // Assemble output: encrypted separate header || ciphertext+tag.
+    out.clear();
+    out.extend_from_slice(&encrypt_separate_header(psk, &sep_plain));
+    out.extend_from_slice(scratch);
+    Ok(())
 }
 
 /// Decode a server → client UDP packet body (returns AEAD plaintext).
@@ -562,19 +587,35 @@ fn spawn_reply_task(
     client_addr: Arc<Mutex<SocketAddr>>,
 ) {
     tokio::spawn(async move {
+        // Pre-allocate all buffers once — zero heap churn per reply packet.
         let mut rbuf = vec![0u8; 65535];
+        let mut encode_scratch = Vec::with_capacity(256);
+        let mut pkt_out = Vec::with_capacity(512);
         let proxy_session = ServerUdpSession {
             server_session_id,
             client_session_id,
             session_key,
         };
         let mut server_packet_id: u64 = 0;
+
+        // Single pinned sleep future, reset on each received packet.
+        // This avoids re-arming a new timer on every recv_from call.
+        let sleep = tokio::time::sleep(UDP_SESSION_IDLE);
+        tokio::pin!(sleep);
+
         loop {
-            let (rn, upstream_src) =
-                match tokio::time::timeout(UDP_SESSION_IDLE, upstream.recv_from(&mut rbuf)).await {
-                    Ok(Ok(v)) => v,
-                    _ => break, // idle timeout or error — session expired
-                };
+            let recv_result = tokio::select! {
+                biased;
+                r = upstream.recv_from(&mut rbuf) => r,
+                _ = &mut sleep => break, // idle timeout — session expired
+            };
+            let (rn, upstream_src) = match recv_result {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            sleep
+                .as_mut()
+                .reset(tokio::time::Instant::now() + UDP_SESSION_IDLE);
 
             if rn == 0 {
                 continue;
@@ -593,9 +634,17 @@ fn spawn_reply_task(
             let pkt_id = server_packet_id;
             server_packet_id += 1;
             let addr = *client_addr.lock();
-            match encode_server_packet(&psk, &proxy_session, pkt_id, &reply_dest, &rbuf[..rn]) {
-                Ok(reply) => {
-                    let _ = client_sock.send_to(&reply, addr).await;
+            match encode_server_packet_into(
+                &psk,
+                &proxy_session,
+                pkt_id,
+                &reply_dest,
+                &rbuf[..rn],
+                &mut encode_scratch,
+                &mut pkt_out,
+            ) {
+                Ok(()) => {
+                    let _ = client_sock.send_to(&pkt_out, addr).await;
                 }
                 Err(e) => {
                     warn!(error = %e, "SS2022 UDP encode reply failed");
