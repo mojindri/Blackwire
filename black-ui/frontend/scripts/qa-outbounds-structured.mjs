@@ -26,6 +26,7 @@ const defaultConfigPath = path.join(tmpdir(), "black-ui-qa-outbounds", `${qaRunI
 const runConfigPath = configPathArg || defaultConfigPath;
 const reportJsonPath = path.join(path.dirname(runConfigPath), `qa-results-${qaRunId}.json`);
 const reportMarkdownPath = path.join(repoRoot, "docs", "outbounds-panel-qa.md");
+const qaSeedInboundTag = `${qaRunId}-seed-inbound`;
 
 const basePort = 29700;
 const cases = [
@@ -129,11 +130,33 @@ const cases = [
     address: "127.0.0.1",
     port: basePort + 7,
     userId: "1f88f8b5-1e1d-4d4c-94d3-7393f8f0a1d1",
-    optional: true,
+    transport: {
+      header: "srtp",
+      mtu: "1350",
+      tti: "20",
+      uplinkCapacity: "5",
+      downlinkCapacity: "20",
+      congestion: true,
+      readBufferSize: "2",
+      writeBufferSize: "2"
+    },
     expected: {
       protocol: "vless",
       settings: { address: "127.0.0.1", port: basePort + 7, users: [{ id: "1f88f8b5-1e1d-4d4c-94d3-7393f8f0a1d1" }] },
-      streamSettings: { network: "kcp", security: "none" }
+      streamSettings: {
+        network: "kcp",
+        security: "none",
+        kcpSettings: {
+          header: "srtp",
+          mtu: 1350,
+          tti: 20,
+          uplink_capacity: 5,
+          downlink_capacity: 20,
+          congestion: true,
+          read_buffer_size: 2,
+          write_buffer_size: 2
+        }
+      }
     }
   },
   {
@@ -145,7 +168,6 @@ const cases = [
     address: "127.0.0.1",
     port: basePort + 8,
     userId: "c76fb8ee-d8a9-4fb1-9f4d-6e0ff51f4f2e",
-    optional: true,
     expected: {
       protocol: "vless",
       settings: { address: "127.0.0.1", port: basePort + 8, users: [{ id: "c76fb8ee-d8a9-4fb1-9f4d-6e0ff51f4f2e" }] },
@@ -280,6 +302,7 @@ const results = [];
 const skippedCases = [];
 const routingChecks = [];
 let originalSettings = null;
+let originalOutbounds = [];
 let failure = null;
 
 await main();
@@ -313,6 +336,7 @@ async function main() {
     await page.getByRole("heading", { name: "Users", exact: true }).waitFor();
 
     originalSettings = await readSettingsFromUI(page);
+    originalOutbounds = await listOutbounds(page);
     await applyQaSettings(page, {
       configPath: runConfigPath,
       grpcAddress: grpcAddressArg || originalSettings.grpcAddress,
@@ -320,6 +344,9 @@ async function main() {
       subscriptionHost: subscriptionHostArg || originalSettings.subscriptionHost,
       adaptiveRoutingEnabled: true
     });
+    await purgeExistingQaOutbounds(page);
+    await disableOriginalEnabledOutbounds(page, originalOutbounds);
+    await ensureSeedInbound(page, qaSeedInboundTag, basePort + 90);
 
     const createdTags = [];
     for (const testCase of cases) {
@@ -346,6 +373,8 @@ async function main() {
       `${qaRunId}-delete`,
       `${qaRunId}-toggle`
     ]));
+    await deleteSeedInbound(page, qaSeedInboundTag);
+    await restoreOriginalOutbounds(page, originalOutbounds);
 
     if (restoreSettings && !keepSettings && originalSettings) {
       await restoreOriginalSettings(page, originalSettings);
@@ -375,29 +404,13 @@ async function main() {
 }
 
 async function runMatrixCase(page, testCase, configPath) {
-  if (testCase.optional) {
-    try {
-      if (!(await isTransportAvailable(page, testCase.network))) {
-        results.push({
-          name: testCase.name,
-          status: "SKIPPED",
-          details: `${testCase.network} transport not exposed by the current UI`
-        });
-        skippedCases.push({ name: testCase.name, reason: `${testCase.network} transport not exposed by the current UI` });
-        return;
-      }
-    } catch {
-      results.push({
-        name: testCase.name,
-        status: "SKIPPED",
-        details: `${testCase.network} transport selector could not be reached cleanly`
-      });
-      skippedCases.push({ name: testCase.name, reason: `${testCase.network} transport selector could not be reached cleanly` });
-      return;
-    }
-  }
+  await refreshPanel(page);
 
   await openNewOutbound(page);
+  if (!(await isTransportAvailable(page, testCase.network))) {
+    await closeDrawer(page).catch(() => {});
+    throw new Error(`${testCase.network} transport is not exposed by the current UI`);
+  }
   await selectTab(page, "Basic");
   await fillField(page, "Tag", testCase.tag);
   await selectField(page, "Protocol", testCase.protocol);
@@ -682,7 +695,11 @@ async function runEnabledToggleOmission(page, configPath) {
   await setDrawerEnabled(page, false);
   await page.getByRole("button", { name: "Save Outbound", exact: true }).click();
   await waitForSaveMessage(page);
-  const config = await readConfig(configPath);
+  const config = await waitForConfigCondition(
+    configPath,
+    (snapshot) => !(snapshot.outbounds || []).some((item) => item.tag === tag),
+    20000
+  );
   const omitted = !(config.outbounds || []).some((item) => item.tag === tag);
   results.push({
     name: "Disabled outbound omission",
@@ -704,7 +721,7 @@ async function runNoEnabledFallback(page, configPath) {
     toggled.push(outbound);
   }
 
-  const settled = await waitForNoEnabledOutbounds(page, configPath);
+  const settled = await waitForNoEnabledOutbounds(page, configPath, 30000);
   const config = settled.config;
   const fallback = config.outbounds || [];
   const passed =
@@ -732,6 +749,73 @@ async function cleanupQaOutbounds(page, tags) {
   }
 }
 
+async function purgeExistingQaOutbounds(page) {
+  const outbounds = await listOutbounds(page);
+  for (const outbound of outbounds.filter((item) => typeof item.tag === "string" && item.tag.startsWith("qa-"))) {
+    await deleteOutbound(page, outbound.id);
+  }
+}
+
+async function ensureSeedInbound(page, tag, port) {
+  const existing = await listInbounds(page);
+  const current = existing.find((item) => item.tag === tag);
+  if (current) {
+    if (!current.enabled) {
+      await updateInbound(page, current.id, {
+        tag: current.tag,
+        listen: current.listen,
+        port: current.port,
+        protocol: current.protocol,
+        enabled: true,
+        transport: current.transport,
+        settings: current.settings,
+        streamSettings: current.streamSettings,
+        sniffing: current.sniffing,
+        limits: current.limits
+      });
+    }
+    return;
+  }
+  await createInbound(page, {
+    tag,
+    listen: "127.0.0.1",
+    port,
+    protocol: "socks",
+    enabled: true,
+    transport: "tcp",
+    settings: "{}",
+    streamSettings: JSON.stringify({ network: "tcp", security: "none" }),
+    sniffing: "",
+    limits: ""
+  });
+}
+
+async function deleteSeedInbound(page, tag) {
+  const existing = await listInbounds(page);
+  const current = existing.find((item) => item.tag === tag);
+  if (current) {
+    await deleteInbound(page, current.id);
+  }
+}
+
+async function disableOriginalEnabledOutbounds(page, outbounds) {
+  for (const outbound of outbounds.filter((item) => item.enabled)) {
+    await setOutboundEnabled(page, outbound, false);
+  }
+}
+
+async function restoreOriginalOutbounds(page, outbounds) {
+  for (const outbound of outbounds) {
+    await updateOutboundPayload(page, outbound.id, {
+      tag: outbound.tag,
+      protocol: outbound.protocol,
+      enabled: outbound.enabled,
+      settings: outbound.settings,
+      streamSettings: outbound.streamSettings
+    });
+  }
+}
+
 async function ensureAuthenticated(page) {
   const isCreateVisible = await page.getByRole("heading", { name: "Create admin", exact: true }).isVisible().catch(() => false);
   const isLoginVisible = await page.getByRole("heading", { name: "Panel login", exact: true }).isVisible().catch(() => false);
@@ -747,6 +831,11 @@ async function ensureAuthenticated(page) {
   }
 
   await waitForAuthenticatedShell(page);
+}
+
+async function refreshPanel(page) {
+  await page.reload({ waitUntil: "networkidle" });
+  await ensureAuthenticated(page);
 }
 
 async function waitForAuthenticatedShell(page) {
@@ -833,6 +922,8 @@ async function openNewOutbound(page) {
   await closeDrawer(page);
   await nav(page, "Outbounds");
   await page.getByRole("button", { name: "New Outbound", exact: true }).click();
+  await page.getByRole("button", { name: "Save Outbound", exact: true }).waitFor({ timeout: 12000 });
+  await waitForDrawerTabs(page);
 }
 
 async function nav(page, name) {
@@ -847,7 +938,18 @@ async function openOutbound(page, tag) {
 }
 
 async function selectTab(page, tabName) {
-  await page.getByRole("button", { name: tabName, exact: true }).click();
+  const clicked = await page.evaluate((target) => {
+    const drawers = Array.from(document.querySelectorAll(".drawer"));
+    const drawer = drawers[drawers.length - 1];
+    if (!drawer) return false;
+    const button = Array.from(drawer.querySelectorAll("button")).find((item) => item.textContent?.trim() === target);
+    if (!button) return false;
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    return true;
+  }, tabName);
+  if (!clicked) {
+    throw new Error(`Could not find ${tabName} tab in the active drawer`);
+  }
   await page.waitForTimeout(80);
 }
 
@@ -895,6 +997,19 @@ async function fillTransportFields(page, testCase) {
   }
   if (testCase.network === "splithttp") {
     await fillField(page, "Path", transport.path || "/");
+  }
+  if (testCase.network === "kcp") {
+    await fillField(page, "Header", transport.header || "srtp");
+    await fillField(page, "MTU", transport.mtu || "1350");
+    await fillField(page, "TTI", transport.tti || "20");
+    await fillField(page, "Uplink capacity", transport.uplinkCapacity || "5");
+    await fillField(page, "Downlink capacity", transport.downlinkCapacity || "20");
+    await fillField(page, "Read buffer size", transport.readBufferSize || "2");
+    await fillField(page, "Write buffer size", transport.writeBufferSize || "2");
+    if (transport.congestion) {
+      const sw = page.getByRole("switch", { name: "Enable congestion control", exact: true });
+      if ((await sw.getAttribute("aria-checked")) !== "true") await sw.click();
+    }
   }
 }
 
@@ -956,6 +1071,23 @@ async function closeDrawer(page) {
   }
 }
 
+function drawer(page) {
+  return page.locator(".drawer").last();
+}
+
+async function waitForDrawerTabs(page, timeout = 12000) {
+  await page.waitForFunction(
+    () => {
+      const drawers = Array.from(document.querySelectorAll(".drawer"));
+      const drawer = drawers[drawers.length - 1];
+      if (!drawer) return false;
+      const labels = Array.from(drawer.querySelectorAll("button")).map((item) => item.textContent?.trim());
+      return ["Basic", "Protocol", "Transport"].every((label) => labels.includes(label));
+    },
+    { timeout }
+  );
+}
+
 async function waitForTopMessage(page, pattern, timeout = 12000) {
   const previous = await page.locator(".strip-message").textContent().catch(() => "");
   try {
@@ -1014,8 +1146,7 @@ async function currentDrawerErrors(page) {
 }
 
 async function readConfig(configPath) {
-  const raw = await readFile(configPath, "utf8");
-  return JSON.parse(raw);
+  return readConfigWithRetry(configPath);
 }
 
 async function waitForNoEnabledOutbounds(page, configPath, timeout = 15000) {
@@ -1040,6 +1171,23 @@ async function waitForNoEnabledOutbounds(page, configPath, timeout = 15000) {
   };
 }
 
+async function waitForConfigCondition(configPath, predicate, timeout = 15000) {
+  const deadline = Date.now() + timeout;
+  let lastConfig = null;
+  while (Date.now() < deadline) {
+    try {
+      lastConfig = await readConfig(configPath);
+      if (predicate(lastConfig)) {
+        return lastConfig;
+      }
+    } catch {
+      // keep polling
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return lastConfig || { outbounds: [] };
+}
+
 async function listOutbounds(page) {
   return page.evaluate(async () => {
     const response = await fetch("/api/outbounds");
@@ -1047,36 +1195,80 @@ async function listOutbounds(page) {
   });
 }
 
+async function listInbounds(page) {
+  return page.evaluate(async () => {
+    const response = await fetch("/api/inbounds");
+    return response.json();
+  });
+}
+
 async function setOutboundEnabled(page, outbound, enabled) {
+  await updateOutboundPayload(page, outbound.id, {
+    tag: outbound.tag,
+    protocol: outbound.protocol,
+    enabled,
+    settings: outbound.settings,
+    streamSettings: outbound.streamSettings
+  });
+}
+
+async function updateOutboundPayload(page, id, payload) {
   await page.evaluate(
-    async ({ id, tag, protocol, settings, streamSettings, enabled: nextEnabled }) => {
-      const response = await fetch(`/api/outbounds/${id}`, {
+    async ({ outboundId, outboundPayload }) => {
+      const response = await fetch(`/api/outbounds/${outboundId}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           "X-Black-UI-Request": "fetch"
         },
-        body: JSON.stringify({
-          tag,
-          protocol,
-          enabled: nextEnabled,
-          settings,
-          streamSettings
-        })
+        body: JSON.stringify(outboundPayload)
       });
       if (!response.ok) {
         throw new Error(await response.text());
       }
       return response.json();
     },
-    {
-      id: outbound.id,
-      tag: outbound.tag,
-      protocol: outbound.protocol,
-      settings: outbound.settings,
-      streamSettings: outbound.streamSettings,
-      enabled
-    }
+    { outboundId: id, outboundPayload: payload }
+  );
+}
+
+async function createInbound(page, input) {
+  await page.evaluate(
+    async ({ payload }) => {
+      const response = await fetch("/api/inbounds", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Black-UI-Request": "fetch"
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      return response.json();
+    },
+    { payload: input }
+  );
+}
+
+async function updateInbound(page, id, input) {
+  await page.evaluate(
+    async ({ inboundId, payload }) => {
+      const response = await fetch(`/api/inbounds/${inboundId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Black-UI-Request": "fetch"
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      return response.json();
+    },
+    { inboundId: id, payload: input }
   );
 }
 
@@ -1098,10 +1290,43 @@ async function deleteOutbound(page, id) {
   );
 }
 
+async function deleteInbound(page, id) {
+  await page.evaluate(
+    async ({ inboundId }) => {
+      const response = await fetch(`/api/inbounds/${inboundId}`, {
+        method: "DELETE",
+        headers: {
+          "X-Black-UI-Request": "fetch"
+        }
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      return response.json();
+    },
+    { inboundId: id }
+  );
+}
+
 async function readOutboundFromDisk(configPath, tag) {
   const config = await readConfig(configPath);
   const outbound = (config.outbounds || []).find((item) => item.tag === tag);
   return outbound ? outbound : null;
+}
+
+async function readConfigWithRetry(configPath, timeout = 12000) {
+  const deadline = Date.now() + timeout;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const raw = await readFile(configPath, "utf8");
+      return JSON.parse(raw);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError ?? new Error(`could not read ${configPath}`);
 }
 
 function assertSubset(actual, expected, pathLabel = "root") {

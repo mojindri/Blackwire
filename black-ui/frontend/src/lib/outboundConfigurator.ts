@@ -27,6 +27,14 @@ export interface OutboundEditorState {
   httpupgradePath: string;
   httpupgradeHost: string;
   splitHttpPath: string;
+  kcpHeader: string;
+  kcpMtu: string;
+  kcpTti: string;
+  kcpUplinkCapacity: string;
+  kcpDownlinkCapacity: string;
+  kcpCongestion: boolean;
+  kcpReadBufferSize: string;
+  kcpWriteBufferSize: string;
   tlsServerName: string;
   tlsAlpn: string;
   tlsCertificateFile: string;
@@ -74,6 +82,14 @@ export function createOutboundEditorState(outbound?: Outbound | null): OutboundE
     httpupgradePath: stringValue(objectValue(streamSettings.value.httpupgradeSettings)?.path) ?? "",
     httpupgradeHost: stringValue(objectValue(streamSettings.value.httpupgradeSettings)?.host) ?? "",
     splitHttpPath: stringValue(objectValue(streamSettings.value.splithttpSettings)?.path) ?? "",
+    kcpHeader: stringValue(objectValue(streamSettings.value.kcpSettings)?.header) ?? "",
+    kcpMtu: numberString(objectValue(streamSettings.value.kcpSettings)?.mtu),
+    kcpTti: numberString(objectValue(streamSettings.value.kcpSettings)?.tti),
+    kcpUplinkCapacity: numberString(objectValue(streamSettings.value.kcpSettings)?.uplink_capacity),
+    kcpDownlinkCapacity: numberString(objectValue(streamSettings.value.kcpSettings)?.downlink_capacity),
+    kcpCongestion: boolValue(objectValue(streamSettings.value.kcpSettings)?.congestion) ?? false,
+    kcpReadBufferSize: numberString(objectValue(streamSettings.value.kcpSettings)?.read_buffer_size),
+    kcpWriteBufferSize: numberString(objectValue(streamSettings.value.kcpSettings)?.write_buffer_size),
     tlsServerName: stringValue(objectValue(streamSettings.value.tlsSettings)?.serverName) ?? "",
     tlsAlpn: arrayOfStrings(objectValue(streamSettings.value.tlsSettings)?.alpn).join(", "),
     tlsCertificateFile: stringValue(objectValue(streamSettings.value.tlsSettings)?.certificateFile) ?? "",
@@ -178,6 +194,25 @@ export function buildOutboundInput(state: OutboundEditorState): OutboundInput {
     streamSettings.splithttpSettings = pruneEmpty(splitHttpSettings);
   } else {
     delete streamSettings.splithttpSettings;
+  }
+
+  if (state.network === "kcp") {
+    const kcpSettings = cloneObject(objectValue(streamSettings.kcpSettings));
+    applyStringField(kcpSettings, "header", state.kcpHeader);
+    applyNumberField(kcpSettings, "mtu", state.kcpMtu);
+    applyNumberField(kcpSettings, "tti", state.kcpTti);
+    applyNumberField(kcpSettings, "uplink_capacity", state.kcpUplinkCapacity);
+    applyNumberField(kcpSettings, "downlink_capacity", state.kcpDownlinkCapacity);
+    if (state.kcpCongestion) {
+      kcpSettings.congestion = true;
+    } else {
+      delete kcpSettings.congestion;
+    }
+    applyNumberField(kcpSettings, "read_buffer_size", state.kcpReadBufferSize);
+    applyNumberField(kcpSettings, "write_buffer_size", state.kcpWriteBufferSize);
+    streamSettings.kcpSettings = pruneEmpty(kcpSettings);
+  } else {
+    delete streamSettings.kcpSettings;
   }
 
   if (state.security === "tls") {
@@ -328,6 +363,14 @@ function syncStructuredFields(state: OutboundEditorState): OutboundEditorState {
     httpupgradePath: next.httpupgradePath,
     httpupgradeHost: next.httpupgradeHost,
     splitHttpPath: next.splitHttpPath,
+    kcpHeader: next.kcpHeader,
+    kcpMtu: next.kcpMtu,
+    kcpTti: next.kcpTti,
+    kcpUplinkCapacity: next.kcpUplinkCapacity,
+    kcpDownlinkCapacity: next.kcpDownlinkCapacity,
+    kcpCongestion: next.kcpCongestion,
+    kcpReadBufferSize: next.kcpReadBufferSize,
+    kcpWriteBufferSize: next.kcpWriteBufferSize,
     tlsServerName: next.tlsServerName,
     tlsAlpn: next.tlsAlpn,
     tlsCertificateFile: next.tlsCertificateFile,
@@ -395,8 +438,12 @@ function pruneEmpty<T extends JsonObject>(value: T): T {
 function removeTransientNetworkKeys(streamSettings: JsonObject): JsonObject {
   const next = cloneObject(streamSettings);
   for (const key of ["wsSettings", "grpcSettings", "httpupgradeSettings", "splithttpSettings"]) {
+    if (key === "splithttpSettings" || key === "httpupgradeSettings" || key === "grpcSettings" || key === "wsSettings") {
+      // keep existing transient network cleanup grouped here
+    }
     if (!objectValue(next[key])) delete next[key];
   }
+  if (!objectValue(next.kcpSettings)) delete next.kcpSettings;
   return next;
 }
 
@@ -419,6 +466,10 @@ function objectValue(value: unknown): JsonObject | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function boolValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function numberString(value: unknown): string {
