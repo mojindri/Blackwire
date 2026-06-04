@@ -7,13 +7,10 @@ export interface RoutingRuleEditor {
   domain: string;
   ip: string;
   port: string;
-  network: string;
-  sourceIP: string;
   inboundTag: string;
   protocol: string;
   user: string;
   outboundTag: string;
-  balancerTag: string;
 }
 
 export interface RoutingBalancerProfileEditor {
@@ -25,7 +22,6 @@ export interface RoutingBalancerEditor {
   tag: string;
   selector: string;
   strategy: string;
-  fallbackTag: string;
   adaptiveFailureThreshold: string;
   adaptiveCooldownSecs: string;
   adaptiveEwmaAlpha: string;
@@ -67,6 +63,8 @@ export interface AdvancedConfigEditorState {
   rawError: string;
   advancedOpen: boolean;
   routingDomainStrategy: string;
+  routingGeoipFile: string;
+  routingGeositeFile: string;
   routingRules: RoutingRuleEditor[];
   routingBalancers: RoutingBalancerEditor[];
   dnsQueryStrategy: string;
@@ -125,6 +123,8 @@ export function createSectionEditorState(section: ConfigSection | null): Advance
     rawError: parsed.error,
     advancedOpen: false,
     routingDomainStrategy: stringValue(asObject(value).domainStrategy),
+    routingGeoipFile: stringValue(asObject(value).geoipFile),
+    routingGeositeFile: stringValue(asObject(value).geositeFile),
     routingRules: arrayValue(asObject(value).rules).map(toRoutingRuleEditor),
     routingBalancers: arrayValue(asObject(value).balancers).map(toRoutingBalancerEditor),
     dnsQueryStrategy: stringValue(asObject(value).queryStrategy),
@@ -199,7 +199,7 @@ export function validateSectionState(state: AdvancedConfigEditorState): Advanced
 
   if (state.name === "routing") {
     state.routingRules.forEach((rule, index) => {
-      if (!(rule.outboundTag || rule.balancerTag).trim()) {
+      if (!rule.outboundTag.trim()) {
         issues.push({ field: `routingRules.${index}`, message: "Each routing rule needs an outbound tag." });
       }
     });
@@ -251,13 +251,12 @@ export function applyAdaptiveRoutingTemplate(state: AdvancedConfigEditorState, o
   return syncSectionState({
     ...state,
     enabled: true,
-    routingRules: [{ type: "field", domain: "", ip: "", port: "", network: "", sourceIP: "", inboundTag: "", protocol: "", user: "", outboundTag: "", balancerTag: "auto-proxy" }],
+    routingRules: [{ type: "field", domain: "", ip: "", port: "", inboundTag: "", protocol: "", user: "", outboundTag: "auto-proxy" }],
     routingBalancers: [
       {
         tag: "auto-proxy",
         selector: `${primary.tag}, ${backup.tag}`,
         strategy: "adaptive",
-        fallbackTag: "",
         adaptiveFailureThreshold: "2",
         adaptiveCooldownSecs: "30",
         adaptiveEwmaAlpha: "0.2",
@@ -286,6 +285,8 @@ function buildSectionObject(state: AdvancedConfigEditorState, base: unknown): un
   const root = asObject(base);
   if (state.name === "routing") {
     setOrDelete(root, "domainStrategy", state.routingDomainStrategy.trim());
+    setOrDelete(root, "geoipFile", state.routingGeoipFile.trim());
+    setOrDelete(root, "geositeFile", state.routingGeositeFile.trim());
     root.rules = state.routingRules.map((rule) => {
       const next = asObject({});
       setOrDelete(next, "type", rule.type.trim() || "field");
@@ -295,14 +296,13 @@ function buildSectionObject(state: AdvancedConfigEditorState, base: unknown): un
       setOrDelete(next, "inboundTag", csvValues(rule.inboundTag));
       setOrDelete(next, "protocol", csvValues(rule.protocol));
       setOrDelete(next, "user", csvValues(rule.user));
-      setOrDelete(next, "outboundTag", (rule.outboundTag || rule.balancerTag).trim());
+      setOrDelete(next, "outboundTag", rule.outboundTag.trim());
       return next;
     });
     root.balancers = state.routingBalancers.map((balancer) => {
       const next = asObject({});
       setOrDelete(next, "tag", balancer.tag.trim());
       setOrDelete(next, "selector", csvValues(balancer.selector));
-      setOrDelete(next, "fallbackTag", balancer.fallbackTag.trim());
       const profiles = balancer.profiles
         .filter((item) => item.name.trim() && item.outboundTag.trim())
         .map((item) => ({
@@ -399,13 +399,10 @@ function toRoutingRuleEditor(value: unknown): RoutingRuleEditor {
     domain: csvText(rule.domain),
     ip: csvText(rule.ip),
     port: scalarText(rule.port),
-    network: stringValue(rule.network),
-    sourceIP: csvText(rule.sourceIP),
     inboundTag: csvText(rule.inboundTag),
     protocol: csvText(rule.protocol),
     user: csvText(rule.user),
-    outboundTag: stringValue(rule.outboundTag),
-    balancerTag: stringValue(rule.balancerTag)
+    outboundTag: stringValue(rule.outboundTag)
   };
 }
 
@@ -417,7 +414,6 @@ function toRoutingBalancerEditor(value: unknown): RoutingBalancerEditor {
     tag: stringValue(balancer.tag),
     selector: csvText(balancer.selector),
     strategy: stringValue(balancer.strategy),
-    fallbackTag: stringValue(balancer.fallbackTag),
     adaptiveFailureThreshold: numberString(adaptive.failureThreshold),
     adaptiveCooldownSecs: numberString(adaptive.cooldownSecs),
     adaptiveEwmaAlpha: scalarText(adaptive.ewmaAlpha),

@@ -188,13 +188,35 @@ const cases = [
     listen: "127.0.0.1",
     port: basePort + 10,
     protocolValues: { decryption: "none" },
+    transportValues: {
+      header: "srtp",
+      mtu: "1350",
+      tti: "20",
+      uplinkCapacity: "5",
+      downlinkCapacity: "20",
+      congestion: true,
+      readBufferSize: "2",
+      writeBufferSize: "2"
+    },
     expected: {
       protocol: "vless",
       transport: "kcp",
-      streamSettings: { network: "kcp", security: "none" },
+      streamSettings: {
+        network: "kcp",
+        security: "none",
+        kcpSettings: {
+          header: "srtp",
+          mtu: 1350,
+          tti: 20,
+          uplink_capacity: 5,
+          downlink_capacity: 20,
+          congestion: true,
+          read_buffer_size: 2,
+          write_buffer_size: 2
+        }
+      },
       settings: { decryption: "none" }
-    },
-    optional: true
+    }
   },
   {
     id: "vless-quic",
@@ -210,8 +232,7 @@ const cases = [
       transport: "quic",
       streamSettings: { network: "quic", security: "none" },
       settings: { decryption: "none" }
-    },
-    optional: true
+    }
   },
   {
     id: "vless-tls",
@@ -469,37 +490,16 @@ async function main() {
 }
 
 async function runCase(page, testCase, configPath) {
-  if (testCase.optional && ["kcp", "quic"].includes(testCase.network)) {
-    results.push({
-      name: testCase.name,
-      status: "SKIPPED",
-      details: `${testCase.network} transport not exposed by the current UI`
-    });
-    skippedCases.push({
-      name: testCase.name,
-      reason: `${testCase.network} transport not exposed by the current UI`
-    });
-    return;
-  }
-  if (testCase.optional && !(await isTransportAvailable(page, testCase.network))) {
-    results.push({
-      name: testCase.name,
-      status: "SKIPPED",
-      details: `${testCase.network} transport not exposed by current capabilities`
-    });
-    skippedCases.push({
-      name: testCase.name,
-      reason: `${testCase.network} transport not exposed by current capabilities`
-    });
-    return;
-  }
-
   const { tag, protocol, network, security, listen, port, protocolValues = {}, transportValues = {}, securityValues = {} } = testCase;
   const expectation = { enabled: true, ...testCase.expected };
   const expectFailure = Boolean(testCase.expectFailure);
   const failureHint = testCase.expectedFailureHint || "expected guard/validation error";
 
   await openNewInbound(page);
+  if (!(await isTransportAvailable(page, testCase.network))) {
+    await closeDrawer(page).catch(() => {});
+    throw new Error(`${testCase.network} transport is not exposed by the current UI`);
+  }
   await selectTab(page, "Basic");
   await fillField(page, "Tag", tag);
   await selectField(page, "Protocol", protocol);
@@ -785,6 +785,8 @@ async function openNewInbound(page) {
   await closeDrawer(page);
   await nav(page, "Inbounds");
   await page.getByRole("button", { name: "New Inbound", exact: true }).click();
+  await page.getByRole("button", { name: "Save Inbound", exact: true }).waitFor({ timeout: 12000 });
+  await waitForDrawerTabs(page);
 }
 
 async function openExistingInbound(page, tag) {
@@ -795,7 +797,18 @@ async function openExistingInbound(page, tag) {
 }
 
 async function selectTab(page, tabName) {
-  await page.getByRole("button", { name: tabName, exact: true }).click();
+  const clicked = await page.evaluate((target) => {
+    const drawers = Array.from(document.querySelectorAll(".drawer"));
+    const drawer = drawers[drawers.length - 1];
+    if (!drawer) return false;
+    const button = Array.from(drawer.querySelectorAll("button")).find((item) => item.textContent?.trim() === target);
+    if (!button) return false;
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    return true;
+  }, tabName);
+  if (!clicked) {
+    throw new Error(`Could not find ${tabName} tab in the active drawer`);
+  }
   await page.waitForTimeout(80);
 }
 
@@ -804,8 +817,9 @@ async function selectField(page, label, value) {
 }
 
 async function fillField(page, label, value) {
-  await page.getByLabel(label, { exact: true }).click({ delay: 20 });
-  await page.getByLabel(label, { exact: true }).fill(String(value));
+  const field = page.getByLabel(label, { exact: true });
+  await field.click({ delay: 20 });
+  await field.fill(String(value));
 }
 
 async function fillProtocolFields(page, protocol, values) {
@@ -833,6 +847,19 @@ async function fillTransportFields(page, network, values) {
   }
   if (network === "splithttp") {
     await fillField(page, "Path", values.path || "/");
+  }
+  if (network === "kcp") {
+    await fillField(page, "Header", values.header || "srtp");
+    await fillField(page, "MTU", values.mtu || "1350");
+    await fillField(page, "TTI", values.tti || "20");
+    await fillField(page, "Uplink capacity", values.uplinkCapacity || "5");
+    await fillField(page, "Downlink capacity", values.downlinkCapacity || "20");
+    await fillField(page, "Read buffer size", values.readBufferSize || "2");
+    await fillField(page, "Write buffer size", values.writeBufferSize || "2");
+    if (values.congestion) {
+      const sw = page.getByRole("switch", { name: "Enable congestion control", exact: true });
+      if ((await sw.getAttribute("aria-checked")) !== "true") await sw.click();
+    }
   }
 }
 
@@ -907,6 +934,23 @@ async function closeDrawer(page) {
   if (await close.isVisible().catch(() => false)) await close.click();
 }
 
+function drawer(page) {
+  return page.locator(".drawer").last();
+}
+
+async function waitForDrawerTabs(page, timeout = 12000) {
+  await page.waitForFunction(
+    () => {
+      const drawers = Array.from(document.querySelectorAll(".drawer"));
+      const drawer = drawers[drawers.length - 1];
+      if (!drawer) return false;
+      const labels = Array.from(drawer.querySelectorAll("button")).map((item) => item.textContent?.trim());
+      return ["Basic", "Protocol", "Transport"].every((label) => labels.includes(label));
+    },
+    { timeout }
+  );
+}
+
 async function waitForTopMessage(page, pattern, timeout = 12000) {
   await page.waitForFunction(
     (source) => {
@@ -961,8 +1005,7 @@ async function launchBrowser() {
 }
 
 async function readInboundFromDisk(configPath, tag) {
-  const raw = await readFile(configPath, "utf8");
-  const config = JSON.parse(raw);
+  const config = await readConfigWithRetry(configPath);
   const inbound = (config.inbounds || []).find((item) => item.tag === tag);
   if (!inbound) return null;
   return {
@@ -973,9 +1016,23 @@ async function readInboundFromDisk(configPath, tag) {
 }
 
 async function isInboundInConfig(configPath, tag) {
-  const raw = await readFile(configPath, "utf8");
-  const config = JSON.parse(raw);
+  const config = await readConfigWithRetry(configPath);
   return (config.inbounds || []).some((item) => item.tag === tag);
+}
+
+async function readConfigWithRetry(configPath, timeout = 12000) {
+  const deadline = Date.now() + timeout;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const raw = await readFile(configPath, "utf8");
+      return JSON.parse(raw);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError ?? new Error(`could not read ${configPath}`);
 }
 
 function assertSubset(actual, expected, path = "root") {
