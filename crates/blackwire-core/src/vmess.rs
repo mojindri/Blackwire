@@ -39,7 +39,7 @@ pub(crate) fn build_vmess_inbound(
         registry.add_user(uuid, email);
     }
 
-    Ok(VmessInbound::new(&cfg.tag, registry))
+    Ok(VmessInbound::new(cfg.tag.as_str(), registry))
 }
 
 /// Build a VMess outbound handler from config.
