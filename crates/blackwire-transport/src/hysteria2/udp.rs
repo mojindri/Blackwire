@@ -180,18 +180,26 @@ impl DatagramLane {
     }
 }
 
+/// Priority mode that governs which datagram lane is used for outbound UDP traffic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DatagramPriorityMode {
     #[default]
+    /// Standard single-lane mode: all datagrams use the unreliable QUIC datagram channel.
     Standard,
+    /// H2+ mode: small and DNS-like datagrams use a priority lane; larger ones use unreliable.
     H2Plus,
 }
 
+/// Policy controlling how outbound UDP datagrams are scheduled and retried.
 #[derive(Debug, Clone, Copy)]
 pub struct DatagramPolicy {
+    /// Datagram priority mode determining which QUIC lane to use.
     pub mode: DatagramPriorityMode,
+    /// Maximum time in milliseconds a datagram may wait in the queue before being dropped.
     pub max_queue_delay_ms: u64,
+    /// Whether to immediately retry DNS-like datagrams on a priority lane.
     pub fast_dns_retry: bool,
+    /// Delay in milliseconds before the fast DNS retry is dispatched.
     pub fast_dns_retry_delay_ms: u64,
 }
 
@@ -207,6 +215,7 @@ impl Default for DatagramPolicy {
 }
 
 impl DatagramPolicy {
+    /// Select the appropriate datagram lane for the given destination and payload size.
     pub fn lane_for(&self, dest: &Destination, payload_len: usize) -> DatagramLane {
         match self.mode {
             DatagramPriorityMode::Standard => DatagramLane::Unreliable,
@@ -220,11 +229,13 @@ impl DatagramPolicy {
         }
     }
 
+    /// Returns `true` if a fast retry on the priority lane should be attempted for this DNS destination.
     pub fn should_fast_retry_dns(&self, dest: &Destination) -> bool {
         self.mode == DatagramPriorityMode::H2Plus && self.fast_dns_retry && is_dns_like(dest)
     }
 }
 
+/// Classify a UDP datagram into a `PacketClass` based on destination and payload size.
 pub fn packet_class_for(dest: &Destination, payload_len: usize) -> PacketClass {
     if is_dns_like(dest) {
         PacketClass::Dns
@@ -235,6 +246,7 @@ pub fn packet_class_for(dest: &Destination, payload_len: usize) -> PacketClass {
     }
 }
 
+/// Build an `InnerFlowKey` that identifies a hysteria2 UDP session for scheduling purposes.
 pub fn flow_key_for(dest: &Destination, session_id: u32) -> InnerFlowKey {
     let (dst_ip, dst_port) = match dest {
         Destination::V4(ip, port) => (Some(IpAddr::V4(*ip)), *port),
@@ -327,6 +339,7 @@ fn decode_destination(data: &mut &[u8]) -> Option<Destination> {
     }
 }
 
+/// Forward-error-correction algorithm applied to outbound hysteria2 UDP packets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FecMode {
     /// Disable forward-error-correction parity generation.
@@ -362,6 +375,7 @@ impl FecMode {
     }
 }
 
+/// Runtime policy controlling forward-error-correction behaviour for a hysteria2 session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FecPolicy {
     /// Selected parity algorithm.
