@@ -372,10 +372,12 @@ pub enum FastRelayFlushPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FastPoolPolicy {
-    /// Ramp pool size based on destination hotness.
-    Adaptive,
-    /// Disable pooling entirely (default).
+    /// Ramp pool size based on destination hotness (default).
+    /// Pooling only activates for destinations that exceed `min_hotness_for_pool`
+    /// recent requests; one-shot destinations are never pooled.
     #[default]
+    Adaptive,
+    /// Disable pooling entirely.
     Disabled,
     /// Use a fixed pool size set by `poolSize`.
     Fixed,
