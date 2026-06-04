@@ -122,7 +122,7 @@ async fn exchange_udp_datagram(
     sock: &UdpSocket,
     upstream: std::net::SocketAddr,
     data: &[u8],
-    recv_buf: &mut Vec<u8>,
+    recv_buf: &mut [u8],
 ) -> Result<Option<usize>, ProxyError> {
     sock.send_to(data, upstream)
         .await
