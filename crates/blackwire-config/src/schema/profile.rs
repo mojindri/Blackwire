@@ -354,6 +354,9 @@ pub enum FastRelayFlushPolicy {
     Immediate,
     /// Flush when a direction reaches EOF/shutdown.
     Deferred,
+    /// Coalesce flushes per burst: flush only when the source pauses or reaches
+    /// EOF. Keeps bulk syscall pressure low without delaying interactive writes.
+    Adaptive,
 }
 
 /// TCP connection pool strategy for the Fast Profile outbound.
