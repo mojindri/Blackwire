@@ -31,7 +31,9 @@ use tracing::{debug, warn};
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::InboundHandler;
-use blackwire_common::{Address, BoxedStream, Network, ProxyError};
+use tokio::io::BufReader;
+
+use blackwire_common::{Address, BoxedStream, Network, PrependedStream, ProxyError};
 
 use super::codec::{compute_token, decode_request, CMD_CONNECT, CMD_UDP_ASSOCIATE, TOKEN_LEN};
 
@@ -111,11 +113,19 @@ impl InboundHandler for TrojanInbound {
         source: SocketAddr,
         dispatcher: Arc<dyn Dispatcher>,
     ) -> Result<(), ProxyError> {
-        // Decode the Trojan request header (token + CRLF + address + CRLF).
-        let request = decode_request(&mut stream).await.map_err(|e| {
+        // Buffer the header reads to collapse ~5-6 small recvfrom syscalls into one.
+        // The Trojan header (token 56B + CRLF + cmd + atyp + addr + CRLF) fits in 128 bytes.
+        // Any payload read ahead is recovered via PrependedStream.
+        let mut buf_reader = BufReader::with_capacity(128, &mut stream);
+        let request = decode_request(&mut buf_reader).await.map_err(|e| {
             debug!(source = %source, error = %e, "Trojan header parse failed");
             e
         })?;
+        let leftover = buf_reader.buffer().to_vec();
+        drop(buf_reader);
+        if !leftover.is_empty() {
+            stream = Box::new(PrependedStream::new(stream, leftover));
+        }
 
         // Validate the token in constant time.
         if !self.validate_token(&request.token) {
