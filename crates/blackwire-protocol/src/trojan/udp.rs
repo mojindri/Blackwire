@@ -46,9 +46,25 @@ pub async fn relay_trojan_udp(
     });
 
     let mut buf = vec![0u8; 65535];
+    // Accumulator with a cursor so consumed bytes are never memmoved until
+    // the prefix grows large enough to be worth compacting (amortised O(1)).
     let mut acc = Vec::new();
+    let mut acc_pos = 0usize;
+    // Pre-allocated reply buffer — reused across every datagram exchange.
+    let mut reply_buf = vec![0u8; 65535];
     let read_result = async {
         loop {
+            // Compact only when more than half of acc is consumed prefix.
+            if acc_pos > 0 {
+                if acc_pos >= acc.len() {
+                    acc.clear();
+                    acc_pos = 0;
+                } else if acc_pos > acc.len() / 2 {
+                    acc.drain(..acc_pos);
+                    acc_pos = 0;
+                }
+            }
+
             acc.reserve(4096);
             let n = reader
                 .read(&mut buf)
@@ -59,31 +75,25 @@ pub async fn relay_trojan_udp(
             }
             acc.extend_from_slice(&buf[..n]);
 
-            let mut consumed_total = 0usize;
-            while !acc.is_empty() {
-                match parse_udp_datagram(&acc[consumed_total..]) {
+            loop {
+                match parse_udp_datagram(&acc[acc_pos..]) {
                     Ok((dest, payload, consumed)) => {
-                        consumed_total += consumed;
+                        acc_pos += consumed;
                         if payload.is_empty() {
                             continue;
                         }
                         let upstream = resolve_udp_dest(&dest, dns.as_deref()).await?;
-                        if let Some(reply_payload) =
-                            exchange_udp_datagram(&udp, upstream, payload).await?
+                        if let Some(rn) =
+                            exchange_udp_datagram(&udp, upstream, payload, &mut reply_buf).await?
                         {
-                            let reply = encode_udp_datagram(&dest, &reply_payload)?;
+                            let reply = encode_udp_datagram(&dest, &reply_buf[..rn])?;
                             reply_tx.send(reply).await.map_err(|_| {
                                 ProxyError::Transport("Trojan UDP reply channel closed".into())
                             })?;
                         }
                     }
-                    Err(ProxyError::Protocol(_)) if acc.len() > 65507 => {
-                        return Err(ProxyError::Protocol(
-                            "Trojan UDP datagram buffer overflow".into(),
-                        ));
-                    }
                     Err(ProxyError::Protocol(_)) => {
-                        if acc.len() > 65507 {
+                        if acc.len() - acc_pos > 65507 {
                             return Err(ProxyError::Protocol(
                                 "Trojan UDP datagram buffer overflow".into(),
                             ));
@@ -92,9 +102,6 @@ pub async fn relay_trojan_udp(
                     }
                     Err(e) => return Err(e),
                 }
-            }
-            if consumed_total > 0 {
-                acc.drain(..consumed_total);
             }
         }
         Ok::<(), ProxyError>(())
@@ -110,18 +117,19 @@ pub async fn relay_trojan_udp(
 }
 
 /// Send one datagram to `upstream` and wait for a single reply on a shared socket.
+/// Writes the reply into `recv_buf` and returns the byte count, avoiding a per-call allocation.
 async fn exchange_udp_datagram(
     sock: &UdpSocket,
     upstream: std::net::SocketAddr,
     data: &[u8],
-) -> Result<Option<Vec<u8>>, ProxyError> {
+    recv_buf: &mut Vec<u8>,
+) -> Result<Option<usize>, ProxyError> {
     sock.send_to(data, upstream)
         .await
         .map_err(|e| ProxyError::Transport(format!("Trojan UDP send: {e}")))?;
 
-    let mut buf = vec![0u8; 65535];
-    match tokio::time::timeout(Duration::from_secs(5), sock.recv_from(&mut buf)).await {
-        Ok(Ok((n, _))) if n > 0 => Ok(Some(buf[..n].to_vec())),
+    match tokio::time::timeout(Duration::from_secs(5), sock.recv_from(recv_buf)).await {
+        Ok(Ok((n, _))) if n > 0 => Ok(Some(n)),
         Ok(Ok(_)) => Ok(None),
         Ok(Err(e)) => Err(ProxyError::Transport(format!("Trojan UDP recv: {e}"))),
         Err(_) => Ok(None),
