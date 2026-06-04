@@ -875,10 +875,20 @@ fn adaptive_splice_ready_for_directions(
 
 #[cfg(target_os = "linux")]
 fn update_full_read_streak(current: u8, read_len: usize, buf_len: usize) -> u8 {
-    if read_len == buf_len {
+    // A bulk sender keeps the socket receive buffer backed up, so reads come
+    // back large. But TCP reads are ragged and rarely fill the buffer *exactly*,
+    // so the previous `read_len == buf_len` test (with a hard reset on any short
+    // read) almost never reached the splice threshold on real connections — the
+    // zero-copy path stayed dormant and the relay kept doing user-space copies.
+    //
+    // Treat any read that fills at least half the buffer as bulk evidence, and
+    // merely decay the streak on a short read instead of wiping it. The byte and
+    // elapsed-time guards in `adaptive_splice_ready` still gate the actual switch,
+    // so genuinely interactive flows never accumulate enough to splice.
+    if read_len.saturating_mul(2) >= buf_len {
         current.saturating_add(1)
     } else {
-        0
+        current.saturating_sub(1)
     }
 }
 
@@ -1031,11 +1041,20 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn adaptive_splice_full_read_streak_resets_on_short_read() {
-        let streak = update_full_read_streak(0, 16 * 1024, 16 * 1024);
-        let streak = update_full_read_streak(streak, 16 * 1024, 16 * 1024);
+    fn adaptive_splice_full_read_streak_counts_near_full_and_decays() {
+        // Reads that fill at least half the buffer count as bulk evidence —
+        // including ragged reads that don't fill it exactly.
+        let streak = update_full_read_streak(0, 16 * 1024, 16 * 1024); // exact full
+        let streak = update_full_read_streak(streak, 10 * 1024, 16 * 1024); // 62%, still bulk
         assert_eq!(streak, 2);
-        assert_eq!(update_full_read_streak(streak, 1024, 16 * 1024), 0);
+        // A short (interactive-sized) read decays the streak by one instead of
+        // wiping it, so one ragged read among many bulk reads doesn't reset.
+        let streak = update_full_read_streak(streak, 1024, 16 * 1024);
+        assert_eq!(streak, 1);
+        // Sustained short reads still drain it to zero (a genuinely small flow).
+        let streak = update_full_read_streak(streak, 1024, 16 * 1024);
+        assert_eq!(streak, 0);
+        assert_eq!(update_full_read_streak(0, 1024, 16 * 1024), 0);
     }
 
     #[cfg(target_os = "linux")]
