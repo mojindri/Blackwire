@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, BufReader};
 use tracing::{debug, warn};
 
 use blackwire_app::context::Context;
@@ -116,8 +116,22 @@ impl InboundHandler for VlessInbound {
             };
             (req, buf)
         } else {
-            let req =
-                with_handshake_timeout(self.handshake_timeout, decode_request(&mut stream)).await;
+            // Buffer the header reads to avoid one syscall per field (~6-10 recvfrom
+            // calls per connection without this). A 64-byte buffer is large enough to
+            // hold the entire VLESS request header in one kernel round-trip.
+            // Any payload bytes read ahead into the buffer are recovered and prepended
+            // back onto the stream via PrependedStream before the relay starts.
+            let mut buf_reader = BufReader::with_capacity(64, &mut stream);
+            let req = with_handshake_timeout(
+                self.handshake_timeout,
+                decode_request(&mut buf_reader),
+            )
+            .await;
+            let leftover = buf_reader.buffer().to_vec();
+            drop(buf_reader);
+            if !leftover.is_empty() {
+                stream = Box::new(PrependedStream::new(stream, leftover));
+            }
             (req, Vec::new())
         };
         metrics::histogram!("proxy_inbound_parse_seconds", "inbound" => self.tag.to_string())
