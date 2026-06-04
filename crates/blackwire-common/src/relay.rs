@@ -528,6 +528,9 @@ async fn copy_one_way_with_idle<R, W>(
         last_activity.store(now_ms(), Ordering::Relaxed);
     }
 
+    // Propagate EOF to the peer so it doesn't stall waiting for data that will
+    // never arrive (idle timeout fired or reader errored on the other half).
+    let _ = writer.shutdown().await;
     pool.release(buf);
 }
 
