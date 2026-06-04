@@ -24,6 +24,8 @@ pub mod tcp;
 
 // QUIC and Hysteria2
 pub mod hysteria2;
+/// Packet classification and deficit-round-robin scheduler for TUN inner flows.
+pub mod innerflow;
 pub mod quic;
 
 // TLS and WebSocket transports
@@ -57,18 +59,23 @@ pub mod shadowtls;
 pub use grpc::{decode_grpc_frame, encode_grpc_frame, grpc_accept, grpc_connect, GrpcStream};
 pub use httpupgrade::{accept_httpupgrade, dial_httpupgrade, httpupgrade_listen_path};
 pub use hysteria2::{
-    Hysteria2Client, Hysteria2ClientConfig, Hysteria2OutboundHandler, Hysteria2Server,
-    Hysteria2ServerConfig, Hysteria2UdpSession, UdpDestination,
+    DatagramLane, DatagramPolicy, DatagramPriorityMode, FecMode, FecPolicy, Hysteria2Client,
+    Hysteria2ClientConfig, Hysteria2OutboundHandler, Hysteria2Server, Hysteria2ServerConfig,
+    Hysteria2UdpSession, UdpDestination,
 };
+pub use innerflow::{InnerFlowKey, InnerFlowPacket, InnerFlowScheduler, PacketClass};
 pub use mkcp::{
     mkcp_accept_once, mkcp_accept_sessions, mkcp_connect, MkcpClientConfig, MkcpServerConfig,
 };
 pub use quic::{
     build_client_endpoint, build_client_endpoint_with_alpn, build_server_endpoint,
     build_server_endpoint_with_alpn, dev_self_signed, dev_self_signed_for_names,
-    ensure_crypto_provider,
+    ensure_crypto_provider, QuicSocketConfig,
 };
-pub use quic::{BrutalCC, BrutalCCFactory};
+pub use quic::{
+    BadNetControllerFactory, BrutalCC, BrutalCCFactory, CongestionConfig, CongestionDirection,
+    CongestionMode, LossFingerprint, PathSample,
+};
 pub use reality::{
     complete_tls13_server_handshake, reality_server_tls_stream, tls_cert_for_auth_key,
     tls_pem_for_auth_key, RealityAccepted, RealityClient, RealityClientConfig, RealityServer,
@@ -90,9 +97,14 @@ pub use tls::{
 };
 pub use tun::{
     build_tcp_packet, build_tcp_rst, create_tun, current_tun_support, ensure_tun_runtime_supported,
-    IpPacket, TransportProtocol, TunConfig, TunPlatformSupport, TunRuntime, UdpNatTable,
+    AfXdpBackend, AfXdpCapabilities, IpPacket, TransportProtocol, TunAfXdpConfig, TunBatchConfig,
+    TunConfig, TunDevice, TunLinuxBackend, TunLinuxConfig, TunPlatformSupport, TunRuntime,
+    UdpNatTable,
 };
-pub use v2rayquic::{accepted_quic_stream, quic_connect, quic_server_endpoint, QuicStream};
+pub use v2rayquic::{
+    accepted_quic_stream, quic_connect, quic_connect_with_socket_config, quic_server_endpoint,
+    quic_server_endpoint_with_socket_config, QuicStream,
+};
 pub use ws::{ws_accept, ws_connect, WsConnectConfig};
 
 // Re-export quinn's congestion module so downstream crates can implement

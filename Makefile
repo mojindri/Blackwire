@@ -18,6 +18,8 @@ include make/aliases.mk
 	fmt fmt-check lint audit audit-optional deny-optional fuzz-smoke \
 	clean clean-generated clean-all-generated clean-reports clean-pcaps clean-lima-artifacts clean-bench \
 	bench bench-build bench-xray bench-singbox bench-smoke \
+	competitive-smoke competitive-clean competitive-loss competitive-mobile competitive-tun \
+	competitive-quic competitive-expensive competitive-all competitive-report \
 	bench-protocol bench-protocol-quick bench-flamegraph \
 	shared-path-local-gate \
 	help help-compat help-internal bench-vm-smoke bench-vm-total bench-vps-smoke bench-vps-total \
@@ -127,6 +129,9 @@ help:
 	@echo "  make finalize        - lab: stable + advanced smoke + Docker external-client matrix"
 	@echo "  make interop-server-docker   - lab: Xray/sing-box clients -> our server (Docker)"
 	@echo "  make bench           - Docker latency benchmark: xray + singbox + blackwire"
+	@echo "  make competitive-smoke - native competitive lab smoke matrix"
+	@echo "  make competitive-clean - native competitive clean-link matrix"
+	@echo "  make competitive-report - summarize labs/competitive reports"
 	@echo "  make bench-xray      - Docker benchmark: xray series only"
 	@echo "  make bench-singbox   - Docker benchmark: singbox series only"
 	@echo "  make bench-remote VPS=root@1.2.3.4  - run bench on remote VPS over SSH"
@@ -232,7 +237,45 @@ perf: bench-vm-total ## Lima VM performance benchmark.
 perf-vps: bench-vps-total ## VPS performance benchmark (needs SSH_SERVER/SSH_CLIENT).
 
 clean-bench:
-	rm -rf labs/realistic/reports/production/bench benches/reports
+	rm -rf labs/realistic/reports/production/bench benches/reports labs/competitive/reports/*.jsonl labs/competitive/reports/*.md labs/competitive/reports/*.log
+
+.PHONY: competitive-smoke competitive-clean competitive-loss competitive-mobile competitive-tun competitive-quic competitive-expensive competitive-all competitive-report
+
+## competitive-smoke: Native competitive smoke matrix.
+competitive-smoke:
+	$(MAKE) -C labs/competitive competitive-smoke
+
+## competitive-clean: Native competitive clean-link matrix. Set COMPETITIVE_MODE=remote for VPS inventory/run scaffolding.
+competitive-clean:
+	$(MAKE) -C labs/competitive competitive-clean
+
+## competitive-loss: Native competitive lossy-network matrix scaffold.
+competitive-loss:
+	$(MAKE) -C labs/competitive competitive-loss
+
+## competitive-mobile: Native competitive mobile/roaming matrix scaffold.
+competitive-mobile:
+	$(MAKE) -C labs/competitive competitive-mobile
+
+## competitive-tun: Native competitive TUN matrix scaffold.
+competitive-tun:
+	$(MAKE) -C labs/competitive competitive-tun
+
+## competitive-quic: Native competitive QUIC matrix scaffold.
+competitive-quic:
+	$(MAKE) -C labs/competitive competitive-quic
+
+## competitive-expensive: Native competitive expensive-protocol matrix scaffold.
+competitive-expensive:
+	$(MAKE) -C labs/competitive competitive-expensive
+
+## competitive-all: Run every native competitive Milestone A target.
+competitive-all:
+	$(MAKE) -C labs/competitive competitive-all
+
+## competitive-report: Summarize native competitive JSONL reports.
+competitive-report:
+	$(MAKE) -C labs/competitive competitive-report
 
 ## bench-protocol: Run full e2e protocol bench matrix (Criterion).
 bench-protocol:

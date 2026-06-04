@@ -21,7 +21,7 @@
       "streamSettings": {
         "network": "tcp",
         "security": "tls",
-        "tlsSettings": { "serverName": "${EXTERNAL_TLS_SERVER_NAME}", "allowInsecure": true }
+        "tlsSettings": { "serverName": "${EXTERNAL_TLS_SERVER_NAME}", "pinnedPeerCertSha256": "${EXTERNAL_TLS_CERT_SHA256}" }
       }
     }
   ]

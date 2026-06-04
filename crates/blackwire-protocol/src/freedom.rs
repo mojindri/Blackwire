@@ -21,7 +21,7 @@ use tracing::debug;
 
 use blackwire_app::context::Context;
 use blackwire_app::dns::DnsModule;
-use blackwire_app::features::OutboundHandler;
+use blackwire_app::features::{OutboundConnectResult, OutboundHandler};
 use blackwire_common::{tcp_connect, Address, BoxedStream, PooledStream, ProxyError};
 
 // ── Adaptive connection pool ─────────────────────────────────────────────────
@@ -629,5 +629,18 @@ impl OutboundHandler for FreedomOutbound {
         // Cold path: dial a fresh connection (pool disabled or miss).
         let stream = tcp_connect(addr).await?;
         Ok(Box::new(stream))
+    }
+
+    async fn connect_with_early_payload(
+        &self,
+        ctx: &Context,
+        dest: &Address,
+        _early_payload: Option<Vec<u8>>,
+    ) -> Result<OutboundConnectResult, ProxyError> {
+        // Leave early bytes in the dispatcher path so pooled Freedom sockets
+        // still get first-use stale-socket retry protection.
+        Ok(OutboundConnectResult::stream(
+            self.connect(ctx, dest).await?,
+        ))
     }
 }

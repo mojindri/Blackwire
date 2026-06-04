@@ -1,0 +1,17 @@
+[package]
+name = "blackwire-connmgr"
+description = "Connection manager: active connection metadata, close commands, and observability."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+dashmap.workspace = true
+metrics.workspace = true
+once_cell.workspace = true
+serde.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

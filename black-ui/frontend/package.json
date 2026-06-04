@@ -7,7 +7,11 @@
     "dev": "vite --host 127.0.0.1 --port 18180",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
+    "test:unit": "vitest run",
     "qa:flow": "node scripts/qa-flow.mjs",
+    "qa:inbounds:panel": "node scripts/qa-inbounds-structured.mjs --headed --restore-settings",
+    "qa:outbounds:panel": "node scripts/qa-outbounds-structured.mjs --headed --restore-settings",
+    "qa:advanced-config:panel": "node scripts/qa-advanced-config-structured.mjs --headed --restore-settings",
     "preview": "vite preview --host 127.0.0.1 --port 18181"
   },
   "dependencies": {
@@ -21,6 +25,7 @@
   "devDependencies": {
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
-    "playwright": "^1.60.0"
+    "playwright": "^1.60.0",
+    "vitest": "^3.2.4"
   }
 }

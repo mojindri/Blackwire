@@ -12,22 +12,29 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tracing::debug;
 
 use blackwire_app::context::Context;
-use blackwire_app::features::OutboundHandler;
+use blackwire_app::features::{OutboundConnectResult, OutboundHandler};
 use blackwire_common::{tcp_connect, Address, BoxedStream, ProxyError};
 use blackwire_config::schema::{NetworkType, SecurityType, StreamSettingsConfig};
-use blackwire_protocol::trojan::{compute_token, connect_trojan_on_stream};
+use blackwire_protocol::trojan::{
+    compute_token, connect_trojan_on_stream, connect_trojan_on_stream_with_early_payload,
+};
 use blackwire_protocol::vless::codec::Command;
-use blackwire_protocol::vless::connect_vless_on_stream;
+use blackwire_protocol::vless::{
+    connect_vless_on_stream, connect_vless_on_stream_with_early_payload,
+};
 use blackwire_protocol::vmess::{auth::cmd_key, connect_vmess_on_stream};
 use blackwire_transport::{
     dial_httpupgrade, grpc_connect, mkcp_connect, quic_connect, shadowtls_v3_connect,
     splithttp_connect, tls_connect, ws_connect, MkcpClientConfig, WsConnectConfig,
 };
+
+const OUTBOUND_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// VLESS outbound that honors `streamSettings.network = "ws"` and
 /// `streamSettings.security = "tls"` before sending the VLESS header.
@@ -68,6 +75,25 @@ impl OutboundHandler for TransportVlessOutbound {
         let stream = connect_transport(self.server, &self.stream_settings).await?;
         connect_vless_on_stream(stream, &self.uuid, &self.flow, Command::Tcp, dest).await
     }
+
+    async fn connect_with_early_payload(
+        &self,
+        _ctx: &Context,
+        dest: &Address,
+        early_payload: Option<Vec<u8>>,
+    ) -> Result<OutboundConnectResult, ProxyError> {
+        debug!(server = %self.server, dest = %dest, "VLESS transport outbound connecting with early payload");
+        let stream = connect_transport(self.server, &self.stream_settings).await?;
+        connect_vless_on_stream_with_early_payload(
+            stream,
+            &self.uuid,
+            &self.flow,
+            Command::Tcp,
+            dest,
+            early_payload,
+        )
+        .await
+    }
 }
 
 /// Trojan outbound that honors stream transport settings before sending the
@@ -105,6 +131,17 @@ impl OutboundHandler for TransportTrojanOutbound {
         debug!(server = %self.server, dest = %dest, "Trojan transport outbound connecting");
         let stream = connect_transport(self.server, &self.stream_settings).await?;
         connect_trojan_on_stream(stream, &self.token, dest).await
+    }
+
+    async fn connect_with_early_payload(
+        &self,
+        _ctx: &Context,
+        dest: &Address,
+        early_payload: Option<Vec<u8>>,
+    ) -> Result<OutboundConnectResult, ProxyError> {
+        debug!(server = %self.server, dest = %dest, "Trojan transport outbound connecting with early payload");
+        let stream = connect_transport(self.server, &self.stream_settings).await?;
+        connect_trojan_on_stream_with_early_payload(stream, &self.token, dest, early_payload).await
     }
 }
 
@@ -235,7 +272,12 @@ async fn connect_transport(
             .map(|t| t.alpn.iter().map(String::as_str).collect::<Vec<_>>())
             .unwrap_or_default();
 
-        stream = tls_connect(stream, server_name, &alpn, allow_insecure).await?;
+        stream = tokio::time::timeout(
+            OUTBOUND_TLS_HANDSHAKE_TIMEOUT,
+            tls_connect(stream, server_name, &alpn, allow_insecure),
+        )
+        .await
+        .map_err(|_| ProxyError::Tls("outbound TLS handshake timed out".into()))??;
     }
 
     if network == Some(&NetworkType::Grpc) {

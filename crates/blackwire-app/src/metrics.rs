@@ -24,6 +24,24 @@
 //! | `proxy_relay_splice_selected_total` | Counter | `policy` |
 //! | `proxy_relay_splice_fallback_total` | Counter | `reason` |
 //! | `proxy_relay_bytes_total` | Counter | `direction`, `path` |
+//! | `proxy_relay_v2_flushes_total` | Counter | none |
+//! | `proxy_relay_v2_buffer_grows_total` | Counter | none |
+//! | `blackwire_relay_v2_selected_total` | Counter | `path`, `profile` |
+//! | `blackwire_vision_phase_total` | Counter | `phase` |
+//! | `blackwire_vision_direct_copy_ready_total` | Counter | none |
+//! | `blackwire_vision_direct_copy_active_total` | Counter | none |
+//! | `blackwire_vision_lower_failed_total` | Counter | `reason` |
+//! | `blackwire_vision_cached_bytes_total` | Counter | none |
+//! | `blackwire_vision_splice_after_direct_total` | Counter | none |
+//! | `blackwire_early_payload_bytes_total` | Counter | `protocol` |
+//! | `blackwire_early_payload_written_total` | Counter | `protocol`, `outbound` |
+//! | `blackwire_handshake_kick_total` | Counter | `protocol`, `direction`, `result` |
+//! | `blackwire_first_byte_latency_seconds` | Histogram | `protocol`, `transport` |
+//! | `blackwire_route_match_seconds` | Histogram | none |
+//! | `blackwire_route_cache_hits_total` | Counter | none |
+//! | `blackwire_route_cache_misses_total` | Counter | none |
+//! | `blackwire_route_compiled_rules_total` | Gauge | `kind` |
+//! | `blackwire_dns_prefetch_total` | Counter | `result` |
 //! | `freedom_pool_leases_total` | Counter | `outbound` |
 //! | `balancer_adaptive_profile_score` | Gauge | `balancer`, `profile` |
 //! | `balancer_adaptive_profile_selected` | Gauge | `balancer`, `profile` |
@@ -191,6 +209,111 @@ fn describe_metrics() {
         "Bytes relayed by path-specific relay implementation"
     );
     metrics::describe_counter!(
+        "proxy_relay_v2_flushes_total",
+        metrics::Unit::Count,
+        "Flush operations performed by Relay Engine v2"
+    );
+    metrics::describe_counter!(
+        "proxy_relay_v2_buffer_grows_total",
+        metrics::Unit::Count,
+        "Dynamic buffer growth events performed by Relay Engine v2"
+    );
+    metrics::describe_counter!(
+        "blackwire_relay_v2_selected_total",
+        metrics::Unit::Count,
+        "Relay v2 or lowering-aware path selections by path and profile"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_phase_total",
+        metrics::Unit::Count,
+        "XTLS Vision lower-state observations by phase"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_direct_copy_ready_total",
+        metrics::Unit::Count,
+        "XTLS Vision streams that became ready for direct copy"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_direct_copy_active_total",
+        metrics::Unit::Count,
+        "XTLS Vision streams that activated direct copy"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_lower_failed_total",
+        metrics::Unit::Count,
+        "XTLS Vision lowering failures by reason"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_cached_bytes_total",
+        metrics::Unit::Bytes,
+        "Cached XTLS Vision bytes drained while lowering"
+    );
+    metrics::describe_counter!(
+        "blackwire_vision_splice_after_direct_total",
+        metrics::Unit::Count,
+        "XTLS Vision streams that entered splice after direct copy"
+    );
+    metrics::describe_counter!(
+        "blackwire_early_payload_bytes_total",
+        metrics::Unit::Bytes,
+        "Inbound bytes captured after protocol handshake and forwarded as early payload"
+    );
+    metrics::describe_counter!(
+        "blackwire_early_payload_written_total",
+        metrics::Unit::Count,
+        "Early payload write attempts by protocol and outbound path"
+    );
+    metrics::describe_counter!(
+        "blackwire_handshake_kick_total",
+        metrics::Unit::Count,
+        "Handshake kick events by protocol, direction, and result"
+    );
+    metrics::describe_histogram!(
+        "blackwire_first_byte_latency_seconds",
+        metrics::Unit::Seconds,
+        "Latency until the first upstream byte can be written"
+    );
+    metrics::describe_counter!(
+        "blackwire_first_packet_boost_total",
+        metrics::Unit::Count,
+        "First-packet boost decisions by kind"
+    );
+    metrics::describe_histogram!(
+        "blackwire_ttfb_seconds",
+        metrics::Unit::Seconds,
+        "Time-to-first-byte by protocol and transport"
+    );
+    metrics::describe_counter!(
+        "blackwire_connection_plan_selected_total",
+        metrics::Unit::Count,
+        "Compiled connection plan selections"
+    );
+    metrics::describe_histogram!(
+        "blackwire_route_match_seconds",
+        metrics::Unit::Seconds,
+        "Compiled router match latency in seconds"
+    );
+    metrics::describe_counter!(
+        "blackwire_route_cache_hits_total",
+        metrics::Unit::Count,
+        "Compiled router cache hits"
+    );
+    metrics::describe_counter!(
+        "blackwire_route_cache_misses_total",
+        metrics::Unit::Count,
+        "Compiled router cache misses"
+    );
+    metrics::describe_gauge!(
+        "blackwire_route_compiled_rules_total",
+        metrics::Unit::Count,
+        "Compiled routing rules by rule kind"
+    );
+    metrics::describe_counter!(
+        "blackwire_dns_prefetch_total",
+        metrics::Unit::Count,
+        "Background routing DNS prefetch outcomes"
+    );
+    metrics::describe_counter!(
         "freedom_pool_hits_total",
         metrics::Unit::Count,
         "Freedom outbound preconnect pool hits after first client write succeeds"
@@ -290,6 +413,182 @@ fn describe_metrics() {
         metrics::Unit::Count,
         "Adaptive balancer outbound connect failures"
     );
+    metrics::describe_counter!(
+        "blackwire_quic_congestion_mode_total",
+        metrics::Unit::Count,
+        "QUIC congestion mode selections"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_ack_rate",
+        metrics::Unit::Count,
+        "Estimated QUIC ACK rate for bad-network congestion control"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_loss_rate",
+        metrics::Unit::Count,
+        "Estimated QUIC loss rate for bad-network congestion control"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_queue_delay_ms",
+        metrics::Unit::Milliseconds,
+        "Estimated QUIC queue delay"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_pacing_rate_bps",
+        metrics::Unit::Bytes,
+        "Selected QUIC pacing rate in bytes per second"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_cwnd_bytes",
+        metrics::Unit::Bytes,
+        "Selected QUIC congestion window"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_delivery_rate_bps",
+        metrics::Unit::Bytes,
+        "Estimated QUIC delivery rate in bytes per second"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_endpoint_shards",
+        metrics::Unit::Count,
+        "Configured QUIC endpoint shard count"
+    );
+    metrics::describe_counter!(
+        "blackwire_hysteria2_pacer_sleep_total",
+        metrics::Unit::Count,
+        "Hysteria2 application write pacer sleep events by lane"
+    );
+    metrics::describe_counter!(
+        "blackwire_hysteria2_pacer_sleep_ms_total",
+        metrics::Unit::Milliseconds,
+        "Total Hysteria2 application write pacer sleep time by lane"
+    );
+    metrics::describe_gauge!(
+        "blackwire_hysteria2_pacer_burst_bytes",
+        metrics::Unit::Bytes,
+        "Hysteria2 application write pacer burst allowance by lane"
+    );
+    metrics::describe_gauge!(
+        "blackwire_hysteria2_pacer_rate_bps",
+        metrics::Unit::Bytes,
+        "Hysteria2 application write pacer rate in bytes per second by lane"
+    );
+    metrics::describe_counter!(
+        "blackwire_hysteria2_pacer_limited_writes_total",
+        metrics::Unit::Count,
+        "Hysteria2 writes shortened by application pacing by lane"
+    );
+    metrics::describe_counter!(
+        "blackwire_quic_endpoint_active_total",
+        metrics::Unit::Count,
+        "QUIC endpoints successfully opened"
+    );
+    metrics::describe_counter!(
+        "blackwire_quic_endpoint_packets_total",
+        metrics::Unit::Count,
+        "QUIC endpoint packets by endpoint and direction"
+    );
+    metrics::describe_counter!(
+        "blackwire_quic_endpoint_bytes_total",
+        metrics::Unit::Bytes,
+        "QUIC endpoint bytes by endpoint and direction"
+    );
+    metrics::describe_counter!(
+        "blackwire_quic_socket_drops_total",
+        metrics::Unit::Count,
+        "QUIC UDP socket drops reported by platform counters"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_recv_buffer_bytes",
+        metrics::Unit::Bytes,
+        "Actual QUIC UDP receive socket buffer size"
+    );
+    metrics::describe_gauge!(
+        "blackwire_quic_send_buffer_bytes",
+        metrics::Unit::Bytes,
+        "Actual QUIC UDP send socket buffer size"
+    );
+    metrics::describe_counter!(
+        "blackwire_quic_loss_fingerprint_total",
+        metrics::Unit::Count,
+        "Classified QUIC path loss fingerprints"
+    );
+    metrics::describe_counter!(
+        "blackwire_fec_mode_total",
+        metrics::Unit::Count,
+        "Selected FEC modes for protected datagram groups"
+    );
+    metrics::describe_counter!(
+        "blackwire_fec_recovered_packets_total",
+        metrics::Unit::Count,
+        "Datagram packets recovered by FEC"
+    );
+    metrics::describe_counter!(
+        "blackwire_fec_overhead_bytes_total",
+        metrics::Unit::Bytes,
+        "FEC parity overhead bytes sent"
+    );
+    metrics::describe_counter!(
+        "blackwire_fec_stale_drops_total",
+        metrics::Unit::Count,
+        "Stale FEC decode groups dropped before recovery"
+    );
+    metrics::describe_counter!(
+        "blackwire_fec_duplicate_safe_skip_total",
+        metrics::Unit::Count,
+        "FEC protection skipped by duplicate-safe policy"
+    );
+    metrics::describe_counter!(
+        "blackwire_datagram_packets_total",
+        metrics::Unit::Count,
+        "QUIC DATAGRAM packets by traffic class and direction"
+    );
+    metrics::describe_counter!(
+        "blackwire_datagram_fallback_total",
+        metrics::Unit::Count,
+        "QUIC DATAGRAM fallback events by reason"
+    );
+    metrics::describe_histogram!(
+        "blackwire_innerflow_queue_delay_ms",
+        metrics::Unit::Milliseconds,
+        "InnerFlow scheduler queue delay by packet class"
+    );
+    metrics::describe_counter!(
+        "blackwire_innerflow_drops_total",
+        metrics::Unit::Count,
+        "InnerFlow scheduler drops by packet class and reason"
+    );
+    metrics::describe_counter!(
+        "blackwire_innerflow_dequeued_total",
+        metrics::Unit::Count,
+        "InnerFlow scheduler enqueue/dequeue events by packet class"
+    );
+    metrics::describe_counter!(
+        "blackwire_innerflow_bulk_starvation_prevented_total",
+        metrics::Unit::Count,
+        "InnerFlow bulk dequeue events that yielded fairness accounting"
+    );
+    metrics::describe_counter!(
+        "blackwire_pool_acquire_total",
+        metrics::Unit::Count,
+        "Shared buffer pool acquisitions by size class"
+    );
+    metrics::describe_counter!(
+        "blackwire_pool_release_total",
+        metrics::Unit::Count,
+        "Shared buffer pool releases by size class"
+    );
+    metrics::describe_counter!(
+        "blackwire_pool_miss_total",
+        metrics::Unit::Count,
+        "Shared buffer pool misses that allocated a fresh buffer"
+    );
+    metrics::describe_gauge!(
+        "blackwire_pool_bytes_active",
+        metrics::Unit::Bytes,
+        "Bytes currently checked out from shared buffer pools"
+    );
+    blackwire_connmgr::metrics::describe_metrics();
 }
 
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
@@ -390,6 +689,136 @@ pub fn record_outbound_connect(inbound: &str, outbound: &str, elapsed: std::time
         "outbound" => outbound.to_owned()
     )
     .record(elapsed.as_secs_f64());
+}
+
+/// Record bytes captured by an inbound parser after its handshake.
+pub fn record_early_payload(protocol: &str, bytes: u64) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_early_payload_bytes_total",
+        "protocol" => protocol.to_owned()
+    )
+    .increment(bytes);
+}
+
+/// Record an outbound writing already-buffered first payload bytes.
+pub fn record_early_payload_written(protocol: &str, outbound: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_early_payload_written_total",
+        "protocol" => protocol.to_owned(),
+        "outbound" => outbound.to_owned()
+    )
+    .increment(1);
+}
+
+/// Record a handshake kick event.
+pub fn record_handshake_kick(protocol: &str, direction: &str, result: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_handshake_kick_total",
+        "protocol" => protocol.to_owned(),
+        "direction" => direction.to_owned(),
+        "result" => result.to_owned()
+    )
+    .increment(1);
+}
+
+/// Record latency until the first upstream byte can be written.
+pub fn record_first_byte_latency(protocol: &str, transport: &str, elapsed: Duration) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::histogram!(
+        "blackwire_first_byte_latency_seconds",
+        "protocol" => protocol.to_owned(),
+        "transport" => transport.to_owned()
+    )
+    .record(elapsed.as_secs_f64());
+    metrics::histogram!(
+        "blackwire_ttfb_seconds",
+        "protocol" => protocol.to_owned(),
+        "transport" => transport.to_owned()
+    )
+    .record(elapsed.as_secs_f64());
+}
+
+/// Record a first-packet boost decision.
+pub fn record_first_packet_boost(kind: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_first_packet_boost_total",
+        "kind" => kind.to_owned()
+    )
+    .increment(1);
+}
+
+/// Record a compiled connection plan selection.
+pub fn record_connection_plan_selected(plan: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_connection_plan_selected_total",
+        "plan" => plan.to_owned()
+    )
+    .increment(1);
+}
+
+/// Record compiled router match latency.
+pub fn record_route_match(elapsed: Duration) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::histogram!("blackwire_route_match_seconds").record(elapsed.as_secs_f64());
+}
+
+/// Increment a compiled route cache hit.
+pub fn record_route_cache_hit() {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!("blackwire_route_cache_hits_total").increment(1);
+}
+
+/// Increment a compiled route cache miss.
+pub fn record_route_cache_miss() {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!("blackwire_route_cache_misses_total").increment(1);
+}
+
+/// Publish the current compiled routing rule count for a rule kind.
+pub fn record_route_compiled_rules(kind: &str, count: usize) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::gauge!(
+        "blackwire_route_compiled_rules_total",
+        "kind" => kind.to_owned()
+    )
+    .set(count as f64);
+}
+
+/// Record a background routing DNS prefetch outcome.
+pub fn record_dns_prefetch(result: &str) {
+    if !metrics_enabled() {
+        return;
+    }
+    metrics::counter!(
+        "blackwire_dns_prefetch_total",
+        "result" => result.to_owned()
+    )
+    .increment(1);
 }
 
 /// Increment the relay error counter for an inbound.
