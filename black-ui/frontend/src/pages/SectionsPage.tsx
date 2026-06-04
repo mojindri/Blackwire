@@ -234,6 +234,14 @@ function RoutingEditor({ editor, onChange }: { editor: AdvancedConfigEditorState
         <Field label="Domain strategy" hint="Leave empty to keep the runtime default.">
           <Input value={editor.routingDomainStrategy} onChange={(e) => onChange({ ...editor, routingDomainStrategy: e.target.value })} placeholder="AsIs" />
         </Field>
+        <div className="configurator-grid">
+          <Field label="GeoIP file">
+            <Input value={editor.routingGeoipFile} onChange={(e) => onChange({ ...editor, routingGeoipFile: e.target.value })} placeholder="geoip.dat" />
+          </Field>
+          <Field label="Geosite file">
+            <Input value={editor.routingGeositeFile} onChange={(e) => onChange({ ...editor, routingGeositeFile: e.target.value })} placeholder="geosite.dat" />
+          </Field>
+        </div>
       </section>
 
       <section className="drawer-card configurator-section">
@@ -248,7 +256,7 @@ function RoutingEditor({ editor, onChange }: { editor: AdvancedConfigEditorState
             onClick={() =>
               onChange({
                 ...editor,
-                routingRules: [...editor.routingRules, { type: "field", domain: "", ip: "", port: "", network: "", sourceIP: "", inboundTag: "", protocol: "", user: "", outboundTag: "", balancerTag: "" }]
+                routingRules: [...editor.routingRules, { type: "field", domain: "", ip: "", port: "", inboundTag: "", protocol: "", user: "", outboundTag: "" }]
               })
             }
           >
@@ -271,9 +279,6 @@ function RoutingEditor({ editor, onChange }: { editor: AdvancedConfigEditorState
               <Field label="Outbound tag">
                 <Input value={rule.outboundTag} onChange={(e) => setRule(index, { outboundTag: e.target.value })} placeholder="freedom" />
               </Field>
-              <Field label="Balancer tag">
-                <Input value={rule.balancerTag} onChange={(e) => setRule(index, { balancerTag: e.target.value })} placeholder="auto-proxy" />
-              </Field>
               <Field label="Port">
                 <Input value={rule.port} onChange={(e) => setRule(index, { port: e.target.value })} placeholder="80,443" />
               </Field>
@@ -282,12 +287,6 @@ function RoutingEditor({ editor, onChange }: { editor: AdvancedConfigEditorState
               </Field>
               <Field label="IP CSV">
                 <Input value={rule.ip} onChange={(e) => setRule(index, { ip: e.target.value })} placeholder="geoip:private, 1.1.1.1" />
-              </Field>
-              <Field label="Network">
-                <Input value={rule.network} onChange={(e) => setRule(index, { network: e.target.value })} placeholder="tcp,udp" />
-              </Field>
-              <Field label="Source IP CSV">
-                <Input value={rule.sourceIP} onChange={(e) => setRule(index, { sourceIP: e.target.value })} placeholder="192.168.1.0/24" />
               </Field>
               <Field label="Inbound tag CSV">
                 <Input value={rule.inboundTag} onChange={(e) => setRule(index, { inboundTag: e.target.value })} placeholder="vless-main" />
@@ -321,7 +320,6 @@ function RoutingEditor({ editor, onChange }: { editor: AdvancedConfigEditorState
                     tag: "",
                     selector: "",
                     strategy: "",
-                    fallbackTag: "",
                     adaptiveFailureThreshold: "",
                     adaptiveCooldownSecs: "",
                     adaptiveEwmaAlpha: "",
@@ -363,9 +361,6 @@ function RoutingEditor({ editor, onChange }: { editor: AdvancedConfigEditorState
                     </option>
                   ))}
                 </Select>
-              </Field>
-              <Field label="Fallback tag">
-                <Input value={balancer.fallbackTag} onChange={(e) => setBalancer(index, { fallbackTag: e.target.value })} placeholder="freedom" />
               </Field>
               <Field label="Failure threshold">
                 <Input value={balancer.adaptiveFailureThreshold} onChange={(e) => setBalancer(index, { adaptiveFailureThreshold: e.target.value })} placeholder="2" />

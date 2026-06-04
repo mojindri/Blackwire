@@ -264,8 +264,35 @@ export function OutboundDrawer({
               </Field>
             ) : null}
 
-            {state.network === "kcp" || state.network === "quic" ? (
-              <p className="field-hint">KCP and legacy QUIC often need extra tuning. Use Advanced for the rest of the transport-specific keys.</p>
+            {state.network === "kcp" ? (
+              <div className="configurator-grid">
+                <Field label="Header">
+                  <Input value={state.kcpHeader} onChange={(e) => updateStructured({ kcpHeader: e.target.value })} placeholder="srtp" />
+                </Field>
+                <Field label="MTU">
+                  <Input value={state.kcpMtu} onChange={(e) => updateStructured({ kcpMtu: e.target.value })} placeholder="1350" />
+                </Field>
+                <Field label="TTI">
+                  <Input value={state.kcpTti} onChange={(e) => updateStructured({ kcpTti: e.target.value })} placeholder="20" />
+                </Field>
+                <Field label="Uplink capacity">
+                  <Input value={state.kcpUplinkCapacity} onChange={(e) => updateStructured({ kcpUplinkCapacity: e.target.value })} placeholder="5" />
+                </Field>
+                <Field label="Downlink capacity">
+                  <Input value={state.kcpDownlinkCapacity} onChange={(e) => updateStructured({ kcpDownlinkCapacity: e.target.value })} placeholder="20" />
+                </Field>
+                <Field label="Read buffer size">
+                  <Input value={state.kcpReadBufferSize} onChange={(e) => updateStructured({ kcpReadBufferSize: e.target.value })} placeholder="2" />
+                </Field>
+                <Field label="Write buffer size">
+                  <Input value={state.kcpWriteBufferSize} onChange={(e) => updateStructured({ kcpWriteBufferSize: e.target.value })} placeholder="2" />
+                </Field>
+                <Switch checked={state.kcpCongestion} onChange={(kcpCongestion) => updateStructured({ kcpCongestion })} label="Enable congestion control" />
+              </div>
+            ) : null}
+
+            {state.network === "quic" ? (
+              <p className="field-hint">QUIC is covered here as an outbound network choice. Any top-level QUIC socket tuning still belongs in Advanced Config.</p>
             ) : null}
           </section>
         ) : null}
