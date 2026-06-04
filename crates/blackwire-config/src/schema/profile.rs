@@ -237,9 +237,14 @@ pub struct FastLinuxConfig {
     #[serde(default = "FastLinuxConfig::default_zerocopy_min_bytes")]
     pub zerocopy_min_bytes: usize,
 
-    /// io_uring backend preference. The splice relay already attempts io_uring
-    /// first on Linux when this is not disabled.
-    #[serde(default)]
+    /// io_uring backend preference for the splice relay.
+    /// Default is `disabled` (epoll splice). Set to `auto` to probe io_uring at
+    /// runtime; set to `require` to mandate it (startup fails if unavailable).
+    /// Note: benchmarks on commodity VPS hardware showed io_uring splice incurred
+    /// a severe throughput regression vs epoll splice (−66% churn, −25% keepalive),
+    /// so `disabled` is the safe default. Enable only after validating on your
+    /// specific host.
+    #[serde(default = "FastLinuxConfig::default_io_uring")]
     pub io_uring: FastExperimentalBackendPolicy,
 
     /// AF_XDP backend preference. This is intentionally experimental and is not
@@ -252,6 +257,10 @@ impl FastLinuxConfig {
     fn default_zerocopy_min_bytes() -> usize {
         16 * 1024
     }
+
+    fn default_io_uring() -> FastExperimentalBackendPolicy {
+        FastExperimentalBackendPolicy::Disabled
+    }
 }
 
 impl Default for FastLinuxConfig {
@@ -259,7 +268,7 @@ impl Default for FastLinuxConfig {
         Self {
             zerocopy: FastZerocopyPolicy::default(),
             zerocopy_min_bytes: Self::default_zerocopy_min_bytes(),
-            io_uring: FastExperimentalBackendPolicy::default(),
+            io_uring: Self::default_io_uring(),
             af_xdp: FastExperimentalBackendPolicy::default(),
         }
     }
