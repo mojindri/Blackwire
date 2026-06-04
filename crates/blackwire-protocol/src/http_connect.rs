@@ -55,14 +55,14 @@ const MAX_HEADER_BYTES: usize = 8192;
 /// transparently to the destination.
 pub struct HttpConnectInbound {
     /// Unique tag from config.
-    tag: String,
+    tag: Arc<str>,
     /// Optional limit for reading the HTTP request headers (Xray `Handshake`).
     handshake_timeout: Option<Duration>,
 }
 
 impl HttpConnectInbound {
     /// Create a new HTTP CONNECT inbound handler.
-    pub fn new(tag: impl Into<String>, handshake_timeout: Option<Duration>) -> Arc<Self> {
+    pub fn new(tag: impl Into<Arc<str>>, handshake_timeout: Option<Duration>) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
             handshake_timeout,
@@ -104,7 +104,7 @@ impl InboundHandler for HttpConnectInbound {
             .await?;
         stream.flush().await?;
 
-        let ctx = Context::new(&self.tag, source);
+        let ctx = Context::new(self.tag.clone(), source);
         dispatcher
             .dispatch_with_early_payload(ctx, dest, stream, early_payload)
             .await
