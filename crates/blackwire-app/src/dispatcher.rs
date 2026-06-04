@@ -401,7 +401,7 @@ impl Dispatcher for DefaultDispatcher {
         mut inbound_stream: BoxedStream,
         early_payload: Option<Vec<u8>>,
     ) -> Result<(), ProxyError> {
-        let sniff_cfg = self.sniffing.load().get(&ctx.inbound_tag).cloned();
+        let sniff_cfg = self.sniffing.load().get(&*ctx.inbound_tag).cloned();
         if let Some(cfg) = sniff_cfg {
             if cfg.enabled {
                 let (stream, mut sniff) = crate::sniff::sniff_stream(inbound_stream, &cfg).await?;
@@ -472,7 +472,7 @@ impl Dispatcher for DefaultDispatcher {
             .map(Protocol::from)
             .unwrap_or(Protocol::Tcp);
         let conn = global_manager().track(
-            Arc::from(ctx.inbound_tag.as_str()),
+            Arc::clone(&ctx.inbound_tag),
             Arc::clone(&outbound.outbound_tag),
             ctx.user.as_ref().map(Arc::clone),
             protocol,
@@ -572,7 +572,7 @@ impl DefaultDispatcher {
         mut inbound_stream: BoxedStream,
         outbound_stream: BoxedStream,
     ) -> Result<(BoxedStream, BoxedStream, u64), ProxyError> {
-        let inbound_tag = ctx.inbound_tag.as_str();
+        let inbound_tag: &str = &ctx.inbound_tag;
         if self.profile != ProfileMode::Fast
             || !(*outbound_stream).as_any().is::<PooledStream<TcpStream>>()
         {
@@ -710,7 +710,7 @@ impl DefaultDispatcher {
         relay_log!(self.profile, outbound = %route.outbound_tag, "route selected");
         let plan_label = self
             .connection_plans
-            .get(&ctx.inbound_tag)
+            .get(&*ctx.inbound_tag)
             .map(|label| label.as_ref())
             .unwrap_or("dynamic");
         record_connection_plan_selected(plan_label);

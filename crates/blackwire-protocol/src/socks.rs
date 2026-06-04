@@ -81,12 +81,12 @@ const REP_ATYP_NOT_SUPPORTED: u8 = 0x08;
 /// destination address, then hands the connection to the dispatcher.
 pub struct Socks5Inbound {
     /// Unique tag for this inbound (from config.json).
-    tag: String,
+    tag: Arc<str>,
 }
 
 impl Socks5Inbound {
     /// Create a new SOCKS5 inbound with the given tag.
-    pub fn new(tag: impl Into<String>) -> Arc<Self> {
+    pub fn new(tag: impl Into<Arc<str>>) -> Arc<Self> {
         Arc::new(Self { tag: tag.into() })
     }
 }
@@ -113,7 +113,7 @@ impl InboundHandler for Socks5Inbound {
         match request {
             Socks5Request::Connect(dest) => {
                 debug!(source = %source, dest = %dest, "SOCKS5 CONNECT");
-                let ctx = Context::new(&self.tag, source);
+                let ctx = Context::new(self.tag.clone(), source);
                 dispatcher
                     .dispatch_with_early_payload(ctx, dest, stream, early_payload)
                     .await

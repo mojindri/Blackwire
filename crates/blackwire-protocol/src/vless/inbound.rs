@@ -46,7 +46,7 @@ use super::vision::wrap_vision_inbound_stream;
 /// The VLESS inbound handler.
 pub struct VlessInbound {
     /// The unique tag for this inbound (from config.json).
-    tag: String,
+    tag: Arc<str>,
 
     /// The user registry: UUID → user info.
     registry: Arc<VlessUserRegistry>,
@@ -67,7 +67,7 @@ impl VlessInbound {
     /// * `registry` — the user UUID registry
     /// * `fallback` — optional fallback backend address for failed auth
     pub fn new(
-        tag: impl Into<String>,
+        tag: impl Into<Arc<str>>,
         registry: Arc<VlessUserRegistry>,
         fallback: Option<SocketAddr>,
         handshake_timeout: Option<Duration>,
@@ -120,7 +120,7 @@ impl InboundHandler for VlessInbound {
                 with_handshake_timeout(self.handshake_timeout, decode_request(&mut stream)).await;
             (req, Vec::new())
         };
-        metrics::histogram!("proxy_inbound_parse_seconds", "inbound" => self.tag.clone())
+        metrics::histogram!("proxy_inbound_parse_seconds", "inbound" => self.tag.to_string())
             .record(t_parse.elapsed().as_secs_f64());
 
         match request {
@@ -164,7 +164,7 @@ impl InboundHandler for VlessInbound {
                             relay_stream = wrap_vision_inbound_stream(relay_stream, req.uuid);
                         }
 
-                        let ctx = Context::new(&self.tag, source)
+                        let ctx = Context::new(self.tag.clone(), source)
                             .with_user(user.email.clone())
                             .with_vision(req.flow == "xtls-rprx-vision");
 

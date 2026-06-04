@@ -24,7 +24,12 @@ pub struct Context {
 
     /// The tag of the inbound that accepted this connection.
     /// Used in routing rules like "only apply rule X to connections from the SOCKS inbound".
-    pub inbound_tag: String,
+    ///
+    /// Stored as `Arc<str>` so it can be cloned onto every connection (and into
+    /// the connection manager) with a refcount bump rather than a heap
+    /// allocation — the inbound handler owns the canonical `Arc<str>` and hands
+    /// out clones.
+    pub inbound_tag: Arc<str>,
 
     /// The authenticated user's email/name, if any.
     /// Set after the protocol handler verifies the client's credentials.
@@ -42,7 +47,10 @@ pub struct Context {
 
 impl Context {
     /// Create a new context for a connection arriving on `inbound_tag` from `source`.
-    pub fn new(inbound_tag: impl Into<String>, source: SocketAddr) -> Self {
+    ///
+    /// Accepts anything convertible into `Arc<str>` (a `&str`, `String`, or an
+    /// existing `Arc<str>`). Passing an `Arc<str>` clone avoids allocating.
+    pub fn new(inbound_tag: impl Into<Arc<str>>, source: SocketAddr) -> Self {
         Self {
             source: Some(source),
             inbound_tag: inbound_tag.into(),
