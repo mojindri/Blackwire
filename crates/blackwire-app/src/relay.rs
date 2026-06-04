@@ -941,6 +941,7 @@ fn relay_v2_options(relay_policy: FastRelayConfig) -> RelayV2Options {
         flush_policy: match relay_policy.flush {
             FastRelayFlushPolicy::Immediate => RelayFlushPolicy::Immediate,
             FastRelayFlushPolicy::Deferred => RelayFlushPolicy::Deferred,
+            FastRelayFlushPolicy::Adaptive => RelayFlushPolicy::Adaptive,
         },
     }
 }
