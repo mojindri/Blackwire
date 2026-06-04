@@ -2,10 +2,13 @@
 //!
 //! Each datagram on the stream: `u16_be(addr_len) | address(port+atyp+host) | payload`.
 
+use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use blackwire_app::dns::DnsModule;
 use blackwire_common::{Address, ProxyError};
 
 use super::codec::{decode_address_port, encode_address_port};
@@ -53,6 +56,7 @@ pub async fn write_udp_packet<W: AsyncWrite + Unpin>(
 /// Relay VLESS UDP packets between client stream and upstream UDP socket.
 pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
     mut client: S,
+    dns: Option<Arc<DnsModule>>,
 ) -> Result<(), ProxyError> {
     use tokio::net::UdpSocket;
 
@@ -71,7 +75,7 @@ pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
             continue;
         }
 
-        let upstream = resolve_udp_dest(&dest).await?;
+        let upstream = resolve_udp_dest(&dest, dns.as_deref()).await?;
         socket
             .send_to(&payload, upstream)
             .await
@@ -89,11 +93,20 @@ pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
     Ok(())
 }
 
-async fn resolve_udp_dest(dest: &Address) -> Result<std::net::SocketAddr, ProxyError> {
+async fn resolve_udp_dest(
+    dest: &Address,
+    dns: Option<&DnsModule>,
+) -> Result<std::net::SocketAddr, ProxyError> {
     match dest {
-        Address::Ipv4(ip, port) => Ok(std::net::SocketAddr::new((*ip).into(), *port)),
-        Address::Ipv6(ip, port) => Ok(std::net::SocketAddr::new((*ip).into(), *port)),
+        Address::Ipv4(ip, port) => Ok(std::net::SocketAddr::new(IpAddr::V4(*ip), *port)),
+        Address::Ipv6(ip, port) => Ok(std::net::SocketAddr::new(IpAddr::V6(*ip), *port)),
         Address::Domain(name, port) => {
+            if let Some(dns) = dns {
+                let ip = dns.resolve(name).await?.into_iter().next().ok_or_else(|| {
+                    ProxyError::DnsResolutionFailed(format!("{name}: no records"))
+                })?;
+                return Ok(std::net::SocketAddr::new(ip, *port));
+            }
             let mut addrs = tokio::net::lookup_host((name.as_str(), *port))
                 .await
                 .map_err(|e| ProxyError::DnsResolutionFailed(format!("{name}: {e}")))?;
