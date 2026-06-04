@@ -6,6 +6,12 @@ on:
   schedule:
     - cron: "0 6 * * *"
 
+# Cancel any in-progress run for the same branch/PR when a new push arrives.
+# Scheduled runs each get a unique group (via run_id) so they never cancel each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'schedule' && github.run_id || 'pr' }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   MATRIX_PCAP_ON_FAIL: "1"
