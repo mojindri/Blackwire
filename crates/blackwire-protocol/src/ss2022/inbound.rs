@@ -28,13 +28,13 @@ use aes_gcm::{
 use async_trait::async_trait;
 use bytes::BytesMut;
 use rand::RngExt;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, warn};
 
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::InboundHandler;
-use blackwire_common::{BoxedStream, Network, ProxyError};
+use blackwire_common::{BoxedStream, Network, PrependedStream, ProxyError};
 
 use super::{
     password_to_psk, replay::SaltReplay, stream::Ss2022Stream, subkey::derive_subkey, u64_from_be8,
@@ -77,8 +77,13 @@ impl InboundHandler for Ss2022Inbound {
         source: SocketAddr,
         dispatcher: Arc<dyn Dispatcher>,
     ) -> Result<(), ProxyError> {
+        // Buffer the header reads. SS-2022 request header: salt(32) + fixed_ct(27) +
+        // var_ct(variable). A 128-byte BufReader covers salt + fixed_ct in one syscall
+        // and often the variable header too. Leftover bytes are recovered via PrependedStream.
+        let mut buf_reader = BufReader::with_capacity(128, &mut stream);
+
         let mut req_salt = [0u8; 32];
-        stream.read_exact(&mut req_salt).await?;
+        buf_reader.read_exact(&mut req_salt).await?;
         if !self.replay.check_and_insert(&req_salt) {
             warn!(source = %source, "SS-2022: replayed salt");
             return Err(ProxyError::AuthFailed);
@@ -89,7 +94,7 @@ impl InboundHandler for Ss2022Inbound {
 
         // SIP022 request fixed header: type(1) | timestamp(8 BE) | length(2 BE)
         let mut fixed_ct = [0u8; 27];
-        stream.read_exact(&mut fixed_ct).await?;
+        buf_reader.read_exact(&mut fixed_ct).await?;
         let fixed = req_cipher
             .decrypt(GenericArray::from_slice(&make_nonce(0)), fixed_ct.as_ref())
             .map_err(|_| ProxyError::Protocol("SS-2022: fixed header decrypt failed".into()))?;
@@ -110,7 +115,13 @@ impl InboundHandler for Ss2022Inbound {
         let variable_len = u16::from_be_bytes([fixed[9], fixed[10]]) as usize;
 
         let mut var_ct = vec![0u8; variable_len + 16];
-        stream.read_exact(&mut var_ct).await?;
+        buf_reader.read_exact(&mut var_ct).await?;
+
+        let leftover = buf_reader.buffer().to_vec();
+        drop(buf_reader);
+        if !leftover.is_empty() {
+            stream = Box::new(PrependedStream::new(stream, leftover));
+        }
         let variable = req_cipher
             .decrypt(GenericArray::from_slice(&make_nonce(1)), var_ct.as_ref())
             .map_err(|_| ProxyError::Protocol("SS-2022: variable header decrypt failed".into()))?;
