@@ -40,7 +40,7 @@ pub(crate) fn build_trojan_inbound(
         anyhow::bail!("Trojan inbound '{}' has no configured clients", cfg.tag);
     }
 
-    Ok(TrojanInbound::new(&cfg.tag, &passwords))
+    Ok(TrojanInbound::new(cfg.tag.as_str(), &passwords))
 }
 
 /// Build a Trojan outbound handler from config.

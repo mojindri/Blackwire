@@ -122,7 +122,7 @@ pub async fn serve_connection(
             let ctx = Context {
                 sniffed_domain: None,
                 source: None,
-                inbound_tag: tag,
+                inbound_tag: tag.into(),
                 user: None,
                 sniffed_protocol: None,
                 vision_flow: false,
