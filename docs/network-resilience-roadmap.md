@@ -14,6 +14,8 @@ operator-facing hardening package.
 
 - Provide practical presets for difficult networks without promising perfect
   unblockability.
+- Prevent avoidable leakage of DNS queries, destination metadata, proxy identity,
+  credentials, private keys, and user traffic outside the configured proxy path.
 - Keep behavior measurable through logs, metrics, and panel status.
 - Favor conservative automatic fallback over aggressive flapping.
 - Make generated client links compatible with common clients.
@@ -60,6 +62,24 @@ operator-facing hardening package.
   - DoT
   - FakeIP for TUN/transparent mode
 - [ ] Document DNS poisoning/hijack caveats and recommended configs.
+
+### P1b - No-leakage hardening
+
+- [ ] Add an operator-facing "no leakage" checklist for server, local proxy,
+  and TUN modes.
+- [ ] Add tests proving DNS queries follow the configured DNS path and do not
+  fall back to system DNS unless explicitly configured.
+- [ ] Add tests proving blocked or failed routes do not silently retry through a
+  direct outbound unless an explicit direct fallback is configured.
+- [ ] Add safeguards so authentication failures, REALITY fallback behavior, and
+  malformed handshakes do not expose proxy-specific banners or protocol identity.
+- [ ] Add log redaction tests for credentials, private keys, short IDs, tokens,
+  subscription URLs, and generated share links.
+- [ ] Add panel warnings for configurations that can leak traffic or metadata:
+  direct fallback outbounds, system DNS, public panel binding, missing TLS, and
+  mixed proxy/direct route rules.
+- [ ] Add a release-gate script that runs DNS-leak, route-leak, and log-redaction
+  checks against representative configs.
 
 ### P2 - Path diversity package
 

@@ -18,7 +18,10 @@ bench-alloc = []
 [dependencies]
 blackwire-core   = { path = "../crates/blackwire-core" }
 blackwire-config = { path = "../crates/blackwire-config" }
+blackwire-common = { path = "../crates/blackwire-common" }
+blackwire-transport = { path = "../crates/blackwire-transport" }
 
+anyhow.workspace = true
 tokio.workspace = true
 socket2.workspace = true
 serde_json.workspace = true
@@ -29,6 +32,10 @@ bytes.workspace = true
 
 [[bench]]
 name = "tcp_relay_throughput"
+harness = false
+
+[[bench]]
+name = "buffer_pool"
 harness = false
 
 [[bench]]

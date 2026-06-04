@@ -35,6 +35,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -52,11 +53,16 @@ use blackwire_config::schema::{Config, FastPoolPolicy, ProfileMode, Protocol};
 use blackwire_protocol::freedom::{FreedomOutbound, PoolConfig};
 use blackwire_protocol::socks::Socks5Inbound;
 use blackwire_transport::mkcp_accept_sessions;
-use blackwire_transport::{create_tun, ensure_tun_runtime_supported, TunConfig, TunRuntime};
+use blackwire_transport::{
+    create_tun, ensure_tun_runtime_supported, TunBatchConfig, TunConfig, TunRuntime,
+};
 use tokio::net::UdpSocket as TokioUdpSocket;
 
+use crate::data_plane::{compile_data_plane, DataPlaneStore};
 use crate::http::build_http_inbound;
-use crate::hysteria2::{build_hysteria2_outbound, start_hysteria2_inbound};
+use crate::hysteria2::{
+    build_hysteria2_outbound, socket_config_from_quic, start_hysteria2_inbound,
+};
 use crate::outbound_transport::uses_quic;
 mod helpers;
 
@@ -208,6 +214,8 @@ pub struct Instance {
     outbound_interface: Option<String>,
     /// Hot-reload state shared with the config watcher.
     pub reload: ReloadState,
+    /// Immutable hot-path data-plane snapshot.
+    pub data_plane: DataPlaneStore,
 }
 
 impl fmt::Debug for Instance {
@@ -238,6 +246,7 @@ impl Instance {
         let mut shutdown_tx: Option<tokio::sync::watch::Sender<bool>> = None;
         let mut outbound_bypass_mark = None;
         let mut outbound_interface = None;
+        let data_plane = compile_data_plane(config.as_ref());
 
         // ── Optional: TUN transparent-proxy runtime ──────────────────────────
         if let Some(tun_cfg) = &config.tun {
@@ -262,6 +271,38 @@ impl Instance {
                 redirect_port: tun_cfg.redirect_port,
                 dns_port: tun_cfg.dns_port,
                 wintun_file: tun_cfg.wintun_file.clone(),
+                batch: TunBatchConfig {
+                    enabled: tun_cfg.batch.enabled,
+                    max_packets: tun_cfg.batch.max_packets,
+                    max_delay: Duration::from_micros(tun_cfg.batch.max_delay_us),
+                    latency_flush_bytes: tun_cfg.batch.latency_flush_bytes,
+                },
+                udp_max_sessions: tun_cfg.sessions.udp_max,
+                udp_idle_timeout: Duration::from_secs(tun_cfg.sessions.udp_idle_timeout_sec),
+                tcp_max_sessions: tun_cfg.sessions.tcp_max,
+                linux: tun_cfg
+                    .linux
+                    .as_ref()
+                    .map(|linux| blackwire_transport::TunLinuxConfig {
+                        backend: match linux.backend {
+                            blackwire_config::schema::TunLinuxBackend::Tun => {
+                                blackwire_transport::TunLinuxBackend::Tun
+                            }
+                            blackwire_config::schema::TunLinuxBackend::Afxdp => {
+                                blackwire_transport::TunLinuxBackend::AfXdp
+                            }
+                        },
+                        af_xdp: blackwire_transport::TunAfXdpConfig {
+                            interface: linux.af_xdp.interface.clone(),
+                            queue_id: linux.af_xdp.queue_id,
+                            ring_entries: linux.af_xdp.ring_entries,
+                            frame_count: linux.af_xdp.frame_count,
+                            frame_size: linux.af_xdp.frame_size,
+                            force_copy: linux.af_xdp.force_copy,
+                            force_zerocopy: linux.af_xdp.force_zerocopy,
+                        },
+                    })
+                    .unwrap_or_default(),
             };
             let device =
                 create_tun(&tc).context("TUN device creation failed (are we running as root?)")?;
@@ -318,8 +359,13 @@ impl Instance {
                 }
                 Protocol::Vless => build_vless_outbound(out_cfg)
                     .with_context(|| format!("building VLESS outbound '{}'", out_cfg.tag))?,
-                Protocol::Hysteria2 => build_hysteria2_outbound(out_cfg)
-                    .with_context(|| format!("building Hysteria2 outbound '{}'", out_cfg.tag))?,
+                Protocol::Hysteria2 => build_hysteria2_outbound(
+                    out_cfg,
+                    config.quic.as_ref(),
+                    config.datagram.as_ref(),
+                    config.fec.as_ref(),
+                )
+                .with_context(|| format!("building Hysteria2 outbound '{}'", out_cfg.tag))?,
                 Protocol::Trojan => build_trojan_outbound(out_cfg)
                     .with_context(|| format!("building Trojan outbound '{}'", out_cfg.tag))?,
                 Protocol::Vmess => build_vmess_outbound(out_cfg)
@@ -402,6 +448,11 @@ impl Instance {
             Arc::clone(&outbound_tags),
         );
         let vless_registries = Arc::clone(&reload.vless_registries);
+        let connection_plan_labels: HashMap<String, Arc<str>> = data_plane
+            .connection_plans
+            .iter()
+            .map(|plan| (plan.inbound_tag.to_string(), Arc::clone(&plan.label)))
+            .collect();
 
         // ── Step 4: Create dispatcher ────────────────────────────────────────
         let dispatcher = match &dns {
@@ -413,7 +464,9 @@ impl Instance {
             ),
             None => DefaultDispatcher::new_with_sniffing(router, outbound_map, sniffing_shared),
         }
-        .with_profile_and_fast(config.profile, config.fast.as_ref());
+        .with_profile_fast_and_vision(config.profile, config.fast.as_ref(), config.vision.as_ref())
+        .with_first_packet_boost(config.first_packet_boost.unwrap_or_default())
+        .with_connection_plans(Arc::new(connection_plan_labels));
 
         if config.profile == ProfileMode::Fast {
             let fast = config.fast.as_ref().cloned().unwrap_or_default();
@@ -424,6 +477,7 @@ impl Instance {
                 adaptive_pool_min_hotness = adaptive_pool.min_hotness_for_pool,
                 adaptive_pool_idle_ttl_ms = adaptive_pool.idle_ttl.as_millis(),
                 splice_policy = ?fast.splice,
+                vision_policy = ?config.vision.unwrap_or_default(),
                 adaptive_splice_min_bytes = ADAPTIVE_SPLICE_MIN_BYTES,
                 adaptive_splice_long_stream_ms = ADAPTIVE_SPLICE_LONG_STREAM_AFTER.as_millis(),
                 strict_production = fast.strict_production,
@@ -447,8 +501,14 @@ impl Instance {
             if in_cfg.protocol == Protocol::Hysteria2 {
                 info!(tag = %in_cfg.tag, addr = %addr, "starting Hysteria2 inbound listener");
                 let dispatcher_for_h2 = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
-                let task = start_hysteria2_inbound(in_cfg, dispatcher_for_h2)
-                    .with_context(|| format!("starting Hysteria2 inbound '{}'", in_cfg.tag))?;
+                let task = start_hysteria2_inbound(
+                    in_cfg,
+                    config.quic.as_ref(),
+                    config.datagram.as_ref(),
+                    config.fec.as_ref(),
+                    dispatcher_for_h2,
+                )
+                .with_context(|| format!("starting Hysteria2 inbound '{}'", in_cfg.tag))?;
                 tasks.push(task);
                 continue;
             }
@@ -595,8 +655,13 @@ impl Instance {
                     })?;
                 let key_pem = std::fs::read_to_string(&tls_cfg.key_file)
                     .with_context(|| format!("cannot read QUIC key file '{}'", tls_cfg.key_file))?;
-                let endpoint = blackwire_transport::quic_server_endpoint(addr, &cert_pem, &key_pem)
-                    .with_context(|| format!("binding QUIC inbound '{}'", in_cfg.tag))?;
+                let endpoint = blackwire_transport::quic_server_endpoint_with_socket_config(
+                    addr,
+                    &cert_pem,
+                    &key_pem,
+                    socket_config_from_quic(config.quic.as_ref()),
+                )
+                .with_context(|| format!("binding QUIC inbound '{}'", in_cfg.tag))?;
                 let conn_handler = Arc::new(InboundConnectionHandler {
                     inbound: Arc::clone(&handler),
                     dispatcher: dispatcher_for_handler,
@@ -776,6 +841,7 @@ impl Instance {
             outbound_bypass_mark,
             outbound_interface,
             reload,
+            data_plane: DataPlaneStore::new(data_plane),
         })
     }
 

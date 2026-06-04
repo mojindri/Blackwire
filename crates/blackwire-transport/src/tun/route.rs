@@ -111,7 +111,7 @@ pub async fn setup_routes(
 ) -> Result<()> {
     let mark = format!("0x{bypass_mark:x}");
     let dns = dns_port.to_string();
-    let redir = redirect_port.to_string();
+    let _redir = redirect_port.to_string();
 
     let mut rb = RollbackList::default();
 
@@ -173,47 +173,10 @@ pub async fn setup_routes(
     )
     .await?;
 
-    must(
-        &[
-            "iptables",
-            "-t",
-            "nat",
-            "-A",
-            "OUTPUT",
-            "-p",
-            "tcp",
-            "-m",
-            "mark",
-            "!",
-            "--mark",
-            &mark,
-            "-j",
-            "REDIRECT",
-            "--to-port",
-            &redir,
-        ],
-        &[
-            "iptables",
-            "-t",
-            "nat",
-            "-D",
-            "OUTPUT",
-            "-p",
-            "tcp",
-            "-m",
-            "mark",
-            "!",
-            "--mark",
-            &mark,
-            "-j",
-            "REDIRECT",
-            "--to-port",
-            &redir,
-        ],
-        &mut rb,
-        "iptables: redirect TCP to proxy",
-    )
-    .await?;
+    // TCP is handled by the packet-level bridge after policy routing sends
+    // packets to the TUN device. Do not REDIRECT here, otherwise the original
+    // TCP stream reaches the local proxy listener before the runtime can parse
+    // the raw packet.
 
     // ── IPv6: policy routing (best-effort) ──────────────────────────────────
     try_best_effort(
@@ -253,28 +216,7 @@ pub async fn setup_routes(
     )
     .await;
 
-    try_best_effort(
-        &[
-            "ip6tables",
-            "-t",
-            "nat",
-            "-A",
-            "OUTPUT",
-            "-p",
-            "tcp",
-            "-m",
-            "mark",
-            "!",
-            "--mark",
-            &mark,
-            "-j",
-            "REDIRECT",
-            "--to-port",
-            &redir,
-        ],
-        "ip6tables: redirect TCP",
-    )
-    .await;
+    // IPv6 TCP follows the same packet-level bridge path.
 
     info!(%tun_name, "TUN routes installed");
     Ok(())

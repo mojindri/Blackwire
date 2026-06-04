@@ -23,7 +23,7 @@ use tokio::net::TcpStream;
 use tracing::debug;
 
 use blackwire_app::context::Context;
-use blackwire_app::features::OutboundHandler;
+use blackwire_app::features::{OutboundConnectResult, OutboundHandler};
 use blackwire_common::{Address, BoxedStream, ProxyError};
 
 use super::codec::{compute_token, encode_request, CMD_CONNECT, CMD_UDP_ASSOCIATE};
@@ -81,6 +81,29 @@ impl OutboundHandler for TrojanOutbound {
 
         connect_trojan_on_stream(Box::new(stream), &self.token, dest).await
     }
+
+    async fn connect_with_early_payload(
+        &self,
+        _ctx: &Context,
+        dest: &Address,
+        early_payload: Option<Vec<u8>>,
+    ) -> Result<OutboundConnectResult, ProxyError> {
+        debug!(
+            server = %self.server,
+            dest = %dest,
+            "Trojan outbound connecting with early payload"
+        );
+
+        let stream = TcpStream::connect(self.server).await?;
+        stream.set_nodelay(true)?;
+        connect_trojan_on_stream_with_early_payload(
+            Box::new(stream),
+            &self.token,
+            dest,
+            early_payload,
+        )
+        .await
+    }
 }
 
 /// Send a Trojan TCP CONNECT header over an already-established stream.
@@ -92,6 +115,32 @@ pub async fn connect_trojan_on_stream(
     let header = encode_request(token, CMD_CONNECT, dest)?;
     stream.write_all(&header).await?;
     Ok(stream)
+}
+
+/// Send a Trojan TCP CONNECT header and optional first payload.
+pub async fn connect_trojan_on_stream_with_early_payload(
+    mut stream: BoxedStream,
+    token: &str,
+    dest: &Address,
+    early_payload: Option<Vec<u8>>,
+) -> Result<OutboundConnectResult, ProxyError> {
+    let header = encode_request(token, CMD_CONNECT, dest)?;
+    stream.write_all(&header).await?;
+    let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+        if !payload.is_empty() {
+            stream.write_all(payload).await?;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    Ok(OutboundConnectResult {
+        stream,
+        wrote_early_payload,
+        returned_early_response: None,
+    })
 }
 
 /// Send a Trojan UDP ASSOCIATE header over an already-established stream.
@@ -112,6 +161,7 @@ pub async fn connect_trojan_on_stream_udp(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncReadExt;
     use tokio::net::{TcpListener, TcpStream};
 
     use crate::trojan::codec as trojan_codec;
@@ -141,5 +191,43 @@ mod tests {
         let _stream = connect_trojan_on_stream(Box::new(tcp), &expected_token, &dest)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn connect_on_stream_with_early_payload_preserves_first_bytes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let password = "early-payload-test";
+        let expected_token = trojan_codec::compute_token(password);
+        let dest = Address::Domain("example.com".into(), 443);
+        let early_payload = b"GET / HTTP/1.1\r\n\r\n".to_vec();
+
+        let expected_dest = dest.clone();
+        let expected_tok = expected_token.clone();
+        let expected_payload = early_payload.clone();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut stream: BoxedStream = Box::new(tcp);
+            let req = trojan_codec::decode_request(&mut stream).await.unwrap();
+            assert_eq!(req.token, expected_tok.as_bytes());
+            assert_eq!(req.dest, expected_dest);
+
+            let mut payload = vec![0u8; expected_payload.len()];
+            stream.read_exact(&mut payload).await.unwrap();
+            assert_eq!(payload, expected_payload);
+        });
+
+        let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let result = connect_trojan_on_stream_with_early_payload(
+            Box::new(tcp),
+            &expected_token,
+            &dest,
+            Some(early_payload),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.wrote_early_payload);
+        assert!(result.returned_early_response.is_none());
     }
 }

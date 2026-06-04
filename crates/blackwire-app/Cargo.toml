@@ -9,6 +9,7 @@ authors.workspace = true
 [dependencies]
 blackwire-common          = { path = "../blackwire-common" }
 blackwire-config          = { path = "../blackwire-config" }
+blackwire-connmgr         = { path = "../blackwire-connmgr" }
 
 tokio.workspace            = true
 bytes.workspace            = true
@@ -33,3 +34,6 @@ metrics-exporter-prometheus.workspace  = true
 axum.workspace                         = true
 once_cell.workspace                    = true
 serde_json.workspace                   = true
+
+[dev-dependencies]
+libc.workspace = true

@@ -697,6 +697,17 @@ mod linux {
     /// `Some(false)` = unavailable; all subsequent calls use epoll splice.
     static URING_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
+    /// Runtime selection policy for the Linux splice backend.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SpliceBackendPolicy {
+        /// Try io_uring first, then fall back to epoll splice.
+        Auto,
+        /// Skip io_uring and use epoll splice directly.
+        EpollOnly,
+        /// Require io_uring. If the ring path cannot start, return its error.
+        RequireIoUring,
+    }
+
     /// Bidirectional zero-copy relay between two TCP streams.
     ///
     /// Tries `io_uring` SPLICE first (lower wakeup latency, ~15 µs vs ~28 µs
@@ -718,6 +729,23 @@ mod linux {
         a: &mut TcpStream,
         b: &mut TcpStream,
     ) -> io::Result<(u64, u64)> {
+        splice_bidirectional_with_backend(a, b, SpliceBackendPolicy::Auto).await
+    }
+
+    /// Bidirectional zero-copy relay with an explicit backend policy.
+    pub async fn splice_bidirectional_with_backend(
+        a: &mut TcpStream,
+        b: &mut TcpStream,
+        policy: SpliceBackendPolicy,
+    ) -> io::Result<(u64, u64)> {
+        match policy {
+            SpliceBackendPolicy::Auto => {}
+            SpliceBackendPolicy::EpollOnly => return splice_bidirectional_epoll(a, b).await,
+            SpliceBackendPolicy::RequireIoUring => {
+                return uring::splice_bidirectional_uring(a, b).await;
+            }
+        }
+
         // Steady-state fast paths: no lock contention, no closure allocation.
         match URING_AVAILABLE.get() {
             Some(&true) => return uring::splice_bidirectional_uring(a, b).await,
@@ -931,6 +959,8 @@ mod linux {
 
 #[cfg(target_os = "linux")]
 pub use linux::splice_bidirectional;
+#[cfg(target_os = "linux")]
+pub use linux::{splice_bidirectional_with_backend, SpliceBackendPolicy};
 
 // On non-Linux we just re-export nothing. Callers use `#[cfg(target_os = "linux")]`
 // to decide whether to call splice or fall back to copy_bidirectional.
