@@ -160,8 +160,8 @@ fn parse_ipv6(buf: &[u8]) -> Option<IpPacket> {
     let mut offset = 40usize;
     loop {
         match next_hdr {
-            6 | 17 | 58 => break, // TCP / UDP / ICMPv6 — transport header found
-            // Extension headers with variable length (RFC 2460 §4.2):
+            6 | 17 | 58 => break, // TCP / UDP / ICMPv6 â€” transport header found
+            // Extension headers with variable length (RFC 2460 Â§4.2):
             // each has next_hdr(1) + ext_len(1) + data; ext_len is in 8-octet units excluding first unit.
             0 | 43 | 60 | 135 | 139 | 140 | 253 | 254 => {
                 if offset + 2 > total_length {
@@ -179,7 +179,7 @@ fn parse_ipv6(buf: &[u8]) -> Option<IpPacket> {
                 next_hdr = buf[offset];
                 offset += 8;
             }
-            // Unknown next header — report as Other, no port info.
+            // Unknown next header â€” report as Other, no port info.
             other => {
                 return Some(IpPacket {
                     src: src.into(),
