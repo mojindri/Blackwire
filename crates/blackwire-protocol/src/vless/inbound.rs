@@ -122,11 +122,9 @@ impl InboundHandler for VlessInbound {
             // Any payload bytes read ahead into the buffer are recovered and prepended
             // back onto the stream via PrependedStream before the relay starts.
             let mut buf_reader = BufReader::with_capacity(64, &mut stream);
-            let req = with_handshake_timeout(
-                self.handshake_timeout,
-                decode_request(&mut buf_reader),
-            )
-            .await;
+            let req =
+                with_handshake_timeout(self.handshake_timeout, decode_request(&mut buf_reader))
+                    .await;
             let leftover = buf_reader.buffer().to_vec();
             drop(buf_reader);
             if !leftover.is_empty() {
