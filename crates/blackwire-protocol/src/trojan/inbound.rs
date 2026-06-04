@@ -30,6 +30,7 @@ use tracing::{debug, warn};
 
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
+use blackwire_app::dns::DnsModule;
 use blackwire_app::features::InboundHandler;
 use tokio::io::BufReader;
 
@@ -62,6 +63,9 @@ pub struct TrojanInbound {
     /// Pre-computed 56-char auth tokens for each configured password.
     /// We compare against these on every connection.
     tokens: Vec<[u8; TOKEN_LEN]>,
+
+    /// DNS module for UDP relay domain resolution.
+    dns: Option<Arc<DnsModule>>,
 }
 
 impl TrojanInbound {
@@ -70,7 +74,12 @@ impl TrojanInbound {
     /// # Arguments
     /// * `tag`       — unique inbound tag from config
     /// * `passwords` — list of accepted Trojan passwords
-    pub fn new(tag: impl Into<Arc<str>>, passwords: &[String]) -> Arc<Self> {
+    /// * `dns`       — optional DNS module for UDP relay resolution
+    pub fn new(
+        tag: impl Into<Arc<str>>,
+        passwords: &[String],
+        dns: Option<Arc<DnsModule>>,
+    ) -> Arc<Self> {
         let tokens = passwords
             .iter()
             .map(|p| {
@@ -84,6 +93,7 @@ impl TrojanInbound {
         Arc::new(Self {
             tag: tag.into(),
             tokens,
+            dns,
         })
     }
 
@@ -140,7 +150,7 @@ impl InboundHandler for TrojanInbound {
         );
 
         if is_trojan_udp_associate(&request) {
-            return relay_trojan_udp(stream).await;
+            return relay_trojan_udp(stream, self.dns.clone()).await;
         }
 
         let ctx = Context::new(self.tag.clone(), source);
