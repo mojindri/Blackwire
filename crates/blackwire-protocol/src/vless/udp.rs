@@ -6,7 +6,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt as _};
 
 use blackwire_app::dns::DnsModule;
 use blackwire_common::{Address, ProxyError};
@@ -64,27 +64,44 @@ pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
         .await
         .map_err(|e| ProxyError::Transport(format!("VLESS UDP bind failed: {e}")))?;
 
+    // Pre-allocate all I/O buffers once — no heap churn in the hot loop.
+    let mut addr_buf = [0u8; 512];
+    let mut payload_buf = vec![0u8; 65507];
+    let mut recv_buf = vec![0u8; 65535];
+
     loop {
-        let dest = match read_udp_header(&mut client).await {
-            Ok(d) => d,
-            Err(ProxyError::Transport(e)) if e.contains("early eof") => break,
-            Err(e) => return Err(e),
+        // Read 2-byte address-length prefix.
+        let addr_len = match client.read_u16().await {
+            Ok(n) => n as usize,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(ProxyError::Transport(e.to_string())),
         };
-        let payload = read_udp_payload(&mut client).await?;
-        if payload.is_empty() {
+        if addr_len == 0 || addr_len > 512 {
+            return Err(ProxyError::Protocol(format!(
+                "invalid VLESS UDP address length {addr_len}"
+            )));
+        }
+        client.read_exact(&mut addr_buf[..addr_len]).await?;
+        let dest = decode_address_port(&addr_buf[..addr_len])?;
+
+        // Single read into pre-allocated buffer — no intermediate Vec, no copy.
+        let n = tokio::time::timeout(Duration::from_millis(500), client.read(&mut payload_buf))
+            .await
+            .map_err(|_| ProxyError::Protocol("VLESS UDP payload read timeout".into()))?
+            .map_err(|e| ProxyError::Transport(e.to_string()))?;
+        if n == 0 {
             continue;
         }
 
         let upstream = resolve_udp_dest(&dest, dns.as_deref()).await?;
         socket
-            .send_to(&payload, upstream)
+            .send_to(&payload_buf[..n], upstream)
             .await
             .map_err(|e| ProxyError::Transport(format!("VLESS UDP send: {e}")))?;
 
-        let mut buf = vec![0u8; 65535];
-        match tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut buf)).await {
-            Ok(Ok(n)) if n > 0 => {
-                write_udp_packet(&mut client, &dest, &buf[..n]).await?;
+        match tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut recv_buf)).await {
+            Ok(Ok(rn)) if rn > 0 => {
+                write_udp_packet(&mut client, &dest, &recv_buf[..rn]).await?;
             }
             _ => {}
         }
