@@ -74,29 +74,49 @@ pub struct ConnectionPlan {
     pub cost: ProtocolCost,
 }
 
+/// Protocol kind for an inbound listener.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InboundKind {
+    /// VLESS inbound listener.
     Vless,
+    /// VMess inbound listener.
     Vmess,
+    /// Trojan inbound listener.
     Trojan,
+    /// Shadowsocks inbound listener.
     Shadowsocks,
+    /// Hysteria2 inbound listener.
     Hysteria2,
+    /// SOCKS5 inbound listener.
     Socks,
+    /// HTTP CONNECT proxy inbound listener.
     Http,
+    /// Direct/freedom inbound listener.
     Freedom,
+    /// ShadowTLS inbound listener.
     ShadowTls,
 }
 
+/// Protocol kind for an outbound connection handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutboundKind {
+    /// VLESS outbound.
     Vless,
+    /// VMess outbound.
     Vmess,
+    /// Trojan outbound.
     Trojan,
+    /// Shadowsocks outbound.
     Shadowsocks,
+    /// Hysteria2 outbound.
     Hysteria2,
+    /// Direct/freedom outbound (no proxy).
     Freedom,
+    /// SOCKS5 outbound.
     Socks,
+    /// HTTP CONNECT proxy outbound.
     Http,
+    /// ShadowTLS outbound.
     ShadowTls,
 }
 
