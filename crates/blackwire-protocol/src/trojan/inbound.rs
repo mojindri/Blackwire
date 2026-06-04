@@ -55,7 +55,7 @@ use super::udp::relay_trojan_udp;
 /// A Trojan inbound handler.
 pub struct TrojanInbound {
     /// The inbound tag from config.
-    tag: String,
+    tag: Arc<str>,
 
     /// Pre-computed 56-char auth tokens for each configured password.
     /// We compare against these on every connection.
@@ -68,7 +68,7 @@ impl TrojanInbound {
     /// # Arguments
     /// * `tag`       — unique inbound tag from config
     /// * `passwords` — list of accepted Trojan passwords
-    pub fn new(tag: impl Into<String>, passwords: &[String]) -> Arc<Self> {
+    pub fn new(tag: impl Into<Arc<str>>, passwords: &[String]) -> Arc<Self> {
         let tokens = passwords
             .iter()
             .map(|p| {
@@ -133,7 +133,7 @@ impl InboundHandler for TrojanInbound {
             return relay_trojan_udp(stream).await;
         }
 
-        let ctx = Context::new(&self.tag, source);
+        let ctx = Context::new(self.tag.clone(), source);
         dispatcher.dispatch(ctx, request.dest, stream).await
     }
 }
