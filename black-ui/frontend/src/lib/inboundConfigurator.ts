@@ -25,6 +25,14 @@ export interface InboundEditorState {
   httpupgradePath: string;
   httpupgradeHost: string;
   splitHttpPath: string;
+  kcpHeader: string;
+  kcpMtu: string;
+  kcpTti: string;
+  kcpUplinkCapacity: string;
+  kcpDownlinkCapacity: string;
+  kcpCongestion: boolean;
+  kcpReadBufferSize: string;
+  kcpWriteBufferSize: string;
   tlsServerName: string;
   tlsAlpn: string;
   tlsCertificateFile: string;
@@ -85,6 +93,14 @@ export function createInboundEditorState(inbound?: Inbound | null): InboundEdito
     httpupgradePath: stringValue(objectValue(streamSettings.value.httpupgradeSettings)?.path) ?? "",
     httpupgradeHost: stringValue(objectValue(streamSettings.value.httpupgradeSettings)?.host) ?? "",
     splitHttpPath: stringValue(objectValue(streamSettings.value.splithttpSettings)?.path) ?? "",
+    kcpHeader: stringValue(objectValue(streamSettings.value.kcpSettings)?.header) ?? "",
+    kcpMtu: numberString(objectValue(streamSettings.value.kcpSettings)?.mtu),
+    kcpTti: numberString(objectValue(streamSettings.value.kcpSettings)?.tti),
+    kcpUplinkCapacity: numberString(objectValue(streamSettings.value.kcpSettings)?.uplink_capacity),
+    kcpDownlinkCapacity: numberString(objectValue(streamSettings.value.kcpSettings)?.downlink_capacity),
+    kcpCongestion: boolValue(objectValue(streamSettings.value.kcpSettings)?.congestion) ?? false,
+    kcpReadBufferSize: numberString(objectValue(streamSettings.value.kcpSettings)?.read_buffer_size),
+    kcpWriteBufferSize: numberString(objectValue(streamSettings.value.kcpSettings)?.write_buffer_size),
     tlsServerName: stringValue(objectValue(streamSettings.value.tlsSettings)?.serverName) ?? "",
     tlsAlpn: arrayOfStrings(objectValue(streamSettings.value.tlsSettings)?.alpn).join(", "),
     tlsCertificateFile: stringValue(objectValue(streamSettings.value.tlsSettings)?.certificateFile) ?? "",
@@ -176,6 +192,25 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
     streamSettings.splithttpSettings = pruneEmpty(splitHttpSettings);
   } else {
     delete streamSettings.splithttpSettings;
+  }
+
+  if (state.network === "kcp") {
+    const kcpSettings = cloneObject(objectValue(streamSettings.kcpSettings));
+    applyStringField(kcpSettings, "header", state.kcpHeader);
+    applyNumberField(kcpSettings, "mtu", state.kcpMtu);
+    applyNumberField(kcpSettings, "tti", state.kcpTti);
+    applyNumberField(kcpSettings, "uplink_capacity", state.kcpUplinkCapacity);
+    applyNumberField(kcpSettings, "downlink_capacity", state.kcpDownlinkCapacity);
+    if (state.kcpCongestion) {
+      kcpSettings.congestion = true;
+    } else {
+      delete kcpSettings.congestion;
+    }
+    applyNumberField(kcpSettings, "read_buffer_size", state.kcpReadBufferSize);
+    applyNumberField(kcpSettings, "write_buffer_size", state.kcpWriteBufferSize);
+    streamSettings.kcpSettings = pruneEmpty(kcpSettings);
+  } else {
+    delete streamSettings.kcpSettings;
   }
 
   if (state.security === "tls") {
@@ -335,6 +370,14 @@ function syncStructuredFields(state: InboundEditorState): InboundEditorState {
     httpupgradePath: next.httpupgradePath,
     httpupgradeHost: next.httpupgradeHost,
     splitHttpPath: next.splitHttpPath,
+    kcpHeader: next.kcpHeader,
+    kcpMtu: next.kcpMtu,
+    kcpTti: next.kcpTti,
+    kcpUplinkCapacity: next.kcpUplinkCapacity,
+    kcpDownlinkCapacity: next.kcpDownlinkCapacity,
+    kcpCongestion: next.kcpCongestion,
+    kcpReadBufferSize: next.kcpReadBufferSize,
+    kcpWriteBufferSize: next.kcpWriteBufferSize,
     tlsServerName: next.tlsServerName,
     tlsAlpn: next.tlsAlpn,
     tlsCertificateFile: next.tlsCertificateFile,
@@ -430,7 +473,8 @@ function removeTransientNetworkKeys(streamSettings: JsonObject): JsonObject {
     "wsSettings",
     "grpcSettings",
     "httpupgradeSettings",
-    "splithttpSettings"
+    "splithttpSettings",
+    "kcpSettings"
   ]) {
     if (!objectValue(next[key])) delete next[key];
   }
@@ -473,6 +517,17 @@ function applyStringArrayField(target: JsonObject, key: string, value: string) {
     .map((item) => item.trim())
     .filter(Boolean);
   if (list.length > 0) target[key] = list;
+  else delete target[key];
+}
+
+function applyNumberField(target: JsonObject, key: string, value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    delete target[key];
+    return;
+  }
+  const parsed = Number(trimmed);
+  if (Number.isFinite(parsed)) target[key] = parsed;
   else delete target[key];
 }
 
