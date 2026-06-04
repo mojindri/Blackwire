@@ -1,6 +1,6 @@
 {
   "profile": "fast",
-  "fast": { "strictProduction": false, "pool": "adaptive", "splice": "always", "linux": { "ioUring": "disabled" } },
+  "fast": { "strictProduction": false, "pool": "adaptive", "splice": "adaptive", "linux": { "ioUring": "disabled" } },
   "log": { "level": "warn" },
   "metricsAddr": "127.0.0.1:9093",
   "inbounds": [
