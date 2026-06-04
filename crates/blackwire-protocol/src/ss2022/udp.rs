@@ -8,9 +8,9 @@
 //! AEAD nonce = decrypted separate header bytes `[4..16]`.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use aes::Aes256;
 use aes_gcm::{
@@ -23,6 +23,7 @@ use rand::RngExt;
 use tokio::net::UdpSocket;
 use tracing::{debug, warn};
 
+use blackwire_app::dns::DnsModule;
 use blackwire_common::{decode_socks5_address, write_socks5_address, Address, ProxyError};
 
 const TYPE_CLIENT: u8 = 0x00;
@@ -117,6 +118,8 @@ struct SessionEntry {
     upstream_sock: Arc<UdpSocket>,
     /// Current client address, updated on every received packet (handles roaming).
     client_addr: Arc<Mutex<SocketAddr>>,
+    /// Timestamp of the last packet received for this session, used for LRU eviction.
+    last_used: Instant,
 }
 
 /// Decode one SS2022 UDP client packet (SIP022 / sing-box compatible).
@@ -291,16 +294,16 @@ pub fn encode_client_packet(
 /// On Linux the inbound socket uses `recvmmsg(2)` to receive up to
 /// `RECV_BATCH` packets in a single syscall, reducing per-packet syscall
 /// overhead at high UDP PPS.
-pub async fn relay_ss2022_udp(socket: Arc<UdpSocket>, psk: [u8; 32]) {
+pub async fn relay_ss2022_udp(socket: Arc<UdpSocket>, psk: [u8; 32], dns: Option<Arc<DnsModule>>) {
     let mut sessions: HashMap<u64, SessionEntry> = HashMap::new();
 
     #[cfg(target_os = "linux")]
     {
-        relay_ss2022_udp_batch(socket, psk, &mut sessions).await;
+        relay_ss2022_udp_batch(socket, psk, dns, &mut sessions).await;
     }
     #[cfg(not(target_os = "linux"))]
     {
-        relay_ss2022_udp_simple(socket, psk, &mut sessions).await;
+        relay_ss2022_udp_simple(socket, psk, dns, &mut sessions).await;
     }
 }
 
@@ -309,6 +312,7 @@ pub async fn relay_ss2022_udp(socket: Arc<UdpSocket>, psk: [u8; 32]) {
 async fn relay_ss2022_udp_simple(
     socket: Arc<UdpSocket>,
     psk: [u8; 32],
+    dns: Option<Arc<DnsModule>>,
     sessions: &mut HashMap<u64, SessionEntry>,
 ) {
     let mut buf = vec![0u8; 65535];
@@ -320,7 +324,15 @@ async fn relay_ss2022_udp_simple(
                 continue;
             }
         };
-        process_ss2022_packet(&socket, &psk, sessions, &buf[..n], client_addr).await;
+        process_ss2022_packet(
+            &socket,
+            &psk,
+            sessions,
+            &buf[..n],
+            client_addr,
+            dns.as_deref(),
+        )
+        .await;
     }
 }
 
@@ -329,6 +341,7 @@ async fn relay_ss2022_udp_simple(
 async fn relay_ss2022_udp_batch(
     socket: Arc<UdpSocket>,
     psk: [u8; 32],
+    dns: Option<Arc<DnsModule>>,
     sessions: &mut HashMap<u64, SessionEntry>,
 ) {
     use std::os::unix::io::AsRawFd;
@@ -408,7 +421,15 @@ async fn relay_ss2022_udp_batch(
             if n == 0 {
                 continue;
             }
-            process_ss2022_packet(&socket, &psk, sessions, &data[i][..n], client_addr).await;
+            process_ss2022_packet(
+                &socket,
+                &psk,
+                sessions,
+                &data[i][..n],
+                client_addr,
+                dns.as_deref(),
+            )
+            .await;
         }
     }
 }
@@ -440,6 +461,7 @@ async fn process_ss2022_packet(
     sessions: &mut HashMap<u64, SessionEntry>,
     buf: &[u8],
     client_addr: SocketAddr,
+    dns: Option<&DnsModule>,
 ) {
     let (client_session_id, _packet_id, dest, payload) = match decode_client_packet(buf, psk) {
         Ok(v) => v,
@@ -461,11 +483,24 @@ async fn process_ss2022_packet(
     }
 
     if sessions.len() >= MAX_SESSIONS {
-        sessions.clear();
+        // Evict sessions idle for longer than UDP_SESSION_IDLE first.
+        let cutoff = Instant::now() - UDP_SESSION_IDLE;
+        sessions.retain(|_, e| e.last_used > cutoff);
+        // If still crowded, evict the oldest quarter to avoid a thundering-herd
+        // reset that tears down all live sessions at once.
+        if sessions.len() >= MAX_SESSIONS * 3 / 4 {
+            let mut by_age: Vec<(u64, Instant)> =
+                sessions.iter().map(|(k, e)| (*k, e.last_used)).collect();
+            by_age.sort_unstable_by_key(|(_, t)| *t);
+            for (k, _) in by_age.into_iter().take(MAX_SESSIONS / 4) {
+                sessions.remove(&k);
+            }
+        }
     }
 
     let entry = if let Some(e) = sessions.get_mut(&client_session_id) {
         *e.client_addr.lock() = client_addr;
+        e.last_used = Instant::now();
         e
     } else {
         let upstream_sock = match UdpSocket::bind("0.0.0.0:0").await {
@@ -493,12 +528,13 @@ async fn process_ss2022_packet(
             SessionEntry {
                 upstream_sock,
                 client_addr: client_addr_shared,
+                last_used: Instant::now(),
             },
         );
         sessions.get_mut(&client_session_id).unwrap()
     };
 
-    let upstream = match resolve_udp_dest(&dest).await {
+    let upstream = match resolve_udp_dest(&dest, dns).await {
         Ok(a) => a,
         Err(e) => {
             warn!(dest = %dest, error = %e, "SS2022 UDP DNS failed");
@@ -569,11 +605,20 @@ fn spawn_reply_task(
     });
 }
 
-async fn resolve_udp_dest(dest: &Address) -> Result<SocketAddr, ProxyError> {
+async fn resolve_udp_dest(
+    dest: &Address,
+    dns: Option<&DnsModule>,
+) -> Result<SocketAddr, ProxyError> {
     match dest {
-        Address::Ipv4(ip, port) => Ok(SocketAddr::new((*ip).into(), *port)),
-        Address::Ipv6(ip, port) => Ok(SocketAddr::new((*ip).into(), *port)),
+        Address::Ipv4(ip, port) => Ok(SocketAddr::new(IpAddr::V4(*ip), *port)),
+        Address::Ipv6(ip, port) => Ok(SocketAddr::new(IpAddr::V6(*ip), *port)),
         Address::Domain(name, port) => {
+            if let Some(dns) = dns {
+                let ip = dns.resolve(name).await?.into_iter().next().ok_or_else(|| {
+                    ProxyError::DnsResolutionFailed(format!("{name}: no records"))
+                })?;
+                return Ok(SocketAddr::new(ip, *port));
+            }
             let mut addrs = tokio::net::lookup_host((name.as_str(), *port))
                 .await
                 .map_err(|e| ProxyError::DnsResolutionFailed(format!("{name}: {e}")))?;
