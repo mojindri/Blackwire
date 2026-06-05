@@ -2,7 +2,7 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, Bytes};
 use std::task::ready;
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -13,7 +13,7 @@ use tokio_util::sync::PollSender;
 pub struct MkcpStream {
     tx: PollSender<Bytes>,
     rx: mpsc::Receiver<Bytes>,
-    read_buf: BytesMut,
+    read_buf: Bytes,
 }
 
 impl MkcpStream {
@@ -22,7 +22,7 @@ impl MkcpStream {
         Self {
             tx: PollSender::new(tx),
             rx,
-            read_buf: BytesMut::new(),
+            read_buf: Bytes::new(),
         }
     }
 }
@@ -40,11 +40,14 @@ impl AsyncRead for MkcpStream {
             return Poll::Ready(Ok(()));
         }
         match self.rx.poll_recv(cx) {
-            Poll::Ready(Some(data)) => {
+            Poll::Ready(Some(mut data)) => {
                 let n = data.len().min(buf.remaining());
                 buf.put_slice(&data[..n]);
                 if n < data.len() {
-                    self.read_buf.extend_from_slice(&data[n..]);
+                    // Keep the unread tail as a zero-copy slice of the same
+                    // allocation instead of copying it into a separate buffer.
+                    data.advance(n);
+                    self.read_buf = data;
                 }
                 Poll::Ready(Ok(()))
             }
