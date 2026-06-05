@@ -446,8 +446,9 @@ impl<S: AsyncRead + Unpin> AsyncRead for VisionStream<S> {
                     let n = buf.remaining().min(self.feed_scratch.len());
                     buf.put_slice(&self.feed_scratch[..n]);
                     if n < self.feed_scratch.len() {
-                        let extra = self.feed_scratch[n..].to_vec();
-                        self.read_buf.extend_from_slice(&extra);
+                        // Disjoint field borrow: get_mut() splits read_buf and feed_scratch.
+                        let me = self.as_mut().get_mut();
+                        me.read_buf.extend_from_slice(&me.feed_scratch[n..]);
                     }
                     return Poll::Ready(Ok(()));
                 }
@@ -463,25 +464,25 @@ impl<S: AsyncWrite + Unpin> VisionStream<S> {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>> {
-        while self.write_pos < self.write_buf.len() {
-            let chunk = self.write_buf[self.write_pos..].to_vec();
-            match Pin::new(&mut self.inner).poll_write(cx, &chunk) {
+        let me = self.as_mut().get_mut();
+        while me.write_pos < me.write_buf.len() {
+            match Pin::new(&mut me.inner).poll_write(cx, &me.write_buf[me.write_pos..]) {
                 Poll::Ready(Ok(0)) => {
                     return Poll::Ready(Err(io::Error::new(
                         io::ErrorKind::WriteZero,
                         "failed to write Vision frame",
                     )));
                 }
-                Poll::Ready(Ok(n)) => self.write_pos += n,
+                Poll::Ready(Ok(n)) => me.write_pos += n,
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Pending => return Poll::Pending,
             }
         }
-        self.write_buf.clear();
-        self.write_pos = 0;
-        if self.write_pending_direct {
-            self.write_direct_copy = true;
-            self.write_pending_direct = false;
+        me.write_buf.clear();
+        me.write_pos = 0;
+        if me.write_pending_direct {
+            me.write_direct_copy = true;
+            me.write_pending_direct = false;
         }
         Poll::Ready(Ok(()))
     }
