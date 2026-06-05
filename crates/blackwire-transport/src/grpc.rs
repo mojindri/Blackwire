@@ -217,7 +217,9 @@ pub struct GrpcStream {
     recv_buf: BytesMut,
     read_buf: Bytes,
     pending_plain: BytesMut,
+    pending_plain_pos: usize, // cursor: bytes already encoded from pending_plain
     write_buf: BytesMut,
+    write_buf_pos: usize, // cursor: bytes already sent from write_buf
 }
 
 impl GrpcStream {
@@ -236,7 +238,9 @@ impl GrpcStream {
             recv_buf: grpc_buffer_pool().acquire(16 * 1024),
             read_buf: Bytes::new(),
             pending_plain: grpc_buffer_pool().acquire(16 * 1024),
+            pending_plain_pos: 0,
             write_buf: grpc_buffer_pool().acquire(16 * 1024),
+            write_buf_pos: 0,
         }
     }
 
@@ -251,7 +255,11 @@ impl GrpcStream {
             if !self.read_buf.is_empty() {
                 let n = self.read_buf.len().min(buf.remaining());
                 buf.put_slice(&self.read_buf[..n]);
-                let _ = self.read_buf.split_to(n);
+                if n == self.read_buf.len() {
+                    self.read_buf = Bytes::new();
+                } else {
+                    let _ = self.read_buf.split_to(n);
+                }
                 return Ok(true);
             }
 
@@ -280,8 +288,9 @@ impl GrpcStream {
             return Poll::Ready(Ok(()));
         };
 
-        while !self.write_buf.is_empty() {
-            send.reserve_capacity(self.write_buf.len());
+        while self.write_buf_pos < self.write_buf.len() {
+            let pending = self.write_buf.len() - self.write_buf_pos;
+            send.reserve_capacity(pending);
             match send.poll_capacity(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(None) => {
@@ -297,21 +306,30 @@ impl GrpcStream {
                     return Poll::Pending;
                 }
                 Poll::Ready(Some(Ok(cap))) => {
-                    let n = cap.min(self.write_buf.len());
-                    let chunk = self.write_buf.split_to(n).freeze();
+                    let n = cap.min(pending);
+                    let start = self.write_buf_pos;
+                    // Copy to owned Bytes for h2 so write_buf stays unshared
+                    // (allows clear() + reuse without reallocation).
+                    let chunk = Bytes::copy_from_slice(&self.write_buf[start..start + n]);
+                    self.write_buf_pos += n;
                     send.send_data(chunk, false).map_err(io::Error::other)?;
                 }
             }
+        }
+        if self.write_buf_pos >= self.write_buf.len() {
+            self.write_buf.clear();
+            self.write_buf_pos = 0;
         }
         Poll::Ready(Ok(()))
     }
 
     fn encode_pending_plain_into_frames(&mut self, force: bool) {
-        while !self.pending_plain.is_empty()
-            && (force || self.pending_plain.len() >= COALESCE_TARGET_BYTES)
+        while self.pending_plain_pos < self.pending_plain.len()
+            && (force
+                || (self.pending_plain.len() - self.pending_plain_pos) >= COALESCE_TARGET_BYTES)
         {
-            let payload_len = self.pending_plain.len().min(MAX_MESSAGE_SIZE as usize);
-            let payload = self.pending_plain.split_to(payload_len);
+            let available = self.pending_plain.len() - self.pending_plain_pos;
+            let payload_len = available.min(MAX_MESSAGE_SIZE as usize);
             let mut varint_len = 1usize;
             let mut remaining = payload_len as u64;
             while remaining >= 0x80 {
@@ -319,9 +337,18 @@ impl GrpcStream {
                 varint_len += 1;
             }
             let hunk_len = 1 + varint_len + payload_len;
+            let start = self.pending_plain_pos;
+            self.pending_plain_pos += payload_len;
+
             self.write_buf.reserve(FRAME_HEADER_LEN + hunk_len);
             append_grpc_frame_prefix(&mut self.write_buf, hunk_len);
-            append_hunk(&mut self.write_buf, &payload);
+            // Disjoint field borrows: pending_plain (read) and write_buf (write).
+            let data = &self.pending_plain[start..start + payload_len];
+            append_hunk(&mut self.write_buf, data);
+        }
+        if self.pending_plain_pos >= self.pending_plain.len() {
+            self.pending_plain.clear();
+            self.pending_plain_pos = 0;
         }
     }
 }
@@ -391,8 +418,12 @@ impl AsyncWrite for GrpcStream {
         let this = self.as_mut().get_mut();
         match &mut this.inner {
             GrpcInner::Io(inner) => {
-                while !this.write_buf.is_empty() {
-                    match Pin::new(inner.as_mut()).poll_write(cx, &this.write_buf) {
+                loop {
+                    if this.write_buf_pos >= this.write_buf.len() {
+                        break;
+                    }
+                    let pos = this.write_buf_pos;
+                    match Pin::new(inner.as_mut()).poll_write(cx, &this.write_buf[pos..]) {
                         Poll::Pending => break,
                         Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                         Poll::Ready(Ok(0)) => {
@@ -402,9 +433,13 @@ impl AsyncWrite for GrpcStream {
                             )));
                         }
                         Poll::Ready(Ok(written)) => {
-                            let _ = this.write_buf.split_to(written);
+                            this.write_buf_pos += written;
                         }
                     }
+                }
+                if this.write_buf_pos >= this.write_buf.len() {
+                    this.write_buf.clear();
+                    this.write_buf_pos = 0;
                 }
             }
             GrpcInner::H2 { .. } => match this.flush_h2_send(cx) {
@@ -420,8 +455,12 @@ impl AsyncWrite for GrpcStream {
         this.encode_pending_plain_into_frames(true);
         match &mut this.inner {
             GrpcInner::Io(inner) => {
-                while !this.write_buf.is_empty() {
-                    match Pin::new(inner.as_mut()).poll_write(cx, &this.write_buf) {
+                loop {
+                    if this.write_buf_pos >= this.write_buf.len() {
+                        break;
+                    }
+                    let pos = this.write_buf_pos;
+                    match Pin::new(inner.as_mut()).poll_write(cx, &this.write_buf[pos..]) {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                         Poll::Ready(Ok(0)) => {
@@ -431,9 +470,13 @@ impl AsyncWrite for GrpcStream {
                             )));
                         }
                         Poll::Ready(Ok(n)) => {
-                            let _ = this.write_buf.split_to(n);
+                            this.write_buf_pos += n;
                         }
                     }
+                }
+                if this.write_buf_pos >= this.write_buf.len() {
+                    this.write_buf.clear();
+                    this.write_buf_pos = 0;
                 }
                 Pin::new(inner.as_mut()).poll_flush(cx)
             }
