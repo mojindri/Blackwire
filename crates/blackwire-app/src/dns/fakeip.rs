@@ -56,15 +56,17 @@ impl FakeIpPool {
 
     /// Allocate or retrieve the fake IP for `domain`.
     pub fn allocate(&self, domain: &str) -> Ipv4Addr {
+        // `LruCache<String, _>::get` borrows the key as `&str`, so the cache-hit
+        // fast path can promote the entry without allocating a `String`.
         if let Some(ip) = self.forward.get(domain) {
-            self.lru.lock().get(&domain.to_string());
+            self.lru.lock().get(domain);
             return *ip;
         }
 
         let _guard = self.alloc_lock.lock();
 
         if let Some(ip) = self.forward.get(domain) {
-            self.lru.lock().get(&domain.to_string());
+            self.lru.lock().get(domain);
             return *ip;
         }
 
