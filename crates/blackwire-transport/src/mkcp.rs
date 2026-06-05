@@ -155,16 +155,17 @@ async fn run_server_listener(
                 let Ok((n, peer)) = received else {
                     return;
                 };
-                let packet = udp_buf[..n].to_vec();
-                let Some(payload) = cfg.header.strip(&packet) else {
+                // Strip header on the borrowed slice — copy only the payload bytes, not the
+                // full packet with header. This eliminates one allocation in the hot path.
+                let Some(stripped) = cfg.header.strip(&udp_buf[..n]) else {
                     continue;
                 };
 
                 if let Some((stored_conv, tx_udp)) = sessions.get(&peer) {
                     // Peek the conv from the first 4 bytes (KCP wire: u32 LE).
-                    let incoming_conv = peek_conv(payload);
+                    let incoming_conv = peek_conv(stripped);
                     if incoming_conv == Some(*stored_conv) {
-                        let _ = tx_udp.try_send(payload.to_vec()); // drop if driver is busy
+                        let _ = tx_udp.try_send(stripped.to_vec()); // drop if driver is busy
                         continue;
                     }
                     // Conv mismatch: peer reconnected with a new session. Evict
@@ -175,10 +176,13 @@ async fn run_server_listener(
                 if sessions.len() >= MAX_SERVER_SESSIONS {
                     continue; // drop packet — server is at capacity
                 }
+                // Copy stripped payload for the async call — udp_buf must not be borrowed
+                // across the .await since recv_from reuses it next iteration.
+                let payload = stripped.to_vec();
                 if start_server_session(
                     Arc::clone(&socket),
                     peer,
-                    payload,
+                    &payload,
                     &cfg,
                     &session_tx,
                     &cleanup_tx,
@@ -274,6 +278,10 @@ async fn run_server_driver(
     let idle_timer = tokio::time::sleep(SERVER_SESSION_IDLE_TIMEOUT);
     tokio::pin!(idle_timer);
     let mut pending: VecDeque<Bytes> = VecDeque::new();
+    // Hoisted allocations reused every tick: flush_out for KCP output segments,
+    // kcp_recv_buf for reassembled KCP message bytes.
+    let mut flush_out: Vec<Vec<u8>> = Vec::new();
+    let mut kcp_recv_buf = vec![0u8; 65535];
 
     loop {
         tokio::select! {
@@ -286,15 +294,15 @@ async fn run_server_driver(
             }
             _ = ticker.tick() => {
                 kcp.update(now_ms());
-                let mut out = Vec::new();
-                kcp.flush(&mut out);
+                flush_out.clear();
+                kcp.flush(&mut flush_out);
                 if kcp.is_dead() {
                     return;
                 }
-                for seg in out {
-                    let _ = socket.send_to(&header.encode(&seg), peer).await;
+                for seg in &flush_out {
+                    let _ = socket.send_to(&header.encode(seg), peer).await;
                 }
-                drain_kcp_recv_into(&mut kcp, &mut pending, pending_cap);
+                drain_kcp_recv_into(&mut kcp, &mut pending, pending_cap, &mut kcp_recv_buf);
             }
             Some(data) = rx_from_user.recv() => {
                 idle_timer.as_mut().reset(tokio::time::Instant::now() + SERVER_SESSION_IDLE_TIMEOUT);
@@ -303,7 +311,7 @@ async fn run_server_driver(
             Some(packet) = rx_from_udp.recv() => {
                 idle_timer.as_mut().reset(tokio::time::Instant::now() + SERVER_SESSION_IDLE_TIMEOUT);
                 let _ = kcp.input(&packet);
-                drain_kcp_recv_into(&mut kcp, &mut pending, pending_cap);
+                drain_kcp_recv_into(&mut kcp, &mut pending, pending_cap, &mut kcp_recv_buf);
             }
             _ = &mut idle_timer => {
                 return;
@@ -327,6 +335,8 @@ async fn run_client_driver(
     let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms));
     let mut udp_buf = vec![0u8; 65535];
     let mut pending: VecDeque<Bytes> = VecDeque::new();
+    let mut flush_out: Vec<Vec<u8>> = Vec::new();
+    let mut kcp_recv_buf = vec![0u8; 65535];
 
     loop {
         tokio::select! {
@@ -337,15 +347,15 @@ async fn run_client_driver(
             }
             _ = ticker.tick() => {
                 kcp.update(now_ms());
-                let mut out = Vec::new();
-                kcp.flush(&mut out);
+                flush_out.clear();
+                kcp.flush(&mut flush_out);
                 if kcp.is_dead() {
                     return;
                 }
-                for seg in out {
-                    let _ = socket.send(&header.encode(&seg)).await;
+                for seg in &flush_out {
+                    let _ = socket.send(&header.encode(seg)).await;
                 }
-                drain_kcp_recv_into(&mut kcp, &mut pending, pending_cap);
+                drain_kcp_recv_into(&mut kcp, &mut pending, pending_cap, &mut kcp_recv_buf);
             }
             Some(data) = rx_from_user.recv() => {
                 let _ = kcp.send(&data);
@@ -353,7 +363,7 @@ async fn run_client_driver(
             Ok(n) = socket.recv(&mut udp_buf) => {
                 if let Some(payload) = header.strip(&udp_buf[..n]) {
                     let _ = kcp.input(payload);
-                    drain_kcp_recv_into(&mut kcp, &mut pending, pending_cap);
+                    drain_kcp_recv_into(&mut kcp, &mut pending, pending_cap, &mut kcp_recv_buf);
                 }
             }
             else => {
@@ -368,13 +378,14 @@ async fn run_client_driver(
 /// Stopping at `max` means the KCP receive window stays full (segments are
 /// not ACKed beyond what the application has consumed), which applies
 /// backpressure on the sender — matching xray's window-bounded behaviour.
-fn drain_kcp_recv_into(kcp: &mut Kcp, pending: &mut VecDeque<Bytes>, max: usize) {
-    let mut recv_buf = vec![0u8; 65535];
+///
+/// `recv_buf` is a caller-supplied scratch buffer (pre-allocated once per driver).
+fn drain_kcp_recv_into(kcp: &mut Kcp, pending: &mut VecDeque<Bytes>, max: usize, recv_buf: &mut [u8]) {
     loop {
         if pending.len() >= max {
             break; // window full — stop ACKing so sender slows down
         }
-        let n = kcp.recv(&mut recv_buf);
+        let n = kcp.recv(recv_buf);
         if n <= 0 {
             break;
         }
