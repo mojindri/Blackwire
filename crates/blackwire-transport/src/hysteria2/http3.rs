@@ -2,7 +2,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context as _, Result};
 use blackwire_app::context::Context;
@@ -33,9 +33,22 @@ const H3_AUTH_HANDLE_TIMEOUT: Duration = Duration::from_secs(5);
 const TCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const UDP_REPLY_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_UDP_WORKERS_PER_CONN: usize = 256;
+/// Cap on per-connection UDP sessions (and thus bound upstream sockets / FDs).
+/// `session_id` is client-controlled, so an unbounded map is an FD-exhaustion vector.
+const MAX_UDP_SESSIONS_PER_CONN: usize = 512;
+/// Idle lifetime for a per-session upstream socket before it is evicted.
+const UDP_SESSION_IDLE: Duration = Duration::from_secs(60);
+/// Bound on the scheduled-datagram channel; backpressure instead of unbounded growth.
+const SCHEDULED_UDP_CHANNEL_CAP: usize = 1024;
 
 struct ScheduledUdpDatagram {
     packet: InnerFlowPacket,
+}
+
+/// Per-session upstream socket plus a last-used timestamp for idle eviction.
+struct UdpSession {
+    sock: Arc<UdpSocket>,
+    last_used: Instant,
 }
 
 /// Serve one QUIC connection: HTTP/3 auth, then TCP proxy streams on QUIC bidi streams.
@@ -151,12 +164,12 @@ async fn serve_udp_sessions(
         super::udp::record_datagram_fallback("disabled");
         return;
     }
-    // session_id → local UDP socket bound on 0.0.0.0:0
-    let sessions: Arc<DashMap<u32, Arc<UdpSocket>>> = Arc::new(DashMap::new());
+    // session_id → per-session upstream socket bound on 0.0.0.0:0
+    let sessions: Arc<DashMap<u32, UdpSession>> = Arc::new(DashMap::new());
     let worker_limiter = Arc::new(Semaphore::new(MAX_UDP_WORKERS_PER_CONN));
     let mut fec_decoder = FecDecoder::new(fec);
     let fec_encoder = Arc::new(std::sync::Mutex::new(FecEncoder::new(fec)));
-    let (scheduled_tx, scheduled_rx) = mpsc::unbounded_channel();
+    let (scheduled_tx, scheduled_rx) = mpsc::channel(SCHEDULED_UDP_CHANNEL_CAP);
     tokio::spawn(send_scheduled_udp_datagrams(conn.clone(), scheduled_rx));
 
     loop {
@@ -164,6 +177,13 @@ async fn serve_udp_sessions(
             Ok(b) => b,
             Err(_) => break,
         };
+
+        // Evict idle sessions when the table grows past its cap, dropping their
+        // upstream sockets (and FDs). Bounds client-driven socket accumulation.
+        if sessions.len() > MAX_UDP_SESSIONS_PER_CONN {
+            let cutoff = Instant::now() - UDP_SESSION_IDLE;
+            sessions.retain(|_, s| s.last_used > cutoff);
+        }
 
         let datagrams = fec_decoder.decode(raw);
         if datagrams.is_empty() {
@@ -191,10 +211,10 @@ async fn serve_udp_sessions(
 async fn handle_udp_datagram(
     _conn: Connection,
     inbound_tag: String,
-    sessions: Arc<DashMap<u32, Arc<UdpSocket>>>,
+    sessions: Arc<DashMap<u32, UdpSession>>,
     worker_limiter: Arc<Semaphore>,
     fec_encoder: Arc<std::sync::Mutex<FecEncoder>>,
-    scheduled_tx: mpsc::UnboundedSender<ScheduledUdpDatagram>,
+    scheduled_tx: mpsc::Sender<ScheduledUdpDatagram>,
     dg: UdpDatagram,
     datagram_policy: super::udp::DatagramPolicy,
 ) {
@@ -236,13 +256,20 @@ async fn handle_udp_datagram(
                 return;
             }
         }
-    } else if let Some(entry) = sessions.get(&session_id) {
-        Arc::clone(entry.value())
+    } else if let Some(mut entry) = sessions.get_mut(&session_id) {
+        entry.last_used = Instant::now();
+        Arc::clone(&entry.sock)
     } else {
         match UdpSocket::bind("0.0.0.0:0").await {
             Ok(new_sock) => {
                 let s = Arc::new(new_sock);
-                sessions.insert(session_id, Arc::clone(&s));
+                sessions.insert(
+                    session_id,
+                    UdpSession {
+                        sock: Arc::clone(&s),
+                        last_used: Instant::now(),
+                    },
+                );
                 s
             }
             Err(e) => {
@@ -317,7 +344,11 @@ async fn handle_udp_datagram(
                 if let Some(parity) = parity {
                     packet.followups.push(parity);
                 }
-                if scheduled_tx.send(ScheduledUdpDatagram { packet }).is_err() {
+                if scheduled_tx
+                    .send(ScheduledUdpDatagram { packet })
+                    .await
+                    .is_err()
+                {
                     warn!("Hysteria2 UDP: scheduled datagram channel closed");
                 }
             }
@@ -327,7 +358,7 @@ async fn handle_udp_datagram(
 
 async fn send_scheduled_udp_datagrams(
     conn: Connection,
-    mut rx: mpsc::UnboundedReceiver<ScheduledUdpDatagram>,
+    mut rx: mpsc::Receiver<ScheduledUdpDatagram>,
 ) {
     let mut scheduler = InnerFlowScheduler::default();
     while let Some(item) = rx.recv().await {
