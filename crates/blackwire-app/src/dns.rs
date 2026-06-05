@@ -168,9 +168,16 @@ impl DnsModule {
     ///
     /// Filtered domains should be resolved normally rather than with FakeIP.
     pub fn is_filtered(&self, domain: &str) -> bool {
-        self.filter
-            .iter()
-            .any(|f| domain == f || domain.ends_with(&format!(".{f}")))
+        self.filter.iter().any(|f| {
+            if domain == f {
+                return true;
+            }
+            // Equivalent to `domain.ends_with(".{f}")` but without allocating a
+            // formatted suffix string per filter entry on every query.
+            domain.len() > f.len()
+                && domain.as_bytes()[domain.len() - f.len() - 1] == b'.'
+                && domain.ends_with(f.as_str())
+        })
     }
 }
 
