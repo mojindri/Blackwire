@@ -16,6 +16,7 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
 use blackwire_common::{BoxedStream, ProxyError, ReunionStream};
+use bytes::{Buf, BytesMut};
 use dashmap::DashMap;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tracing::debug;
@@ -964,7 +965,8 @@ impl AsyncWrite for PrependedChunkStream {
 
 struct SplitHttpStream<S> {
     inner: S,
-    read_buf: Vec<u8>,
+    // BytesMut so front-consumption is O(1) `advance` rather than O(n) `Vec::drain`.
+    read_buf: BytesMut,
     chunk_remaining: usize,
     need_chunk_crlf: bool,
     eof: bool,
@@ -974,7 +976,7 @@ impl<S> SplitHttpStream<S> {
     fn new(inner: S) -> Self {
         Self {
             inner,
-            read_buf: Vec::new(),
+            read_buf: BytesMut::new(),
             chunk_remaining: 0,
             need_chunk_crlf: false,
             eof: false,
@@ -1009,7 +1011,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
                         Poll::Pending => return Poll::Pending,
                     }
                 }
-                self.read_buf.drain(..2);
+                self.read_buf.advance(2);
                 self.need_chunk_crlf = false;
             }
 
@@ -1018,7 +1020,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
                     let line = String::from_utf8_lossy(&self.read_buf[..line_end]);
                     let size = usize::from_str_radix(line.trim(), 16)
                         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                    self.read_buf.drain(..line_end + 2);
+                    self.read_buf.advance(line_end + 2);
                     if size == 0 {
                         self.eof = true;
                         return Poll::Ready(Ok(()));
@@ -1048,7 +1050,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
                     .min(self.chunk_remaining)
                     .min(self.read_buf.len());
                 buf.put_slice(&self.read_buf[..n]);
-                self.read_buf.drain(..n);
+                self.read_buf.advance(n);
                 self.chunk_remaining -= n;
                 if self.chunk_remaining == 0 {
                     self.need_chunk_crlf = true;
