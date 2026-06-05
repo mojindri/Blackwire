@@ -257,15 +257,18 @@ pub fn taint_backend_application_data(
     record: &[u8],
 ) -> Result<Vec<u8>, ProxyError> {
     let payload = application_payload(record)?;
-    let mut processed = payload.to_vec();
-    xor_with_handshake_mask(&mut processed, psk, server_random);
+    // Assemble [tag | processed] in one buffer: reserve the tag prefix, copy the
+    // payload after it, XOR in place, then backfill the tag. Avoids a separate
+    // `processed` allocation per record.
+    let mut tainted = Vec::with_capacity(TAG_LEN + payload.len());
+    tainted.resize(TAG_LEN, 0);
+    tainted.extend_from_slice(payload);
+    xor_with_handshake_mask(&mut tainted[TAG_LEN..], psk, server_random);
 
-    let tag = next_tag(residual_mac, &processed);
-    residual_mac.update(&processed);
+    let tag = next_tag(residual_mac, &tainted[TAG_LEN..]);
+    residual_mac.update(&tainted[TAG_LEN..]);
+    tainted[..TAG_LEN].copy_from_slice(&tag);
 
-    let mut tainted = Vec::with_capacity(TAG_LEN + processed.len());
-    tainted.extend_from_slice(&tag);
-    tainted.extend_from_slice(&processed);
     Ok(encode_tls_record(TLS_APPLICATION_DATA, &tainted))
 }
 
