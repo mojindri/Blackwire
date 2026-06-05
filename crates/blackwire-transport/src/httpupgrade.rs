@@ -4,7 +4,7 @@
 //! raw byte tunnel (not a WebSocket frame codec).
 
 use blackwire_common::{BoxedStream, PrependedStream, ProxyError};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 use blackwire_config::schema::StreamSettingsConfig;
@@ -32,18 +32,54 @@ pub async fn dial_httpupgrade(
     stream.write_all(request.as_bytes()).await?;
     stream.flush().await?;
 
-    let mut buf = vec![0u8; 4096];
-    let n = stream.read(&mut buf).await?;
-    let response = std::str::from_utf8(&buf[..n])
-        .map_err(|_| ProxyError::Protocol("HTTPUpgrade response not UTF-8".into()))?;
-    if !response.starts_with("HTTP/1.1 101") && !response.starts_with("HTTP/1.0 101") {
+    // Use BufReader so we can parse the response line-by-line and capture any
+    // application bytes that immediately follow the headers in the same read.
+    let mut reader = BufReader::new(stream);
+    let mut total = 0usize;
+
+    let mut first_line = String::new();
+    let n = reader.read_line(&mut first_line).await?;
+    if n == 0 {
+        return Err(ProxyError::Protocol(
+            "HTTPUpgrade: server closed before response".into(),
+        ));
+    }
+    total += n;
+    if !first_line.starts_with("HTTP/1.1 101") && !first_line.starts_with("HTTP/1.0 101") {
         return Err(ProxyError::Protocol(format!(
             "HTTPUpgrade expected 101, got: {}",
-            response.lines().next().unwrap_or("")
+            first_line.trim_end()
         )));
     }
 
-    Ok(Box::new(stream))
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            return Err(ProxyError::Protocol(
+                "HTTPUpgrade: server closed during headers".into(),
+            ));
+        }
+        total += n;
+        if total > MAX_HEADER_BYTES {
+            return Err(ProxyError::Protocol(
+                "HTTPUpgrade: server response headers too large".into(),
+            ));
+        }
+        if line == "\r\n" || line == "\n" {
+            break;
+        }
+    }
+
+    // Any bytes already buffered after the headers belong to the tunnel stream.
+    let remainder = reader.buffer().to_vec();
+    let inner = reader.into_inner();
+    let stream: BoxedStream = if remainder.is_empty() {
+        Box::new(inner)
+    } else {
+        Box::new(PrependedStream::new(Box::new(inner), remainder))
+    };
+    Ok(stream)
 }
 
 /// Accept an inbound HTTPUpgrade request and return the upgraded byte stream.

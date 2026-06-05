@@ -73,8 +73,7 @@ pub fn load_geoip(path: impl AsRef<Path>) -> HashMap<String, GeoIpMatcher> {
         if let Some(cached) = guard.as_ref() {
             if cached.hash == hash {
                 debug!(path = %path.display(), "GeoIP cache hit — skipping re-parse");
-                return Arc::try_unwrap(Arc::clone(&cached.data))
-                    .unwrap_or_else(|arc| (*arc).clone());
+                return (*cached.data).clone();
             }
         }
     }
@@ -129,8 +128,7 @@ pub fn load_geosite(path: impl AsRef<Path>) -> HashMap<String, GeoSiteMatcher> {
         if let Some(cached) = guard.as_ref() {
             if cached.hash == hash {
                 debug!(path = %path.display(), "GeoSite cache hit — skipping re-parse");
-                return Arc::try_unwrap(Arc::clone(&cached.data))
-                    .unwrap_or_else(|arc| (*arc).clone());
+                return (*cached.data).clone();
             }
         }
     }
