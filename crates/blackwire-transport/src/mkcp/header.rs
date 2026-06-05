@@ -40,6 +40,18 @@ impl HeaderType {
         out
     }
 
+    /// Prefix a payload into a caller-supplied buffer (cleared first).
+    ///
+    /// Use this in hot send loops to reuse one buffer across packets instead of
+    /// allocating a fresh `Vec` per send.
+    pub fn encode_into(self, payload: &[u8], out: &mut Vec<u8>) {
+        let hdr = self.size();
+        out.clear();
+        out.resize(hdr, 0);
+        self.write_header(&mut out[..hdr]);
+        out.extend_from_slice(payload);
+    }
+
     /// Remove the configured disguise header from a packet.
     ///
     /// Returns `None` when the packet is shorter than the header.
