@@ -37,18 +37,25 @@ pub async fn read_udp_payload<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Ve
 }
 
 /// Write one VLESS UDP packet to the stream.
+///
+/// `frame` is a caller-supplied scratch buffer reused across calls to avoid
+/// per-packet allocation. The three fields are coalesced into one `write_all`
+/// so TLS-backed streams produce a single record instead of three.
 pub async fn write_udp_packet<W: AsyncWrite + Unpin>(
     writer: &mut W,
     dest: &Address,
     payload: &[u8],
+    frame: &mut Vec<u8>,
 ) -> Result<(), ProxyError> {
     let addr_bytes = encode_address_port(dest)?;
     if addr_bytes.len() > u16::MAX as usize {
         return Err(ProxyError::Protocol("VLESS UDP address too long".into()));
     }
-    writer.write_u16(addr_bytes.len() as u16).await?;
-    writer.write_all(&addr_bytes).await?;
-    writer.write_all(payload).await?;
+    frame.clear();
+    frame.extend_from_slice(&(addr_bytes.len() as u16).to_be_bytes());
+    frame.extend_from_slice(&addr_bytes);
+    frame.extend_from_slice(payload);
+    writer.write_all(frame).await?;
     writer.flush().await?;
     Ok(())
 }
@@ -68,6 +75,7 @@ pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
     let mut addr_buf = [0u8; 512];
     let mut payload_buf = vec![0u8; 65507];
     let mut recv_buf = vec![0u8; 65535];
+    let mut frame_buf = Vec::with_capacity(512);
 
     loop {
         // Read 2-byte address-length prefix.
@@ -101,7 +109,7 @@ pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
 
         match tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut recv_buf)).await {
             Ok(Ok(rn)) if rn > 0 => {
-                write_udp_packet(&mut client, &dest, &recv_buf[..rn]).await?;
+                write_udp_packet(&mut client, &dest, &recv_buf[..rn], &mut frame_buf).await?;
             }
             _ => {}
         }
