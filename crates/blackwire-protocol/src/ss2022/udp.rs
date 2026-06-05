@@ -139,7 +139,7 @@ pub fn decode_client_packet(
 
     let session_key = derive_session_key(psk, header[..8].try_into().unwrap());
     let cipher = session_cipher(&session_key);
-    let plaintext = cipher
+    let mut plaintext = cipher
         .decrypt(GenericArray::from_slice(&aead_nonce(&header)), ciphertext)
         .map_err(|_| ProxyError::Protocol("SS2022 UDP decrypt failed".into()))?;
 
@@ -173,8 +173,10 @@ pub fn decode_client_packet(
     pos += 1;
     let (dest, consumed) = decode_socks5_address(&plaintext[pos..], atyp, "SS2022 UDP")?;
     pos += consumed;
-    let payload = plaintext[pos..].to_vec();
-    Ok((client_session_id, packet_id, dest, payload))
+    // Reuse the decrypted buffer: drop the consumed header prefix in place rather
+    // than allocating a second Vec for the payload tail.
+    plaintext.drain(..pos);
+    Ok((client_session_id, packet_id, dest, plaintext))
 }
 
 /// Encode a SIP022 server → client UDP packet (allocating convenience wrapper).

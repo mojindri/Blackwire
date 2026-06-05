@@ -1,4 +1,4 @@
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes};
 
 /// Number of bytes in the fixed KCP segment header.
 pub const OVERHEAD: usize = 24;
@@ -61,7 +61,7 @@ impl Segment {
     }
 
     /// Encode this segment to wire format and append to `dst`.
-    pub fn encode(&self, dst: &mut BytesMut) {
+    pub fn encode(&self, dst: &mut impl BufMut) {
         dst.put_u32_le(self.conv);
         dst.put_u8(self.cmd);
         dst.put_u8(self.frg);
@@ -70,7 +70,7 @@ impl Segment {
         dst.put_u32_le(self.sn);
         dst.put_u32_le(self.una);
         dst.put_u32_le(self.data.len() as u32);
-        dst.extend_from_slice(&self.data);
+        dst.put_slice(&self.data);
     }
 
     /// Decode one segment from `src`, advancing the slice on success.
