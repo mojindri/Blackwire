@@ -19,8 +19,7 @@ use std::io;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
+use blackwire_common::aead::{AeadAlgorithm, AeadKey, TAG_LEN};
 use hkdf::Hkdf;
 use hmac::Mac;
 // `hmac::KeyInit as _` brings new_from_slice into scope for Hmac<H>
@@ -322,47 +321,40 @@ fn compute_nonce(iv: &[u8; 12], seq: u64) -> [u8; 12] {
 /// per-record input that changes is the nonce. Building a fresh `Aes*Gcm` per
 /// record — as the datapath used to — repeated the full AES key expansion on
 /// every 16 KiB record for no reason; caching the expanded cipher removes that.
-pub(super) enum RecordCrypter {
-    /// TLS_AES_128_GCM_SHA256. Boxed: the expanded schedule is ~700 B and we
-    /// hold one per direction per connection.
-    Aes128(Box<Aes128Gcm>),
-    /// TLS_AES_256_GCM_SHA384.
-    Aes256(Box<Aes256Gcm>),
+pub(super) struct RecordCrypter {
+    // Boxed so the per-connection `Tls13Stream` (which holds one per direction)
+    // stays small regardless of the backend's expanded-key size.
+    key: Box<AeadKey>,
 }
 
 impl RecordCrypter {
     /// Expand `key` into a reusable cipher for the negotiated suite.
     pub(super) fn new(cs: CipherSuite, key: &[u8]) -> Result<Self, ProxyError> {
-        Ok(match cs {
-            CipherSuite::Aes128GcmSha256 => Self::Aes128(Box::new(
-                Aes128Gcm::new_from_slice(key)
-                    .map_err(|_| ProxyError::Protocol("bad AES-128-GCM key len".into()))?,
-            )),
-            CipherSuite::Aes256GcmSha384 => Self::Aes256(Box::new(
-                Aes256Gcm::new_from_slice(key)
-                    .map_err(|_| ProxyError::Protocol("bad AES-256-GCM key len".into()))?,
-            )),
-        })
+        let alg = match cs {
+            CipherSuite::Aes128GcmSha256 => AeadAlgorithm::Aes128Gcm,
+            CipherSuite::Aes256GcmSha384 => AeadAlgorithm::Aes256Gcm,
+        };
+        let key = AeadKey::new(alg, key)
+            .map_err(|_| ProxyError::Protocol("bad TLS 1.3 record key length".into()))?;
+        Ok(Self { key: Box::new(key) })
     }
 
     fn decrypt(&self, nonce: &[u8; 12], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>, ProxyError> {
-        let nonce = Nonce::from_slice(nonce);
-        let payload = Payload { msg: ciphertext, aad };
-        match self {
-            Self::Aes128(c) => c.decrypt(nonce, payload),
-            Self::Aes256(c) => c.decrypt(nonce, payload),
-        }
-        .map_err(|_| ProxyError::Protocol("TLS 1.3 record decrypt failed".into()))
+        let mut buf = ciphertext.to_vec();
+        let plain_len = self
+            .key
+            .open_combined(nonce, aad, &mut buf)
+            .map_err(|_| ProxyError::Protocol("TLS 1.3 record decrypt failed".into()))?;
+        buf.truncate(plain_len);
+        Ok(buf)
     }
 
     fn encrypt(&self, nonce: &[u8; 12], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, ProxyError> {
-        let nonce = Nonce::from_slice(nonce);
-        let payload = Payload { msg: plaintext, aad };
-        match self {
-            Self::Aes128(c) => c.encrypt(nonce, payload),
-            Self::Aes256(c) => c.encrypt(nonce, payload),
-        }
-        .map_err(|_| ProxyError::Protocol("TLS 1.3 record encrypt failed".into()))
+        let mut buf = Vec::with_capacity(plaintext.len() + TAG_LEN);
+        buf.extend_from_slice(plaintext);
+        let tag = self.key.seal_detached(nonce, aad, &mut buf);
+        buf.extend_from_slice(&tag);
+        Ok(buf)
     }
 }
 
