@@ -644,7 +644,9 @@ fn spawn_reply_task(
                 &mut pkt_out,
             ) {
                 Ok(()) => {
-                    let _ = client_sock.send_to(&pkt_out, addr).await;
+                    if let Err(e) = client_sock.send_to(&pkt_out, addr).await {
+                        warn!(error = %e, "SS2022 UDP reply send failed");
+                    }
                 }
                 Err(e) => {
                     warn!(error = %e, "SS2022 UDP encode reply failed");

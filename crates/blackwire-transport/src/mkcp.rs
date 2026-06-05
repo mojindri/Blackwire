@@ -48,12 +48,11 @@ pub struct MkcpClientConfig {
 
 impl Default for MkcpClientConfig {
     fn default() -> Self {
-        let server = match "0.0.0.0:0".parse() {
-            Ok(v) => v,
-            Err(_) => panic!("valid default mKCP server socket"),
-        };
         Self {
-            server,
+            server: std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+                0,
+            ),
             conv: 0,
             header: HeaderType::None,
             interval_ms: 50,

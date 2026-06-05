@@ -12,7 +12,7 @@ use crate::{
 };
 
 pub fn build_value(state: &AppState) -> Result<Value> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     let settings = db::load_settings(&conn)?;
     let inbounds = db::load_inbounds(&conn)?;
     let outbounds = db::load_outbounds(&conn)?;
@@ -144,7 +144,7 @@ pub fn validate_value(value: &Value) -> Result<()> {
 
 pub fn write(state: &AppState) -> Result<()> {
     let settings = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         db::load_settings(&conn)?
     };
     let value = build_value(state)?;
@@ -560,7 +560,7 @@ mod tests {
     fn generated_minimal_config_validates() {
         let state = test_state();
         {
-            let conn = state.db.lock().unwrap();
+            let conn = state.lock_db().unwrap();
             let ts = util::now();
             conn.execute(
                 "INSERT INTO inbounds (tag, listen, port, protocol, enabled, transport, settings, stream_settings, sniffing, limits, created_at, updated_at)
@@ -577,7 +577,7 @@ mod tests {
     fn generated_vless_ws_user_config_validates() {
         let state = test_state();
         {
-            let conn = state.db.lock().unwrap();
+            let conn = state.lock_db().unwrap();
             let ts = util::now();
             conn.execute(
                 "INSERT INTO inbounds (tag, listen, port, protocol, enabled, transport, settings, stream_settings, sniffing, limits, created_at, updated_at)
@@ -606,7 +606,7 @@ mod tests {
     fn generated_adaptive_balancer_routing_config_validates() {
         let state = test_state();
         {
-            let conn = state.db.lock().unwrap();
+            let conn = state.lock_db().unwrap();
             let ts = util::now();
             conn.execute(
                 "INSERT INTO inbounds (tag, listen, port, protocol, enabled, transport, settings, stream_settings, sniffing, limits, created_at, updated_at)
@@ -671,7 +671,7 @@ mod tests {
     fn adaptive_routing_setting_generates_balancer_only_with_multiple_outbounds() {
         let state = test_state();
         {
-            let conn = state.db.lock().unwrap();
+            let conn = state.lock_db().unwrap();
             let ts = util::now();
             conn.execute(
                 "INSERT INTO inbounds (tag, listen, port, protocol, enabled, transport, settings, stream_settings, sniffing, limits, created_at, updated_at)
@@ -701,7 +701,7 @@ mod tests {
         assert_eq!(value["routing"]["rules"][0]["outboundTag"], "freedom");
 
         {
-            let conn = state.db.lock().unwrap();
+            let conn = state.lock_db().unwrap();
             let ts = util::now();
             conn.execute(
                 "INSERT INTO outbounds (tag, protocol, enabled, settings, stream_settings, created_at, updated_at)
