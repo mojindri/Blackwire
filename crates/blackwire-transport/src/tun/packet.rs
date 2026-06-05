@@ -525,24 +525,29 @@ fn build_ipv6_tcp_packet(
 }
 
 fn tcp_checksum_ipv4(src: Ipv4Addr, dst: Ipv4Addr, tcp_segment: &[u8]) -> u16 {
-    let mut pseudo = Vec::with_capacity(12 + tcp_segment.len());
-    pseudo.extend_from_slice(&src.octets());
-    pseudo.extend_from_slice(&dst.octets());
-    pseudo.push(0);
-    pseudo.push(6); // TCP
-    pseudo.extend_from_slice(&(tcp_segment.len() as u16).to_be_bytes());
-    pseudo.extend_from_slice(tcp_segment);
-    internet_checksum(&pseudo)
+    // Pseudo-header on the stack; fold it and the segment incrementally so we
+    // never allocate a temporary buffer or copy the segment just to checksum it.
+    let mut pseudo = [0u8; 12];
+    pseudo[..4].copy_from_slice(&src.octets());
+    pseudo[4..8].copy_from_slice(&dst.octets());
+    pseudo[9] = 6; // TCP
+    pseudo[10..12].copy_from_slice(&(tcp_segment.len() as u16).to_be_bytes());
+    let mut sum = 0u32;
+    checksum_accumulate(&mut sum, &pseudo);
+    checksum_accumulate(&mut sum, tcp_segment);
+    checksum_finish(sum)
 }
 
 fn tcp_checksum_ipv6(src: Ipv6Addr, dst: Ipv6Addr, tcp_segment: &[u8]) -> u16 {
-    let mut pseudo = Vec::with_capacity(40 + tcp_segment.len());
-    pseudo.extend_from_slice(&src.octets());
-    pseudo.extend_from_slice(&dst.octets());
-    pseudo.extend_from_slice(&(tcp_segment.len() as u32).to_be_bytes());
-    pseudo.extend_from_slice(&[0, 0, 0, 6]); // next header = TCP
-    pseudo.extend_from_slice(tcp_segment);
-    internet_checksum(&pseudo)
+    let mut pseudo = [0u8; 40];
+    pseudo[..16].copy_from_slice(&src.octets());
+    pseudo[16..32].copy_from_slice(&dst.octets());
+    pseudo[32..36].copy_from_slice(&(tcp_segment.len() as u32).to_be_bytes());
+    pseudo[39] = 6; // next header = TCP
+    let mut sum = 0u32;
+    checksum_accumulate(&mut sum, &pseudo);
+    checksum_accumulate(&mut sum, tcp_segment);
+    checksum_finish(sum)
 }
 
 /// Build a UDP response packet by swapping request source/destination.
@@ -630,35 +635,53 @@ fn build_ipv6_udp_packet(
 }
 
 fn udp_checksum_ipv4(src: Ipv4Addr, dst: Ipv4Addr, udp_packet: &[u8]) -> u16 {
-    let mut pseudo = Vec::with_capacity(12 + udp_packet.len() + 1);
-    pseudo.extend_from_slice(&src.octets());
-    pseudo.extend_from_slice(&dst.octets());
-    pseudo.push(0);
-    pseudo.push(17);
-    pseudo.extend_from_slice(&(udp_packet.len() as u16).to_be_bytes());
-    pseudo.extend_from_slice(udp_packet);
-    internet_checksum(&pseudo)
+    let mut pseudo = [0u8; 12];
+    pseudo[..4].copy_from_slice(&src.octets());
+    pseudo[4..8].copy_from_slice(&dst.octets());
+    pseudo[9] = 17; // UDP
+    pseudo[10..12].copy_from_slice(&(udp_packet.len() as u16).to_be_bytes());
+    let mut sum = 0u32;
+    checksum_accumulate(&mut sum, &pseudo);
+    checksum_accumulate(&mut sum, udp_packet);
+    checksum_finish(sum)
 }
 
 fn udp_checksum_ipv6(src: Ipv6Addr, dst: Ipv6Addr, udp_packet: &[u8]) -> u16 {
-    let mut pseudo = Vec::with_capacity(40 + udp_packet.len() + 1);
-    pseudo.extend_from_slice(&src.octets());
-    pseudo.extend_from_slice(&dst.octets());
-    pseudo.extend_from_slice(&(udp_packet.len() as u32).to_be_bytes());
-    pseudo.extend_from_slice(&[0, 0, 0, 17]);
-    pseudo.extend_from_slice(udp_packet);
-    internet_checksum(&pseudo)
+    let mut pseudo = [0u8; 40];
+    pseudo[..16].copy_from_slice(&src.octets());
+    pseudo[16..32].copy_from_slice(&dst.octets());
+    pseudo[32..36].copy_from_slice(&(udp_packet.len() as u32).to_be_bytes());
+    pseudo[39] = 17; // next header = UDP
+    let mut sum = 0u32;
+    checksum_accumulate(&mut sum, &pseudo);
+    checksum_accumulate(&mut sum, udp_packet);
+    checksum_finish(sum)
 }
 
 fn internet_checksum(data: &[u8]) -> u16 {
     let mut sum = 0u32;
+    checksum_accumulate(&mut sum, data);
+    checksum_finish(sum)
+}
+
+/// Fold `data` into a running ones-complement sum.
+///
+/// Safe to call repeatedly across multiple slices **only when every slice but
+/// the last has even length** — all callers here fold an even-length (12 or 40
+/// byte) pseudo-header before the segment, so 16-bit words never straddle a
+/// slice boundary.
+fn checksum_accumulate(sum: &mut u32, data: &[u8]) {
     let mut chunks = data.chunks_exact(2);
     for chunk in &mut chunks {
-        sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+        *sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
     }
     if let Some(&last) = chunks.remainder().first() {
-        sum += (last as u32) << 8;
+        *sum += (last as u32) << 8;
     }
+}
+
+/// Fold the carries and take the ones-complement to finish a checksum.
+fn checksum_finish(mut sum: u32) -> u16 {
     while (sum >> 16) != 0 {
         sum = (sum & 0xffff) + (sum >> 16);
     }
