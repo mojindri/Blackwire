@@ -121,10 +121,7 @@ impl V3FrameEncoder {
     }
 
     fn new(psk: &[u8], server_random: &[u8; 32], direction: &[u8]) -> Self {
-        let mut mac = match ShadowHmac::new_from_slice(psk) {
-            Ok(v) => v,
-            Err(_) => panic!("HMAC accepts any key length"),
-        };
+        let mut mac = ShadowHmac::new_from_slice(psk).expect("PSK must be non-empty");
         mac.update(server_random);
         mac.update(direction);
         Self { mac }
