@@ -377,6 +377,11 @@ async fn relay_ss2022_udp_batch(
     let mut addr_lens: Vec<libc::socklen_t> =
         vec![std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t; RECV_BATCH];
 
+    // Hoisted results buffer: (received_len, peer_addr) per slot.
+    // Vec<(usize, SocketAddr)> is Send so it can cross the .readable().await point.
+    // iovecs/mmsghdr (non-Send, contain raw ptrs) stay inside the sync try_io closure.
+    let mut results: Vec<(usize, SocketAddr)> = Vec::with_capacity(RECV_BATCH);
+
     loop {
         // Wait until the socket is readable (Tokio wakes us on I/O readiness).
         if socket.readable().await.is_err() {
@@ -384,9 +389,11 @@ async fn relay_ss2022_udp_batch(
         }
 
         // Attempt to drain as many packets as the kernel has queued.
-        let received = socket
+        // iovecs and msgs are rebuilt each call — they're !Send so cannot cross
+        // the await above. Allocation cost is small relative to the syscall.
+        results.clear();
+        socket
             .try_io(tokio::io::Interest::READABLE, || {
-                // Build iovec + mmsghdr arrays pointing into our pre-allocated buffers.
                 let mut iovecs: Vec<libc::iovec> = data
                     .iter_mut()
                     .map(|b| libc::iovec {
@@ -418,40 +425,34 @@ async fn relay_ss2022_udp_batch(
                         std::ptr::null_mut(),
                     )
                 };
-
                 if ret < 0 {
-                    let e = std::io::Error::last_os_error();
-                    if e.kind() == std::io::ErrorKind::WouldBlock {
-                        return Err(e);
-                    }
-                    return Err(e);
+                    return Err(std::io::Error::last_os_error());
                 }
 
-                // Collect (length, peer SocketAddr) for each received message.
+                // Fill hoisted results buffer — no allocation outside the sync block.
                 let count = ret as usize;
-                let mut results: Vec<(usize, SocketAddr)> = Vec::with_capacity(count);
                 for i in 0..count {
                     let n = msgs[i].msg_len as usize;
                     let addr = sockaddr_to_socketaddr(&addrs[i], addr_lens[i]);
                     results.push((n, addr));
                 }
-                Ok(results)
+                Ok(())
             })
-            .unwrap_or_default();
+            .ok();
 
         // Reset addr_lens for next batch (recvmmsg may have shrunk them).
         addr_lens.fill(std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t);
 
-        for (i, (n, client_addr)) in received.into_iter().enumerate() {
-            if n == 0 {
+        for (i, (n, client_addr)) in results.iter().enumerate() {
+            if *n == 0 {
                 continue;
             }
             process_ss2022_packet(
                 &socket,
                 &psk,
                 sessions,
-                &data[i][..n],
-                client_addr,
+                &data[i][..*n],
+                *client_addr,
                 dns.as_deref(),
             )
             .await;
