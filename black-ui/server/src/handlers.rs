@@ -65,7 +65,7 @@ pub async fn logout(
 
 pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Value> {
     let admin_id = auth::require(&headers, &state)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     let username: String = conn
         .query_row(
             "SELECT username FROM admins WHERE id=?1",
@@ -96,7 +96,7 @@ pub async fn capabilities() -> ApiResult<CapabilityMap> {
 
 pub async fn status(State(state): State<AppState>) -> ApiResult<Status> {
     let (settings, setup_required, inbounds, outbounds, users, active_users) = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         let settings = db::load_settings(&conn).map_err(AppError::internal)?;
         let setup_required = db::setup_required(&conn).map_err(AppError::internal)?;
         let inbounds = db::count(&conn, "inbounds").map_err(AppError::internal)? as usize;
@@ -136,7 +136,7 @@ pub async fn get_settings(
     headers: HeaderMap,
 ) -> ApiResult<Settings> {
     let _ = auth::require(&headers, &state)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     Ok(Json(db::load_settings(&conn).map_err(AppError::internal)?))
 }
 
@@ -146,7 +146,7 @@ pub async fn update_settings(
     Json(settings): Json<Settings>,
 ) -> ApiResult<Settings> {
     let _ = auth::require(&headers, &state)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     db::save_settings(&conn, &settings).map_err(AppError::internal)?;
     Ok(Json(settings))
 }
@@ -206,7 +206,7 @@ pub async fn list_inbounds(
     headers: HeaderMap,
 ) -> ApiResult<Vec<crate::models::Inbound>> {
     let _ = auth::require(&headers, &state)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     Ok(Json(db::load_inbounds(&conn).map_err(AppError::internal)?))
 }
 
@@ -218,7 +218,7 @@ pub async fn create_inbound(
     let _ = auth::require(&headers, &state)?;
     validate_inbound(&input)?;
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         let ts = util::now();
         conn.execute(
             "INSERT INTO inbounds (tag, listen, port, protocol, enabled, transport, settings, stream_settings, sniffing, limits, created_at, updated_at)
@@ -251,7 +251,7 @@ pub async fn update_inbound(
     let _ = auth::require(&headers, &state)?;
     validate_inbound(&input)?;
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         conn.execute(
             "UPDATE inbounds SET tag=?1, listen=?2, port=?3, protocol=?4, enabled=?5, transport=?6, settings=?7, stream_settings=?8, sniffing=?9, limits=?10, updated_at=?11 WHERE id=?12",
             params![
@@ -281,7 +281,7 @@ pub async fn delete_inbound(
 ) -> ApiResult<ApplyResult> {
     let _ = auth::require(&headers, &state)?;
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         let inbound_count = db::count(&conn, "inbounds").map_err(AppError::internal)?;
         if inbound_count <= 1 {
             return Err(AppError::bad_request(
@@ -307,7 +307,7 @@ pub async fn list_outbounds(
     headers: HeaderMap,
 ) -> ApiResult<Vec<Outbound>> {
     let _ = auth::require(&headers, &state)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     Ok(Json(db::load_outbounds(&conn).map_err(AppError::internal)?))
 }
 
@@ -319,7 +319,7 @@ pub async fn create_outbound(
     let _ = auth::require(&headers, &state)?;
     validate_outbound(&input)?;
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         let ts = util::now();
         conn.execute(
             "INSERT INTO outbounds (tag, protocol, enabled, settings, stream_settings, created_at, updated_at)
@@ -347,7 +347,7 @@ pub async fn update_outbound(
     let _ = auth::require(&headers, &state)?;
     validate_outbound(&input)?;
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         conn.execute(
             "UPDATE outbounds SET tag=?1, protocol=?2, enabled=?3, settings=?4, stream_settings=?5, updated_at=?6 WHERE id=?7",
             params![
@@ -372,7 +372,7 @@ pub async fn delete_outbound(
 ) -> ApiResult<ApplyResult> {
     let _ = auth::require(&headers, &state)?;
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         conn.execute("DELETE FROM outbounds WHERE id=?1", params![id])
             .map_err(|e| AppError::internal(e.into()))?;
     }
@@ -384,7 +384,7 @@ pub async fn list_config_sections(
     headers: HeaderMap,
 ) -> ApiResult<Vec<ConfigSection>> {
     let _ = auth::require(&headers, &state)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     Ok(Json(db::load_sections(&conn).map_err(AppError::internal)?))
 }
 
@@ -397,7 +397,7 @@ pub async fn update_config_section(
     let _ = auth::require(&headers, &state)?;
     validate_section(&name, &input)?;
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         conn.execute(
             "INSERT INTO config_sections (name, enabled, value, updated_at)
              VALUES (?1, ?2, ?3, ?4)
@@ -414,7 +414,7 @@ pub async fn list_users(
     headers: HeaderMap,
 ) -> ApiResult<Vec<ManagedUser>> {
     let _ = auth::require(&headers, &state)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     Ok(Json(db::load_users(&conn).map_err(AppError::internal)?))
 }
 
@@ -426,7 +426,7 @@ pub async fn create_user(
     let _ = auth::require(&headers, &state)?;
     validate_user(&input)?;
     let (inbound, user) = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         if db::load_inbound(&conn, input.inbound_id)
             .map_err(AppError::internal)?
             .is_none()
@@ -472,7 +472,7 @@ pub async fn update_user(
     let _ = auth::require(&headers, &state)?;
     validate_user(&input)?;
     let (remove, add) = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         let old = user_or_404(&conn, id)?;
         let old_inbound = db::load_inbound(&conn, old.inbound_id)
             .map_err(AppError::internal)?
@@ -518,7 +518,7 @@ pub async fn delete_user(
 ) -> ApiResult<ApplyResult> {
     let _ = auth::require(&headers, &state)?;
     let remove = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         let old = user_or_404(&conn, id)?;
         let inbound = db::load_inbound(&conn, old.inbound_id)
             .map_err(AppError::internal)?
@@ -554,7 +554,7 @@ async fn set_enabled(
 ) -> ApiResult<ApplyResult> {
     let _ = auth::require(headers, state)?;
     let (remove, add) = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         let old = user_or_404(&conn, id)?;
         let inbound = db::load_inbound(&conn, old.inbound_id)
             .map_err(AppError::internal)?
@@ -588,7 +588,7 @@ pub async fn reset_usage(
     Path(id): Path<i64>,
 ) -> ApiResult<ManagedUser> {
     let _ = auth::require(&headers, &state)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     conn.execute(
         "UPDATE users SET upload_bytes=0, download_bytes=0, updated_at=?1 WHERE id=?2",
         params![util::now(), id],
@@ -604,7 +604,7 @@ pub async fn rotate_uuid(
 ) -> ApiResult<ApplyResult> {
     let _ = auth::require(&headers, &state)?;
     let (remove, add) = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         let old = user_or_404(&conn, id)?;
         let inbound = db::load_inbound(&conn, old.inbound_id)
             .map_err(AppError::internal)?
@@ -629,7 +629,7 @@ pub async fn rotate_sub_token(
     Path(id): Path<i64>,
 ) -> ApiResult<ManagedUser> {
     let _ = auth::require(&headers, &state)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     conn.execute(
         "UPDATE users SET sub_token=?1, updated_at=?2 WHERE id=?3",
         params![util::random_token(40), util::now(), id],
@@ -645,7 +645,7 @@ pub async fn bulk_users(
 ) -> ApiResult<ApplyResult> {
     let _ = auth::require(&headers, &state)?;
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         for id in input.user_ids {
             match input.action.as_str() {
                 "enable" => db::touch_user_status(&conn, id, true, "active"),
@@ -718,7 +718,7 @@ pub async fn config_apply(
 }
 
 fn import_config_value(state: &AppState, value: Value) -> Result<(), AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     conn.execute("DELETE FROM users", [])
         .map_err(|e| AppError::internal(e.into()))?;
     conn.execute("DELETE FROM inbounds", [])
@@ -967,7 +967,7 @@ pub async fn subscription_raw(
 }
 
 fn subscription_link(state: &AppState, token: &str) -> anyhow::Result<String> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     let settings = db::load_settings(&conn)?;
     let user = db::load_user_by_token(&conn, token)?.ok_or_else(|| anyhow::anyhow!("not found"))?;
     if !user.enabled || user.enforcement_status != "active" {
@@ -989,7 +989,7 @@ fn subscription_link(state: &AppState, token: &str) -> anyhow::Result<String> {
 }
 
 fn current_settings(state: &AppState) -> Result<Settings, AppError> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     db::load_settings(&conn).map_err(AppError::internal)
 }
 
