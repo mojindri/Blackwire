@@ -279,9 +279,10 @@ async fn run_server_driver(
     tokio::pin!(idle_timer);
     let mut pending: VecDeque<Bytes> = VecDeque::new();
     // Hoisted allocations reused every tick: flush_out for KCP output segments,
-    // kcp_recv_buf for reassembled KCP message bytes.
+    // kcp_recv_buf for reassembled KCP message bytes, send_buf for header-wrapped frames.
     let mut flush_out: Vec<Vec<u8>> = Vec::new();
     let mut kcp_recv_buf = vec![0u8; 65535];
+    let mut send_buf: Vec<u8> = Vec::with_capacity(2048);
 
     loop {
         tokio::select! {
@@ -300,7 +301,8 @@ async fn run_server_driver(
                     return;
                 }
                 for seg in &flush_out {
-                    let _ = socket.send_to(&header.encode(seg), peer).await;
+                    header.encode_into(seg, &mut send_buf);
+                    let _ = socket.send_to(&send_buf, peer).await;
                 }
                 drain_kcp_recv_into(&mut kcp, &mut pending, pending_cap, &mut kcp_recv_buf);
             }
@@ -337,6 +339,7 @@ async fn run_client_driver(
     let mut pending: VecDeque<Bytes> = VecDeque::new();
     let mut flush_out: Vec<Vec<u8>> = Vec::new();
     let mut kcp_recv_buf = vec![0u8; 65535];
+    let mut send_buf: Vec<u8> = Vec::with_capacity(2048);
 
     loop {
         tokio::select! {
@@ -353,7 +356,8 @@ async fn run_client_driver(
                     return;
                 }
                 for seg in &flush_out {
-                    let _ = socket.send(&header.encode(seg)).await;
+                    header.encode_into(seg, &mut send_buf);
+                    let _ = socket.send(&send_buf).await;
                 }
                 drain_kcp_recv_into(&mut kcp, &mut pending, pending_cap, &mut kcp_recv_buf);
             }
