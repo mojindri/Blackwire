@@ -344,7 +344,7 @@ pub fn encode_request(
 }
 
 /// Encode port + address for a VLESS UDP packet (Xray `EncodeUDPPacket` address section).
-pub fn encode_address_port(dest: &Address) -> Result<Vec<u8>, ProxyError> {
+pub fn encode_address_port(dest: &Address) -> Result<BytesMut, ProxyError> {
     let mut buf = BytesMut::with_capacity(64);
     buf.put_u16(dest.port());
     match dest {
@@ -362,7 +362,7 @@ pub fn encode_address_port(dest: &Address) -> Result<Vec<u8>, ProxyError> {
             buf.put_slice(name.as_bytes());
         }
     }
-    Ok(buf.to_vec())
+    Ok(buf)
 }
 
 /// Decode port + address from a VLESS UDP packet address section.
