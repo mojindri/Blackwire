@@ -72,6 +72,7 @@ pub struct Ss2022Stream {
     // Write state
     write_counter: u64,
     write_buf: BytesMut, // encrypted bytes waiting to be flushed
+    write_buf_pos: usize, // cursor: bytes already sent from write_buf
     response_header: Option<[u8; 43]>,
 }
 
@@ -116,6 +117,7 @@ impl Ss2022Stream {
             read_len_scratch: [0u8; 2],
             write_counter: write_start_nonce,
             write_buf: ss2022_buffer_pool().acquire(MAX_CHUNK_SIZE + 256),
+            write_buf_pos: 0,
             response_header,
         }
     }
@@ -276,7 +278,13 @@ impl AsyncRead for Ss2022Stream {
             if !self.read_buf.is_empty() {
                 let n = self.read_buf.len().min(buf.remaining());
                 buf.put_slice(&self.read_buf[..n]);
-                let _ = self.read_buf.split_to(n);
+                if n == self.read_buf.len() {
+                    // Release the reference to the pool allocation so read_raw
+                    // can extend in-place without triggering a copy.
+                    self.read_buf = Bytes::new();
+                } else {
+                    let _ = self.read_buf.split_to(n);
+                }
                 return Poll::Ready(Ok(()));
             }
 
@@ -344,9 +352,13 @@ impl AsyncWrite for Ss2022Stream {
     ) -> Poll<io::Result<usize>> {
         // If previous ciphertext is still queued, drain it before accepting more
         // plaintext so we propagate backpressure to callers.
-        while !self.write_buf.is_empty() {
+        while {
             let this = self.as_mut().get_mut();
-            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf) {
+            this.write_buf_pos < this.write_buf.len()
+        } {
+            let this = self.as_mut().get_mut();
+            let pos = this.write_buf_pos;
+            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf[pos..]) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Ready(Ok(0)) => {
@@ -356,8 +368,15 @@ impl AsyncWrite for Ss2022Stream {
                     )));
                 }
                 Poll::Ready(Ok(n)) => {
-                    let _ = this.write_buf.split_to(n);
+                    this.write_buf_pos += n;
                 }
+            }
+        }
+        {
+            let this = self.as_mut().get_mut();
+            if this.write_buf_pos >= this.write_buf.len() {
+                this.write_buf.clear();
+                this.write_buf_pos = 0;
             }
         }
 
@@ -370,9 +389,13 @@ impl AsyncWrite for Ss2022Stream {
         }
 
         // Opportunistically drain newly-buffered ciphertext too.
-        while !self.write_buf.is_empty() {
+        loop {
             let this = self.as_mut().get_mut();
-            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf) {
+            if this.write_buf_pos >= this.write_buf.len() {
+                break;
+            }
+            let pos = this.write_buf_pos;
+            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf[pos..]) {
                 Poll::Pending => break,
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Ready(Ok(0)) => {
@@ -382,18 +405,28 @@ impl AsyncWrite for Ss2022Stream {
                     )));
                 }
                 Poll::Ready(Ok(n)) => {
-                    let _ = this.write_buf.split_to(n);
+                    this.write_buf_pos += n;
                 }
+            }
+        }
+        {
+            let this = self.as_mut().get_mut();
+            if this.write_buf_pos >= this.write_buf.len() {
+                this.write_buf.clear();
+                this.write_buf_pos = 0;
             }
         }
         Poll::Ready(Ok(chunk.len()))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        // Split field borrows without cloning the buffer. Ss2022Stream: Unpin.
-        while !self.write_buf.is_empty() {
+        while {
             let this = self.as_mut().get_mut();
-            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf) {
+            this.write_buf_pos < this.write_buf.len()
+        } {
+            let this = self.as_mut().get_mut();
+            let pos = this.write_buf_pos;
+            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf[pos..]) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Ready(Ok(0)) => {
@@ -403,8 +436,15 @@ impl AsyncWrite for Ss2022Stream {
                     )));
                 }
                 Poll::Ready(Ok(n)) => {
-                    let _ = this.write_buf.split_to(n);
+                    this.write_buf_pos += n;
                 }
+            }
+        }
+        {
+            let this = self.as_mut().get_mut();
+            if this.write_buf_pos >= this.write_buf.len() {
+                this.write_buf.clear();
+                this.write_buf_pos = 0;
             }
         }
         Pin::new(self.inner.as_mut()).poll_flush(cx)
