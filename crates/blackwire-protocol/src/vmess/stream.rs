@@ -24,12 +24,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
-use aes_gcm::{
-    aead::{generic_array::GenericArray, AeadInPlace},
-    Aes128Gcm, KeyInit,
-};
 use bytes::{BufMut, BytesMut};
-use chacha20poly1305::ChaCha20Poly1305;
 use md5::{Digest as Md5Digest, Md5};
 use rand::RngExt;
 use shake::{
@@ -38,6 +33,7 @@ use shake::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use blackwire_common::aead::{AeadAlgorithm, AeadKey, TAG_LEN};
 use blackwire_common::{BoxedStream, BufferPool};
 
 use super::codec::Security;
@@ -62,57 +58,38 @@ fn chunk_nonce(counter: u16, iv: &[u8; 16]) -> [u8; 12] {
 }
 
 enum BodyCipher {
-    Aes128Gcm(Box<Aes128Gcm>),
-    ChaCha20Poly1305(Box<ChaCha20Poly1305>),
+    Aead(AeadKey),
     None,
 }
 
 impl BodyCipher {
     fn new(security: Security, key: &[u8; 16]) -> Self {
         match security {
-            Security::Aes128Gcm => {
-                Self::Aes128Gcm(Box::new(Aes128Gcm::new(GenericArray::from_slice(key))))
-            }
-            Security::ChaCha20Poly1305 => Self::ChaCha20Poly1305(Box::new(ChaCha20Poly1305::new(
-                GenericArray::from_slice(&chacha_key(key)),
-            ))),
+            Security::Aes128Gcm => Self::Aead(
+                AeadKey::new(AeadAlgorithm::Aes128Gcm, key).expect("16-byte AES-128 key"),
+            ),
+            Security::ChaCha20Poly1305 => Self::Aead(
+                AeadKey::new(AeadAlgorithm::ChaCha20Poly1305, &chacha_key(key))
+                    .expect("32-byte ChaCha20 key"),
+            ),
             Security::None => Self::None,
         }
     }
 
     fn overhead(&self) -> usize {
         match self {
-            Self::Aes128Gcm(_) | Self::ChaCha20Poly1305(_) => 16,
+            Self::Aead(_) => TAG_LEN,
             Self::None => 0,
         }
     }
 
     fn encrypt_append(&self, nonce: &[u8; 12], dst: &mut BytesMut, data: &[u8]) -> Result<(), ()> {
         match self {
-            Self::Aes128Gcm(cipher) => {
+            Self::Aead(cipher) => {
                 let start = dst.len();
                 dst.extend_from_slice(data);
-                let tag = cipher
-                    .encrypt_in_place_detached(
-                        GenericArray::from_slice(nonce),
-                        &[],
-                        &mut dst[start..],
-                    )
-                    .map_err(|_| ())?;
-                dst.extend_from_slice(tag.as_slice());
-                Ok(())
-            }
-            Self::ChaCha20Poly1305(cipher) => {
-                let start = dst.len();
-                dst.extend_from_slice(data);
-                let tag = cipher
-                    .encrypt_in_place_detached(
-                        GenericArray::from_slice(nonce),
-                        &[],
-                        &mut dst[start..],
-                    )
-                    .map_err(|_| ())?;
-                dst.extend_from_slice(tag.as_slice());
+                let tag = cipher.seal_detached(nonce, &[], &mut dst[start..]);
+                dst.extend_from_slice(&tag);
                 Ok(())
             }
             Self::None => {
@@ -125,12 +102,11 @@ impl BodyCipher {
     /// Decrypt ciphertext in place (buffer holds ciphertext || tag on input).
     fn decrypt_in_place(&self, nonce: &[u8; 12], buf: &mut Vec<u8>) -> Result<(), ()> {
         match self {
-            Self::Aes128Gcm(cipher) => cipher
-                .decrypt_in_place(GenericArray::from_slice(nonce), &[], buf)
-                .map_err(|_| ()),
-            Self::ChaCha20Poly1305(cipher) => cipher
-                .decrypt_in_place(GenericArray::from_slice(nonce), &[], buf)
-                .map_err(|_| ()),
+            Self::Aead(cipher) => {
+                let plain_len = cipher.open_combined(nonce, &[], buf).map_err(|_| ())?;
+                buf.truncate(plain_len);
+                Ok(())
+            }
             Self::None => Ok(()),
         }
     }
