@@ -10,12 +10,12 @@ use crate::{config, db, runtime, state::AppState, util};
 pub fn spawn(state: AppState) {
     tokio::spawn(async move {
         loop {
-            let interval = {
-                let conn = state.db.lock().unwrap();
-                db::load_settings(&conn)
+            let interval = match state.db.lock() {
+                Ok(conn) => db::load_settings(&conn)
                     .map(|s| s.enforcement_interval_seconds)
                     .unwrap_or(30)
-                    .max(5)
+                    .max(5),
+                Err(_) => 30,
             };
             tokio::time::sleep(Duration::from_secs(interval)).await;
             if let Err(e) = run_once(&state).await {
@@ -27,13 +27,13 @@ pub fn spawn(state: AppState) {
 
 async fn run_once(state: &AppState) -> Result<()> {
     let settings = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         db::load_settings(&conn)?
     };
 
     if settings.grpc_enabled {
         if let Ok(snapshot) = runtime::fetch_traffic(&settings.grpc_address).await {
-            let conn = state.db.lock().unwrap();
+            let conn = state.lock_db()?;
             for u in snapshot.users {
                 conn.execute(
                     "UPDATE users SET upload_bytes=?1, download_bytes=?2 WHERE email=?3",
@@ -45,7 +45,7 @@ async fn run_once(state: &AppState) -> Result<()> {
 
     let mut changed = false;
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         for user in db::load_users(&conn)? {
             if !user.enabled {
                 continue;
@@ -74,9 +74,13 @@ async fn run_once(state: &AppState) -> Result<()> {
     }
 
     if changed {
-        let _ = config::write(state);
+        if let Err(e) = config::write(state) {
+            warn!(error = %e, "enforcement: config write failed");
+        }
         if settings.grpc_enabled {
-            let _ = runtime::sync_config(state, &settings.grpc_address).await;
+            if let Err(e) = runtime::sync_config(state, &settings.grpc_address).await {
+                warn!(error = %e, "enforcement: live sync failed after user enforcement");
+            }
         }
     }
     Ok(())
