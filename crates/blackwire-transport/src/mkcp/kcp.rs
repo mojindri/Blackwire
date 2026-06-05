@@ -1,5 +1,5 @@
 use super::segment::{Segment, CMD_ACK, CMD_PUSH, CMD_WASK, CMD_WINS, OVERHEAD};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use std::collections::VecDeque;
 
 const RTO_NDL: u32 = 30;
@@ -388,9 +388,11 @@ impl Kcp {
                 seg.ts = current;
                 seg.wnd = wnd_unused;
                 seg.una = rcv_nxt;
-                let mut buf = BytesMut::with_capacity(OVERHEAD + seg.data.len());
+                // Encode directly into a Vec — Vec<u8>: BufMut — avoiding the
+                // BytesMut + to_vec() double allocation per segment.
+                let mut buf = Vec::with_capacity(OVERHEAD + seg.data.len());
                 seg.encode(&mut buf);
-                out.push(buf.to_vec());
+                out.push(buf);
                 if seg.xmit >= dead_link {
                     self.state = -1;
                 }
@@ -440,9 +442,9 @@ impl Kcp {
     }
 
     fn encode_seg(&self, seg: &Segment) -> Vec<u8> {
-        let mut buf = BytesMut::with_capacity(OVERHEAD + seg.data.len());
+        let mut buf = Vec::with_capacity(OVERHEAD + seg.data.len());
         seg.encode(&mut buf);
-        buf.to_vec()
+        buf
     }
 
     fn parse_una(&mut self, una: u32) {

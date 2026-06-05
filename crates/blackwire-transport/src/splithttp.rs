@@ -43,6 +43,11 @@ pub type PacketUpH2TunnelFn = Arc<dyn Fn(SplitHttpAcceptResult) + Send + Sync>;
 
 const MAX_HEADER_BYTES: usize = 16384;
 
+/// Maximum bytes accepted for a single packet-up POST body. XHTTP uplink packets
+/// are small (one MTU-ish chunk per POST); without a cap a malicious client could
+/// stream an unbounded body (or send a huge Content-Length) and exhaust memory.
+const MAX_PACKET_UP_BODY_BYTES: usize = 2 * 1024 * 1024;
+
 /// Normalized XHTTP mode (subset implemented in this crate).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplitHttpMode {
@@ -472,10 +477,17 @@ pub async fn splithttp_accept_h2_packet_up(
             let mut body = request.into_body();
             let mut payload = Vec::new();
             let mut body_error = false;
+            let mut body_too_large = false;
             while let Some(chunk) = body.data().await {
                 match chunk {
                     Ok(chunk) => {
                         let _ = body.flow_control().release_capacity(chunk.len());
+                        // Cap accumulation: reject an unbounded uplink body instead
+                        // of growing payload until memory is exhausted.
+                        if payload.len() + chunk.len() > MAX_PACKET_UP_BODY_BYTES {
+                            body_too_large = true;
+                            break;
+                        }
                         payload.extend_from_slice(&chunk);
                     }
                     Err(_) => {
@@ -483,6 +495,14 @@ pub async fn splithttp_accept_h2_packet_up(
                         break;
                     }
                 }
+            }
+
+            if body_too_large {
+                let _ = respond.send_response(
+                    http::Response::builder().status(413).body(()).unwrap(),
+                    true,
+                );
+                continue;
             }
 
             if body_error {
@@ -810,14 +830,27 @@ async fn read_request_body(stream: &mut BoxedStream, request: &str) -> Result<Ve
         .is_some_and(|v| v.eq_ignore_ascii_case("chunked"))
     {
         let mut framed = SplitHttpStream::new(stream);
+        // Bounded read: cap the chunked body so a never-ending stream cannot
+        // exhaust memory. take() yields EOF at the limit; a body that long is rejected.
         let mut body = Vec::new();
-        framed.read_to_end(&mut body).await?;
+        let limit = MAX_PACKET_UP_BODY_BYTES as u64;
+        let read = (&mut framed).take(limit + 1).read_to_end(&mut body).await?;
+        if read as u64 > limit {
+            return Err(ProxyError::Protocol(
+                "SplitHTTP chunked body exceeds maximum size".into(),
+            ));
+        }
         return Ok(body);
     }
     if let Some(clen) = headers.get("content-length") {
         let n: usize = clen
             .parse()
             .map_err(|_| ProxyError::Protocol("SplitHTTP invalid Content-Length".into()))?;
+        if n > MAX_PACKET_UP_BODY_BYTES {
+            return Err(ProxyError::Protocol(
+                "SplitHTTP Content-Length exceeds maximum size".into(),
+            ));
+        }
         let mut body = vec![0u8; n];
         stream.read_exact(&mut body).await?;
         return Ok(body);
