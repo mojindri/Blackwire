@@ -1,12 +1,12 @@
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::db;
+use crate::{db, error::AppError};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -14,6 +14,13 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Acquire the database lock, converting a poison error into a 500 response.
+    pub fn lock_db(&self) -> Result<MutexGuard<'_, Connection>, AppError> {
+        self.db
+            .lock()
+            .map_err(|_| AppError::internal(anyhow::anyhow!("db lock poisoned")))
+    }
+
     pub fn open() -> Result<Self> {
         let data_dir = std::env::var("BLACK_UI_DATA_DIR")
             .map(PathBuf::from)

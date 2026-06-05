@@ -14,7 +14,7 @@ pub fn sync_enabled_inbounds(state: &AppState) -> Result<String> {
     }
 
     let inbounds = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         db::load_inbounds(&conn)?
     };
     let rules = firewall_rules(&inbounds);
