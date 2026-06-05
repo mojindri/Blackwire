@@ -173,7 +173,7 @@ impl InboundHandler for Ss2022Inbound {
             2,
             &resp_subkey,
             2,
-            BytesMut::from(initial_payload.as_slice()),
+            BytesMut::from(initial_payload),
             None,
         );
 
