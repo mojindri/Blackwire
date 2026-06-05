@@ -13,6 +13,7 @@
 //! - [`buf`]       — a buffer pool for reusing memory allocations
 
 pub mod address;
+pub mod aead;
 pub mod af_xdp;
 pub mod buf;
 pub mod connect;
