@@ -13,6 +13,7 @@ use blackwire_api::{
 };
 use prost::Message;
 use tonic::transport::Channel;
+use tracing::warn;
 
 use crate::{
     config,
@@ -64,17 +65,23 @@ pub async fn sync_config(state: &AppState, addr: &str) -> Result<()> {
         .iter()
         .filter(|tag| !target_inbound_tags.contains(*tag))
     {
-        let _ = client
+        if let Err(e) = client
             .remove_inbound(RemoveInboundRequest {
                 tag: tag.to_string(),
             })
-            .await;
+            .await
+        {
+            warn!(tag, error = %e, "sync_config: remove_inbound failed");
+        }
     }
     let current_inbound_tags = current
         .into_iter()
         .collect::<std::collections::HashSet<_>>();
     for inbound in target_inbounds {
-        let tag = inbound["tag"].as_str().unwrap_or_default().to_string();
+        let tag = match inbound["tag"].as_str() {
+            Some(t) if !t.is_empty() => t.to_string(),
+            _ => continue,
+        };
         if current_inbound_tags.contains(&tag) {
             continue;
         }
@@ -109,17 +116,23 @@ pub async fn sync_config(state: &AppState, addr: &str) -> Result<()> {
         .iter()
         .filter(|tag| !target_outbound_tags.contains(*tag))
     {
-        let _ = client
+        if let Err(e) = client
             .remove_outbound(RemoveOutboundRequest {
                 tag: tag.to_string(),
             })
-            .await;
+            .await
+        {
+            warn!(tag, error = %e, "sync_config: remove_outbound failed");
+        }
     }
     let current_outbound_tags = current_outbounds
         .into_iter()
         .collect::<std::collections::HashSet<_>>();
     for outbound in target_outbounds {
-        let tag = outbound["tag"].as_str().unwrap_or_default().to_string();
+        let tag = match outbound["tag"].as_str() {
+            Some(t) if !t.is_empty() => t.to_string(),
+            _ => continue,
+        };
         let outbound_config = OutboundHandlerConfig {
             tag: tag.clone(),
             sender_settings: None,
