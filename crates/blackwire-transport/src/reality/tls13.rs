@@ -315,10 +315,84 @@ fn compute_nonce(iv: &[u8; 12], seq: u64) -> [u8; 12] {
     nonce
 }
 
-/// Decrypt a TLS 1.3 application-data record body.
+/// An AEAD cipher whose key schedule is expanded once and reused for every
+/// record.
+///
+/// This TLS 1.3 stack never rekeys mid-stream (no `KeyUpdate`), so the only
+/// per-record input that changes is the nonce. Building a fresh `Aes*Gcm` per
+/// record — as the datapath used to — repeated the full AES key expansion on
+/// every 16 KiB record for no reason; caching the expanded cipher removes that.
+pub(super) enum RecordCrypter {
+    /// TLS_AES_128_GCM_SHA256. Boxed: the expanded schedule is ~700 B and we
+    /// hold one per direction per connection.
+    Aes128(Box<Aes128Gcm>),
+    /// TLS_AES_256_GCM_SHA384.
+    Aes256(Box<Aes256Gcm>),
+}
+
+impl RecordCrypter {
+    /// Expand `key` into a reusable cipher for the negotiated suite.
+    pub(super) fn new(cs: CipherSuite, key: &[u8]) -> Result<Self, ProxyError> {
+        Ok(match cs {
+            CipherSuite::Aes128GcmSha256 => Self::Aes128(Box::new(
+                Aes128Gcm::new_from_slice(key)
+                    .map_err(|_| ProxyError::Protocol("bad AES-128-GCM key len".into()))?,
+            )),
+            CipherSuite::Aes256GcmSha384 => Self::Aes256(Box::new(
+                Aes256Gcm::new_from_slice(key)
+                    .map_err(|_| ProxyError::Protocol("bad AES-256-GCM key len".into()))?,
+            )),
+        })
+    }
+
+    fn decrypt(&self, nonce: &[u8; 12], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>, ProxyError> {
+        let nonce = Nonce::from_slice(nonce);
+        let payload = Payload { msg: ciphertext, aad };
+        match self {
+            Self::Aes128(c) => c.decrypt(nonce, payload),
+            Self::Aes256(c) => c.decrypt(nonce, payload),
+        }
+        .map_err(|_| ProxyError::Protocol("TLS 1.3 record decrypt failed".into()))
+    }
+
+    fn encrypt(&self, nonce: &[u8; 12], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, ProxyError> {
+        let nonce = Nonce::from_slice(nonce);
+        let payload = Payload { msg: plaintext, aad };
+        match self {
+            Self::Aes128(c) => c.encrypt(nonce, payload),
+            Self::Aes256(c) => c.encrypt(nonce, payload),
+        }
+        .map_err(|_| ProxyError::Protocol("TLS 1.3 record encrypt failed".into()))
+    }
+}
+
+/// Decrypt a TLS 1.3 application-data record body with a pre-built cipher.
 ///
 /// `header` is the 5-byte TLS record header (used as AAD).
 /// Returns `(inner_plaintext, inner_content_type)`.
+pub(super) fn decrypt_app_record_with(
+    crypter: &RecordCrypter,
+    iv: &[u8; 12],
+    seq: u64,
+    ciphertext: &[u8],
+    header: [u8; 5],
+) -> Result<(Vec<u8>, u8), ProxyError> {
+    let nonce = compute_nonce(iv, seq);
+    let mut plaintext = crypter.decrypt(&nonce, ciphertext, &header)?;
+    // The inner content-type is the last plaintext byte. `pop` strips it in
+    // place, so we return the decrypted buffer itself instead of copying its
+    // body into a fresh Vec on every record.
+    let inner_type = plaintext.pop().ok_or_else(|| {
+        ProxyError::Protocol("decrypted TLS record is empty (no content-type byte)".into())
+    })?;
+    Ok((plaintext, inner_type))
+}
+
+/// Decrypt a TLS 1.3 application-data record body.
+///
+/// Convenience wrapper that expands `key` for a single record — used on the
+/// one-shot handshake path. The datapath uses [`decrypt_app_record_with`] with
+/// a cached [`RecordCrypter`].
 pub(super) fn decrypt_app_record(
     cs: CipherSuite,
     key: &[u8],
@@ -327,62 +401,23 @@ pub(super) fn decrypt_app_record(
     ciphertext: &[u8],
     header: [u8; 5],
 ) -> Result<(Vec<u8>, u8), ProxyError> {
-    let nonce = compute_nonce(iv, seq);
-    let nonce_ga = Nonce::from_slice(&nonce);
-
-    let plaintext = match cs {
-        CipherSuite::Aes128GcmSha256 => {
-            let cipher = Aes128Gcm::new_from_slice(key)
-                .map_err(|_| ProxyError::Protocol("bad AES-128-GCM key len".into()))?;
-            cipher
-                .decrypt(
-                    nonce_ga,
-                    Payload {
-                        msg: ciphertext,
-                        aad: &header,
-                    },
-                )
-                .map_err(|_| ProxyError::Protocol("AES-128-GCM decrypt failed".into()))?
-        }
-        CipherSuite::Aes256GcmSha384 => {
-            let cipher = Aes256Gcm::new_from_slice(key)
-                .map_err(|_| ProxyError::Protocol("bad AES-256-GCM key len".into()))?;
-            cipher
-                .decrypt(
-                    nonce_ga,
-                    Payload {
-                        msg: ciphertext,
-                        aad: &header,
-                    },
-                )
-                .map_err(|_| ProxyError::Protocol("AES-256-GCM decrypt failed".into()))?
-        }
-    };
-
-    if plaintext.is_empty() {
-        return Err(ProxyError::Protocol(
-            "decrypted TLS record is empty (no content-type byte)".into(),
-        ));
-    }
-
-    let inner_type = plaintext[plaintext.len() - 1];
-    let inner = plaintext[..plaintext.len() - 1].to_vec();
-    Ok((inner, inner_type))
+    let crypter = RecordCrypter::new(cs, key)?;
+    decrypt_app_record_with(&crypter, iv, seq, ciphertext, header)
 }
 
 /// Encrypt a TLS 1.3 application-data record.
 ///
 /// `inner_type` is the inner content type (0x16 = handshake, 0x17 = app data).
 /// Returns the full 5-byte-header + ciphertext record.
-pub(super) fn encrypt_app_record(
-    cs: CipherSuite,
-    key: &[u8],
+pub(super) fn encrypt_app_record_with(
+    crypter: &RecordCrypter,
     iv: &[u8; 12],
     seq: u64,
     inner_plaintext: &[u8],
     inner_type: u8,
 ) -> Result<Vec<u8>, ProxyError> {
-    let mut msg = inner_plaintext.to_vec();
+    let mut msg = Vec::with_capacity(inner_plaintext.len() + 1);
+    msg.extend_from_slice(inner_plaintext);
     msg.push(inner_type); // TLS 1.3 inner content type
 
     let tag_len = 16; // AES-GCM tag
@@ -398,41 +433,29 @@ pub(super) fn encrypt_app_record(
     ];
 
     let nonce = compute_nonce(iv, seq);
-    let nonce_ga = Nonce::from_slice(&nonce);
-
-    let ciphertext = match cs {
-        CipherSuite::Aes128GcmSha256 => {
-            let cipher = Aes128Gcm::new_from_slice(key)
-                .map_err(|_| ProxyError::Protocol("bad AES-128-GCM key".into()))?;
-            cipher
-                .encrypt(
-                    nonce_ga,
-                    Payload {
-                        msg: &msg,
-                        aad: &header,
-                    },
-                )
-                .map_err(|_| ProxyError::Protocol("AES-128-GCM encrypt failed".into()))?
-        }
-        CipherSuite::Aes256GcmSha384 => {
-            let cipher = Aes256Gcm::new_from_slice(key)
-                .map_err(|_| ProxyError::Protocol("bad AES-256-GCM key".into()))?;
-            cipher
-                .encrypt(
-                    nonce_ga,
-                    Payload {
-                        msg: &msg,
-                        aad: &header,
-                    },
-                )
-                .map_err(|_| ProxyError::Protocol("AES-256-GCM encrypt failed".into()))?
-        }
-    };
+    let ciphertext = crypter.encrypt(&nonce, &msg, &header)?;
 
     let mut record = Vec::with_capacity(5 + ciphertext.len());
     record.extend_from_slice(&header);
     record.extend_from_slice(&ciphertext);
     Ok(record)
+}
+
+/// Encrypt a TLS 1.3 application-data record.
+///
+/// Convenience wrapper that expands `key` for a single record — used on the
+/// one-shot handshake path. The datapath uses [`encrypt_app_record_with`] with
+/// a cached [`RecordCrypter`].
+pub(super) fn encrypt_app_record(
+    cs: CipherSuite,
+    key: &[u8],
+    iv: &[u8; 12],
+    seq: u64,
+    inner_plaintext: &[u8],
+    inner_type: u8,
+) -> Result<Vec<u8>, ProxyError> {
+    let crypter = RecordCrypter::new(cs, key)?;
+    encrypt_app_record_with(&crypter, iv, seq, inner_plaintext, inner_type)
 }
 
 // ── TLS record I/O ────────────────────────────────────────────────────────────
@@ -831,13 +854,13 @@ pin_project! {
 
         cs: CipherSuite,
 
-        // Encryption: client → server
-        client_key: Vec<u8>,
+        // client → server traffic (encrypt when client, decrypt when server)
+        client_crypter: RecordCrypter,
         client_iv: [u8; 12],
         client_seq: u64,
 
-        // Decryption: server → client
-        server_key: Vec<u8>,
+        // server → client traffic (decrypt when client, encrypt when server)
+        server_crypter: RecordCrypter,
         server_iv: [u8; 12],
         server_seq: u64,
 
@@ -870,13 +893,19 @@ impl Tls13Stream {
     }
 
     fn with_role(inner: BoxedStream, keys: AppKeys, is_server: bool) -> Self {
+        // Expand both direction keys once. The lengths come from the handshake
+        // key schedule (always `cs.key_len()`), so construction cannot fail.
+        let client_crypter = RecordCrypter::new(keys.cs, &keys.client_key)
+            .expect("application keys have valid length");
+        let server_crypter = RecordCrypter::new(keys.cs, &keys.server_key)
+            .expect("application keys have valid length");
         Self {
             inner,
             cs: keys.cs,
-            client_key: keys.client_key,
+            client_crypter,
             client_iv: keys.client_iv,
             client_seq: 0,
-            server_key: keys.server_key,
+            server_crypter,
             server_iv: keys.server_iv,
             server_seq: 0,
             is_server,
@@ -961,18 +990,16 @@ impl AsyncRead for Tls13Stream {
                 match rec_type {
                     RT_APPLICATION_DATA => {
                         let result = if *me.is_server {
-                            decrypt_app_record(
-                                *me.cs,
-                                me.client_key,
+                            decrypt_app_record_with(
+                                me.client_crypter,
                                 me.client_iv,
                                 *me.client_seq,
                                 me.body_buf,
                                 *me.header_buf,
                             )
                         } else {
-                            decrypt_app_record(
-                                *me.cs,
-                                me.server_key,
+                            decrypt_app_record_with(
+                                me.server_crypter,
                                 me.server_iv,
                                 *me.server_seq,
                                 me.body_buf,
@@ -1080,18 +1107,16 @@ impl AsyncWrite for Tls13Stream {
         *me.write_chunk_len = chunk_len;
 
         let record = if *me.is_server {
-            encrypt_app_record(
-                *me.cs,
-                me.server_key,
+            encrypt_app_record_with(
+                me.server_crypter,
                 me.server_iv,
                 *me.server_seq,
                 &buf[..chunk_len],
                 RT_APPLICATION_DATA,
             )
         } else {
-            encrypt_app_record(
-                *me.cs,
-                me.client_key,
+            encrypt_app_record_with(
+                me.client_crypter,
                 me.client_iv,
                 *me.client_seq,
                 &buf[..chunk_len],
