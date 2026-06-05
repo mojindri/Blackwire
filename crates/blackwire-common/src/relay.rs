@@ -5,11 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use std::collections::VecDeque;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::pin;
 
@@ -120,10 +120,17 @@ impl RelayV2Stats {
     }
 }
 
-/// Growable FIFO ring buffer used by the v2 relay.
+/// Growable FIFO buffer used by the v2 relay.
+///
+/// Backed by a `BytesMut` plus a read cursor so the reader consumes from the
+/// front in O(1) (`consume` just advances the cursor) and always sees a single
+/// contiguous `front_slice` — unlike a `VecDeque<u8>` ring, which can wrap and
+/// expose only a partial leading segment. Consumed front space is reclaimed by
+/// compaction only when the tail runs out of room, keeping memmoves rare.
 #[derive(Debug)]
 pub struct RelayRingBuffer {
-    buf: VecDeque<u8>,
+    buf: BytesMut,
+    start: usize,
     max_capacity: usize,
 }
 
@@ -133,14 +140,15 @@ impl RelayRingBuffer {
         let initial_capacity = initial_capacity.max(1);
         let max_capacity = max_capacity.max(initial_capacity);
         Self {
-            buf: VecDeque::with_capacity(initial_capacity),
+            buf: BytesMut::with_capacity(initial_capacity),
+            start: 0,
             max_capacity,
         }
     }
 
     /// Number of bytes currently held in the buffer.
     pub fn len(&self) -> usize {
-        self.buf.len()
+        self.buf.len() - self.start
     }
 
     /// Current allocated capacity of the buffer.
@@ -155,25 +163,36 @@ impl RelayRingBuffer {
 
     /// True if the buffer holds no bytes.
     pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
+        self.len() == 0
     }
 
     /// Append as many bytes from `bytes` as fit; returns the number appended.
     pub fn push_slice(&mut self, bytes: &[u8]) -> usize {
         let n = bytes.len().min(self.remaining_capacity());
-        self.buf.extend(&bytes[..n]);
+        if n == 0 {
+            return 0;
+        }
+        // Reclaim consumed front space if the tail can't hold the new bytes.
+        if self.buf.capacity() - self.buf.len() < n {
+            self.compact();
+        }
+        self.buf.extend_from_slice(&bytes[..n]);
         n
     }
 
-    /// A contiguous view of the leading bytes in the buffer (may not be all bytes).
+    /// A contiguous view of the leading bytes in the buffer.
     pub fn front_slice(&self) -> &[u8] {
-        self.buf.as_slices().0
+        &self.buf[self.start..]
     }
 
     /// Remove the first `n` bytes from the front of the buffer.
     pub fn consume(&mut self, n: usize) {
-        let n = n.min(self.buf.len());
-        self.buf.drain(..n);
+        self.start += n.min(self.len());
+        if self.start == self.buf.len() {
+            // Fully drained — reset to the front so capacity is fully usable.
+            self.buf.clear();
+            self.start = 0;
+        }
     }
 
     /// Attempt to double the buffer capacity up to `max_capacity`. Returns `false` if already at max.
@@ -183,14 +202,29 @@ impl RelayRingBuffer {
             return false;
         }
         let next = capacity.saturating_mul(2).min(self.max_capacity).max(1);
-        self.buf.reserve_exact(next.saturating_sub(capacity));
+        self.buf.reserve(next.saturating_sub(self.buf.len()));
         true
+    }
+
+    /// Move live bytes to the front of the allocation, dropping consumed prefix.
+    /// Uses `copy_within` (not `BytesMut::advance`) so `capacity()` stays stable
+    /// and equal to the underlying allocation; only `grow` changes capacity.
+    fn compact(&mut self) {
+        if self.start == 0 {
+            return;
+        }
+        let live = self.buf.len() - self.start;
+        self.buf.copy_within(self.start.., 0);
+        self.buf.truncate(live);
+        self.start = 0;
     }
 }
 
 struct RelayDirectionState {
     pending: RelayRingBuffer,
-    scratch: Vec<u8>,
+    /// Read scratch, borrowed from the shared pool and returned on drop so each
+    /// relay direction reuses a pooled allocation instead of a fresh `Vec`.
+    scratch: BytesMut,
     read_eof: bool,
     shutdown_sent: bool,
     flush_pending: bool,
@@ -204,9 +238,11 @@ struct RelayDirectionState {
 impl RelayDirectionState {
     fn new(options: RelayV2Options) -> Self {
         let initial = options.initial_buffer.max(1);
+        let mut scratch = relay_pool().acquire(initial);
+        scratch.resize(initial, 0);
         Self {
             pending: RelayRingBuffer::new(initial, options.max_buffer.max(initial)),
-            scratch: vec![0; initial],
+            scratch,
             read_eof: false,
             shutdown_sent: false,
             flush_pending: false,
@@ -220,6 +256,12 @@ impl RelayDirectionState {
 
     fn done(&self) -> bool {
         self.read_eof && self.pending.is_empty() && self.shutdown_sent
+    }
+}
+
+impl Drop for RelayDirectionState {
+    fn drop(&mut self) {
+        relay_pool().release(std::mem::take(&mut self.scratch));
     }
 }
 
