@@ -389,7 +389,7 @@ fn build_request_plaintext(
     pad_len: u8,
     security: Security,
     dest: &Address,
-) -> Result<Vec<u8>, ProxyError> {
+) -> Result<BytesMut, ProxyError> {
     let mut buf = BytesMut::new();
     buf.put_u8(0x01); // version
     buf.put_slice(iv);
@@ -426,7 +426,7 @@ fn build_request_plaintext(
     let checksum = fnv32a(buf.as_ref());
     buf.put_u32(checksum);
 
-    Ok(buf.to_vec())
+    Ok(buf)
 }
 
 fn decode_plaintext(data: &[u8]) -> Result<VmessRequest, ProxyError> {

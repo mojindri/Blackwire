@@ -80,7 +80,7 @@ impl OutboundHandler for VmessOutbound {
         &self,
         _ctx: &Context,
         dest: &Address,
-        early_payload: Option<Vec<u8>>,
+        early_payload: Option<&[u8]>,
     ) -> Result<OutboundConnectResult, ProxyError> {
         debug!(server = %self.server, dest = %dest, "VMess outbound connecting with early payload");
 
@@ -153,10 +153,10 @@ pub async fn connect_vmess_on_stream_with_early_payload(
     uuid: &[u8; 16],
     cmd_key_bytes: &[u8; 16],
     dest: &Address,
-    early_payload: Option<Vec<u8>>,
+    early_payload: Option<&[u8]>,
 ) -> Result<OutboundConnectResult, ProxyError> {
     let mut stream = connect_vmess_on_stream(stream, uuid, cmd_key_bytes, dest).await?;
-    let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+    let wrote_early_payload = if let Some(payload) = early_payload {
         if !payload.is_empty() {
             stream.write_all(payload).await?;
             stream.flush().await?;

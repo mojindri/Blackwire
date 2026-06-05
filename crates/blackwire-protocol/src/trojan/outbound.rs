@@ -86,7 +86,7 @@ impl OutboundHandler for TrojanOutbound {
         &self,
         _ctx: &Context,
         dest: &Address,
-        early_payload: Option<Vec<u8>>,
+        early_payload: Option<&[u8]>,
     ) -> Result<OutboundConnectResult, ProxyError> {
         debug!(
             server = %self.server,
@@ -122,11 +122,11 @@ pub async fn connect_trojan_on_stream_with_early_payload(
     mut stream: BoxedStream,
     token: &str,
     dest: &Address,
-    early_payload: Option<Vec<u8>>,
+    early_payload: Option<&[u8]>,
 ) -> Result<OutboundConnectResult, ProxyError> {
     let header = encode_request(token, CMD_CONNECT, dest)?;
     stream.write_all(&header).await?;
-    let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+    let wrote_early_payload = if let Some(payload) = early_payload {
         if !payload.is_empty() {
             stream.write_all(payload).await?;
             true
@@ -222,7 +222,7 @@ mod tests {
             Box::new(tcp),
             &expected_token,
             &dest,
-            Some(early_payload),
+            Some(&early_payload),
         )
         .await
         .unwrap();
