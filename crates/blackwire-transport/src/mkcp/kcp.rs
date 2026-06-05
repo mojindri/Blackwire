@@ -510,16 +510,13 @@ impl Kcp {
         if sn >= self.rcv_nxt + self.rcv_wnd as u32 || sn < self.rcv_nxt {
             return;
         }
-        if self.rcv_buf.iter().any(|s| s.sn == sn) {
-            return;
+        // `rcv_buf` is kept sorted ascending by `sn`, so a single binary search
+        // both rejects duplicates and locates the insertion point, replacing the
+        // previous two linear scans (`any` + `rposition`) over the receive window.
+        match self.rcv_buf.binary_search_by(|s| s.sn.cmp(&sn)) {
+            Ok(_) => return, // duplicate segment already buffered
+            Err(pos) => self.rcv_buf.insert(pos, seg),
         }
-        let pos = self
-            .rcv_buf
-            .iter()
-            .rposition(|s| s.sn < sn)
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        self.rcv_buf.insert(pos, seg);
         self.move_rcv_buf();
     }
 
