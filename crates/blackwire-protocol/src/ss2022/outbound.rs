@@ -85,7 +85,7 @@ impl OutboundHandler for Ss2022Outbound {
         &self,
         _ctx: &Context,
         dest: &Address,
-        early_payload: Option<Vec<u8>>,
+        early_payload: Option<&[u8]>,
     ) -> Result<OutboundConnectResult, ProxyError> {
         debug!(server = %self.server, dest = %dest, "SS-2022 outbound connecting with early payload");
         let tcp = tcp_connect(self.server).await?;
@@ -93,7 +93,7 @@ impl OutboundHandler for Ss2022Outbound {
         let payload = early_payload.unwrap_or_default();
         let wrote_early_payload = !payload.is_empty();
         let stream =
-            open_ss2022_stream_with_initial_payload(Box::new(tcp), &self.psk, dest, &payload)
+            open_ss2022_stream_with_initial_payload(Box::new(tcp), &self.psk, dest, payload)
                 .await?;
         Ok(OutboundConnectResult {
             stream: Box::new(stream),
