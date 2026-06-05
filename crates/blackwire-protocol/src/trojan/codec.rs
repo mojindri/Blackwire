@@ -163,6 +163,27 @@ pub fn encode_udp_datagram(dest: &Address, payload: &[u8]) -> Result<Vec<u8>, Pr
     Ok(buf.into())
 }
 
+/// Zero-allocation variant: encodes the datagram into a caller-supplied `buf` (cleared first).
+/// Use this in hot loops where the buffer can be reused across calls.
+pub fn encode_udp_datagram_into(
+    dest: &Address,
+    payload: &[u8],
+    buf: &mut Vec<u8>,
+) -> Result<(), ProxyError> {
+    if payload.len() > MAX_UDP_PAYLOAD_LEN {
+        return Err(ProxyError::Protocol(format!(
+            "Trojan UDP payload length {} exceeds Xray max {MAX_UDP_PAYLOAD_LEN}",
+            payload.len()
+        )));
+    }
+    buf.clear();
+    write_socks5_address(buf, dest)?;
+    buf.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    buf.extend_from_slice(b"\r\n");
+    buf.extend_from_slice(payload);
+    Ok(())
+}
+
 async fn expect_crlf<R: AsyncRead + Unpin>(reader: &mut R, ctx: &str) -> Result<(), ProxyError> {
     let mut crlf = [0u8; 2];
     reader.read_exact(&mut crlf).await?;
