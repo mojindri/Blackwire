@@ -16,7 +16,7 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
 use blackwire_common::{BoxedStream, ProxyError, ReunionStream};
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use dashmap::DashMap;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tracing::debug;
@@ -967,6 +967,9 @@ struct SplitHttpStream<S> {
     inner: S,
     // BytesMut so front-consumption is O(1) `advance` rather than O(n) `Vec::drain`.
     read_buf: BytesMut,
+    // Reused across every `poll_write` to frame a chunk without a fresh heap
+    // allocation (and without `format!`) per write.
+    write_buf: BytesMut,
     chunk_remaining: usize,
     need_chunk_crlf: bool,
     eof: bool,
@@ -977,11 +980,35 @@ impl<S> SplitHttpStream<S> {
         Self {
             inner,
             read_buf: BytesMut::new(),
+            write_buf: BytesMut::new(),
             chunk_remaining: 0,
             need_chunk_crlf: false,
             eof: false,
         }
     }
+}
+
+/// Append `value` as an uppercase ASCII-hex chunk-size, without `format!`.
+fn put_chunk_size_hex(buf: &mut BytesMut, value: usize) {
+    if value == 0 {
+        buf.put_u8(b'0');
+        return;
+    }
+    // usize is at most 16 hex digits; build into a stack scratch, then emit.
+    let mut digits = [0u8; 16];
+    let mut n = value;
+    let mut i = digits.len();
+    while n != 0 {
+        i -= 1;
+        let nibble = (n & 0xf) as u8;
+        digits[i] = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'A' + (nibble - 10)
+        };
+        n >>= 4;
+    }
+    buf.put_slice(&digits[i..]);
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
@@ -1400,10 +1427,15 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for SplitHttpStream<S> {
         if buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
-        let mut framed = format!("{:X}\r\n", buf.len()).into_bytes();
-        framed.extend_from_slice(buf);
-        framed.extend_from_slice(b"\r\n");
-        match Pin::new(&mut self.inner).poll_write(cx, &framed) {
+        // Frame the chunk into the reused buffer: "<hex-len>\r\n<data>\r\n".
+        let this = &mut *self;
+        this.write_buf.clear();
+        this.write_buf.reserve(buf.len() + 20);
+        put_chunk_size_hex(&mut this.write_buf, buf.len());
+        this.write_buf.extend_from_slice(b"\r\n");
+        this.write_buf.extend_from_slice(buf);
+        this.write_buf.extend_from_slice(b"\r\n");
+        match Pin::new(&mut this.inner).poll_write(cx, &this.write_buf) {
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(buf.len())),
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
             Poll::Pending => Poll::Pending,
