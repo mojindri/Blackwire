@@ -339,7 +339,12 @@ impl RecordCrypter {
         Ok(Self { key: Box::new(key) })
     }
 
-    fn decrypt(&self, nonce: &[u8; 12], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>, ProxyError> {
+    fn decrypt(
+        &self,
+        nonce: &[u8; 12],
+        ciphertext: &[u8],
+        aad: &[u8],
+    ) -> Result<Vec<u8>, ProxyError> {
         let mut buf = ciphertext.to_vec();
         let plain_len = self
             .key
@@ -349,7 +354,12 @@ impl RecordCrypter {
         Ok(buf)
     }
 
-    fn encrypt(&self, nonce: &[u8; 12], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, ProxyError> {
+    fn encrypt(
+        &self,
+        nonce: &[u8; 12],
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> Result<Vec<u8>, ProxyError> {
         let mut buf = Vec::with_capacity(plaintext.len() + TAG_LEN);
         buf.extend_from_slice(plaintext);
         let tag = self.key.seal_detached(nonce, aad, &mut buf);
