@@ -573,7 +573,13 @@ pub fn wrap_vision_inbound_stream(stream: BoxedStream, uuid: [u8; 16]) -> BoxedS
 
 /// Fill `out` with a Vision padding chunk, reusing its existing capacity.
 /// Clears `out` first so repeated calls amortize the allocation across writes.
-fn fill_vision_chunk(out: &mut Vec<u8>, uuid: &[u8; 16], content: &[u8], command: u8, include_uuid: bool) {
+fn fill_vision_chunk(
+    out: &mut Vec<u8>,
+    uuid: &[u8; 16],
+    content: &[u8],
+    command: u8,
+    include_uuid: bool,
+) {
     let header_len = if include_uuid { 21 } else { 5 };
     out.clear();
     out.reserve(header_len + content.len());
