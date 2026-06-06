@@ -59,6 +59,9 @@ mod backend_awslc {
     }
 
     impl AwsAeadKey {
+        /// Expand `key` into a ready-to-use AEAD key for `alg`.
+        ///
+        /// Fails if `key` has the wrong length for the chosen algorithm.
         pub fn new(alg: AeadAlgorithm, key: &[u8]) -> Result<Self, AeadError> {
             let algorithm = match alg {
                 AeadAlgorithm::Aes128Gcm => &AES_128_GCM,
@@ -71,6 +74,10 @@ mod backend_awslc {
             })
         }
 
+        /// Seal `in_out` in place and return the detached authentication tag.
+        ///
+        /// `in_out` holds the plaintext on entry and the ciphertext (same
+        /// length) on return; the tag is appended by the caller as needed.
         #[inline]
         pub fn seal_detached(
             &self,
@@ -91,6 +98,11 @@ mod backend_awslc {
             out
         }
 
+        /// Open an `in_out` buffer holding `ciphertext || tag` in place.
+        ///
+        /// Returns the plaintext length on success; the caller truncates
+        /// `in_out` to that length to drop the consumed tag. Fails on
+        /// authentication failure.
         #[inline]
         pub fn open_combined(
             &self,
@@ -105,6 +117,8 @@ mod backend_awslc {
             Ok(plaintext.len())
         }
 
+        /// Open `in_out` (ciphertext only, same length as the plaintext) in
+        /// place against a detached `tag`. Fails on authentication failure.
         #[inline]
         pub fn open_detached(
             &self,
@@ -148,6 +162,9 @@ mod backend_rustcrypto {
     }
 
     impl RcAeadKey {
+        /// Expand `key` into a ready-to-use AEAD key for `alg`.
+        ///
+        /// Fails if `key` has the wrong length for the chosen algorithm.
         pub fn new(alg: AeadAlgorithm, key: &[u8]) -> Result<Self, AeadError> {
             let inner = match alg {
                 AeadAlgorithm::Aes128Gcm => Inner::Aes128(Box::new(
@@ -163,6 +180,10 @@ mod backend_rustcrypto {
             Ok(Self { inner })
         }
 
+        /// Seal `in_out` in place and return the detached authentication tag.
+        ///
+        /// `in_out` holds the plaintext on entry and the ciphertext (same
+        /// length) on return; the tag is appended by the caller as needed.
         #[inline]
         pub fn seal_detached(
             &self,
@@ -182,6 +203,11 @@ mod backend_rustcrypto {
             out
         }
 
+        /// Open an `in_out` buffer holding `ciphertext || tag` in place.
+        ///
+        /// Returns the plaintext length on success; the caller truncates
+        /// `in_out` to that length to drop the consumed tag. Fails on
+        /// authentication failure.
         #[inline]
         pub fn open_combined(
             &self,
@@ -195,6 +221,8 @@ mod backend_rustcrypto {
             Ok(ciphertext.len())
         }
 
+        /// Open `in_out` (ciphertext only, same length as the plaintext) in
+        /// place against a detached `tag`. Fails on authentication failure.
         #[inline]
         pub fn open_detached(
             &self,
