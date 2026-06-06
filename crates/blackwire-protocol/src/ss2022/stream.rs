@@ -68,7 +68,7 @@ pub struct Ss2022Stream {
 
     // Write state
     write_counter: u64,
-    write_buf: BytesMut, // encrypted bytes waiting to be flushed
+    write_buf: BytesMut,  // encrypted bytes waiting to be flushed
     write_buf_pos: usize, // cursor: bytes already sent from write_buf
     response_header: Option<[u8; 43]>,
 }
@@ -163,7 +163,10 @@ impl Ss2022Stream {
         let mut data_ct = src.split_to(data_len + 16);
         let data_nonce = make_nonce(self.read_counter);
         // `data_ct` holds ciphertext || tag; decrypt in place, then drop the tag.
-        let plain_len = match self.read_cipher.open_combined(&data_nonce, &[], &mut data_ct) {
+        let plain_len = match self
+            .read_cipher
+            .open_combined(&data_nonce, &[], &mut data_ct)
+        {
             Ok(n) => n,
             Err(_) => {
                 return Some(Err(io::Error::new(
@@ -193,7 +196,12 @@ impl Ss2022Stream {
 
             let header_nonce = make_nonce(self.write_counter);
             dst.reserve(fixed_header.len() + 16 + data.len() + 16);
-            Self::encrypt_append(&self.write_cipher, &header_nonce, dst, fixed_header.as_slice());
+            Self::encrypt_append(
+                &self.write_cipher,
+                &header_nonce,
+                dst,
+                fixed_header.as_slice(),
+            );
             self.write_counter += 1;
 
             let data_nonce = make_nonce(self.write_counter);
