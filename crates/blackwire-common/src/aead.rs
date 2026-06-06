@@ -100,11 +100,7 @@ mod backend_awslc {
         ) -> Result<usize, AeadError> {
             let plaintext = self
                 .key
-                .open_in_place(
-                    Nonce::assume_unique_for_key(*nonce),
-                    Aad::from(aad),
-                    in_out,
-                )
+                .open_in_place(Nonce::assume_unique_for_key(*nonce), Aad::from(aad), in_out)
                 .map_err(|_| AeadError)?;
             Ok(plaintext.len())
         }
@@ -154,12 +150,12 @@ mod backend_rustcrypto {
     impl RcAeadKey {
         pub fn new(alg: AeadAlgorithm, key: &[u8]) -> Result<Self, AeadError> {
             let inner = match alg {
-                AeadAlgorithm::Aes128Gcm => {
-                    Inner::Aes128(Box::new(Aes128Gcm::new_from_slice(key).map_err(|_| AeadError)?))
-                }
-                AeadAlgorithm::Aes256Gcm => {
-                    Inner::Aes256(Box::new(Aes256Gcm::new_from_slice(key).map_err(|_| AeadError)?))
-                }
+                AeadAlgorithm::Aes128Gcm => Inner::Aes128(Box::new(
+                    Aes128Gcm::new_from_slice(key).map_err(|_| AeadError)?,
+                )),
+                AeadAlgorithm::Aes256Gcm => Inner::Aes256(Box::new(
+                    Aes256Gcm::new_from_slice(key).map_err(|_| AeadError)?,
+                )),
                 AeadAlgorithm::ChaCha20Poly1305 => Inner::ChaCha(Box::new(
                     ChaCha20Poly1305::new_from_slice(key).map_err(|_| AeadError)?,
                 )),
@@ -311,13 +307,18 @@ mod tests {
             let mut buf2 = plaintext.clone();
             let tag2 = rc.seal_detached(&nonce, aad, &mut buf2);
             let mut detached2 = buf2.clone();
-            aws.open_detached(&nonce, aad, &tag2, &mut detached2).unwrap();
+            aws.open_detached(&nonce, aad, &tag2, &mut detached2)
+                .unwrap();
             assert_eq!(detached2, plaintext, "{alg:?}: rc->aws detached");
 
             let mut combined2 = buf2;
             combined2.extend_from_slice(&tag2);
             let n2 = aws.open_combined(&nonce, aad, &mut combined2).unwrap();
-            assert_eq!(&combined2[..n2], &plaintext[..], "{alg:?}: rc->aws combined");
+            assert_eq!(
+                &combined2[..n2],
+                &plaintext[..],
+                "{alg:?}: rc->aws combined"
+            );
         }
     }
 
