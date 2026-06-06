@@ -130,9 +130,10 @@ impl InnerFlowPacket {
 
 /// Deficit-round-robin scheduler that prioritises latency-sensitive packet classes over bulk traffic.
 ///
-/// Per-class queues are held in a fixed array indexed by [`PacketClass::index`]
-/// rather than a `HashMap`, so enqueue/dequeue do no hashing — important on the
-/// TUN/NAT packet hot path that runs tens of thousands of times per second.
+/// Per-class queues are held in a fixed array indexed by each class's stable
+/// position rather than a `HashMap`, so enqueue/dequeue do no hashing —
+/// important on the TUN/NAT packet hot path that runs tens of thousands of
+/// times per second.
 #[derive(Debug)]
 pub struct InnerFlowScheduler {
     queues: [VecDeque<InnerFlowPacket>; CLASS_COUNT],
