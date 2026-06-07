@@ -502,4 +502,4 @@ SSH_SERVER=1.2.3.4 SSH_CLIENT=5.6.7.8 SSH_KEY=~/.ssh/id_ed25519 \
 | 10 | External-client matrix passes over real public network; SKIPs documented |
 | 11 | TUN device, platform route/redirection setup, and UDP NAT work under platform privileges |
 
-Tiers 1–9 are the mandatory green gate before any merge to main. Tiers 10–11 are required before a protocol or subsystem is marked production-ready.
+Tiers 1–9 are the mandatory green gate before any merge to main. Tiers 10–11 are required before a protocol or subsystem can be considered for a stronger readiness label.

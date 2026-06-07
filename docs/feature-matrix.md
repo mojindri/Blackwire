@@ -9,14 +9,14 @@ This file owns detailed feature status and evidence. The release support
 contract is summarized in [release.md](release.md); test command details belong
 in [11-testing.md](11-testing.md) and [test-workflows.md](test-workflows.md).
 
-**Latest VPS evidence (2026-05-30):** `make -C labs/realistic interop-server-vps` passed with two production VPS hosts (`SSH_SERVER=<server-host>`, `SSH_CLIENT=<client-host>`); `ss2022-udp` is now PASS for both Xray and sing-box after opening `8389/udp` in VPS server setup. Summary: `labs/realistic/reports/external-clients-vps/summary.txt`.
+**Latest VPS evidence (2026-05-30):** `make -C labs/realistic interop-server-vps` passed with two real VPS hosts (`SSH_SERVER=<server-host>`, `SSH_CLIENT=<client-host>`); `ss2022-udp` is now PASS for both Xray and sing-box after opening `8389/udp` in VPS server setup. Summary: `labs/realistic/reports/external-clients-vps/summary.txt`.
 
 **Release posture** (see [release.md](release.md) for the full support contract):
 
 | Label | Release meaning |
 | ----- | --------------- |
-| **Supported** | Safe to rely on in production — tested by CI, e2e suite, and realistic lab |
-| **Partial** | Shipped but has a known gap; read the notes before production use |
+| **Supported** | Release-candidate supported for documented personal, lab, or controlled deployments; tested by CI, e2e suite, and realistic lab |
+| **Partial** | Shipped but has a known gap; read the notes before relying on it |
 | **Experimental** | Implemented end-to-end; missing hostile-network, breadth, or soak coverage |
 | **Unsupported** | Not implemented or explicitly fail-closed |
 
@@ -26,7 +26,7 @@ Status labels:
 | Label                     | Meaning                                                                                                       |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | **Supported**             | Wired in `blackwire-core` `Instance`, exercised by automated tests or the realistic lab mandatory matrix      |
-| **Experimental**          | Implemented end-to-end but missing hostile-network coverage, external-client breadth, or production hardening |
+| **Experimental**          | Implemented end-to-end but missing hostile-network coverage, external-client breadth, soak, or hardening |
 | **Partial**               | Code or schema exists; behavior, wiring, or observability is incomplete                                       |
 | **Unsupported**           | Not implemented or explicitly stubbed                                                                         |
 | **Intentional deviation** | Differs from V2Ray/Xray by design                                                                             |
@@ -240,8 +240,9 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 | `labs/realistic/`                        | Docker + optional two-VPS checklist                                   |
 
 
-**Not claimed:** full Xray feature parity, every `network`/`security` schema combination, or
-production certification on all Experimental rows.
+**Not claimed:** full Xray feature parity, every `network`/`security` schema
+combination, or production certification. Nothing in this table turns the
+pre-1.0 project into a stable production application.
 
 ---
 

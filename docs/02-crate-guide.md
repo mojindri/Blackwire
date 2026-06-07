@@ -136,7 +136,7 @@ It is the glue between config, protocols, transports, router, and listeners.
 ### Read First
 
 - `crates/blackwire-core/src/lib.rs`
-- `crates/blackwire-core/src/instance.rs`
+- `crates/blackwire-core/src/instance/mod.rs`
 
 ### Supporting Modules
 

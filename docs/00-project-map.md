@@ -302,7 +302,7 @@ If you want to understand the code in a practical order, use this path:
 1. `crates/blackwire-cli/src/main.rs`
    Shows startup.
 
-2. `crates/blackwire-core/src/instance.rs`
+2. `crates/blackwire-core/src/instance/mod.rs`
    Shows how the system is assembled.
 
 3. `crates/blackwire-app/src/features.rs`

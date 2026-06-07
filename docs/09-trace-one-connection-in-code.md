@@ -30,7 +30,7 @@ If you want one mental anchor, this file is the front door.
 
 Read:
 
-- [crates/blackwire-core/src/instance.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance.rs)
+- [crates/blackwire-core/src/instance/mod.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance/mod.rs)
 
 This is the assembly line.
 
@@ -273,7 +273,7 @@ If you ask:
 Read:
 
 - [crates/blackwire-cli/src/main.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-cli/src/main.rs)
-- [crates/blackwire-core/src/instance.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance.rs)
+- [crates/blackwire-core/src/instance/mod.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance/mod.rs)
 
 ### "Where is the client destination parsed?"
 
@@ -328,4 +328,3 @@ If you can trace:
 - connect in an outbound
 
 then you already understand the core of the project.
-
