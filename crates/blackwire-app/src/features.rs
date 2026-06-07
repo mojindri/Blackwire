@@ -113,10 +113,10 @@ pub trait OutboundHandler: Send + Sync + 'static {
         &self,
         ctx: &Context,
         dest: &Address,
-        early_payload: Option<Vec<u8>>,
+        early_payload: Option<&[u8]>,
     ) -> Result<OutboundConnectResult, ProxyError> {
         let mut stream = self.connect(ctx, dest).await?;
-        let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+        let wrote_early_payload = if let Some(payload) = early_payload {
             if !payload.is_empty() {
                 stream.write_all(payload).await?;
                 true

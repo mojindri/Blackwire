@@ -88,11 +88,11 @@ pub async fn connect_vless_on_stream_with_early_payload(
     flow: &str,
     command: Command,
     dest: &Address,
-    early_payload: Option<Vec<u8>>,
+    early_payload: Option<&[u8]>,
 ) -> Result<OutboundConnectResult, ProxyError> {
     if flow == "xtls-rprx-vision" {
         let mut stream = connect_vless_on_stream(stream, uuid, flow, command, dest).await?;
-        let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+        let wrote_early_payload = if let Some(payload) = early_payload {
             if !payload.is_empty() {
                 stream.write_all(payload).await?;
                 true
@@ -111,7 +111,7 @@ pub async fn connect_vless_on_stream_with_early_payload(
 
     let header = encode_request(uuid, flow, command, dest)?;
     stream.write_all(&header).await?;
-    let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+    let wrote_early_payload = if let Some(payload) = early_payload {
         if !payload.is_empty() {
             stream.write_all(payload).await?;
             true
@@ -239,7 +239,7 @@ impl OutboundHandler for VlessOutbound {
         &self,
         _ctx: &Context,
         dest: &Address,
-        early_payload: Option<Vec<u8>>,
+        early_payload: Option<&[u8]>,
     ) -> Result<OutboundConnectResult, ProxyError> {
         let stream = TcpStream::connect(self.config.server).await?;
         stream.set_nodelay(true)?;
@@ -301,7 +301,7 @@ mod tests {
             "",
             Command::Tcp,
             &dest,
-            Some(early_payload),
+            Some(&early_payload),
         )
         .await
         .unwrap();
