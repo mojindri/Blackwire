@@ -174,8 +174,8 @@ wait "$SAMPLER_PID" || true
 SAMPLER_PID=""
 
 rps="$(awk '/Requests\/sec:/ {print $2}' "$HEY_LOG" | tail -n1)"
-p95_s="$(awk '$1 == "95%" && $2 == "in" {print $3}' "$HEY_LOG" | tail -n1)"
-p99_s="$(awk '$1 == "99%" && $2 == "in" {print $3}' "$HEY_LOG" | tail -n1)"
+p95_s="$(awk '{ pct=$1; gsub(/%/, "", pct); if (pct == "95" && $2 == "in") print $3 }' "$HEY_LOG" | tail -n1)"
+p99_s="$(awk '{ pct=$1; gsub(/%/, "", pct); if (pct == "99" && $2 == "in") print $3 }' "$HEY_LOG" | tail -n1)"
 ok_200="$(awk '/\[200\]/ {print $2}' "$HEY_LOG" | tail -n1)"
 ok_200="${ok_200:-0}"
 rps="${rps:-0}"

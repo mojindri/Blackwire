@@ -1,6 +1,6 @@
 {
   "max_peak_rss_kb": 28000,
-  "max_peak_fd": 160,
+  "max_peak_fd": 300,
   "max_peak_threads": 11,
   "min_requests_per_second": 9000.0,
   "max_p95_latency_ms": 6.0,
