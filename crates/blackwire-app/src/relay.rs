@@ -61,6 +61,7 @@ pub const ADAPTIVE_SPLICE_LONG_STREAM_AFTER: Duration = Duration::from_millis(0)
 ///
 /// Returns `(bytes_client_to_server, bytes_server_to_client)`.
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) async fn relay_bidirectional(
     inbound: BoxedStream,
     outbound: BoxedStream,
@@ -70,6 +71,7 @@ pub(crate) async fn relay_bidirectional(
 
 /// Relay bytes with an explicit Fast Profile splice policy.
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) async fn relay_bidirectional_with_splice_policy(
     inbound: BoxedStream,
     outbound: BoxedStream,
