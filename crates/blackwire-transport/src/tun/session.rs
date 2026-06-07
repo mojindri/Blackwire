@@ -75,7 +75,15 @@ impl TunSessionTable {
     /// Returns the stored session, or `None` when protocol is unsupported.
     pub fn observe_packet(&mut self, packet: &IpPacket, now: Instant) -> Option<&TunSession> {
         let flow = FlowKey::from_packet(packet)?;
-        if !self.sessions.contains_key(&flow) && self.sessions.len() >= self.max_sessions {
+        // Hot path: an already-tracked flow refreshes its timestamp with a single
+        // lookup and no key clone.
+        if self.sessions.contains_key(&flow) {
+            let session = self.sessions.get_mut(&flow).expect("entry present");
+            session.last_seen = now;
+            return Some(session);
+        }
+        // Cold path: a new flow may need to evict before inserting.
+        if self.sessions.len() >= self.max_sessions {
             self.evict_oldest();
         }
         let session = self.sessions.entry(flow.clone()).or_insert(TunSession {

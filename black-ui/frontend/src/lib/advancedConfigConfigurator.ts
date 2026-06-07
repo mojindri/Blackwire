@@ -94,6 +94,7 @@ export interface AdvancedConfigEditorState {
   fastStrictProduction: boolean;
   fastPool: string;
   fastSplice: string;
+  fastLinuxIoUring: string;
 }
 
 export interface AdvancedConfigValidationIssue {
@@ -156,7 +157,8 @@ export function createSectionEditorState(section: ConfigSection | null): Advance
     profileCustom: PROFILE_OPTIONS.has(profile) ? "" : profile,
     fastStrictProduction: boolValue(asObject(value).strictProduction),
     fastPool: stringValue(asObject(value).pool),
-    fastSplice: stringValue(asObject(value).splice)
+    fastSplice: stringValue(asObject(value).splice),
+    fastLinuxIoUring: stringValue(asObject(asObject(value).linux).ioUring)
   };
 }
 
@@ -238,8 +240,7 @@ export function validateSectionState(state: AdvancedConfigEditorState): Advanced
     issues.push({ field: "profile", message: "Profile value is required." });
   }
   if (state.name === "fast") {
-    if (!state.fastPool.trim()) issues.push({ field: "fastPool", message: "Fast pool mode is required." });
-    if (!state.fastSplice.trim()) issues.push({ field: "fastSplice", message: "Fast splice mode is required." });
+    // pool, splice, and linux.ioUring are all optional — omitting them uses the runtime default
   }
   return issues;
 }
@@ -367,6 +368,10 @@ function buildSectionObject(state: AdvancedConfigEditorState, base: unknown): un
     root.strictProduction = state.fastStrictProduction;
     setOrDelete(root, "pool", state.fastPool.trim());
     setOrDelete(root, "splice", state.fastSplice.trim());
+    const linux = asObject(root.linux);
+    setOrDelete(linux, "ioUring", state.fastLinuxIoUring.trim());
+    if (Object.keys(linux).length > 0) root.linux = linux;
+    else delete root.linux;
     return root;
   }
   return base;

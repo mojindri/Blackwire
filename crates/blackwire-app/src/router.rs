@@ -231,14 +231,22 @@ impl LiveRouter {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Cache key for one routing decision.
+///
+/// Every field is reduced to a fixed-width hash so the key is `Copy` and
+/// requires **zero heap allocation** to build — this runs on the per-connection
+/// hot path, including cache hits. The destination and sniffed-domain were
+/// already hashed (accepting the negligible 64-bit collision risk); the inbound
+/// tag, user, and sniffed protocol now follow the same scheme instead of cloning
+/// three `Arc<str>` per lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct RouteCacheKey {
     dest_hash: u64,
     port: u16,
     network: Network,
-    inbound_tag: Arc<str>,
-    user: Option<Arc<str>>,
-    sniffed_protocol: Option<Arc<str>>,
+    inbound_tag_hash: u64,
+    user_hash: u64,
+    sniffed_protocol_hash: u64,
     sniffed_domain_hash: u64,
 }
 
@@ -248,9 +256,11 @@ impl RouteCacheKey {
             dest_hash: stable_hash(ctx.dest),
             port: ctx.dest.port(),
             network: ctx.network,
-            inbound_tag: Arc::from(ctx.inbound_tag),
-            user: ctx.user.map(Arc::from),
-            sniffed_protocol: ctx.sniffed_protocol.map(Arc::from),
+            inbound_tag_hash: stable_hash(&ctx.inbound_tag),
+            // `Option<&str>` hashing folds in the discriminant, so `None` and
+            // `Some("")` stay distinct.
+            user_hash: stable_hash(&ctx.user),
+            sniffed_protocol_hash: stable_hash(&ctx.sniffed_protocol),
             sniffed_domain_hash: stable_hash(&ctx.sniffed_domain),
         }
     }

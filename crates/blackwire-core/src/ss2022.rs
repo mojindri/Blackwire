@@ -30,7 +30,7 @@ pub(crate) fn build_ss2022_inbound(
         .ok_or_else(|| anyhow::anyhow!("SS-2022 inbound '{}' missing 'password'", cfg.tag))?
         .to_string();
 
-    Ok(Ss2022Inbound::new(&cfg.tag, &password))
+    Ok(Ss2022Inbound::new(cfg.tag.as_str(), &password))
 }
 
 /// Build an SS-2022 outbound handler from config.

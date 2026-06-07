@@ -35,6 +35,8 @@ use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 #[cfg(target_os = "linux")]
 use tokio::net::TcpStream;
@@ -311,7 +313,7 @@ pub struct VisionStream<S> {
     inner: S,
     uuid: [u8; 16],
     read_state: VisionUnpaddingState,
-    read_buf: Vec<u8>,
+    read_buf: BytesMut,
     feed_scratch: Vec<u8>,
     read_direct_copy: bool,
     write_uuid_once: bool,
@@ -329,7 +331,7 @@ impl<S> VisionStream<S> {
             inner,
             uuid,
             read_state: VisionUnpaddingState::new(),
-            read_buf: Vec::new(),
+            read_buf: BytesMut::new(),
             feed_scratch: Vec::new(),
             read_direct_copy: false,
             write_uuid_once: true,
@@ -421,7 +423,11 @@ impl<S: AsyncRead + Unpin> AsyncRead for VisionStream<S> {
             if !self.read_buf.is_empty() {
                 let n = buf.remaining().min(self.read_buf.len());
                 buf.put_slice(&self.read_buf[..n]);
-                self.read_buf.drain(..n);
+                if n >= self.read_buf.len() {
+                    self.read_buf = BytesMut::new();
+                } else {
+                    self.read_buf.advance(n);
+                }
                 return Poll::Ready(Ok(()));
             }
 
@@ -446,8 +452,9 @@ impl<S: AsyncRead + Unpin> AsyncRead for VisionStream<S> {
                     let n = buf.remaining().min(self.feed_scratch.len());
                     buf.put_slice(&self.feed_scratch[..n]);
                     if n < self.feed_scratch.len() {
-                        let extra = self.feed_scratch[n..].to_vec();
-                        self.read_buf.extend_from_slice(&extra);
+                        // Disjoint field borrow: get_mut() splits read_buf and feed_scratch.
+                        let me = self.as_mut().get_mut();
+                        me.read_buf.extend_from_slice(&me.feed_scratch[n..]);
                     }
                     return Poll::Ready(Ok(()));
                 }
@@ -463,25 +470,25 @@ impl<S: AsyncWrite + Unpin> VisionStream<S> {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>> {
-        while self.write_pos < self.write_buf.len() {
-            let chunk = self.write_buf[self.write_pos..].to_vec();
-            match Pin::new(&mut self.inner).poll_write(cx, &chunk) {
+        let me = self.as_mut().get_mut();
+        while me.write_pos < me.write_buf.len() {
+            match Pin::new(&mut me.inner).poll_write(cx, &me.write_buf[me.write_pos..]) {
                 Poll::Ready(Ok(0)) => {
                     return Poll::Ready(Err(io::Error::new(
                         io::ErrorKind::WriteZero,
                         "failed to write Vision frame",
                     )));
                 }
-                Poll::Ready(Ok(n)) => self.write_pos += n,
+                Poll::Ready(Ok(n)) => me.write_pos += n,
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Pending => return Poll::Pending,
             }
         }
-        self.write_buf.clear();
-        self.write_pos = 0;
-        if self.write_pending_direct {
-            self.write_direct_copy = true;
-            self.write_pending_direct = false;
+        me.write_buf.clear();
+        me.write_pos = 0;
+        if me.write_pending_direct {
+            me.write_direct_copy = true;
+            me.write_pending_direct = false;
         }
         Poll::Ready(Ok(()))
     }
@@ -523,7 +530,8 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for VisionStream<S> {
         } else {
             VISION_COMMAND_PADDING_END as u8
         };
-        self.write_buf = vision_pad_chunk(&self.uuid, buf, command, include_uuid);
+        let uuid = self.uuid;
+        fill_vision_chunk(&mut self.write_buf, &uuid, buf, command, include_uuid);
         self.write_pos = 0;
         self.write_pending_consumed = buf.len();
         self.write_pending_direct = command == VISION_COMMAND_PADDING_DIRECT as u8;
@@ -563,8 +571,18 @@ pub fn wrap_vision_inbound_stream(stream: BoxedStream, uuid: [u8; 16]) -> BoxedS
     Box::new(VisionStream::new_server_inbound(stream, uuid))
 }
 
-fn vision_pad_chunk(uuid: &[u8; 16], content: &[u8], command: u8, include_uuid: bool) -> Vec<u8> {
-    let mut out = Vec::with_capacity(21 + content.len());
+/// Fill `out` with a Vision padding chunk, reusing its existing capacity.
+/// Clears `out` first so repeated calls amortize the allocation across writes.
+fn fill_vision_chunk(
+    out: &mut Vec<u8>,
+    uuid: &[u8; 16],
+    content: &[u8],
+    command: u8,
+    include_uuid: bool,
+) {
+    let header_len = if include_uuid { 21 } else { 5 };
+    out.clear();
+    out.reserve(header_len + content.len());
     if include_uuid {
         out.extend_from_slice(uuid);
     }
@@ -575,7 +593,6 @@ fn vision_pad_chunk(uuid: &[u8; 16], content: &[u8], command: u8, include_uuid: 
     out.push(0);
     out.push(0);
     out.extend_from_slice(content);
-    out
 }
 
 fn looks_like_tls_application_data(buf: &[u8]) -> bool {
@@ -896,6 +913,11 @@ impl<S: AsyncRead + Unpin> AsyncRead for PrependedStream<S> {
             let n = remaining.len().min(buf.remaining());
             buf.put_slice(&remaining[..n]);
             self.prefix_pos += n;
+            if self.prefix_pos >= self.prefix.len() {
+                // Free the prefix allocation; it is no longer needed.
+                self.prefix = Vec::new();
+                self.prefix_pos = 0;
+            }
             return Poll::Ready(Ok(()));
         }
         // Prefix exhausted — delegate to the inner stream.

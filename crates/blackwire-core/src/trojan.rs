@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 
+use blackwire_app::dns::DnsModule;
 use blackwire_app::features::{InboundHandler, OutboundHandler};
 use blackwire_protocol::trojan::{TrojanInbound, TrojanOutbound, TrojanOutboundConfig};
 
@@ -16,6 +17,7 @@ use crate::outbound_transport::{uses_outbound_transport, TransportTrojanOutbound
 /// Build a Trojan inbound handler from config.
 pub(crate) fn build_trojan_inbound(
     cfg: &blackwire_config::schema::InboundConfig,
+    dns: Option<Arc<DnsModule>>,
 ) -> Result<Arc<dyn InboundHandler>> {
     // Collect passwords from config JSON.
     // Expected shape: { "clients": [{ "password": "..." }, ...] }
@@ -40,7 +42,7 @@ pub(crate) fn build_trojan_inbound(
         anyhow::bail!("Trojan inbound '{}' has no configured clients", cfg.tag);
     }
 
-    Ok(TrojanInbound::new(&cfg.tag, &passwords))
+    Ok(TrojanInbound::new(cfg.tag.as_str(), &passwords, dns))
 }
 
 /// Build a Trojan outbound handler from config.

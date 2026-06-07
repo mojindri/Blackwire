@@ -401,7 +401,7 @@ impl Dispatcher for DefaultDispatcher {
         mut inbound_stream: BoxedStream,
         early_payload: Option<Vec<u8>>,
     ) -> Result<(), ProxyError> {
-        let sniff_cfg = self.sniffing.load().get(&ctx.inbound_tag).cloned();
+        let sniff_cfg = self.sniffing.load().get(&*ctx.inbound_tag).cloned();
         if let Some(cfg) = sniff_cfg {
             if cfg.enabled {
                 let (stream, mut sniff) = crate::sniff::sniff_stream(inbound_stream, &cfg).await?;
@@ -426,7 +426,7 @@ impl Dispatcher for DefaultDispatcher {
             }
         }
         let outbound = match self
-            .connect_outbound_result(&ctx, &dest, early_payload.clone())
+            .connect_outbound_result(&ctx, &dest, early_payload.as_deref())
             .await
         {
             Ok(outbound) => outbound,
@@ -472,7 +472,7 @@ impl Dispatcher for DefaultDispatcher {
             .map(Protocol::from)
             .unwrap_or(Protocol::Tcp);
         let conn = global_manager().track(
-            Arc::from(ctx.inbound_tag.as_str()),
+            Arc::clone(&ctx.inbound_tag),
             Arc::clone(&outbound.outbound_tag),
             ctx.user.as_ref().map(Arc::clone),
             protocol,
@@ -572,7 +572,7 @@ impl DefaultDispatcher {
         mut inbound_stream: BoxedStream,
         outbound_stream: BoxedStream,
     ) -> Result<(BoxedStream, BoxedStream, u64), ProxyError> {
-        let inbound_tag = ctx.inbound_tag.as_str();
+        let inbound_tag: &str = &ctx.inbound_tag;
         if self.profile != ProfileMode::Fast
             || !(*outbound_stream).as_any().is::<PooledStream<TcpStream>>()
         {
@@ -688,7 +688,7 @@ impl DefaultDispatcher {
         &self,
         ctx: &Context,
         dest: &Address,
-        early_payload: Option<Vec<u8>>,
+        early_payload: Option<&[u8]>,
     ) -> Result<RoutedOutboundConnectResult, ProxyError> {
         let dest = self.restore_fakeip_destination(dest);
 
@@ -710,7 +710,7 @@ impl DefaultDispatcher {
         relay_log!(self.profile, outbound = %route.outbound_tag, "route selected");
         let plan_label = self
             .connection_plans
-            .get(&ctx.inbound_tag)
+            .get(&*ctx.inbound_tag)
             .map(|label| label.as_ref())
             .unwrap_or("dynamic");
         record_connection_plan_selected(plan_label);
@@ -1007,6 +1007,102 @@ mod tests {
                 false,
             )
         }
+    }
+
+    /// Regression: when an outbound does NOT write the early payload itself
+    /// (`wrote_early_payload == false`), the dispatcher must prepend it to the
+    /// inbound stream so the first bytes are relayed to the outbound rather than
+    /// dropped. This guards the borrow-not-clone refactor of the early-payload
+    /// path: `connect_outbound_result` borrows the payload, leaving the owned
+    /// copy intact for this fallback.
+    #[tokio::test]
+    async fn dispatch_prepends_early_payload_when_outbound_skips_it() {
+        use std::sync::Mutex as StdMutex;
+        use tokio::io::{AsyncReadExt, DuplexStream};
+
+        // Mock outbound that connects but deliberately ignores the early payload,
+        // reporting `wrote_early_payload = false` to force the dispatcher fallback.
+        struct SkipEarlyOutbound {
+            // The outbound side of a duplex; handed to the relay on connect.
+            relay_end: StdMutex<Option<DuplexStream>>,
+        }
+
+        #[async_trait]
+        impl OutboundHandler for SkipEarlyOutbound {
+            fn tag(&self) -> &str {
+                "unused"
+            }
+            async fn connect(
+                &self,
+                _ctx: &Context,
+                _dest: &Address,
+            ) -> Result<BoxedStream, ProxyError> {
+                let end = self
+                    .relay_end
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("connect called once");
+                Ok(Box::new(end))
+            }
+            async fn connect_with_early_payload(
+                &self,
+                _ctx: &Context,
+                _dest: &Address,
+                _early_payload: Option<&[u8]>,
+            ) -> Result<crate::features::OutboundConnectResult, ProxyError> {
+                let end = self
+                    .relay_end
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("connect called once");
+                Ok(crate::features::OutboundConnectResult {
+                    stream: Box::new(end),
+                    wrote_early_payload: false,
+                    returned_early_response: None,
+                })
+            }
+        }
+
+        // duplex bridging the mock outbound (relay_end) and the test (peer).
+        let (relay_end, mut outbound_peer) = tokio::io::duplex(1024);
+        let mut outbounds: std::collections::HashMap<String, Arc<dyn OutboundHandler>> =
+            std::collections::HashMap::new();
+        outbounds.insert(
+            "unused".to_string(),
+            Arc::new(SkipEarlyOutbound {
+                relay_end: StdMutex::new(Some(relay_end)),
+            }),
+        );
+        let dispatcher = DefaultDispatcher::new(Arc::new(StaticRouter), outbounds);
+
+        // Inbound duplex: drop our end so the inbound side reports EOF after the
+        // prepended early payload is consumed.
+        let (inbound_peer, inbound_for_relay) = tokio::io::duplex(1024);
+        drop(inbound_peer);
+
+        let early = b"FIRST-PACKET-BYTES".to_vec();
+        let expected = early.clone();
+        let ctx = Context::new("test-in", "127.0.0.1:1080".parse().unwrap());
+        let dest = Address::Ipv4("127.0.0.1".parse().unwrap(), 80);
+
+        tokio::spawn(async move {
+            let _ = dispatcher
+                .dispatch_with_early_payload(ctx, dest, Box::new(inbound_for_relay), Some(early))
+                .await;
+        });
+
+        // The early payload must arrive on the outbound side via the fallback.
+        let mut got = vec![0u8; expected.len()];
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            outbound_peer.read_exact(&mut got),
+        )
+        .await
+        .expect("timed out waiting for early payload")
+        .expect("read early payload");
+        assert_eq!(got, expected);
     }
 
     #[test]

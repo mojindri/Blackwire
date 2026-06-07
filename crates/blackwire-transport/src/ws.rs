@@ -199,7 +199,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for WsStream<S> {
             if !self.read_buf.is_empty() {
                 let n = self.read_buf.len().min(buf.remaining());
                 buf.put_slice(&self.read_buf[..n]);
-                let _ = self.read_buf.split_to(n);
+                if n >= self.read_buf.len() {
+                    // Release the frame allocation as soon as it is fully consumed
+                    // so a large frame read in small chunks isn't pinned.
+                    self.read_buf = Bytes::new();
+                } else {
+                    let _ = self.read_buf.split_to(n);
+                }
                 return Poll::Ready(Ok(()));
             }
 
@@ -282,7 +288,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for WsStream<S> {
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         if self.pending_write.is_none() && !self.write_buf.is_empty() {
-            let data = self.write_buf.split().freeze();
+            // Copy out rather than `split().freeze()`: split() leaves write_buf
+            // with zero capacity, sending the pool-backed allocation off with the
+            // frozen Bytes (freed, not pooled). Copying keeps the pooled buffer
+            // alive and reusable for the lifetime of the connection.
+            let data = Bytes::copy_from_slice(&self.write_buf);
+            self.write_buf.clear();
             self.pending_write = Some(Message::Binary(data));
         }
 

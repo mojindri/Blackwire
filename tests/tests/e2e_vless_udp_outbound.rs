@@ -82,7 +82,8 @@ async fn vless_udp_outbound_client_roundtrip() {
     let payload = b"vless-udp-outbound-ping";
 
     // VLESS UDP framing: u16_be(addr_len) | address | payload
-    write_udp_packet(&mut stream, &echo_dest, payload)
+    let mut frame_buf = Vec::with_capacity(64);
+    write_udp_packet(&mut stream, &echo_dest, payload, &mut frame_buf)
         .await
         .unwrap();
 

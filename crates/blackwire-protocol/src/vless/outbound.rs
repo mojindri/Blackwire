@@ -16,13 +16,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tracing::debug;
 
 use blackwire_app::context::Context;
 use blackwire_app::features::{OutboundConnectResult, OutboundHandler};
-use blackwire_common::{Address, BoxedStream, ProxyError};
+use blackwire_common::{Address, BoxedStream, PrependedStream, ProxyError};
 
 use super::codec::{encode_request, Command};
 use super::vision::wrap_vision_stream;
@@ -54,17 +54,25 @@ pub async fn connect_vless_on_stream(
     // the VLESS header immediately without waiting for more data.
     stream.flush().await?;
 
-    // Read VLESS response header: VER(1) + ADDONS_LEN(1) + ADDONS(N)
-    let ver = stream.read_u8().await?;
+    // Read VLESS response header: VER(1) + ADDONS_LEN(1) + ADDONS(N).
+    // Buffer the reads so 2-3 small calls become one recvfrom. Any payload
+    // bytes over-read are recovered via PrependedStream.
+    let mut buf_reader = BufReader::with_capacity(16, &mut stream);
+    let ver = buf_reader.read_u8().await?;
     if ver != 0x00 {
         return Err(ProxyError::Protocol(format!(
             "VLESS server responded with unexpected version {ver:#x}"
         )));
     }
-    let addons_len = stream.read_u8().await? as usize;
+    let addons_len = buf_reader.read_u8().await? as usize;
     if addons_len > 0 {
         let mut addons = vec![0u8; addons_len];
-        stream.read_exact(&mut addons).await?;
+        buf_reader.read_exact(&mut addons).await?;
+    }
+    let leftover = buf_reader.buffer().to_vec();
+    drop(buf_reader);
+    if !leftover.is_empty() {
+        stream = Box::new(PrependedStream::new(stream, leftover));
     }
     if flow == "xtls-rprx-vision" {
         Ok(wrap_vision_stream(stream, *uuid))
@@ -80,11 +88,11 @@ pub async fn connect_vless_on_stream_with_early_payload(
     flow: &str,
     command: Command,
     dest: &Address,
-    early_payload: Option<Vec<u8>>,
+    early_payload: Option<&[u8]>,
 ) -> Result<OutboundConnectResult, ProxyError> {
     if flow == "xtls-rprx-vision" {
         let mut stream = connect_vless_on_stream(stream, uuid, flow, command, dest).await?;
-        let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+        let wrote_early_payload = if let Some(payload) = early_payload {
             if !payload.is_empty() {
                 stream.write_all(payload).await?;
                 true
@@ -103,7 +111,7 @@ pub async fn connect_vless_on_stream_with_early_payload(
 
     let header = encode_request(uuid, flow, command, dest)?;
     stream.write_all(&header).await?;
-    let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+    let wrote_early_payload = if let Some(payload) = early_payload {
         if !payload.is_empty() {
             stream.write_all(payload).await?;
             true
@@ -115,16 +123,22 @@ pub async fn connect_vless_on_stream_with_early_payload(
     };
     stream.flush().await?;
 
-    let ver = stream.read_u8().await?;
+    let mut buf_reader = BufReader::with_capacity(16, &mut stream);
+    let ver = buf_reader.read_u8().await?;
     if ver != 0x00 {
         return Err(ProxyError::Protocol(format!(
             "VLESS server responded with unexpected version {ver:#x}"
         )));
     }
-    let addons_len = stream.read_u8().await? as usize;
+    let addons_len = buf_reader.read_u8().await? as usize;
     if addons_len > 0 {
         let mut addons = vec![0u8; addons_len];
-        stream.read_exact(&mut addons).await?;
+        buf_reader.read_exact(&mut addons).await?;
+    }
+    let leftover = buf_reader.buffer().to_vec();
+    drop(buf_reader);
+    if !leftover.is_empty() {
+        stream = Box::new(PrependedStream::new(stream, leftover));
     }
 
     Ok(OutboundConnectResult {
@@ -190,25 +204,30 @@ impl OutboundHandler for VlessOutbound {
         stream.write_all(&header).await?;
         stream.flush().await?;
 
-        // Step 3: Read the VLESS response header from the server.
-        // The response is: VER (1 byte) + ADDONS_LEN (1 byte) + ADDONS (N bytes).
-        // We must read this before sending any payload.
-        let ver = stream.read_u8().await?;
+        // Step 3: Read the VLESS response header: VER(1) + ADDONS_LEN(1) + ADDONS(N).
+        // Buffer to collapse 2-3 recvfrom calls into one; recover leftover via PrependedStream.
+        let mut buf_reader = BufReader::with_capacity(16, &mut stream);
+        let ver = buf_reader.read_u8().await?;
         if ver != 0x00 {
             return Err(ProxyError::Protocol(format!(
                 "VLESS server responded with unexpected version {ver:#x}"
             )));
         }
-
-        let addons_len = stream.read_u8().await? as usize;
+        let addons_len = buf_reader.read_u8().await? as usize;
         if addons_len > 0 {
             let mut addons = vec![0u8; addons_len];
-            stream.read_exact(&mut addons).await?;
+            buf_reader.read_exact(&mut addons).await?;
         }
+        let leftover = buf_reader.buffer().to_vec();
+        drop(buf_reader);
 
         debug!(server = %self.config.server, dest = %dest, "VLESS handshake complete");
 
-        let stream: BoxedStream = Box::new(stream);
+        let stream: BoxedStream = if leftover.is_empty() {
+            Box::new(stream)
+        } else {
+            Box::new(PrependedStream::new(stream, leftover))
+        };
         if self.config.flow == "xtls-rprx-vision" {
             Ok(wrap_vision_stream(stream, self.config.uuid))
         } else {
@@ -220,7 +239,7 @@ impl OutboundHandler for VlessOutbound {
         &self,
         _ctx: &Context,
         dest: &Address,
-        early_payload: Option<Vec<u8>>,
+        early_payload: Option<&[u8]>,
     ) -> Result<OutboundConnectResult, ProxyError> {
         let stream = TcpStream::connect(self.config.server).await?;
         stream.set_nodelay(true)?;
@@ -282,7 +301,7 @@ mod tests {
             "",
             Command::Tcp,
             &dest,
-            Some(early_payload),
+            Some(&early_payload),
         )
         .await
         .unwrap();

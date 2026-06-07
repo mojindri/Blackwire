@@ -26,11 +26,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, BufReader};
 use tracing::{debug, warn};
 
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
+use blackwire_app::dns::DnsModule;
 use blackwire_app::features::InboundHandler;
 use blackwire_common::{
     copy_bidirectional_with_idle, tcp_connect, with_handshake_timeout, BoxedStream, Network,
@@ -46,7 +47,7 @@ use super::vision::wrap_vision_inbound_stream;
 /// The VLESS inbound handler.
 pub struct VlessInbound {
     /// The unique tag for this inbound (from config.json).
-    tag: String,
+    tag: Arc<str>,
 
     /// The user registry: UUID → user info.
     registry: Arc<VlessUserRegistry>,
@@ -57,6 +58,9 @@ pub struct VlessInbound {
     fallback: Option<SocketAddr>,
     /// Optional limit for reading the VLESS request header (Xray `Handshake`).
     handshake_timeout: Option<Duration>,
+    /// DNS module for UDP relay domain resolution. When present, UDP DNS
+    /// queries route through the configured resolver instead of the OS resolver.
+    dns: Option<Arc<DnsModule>>,
 }
 
 impl VlessInbound {
@@ -66,17 +70,20 @@ impl VlessInbound {
     /// * `tag`      — the inbound's unique name from config.json
     /// * `registry` — the user UUID registry
     /// * `fallback` — optional fallback backend address for failed auth
+    /// * `dns`      — optional DNS module for UDP relay resolution
     pub fn new(
-        tag: impl Into<String>,
+        tag: impl Into<Arc<str>>,
         registry: Arc<VlessUserRegistry>,
         fallback: Option<SocketAddr>,
         handshake_timeout: Option<Duration>,
+        dns: Option<Arc<DnsModule>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
             registry,
             fallback,
             handshake_timeout,
+            dns,
         })
     }
 }
@@ -116,11 +123,23 @@ impl InboundHandler for VlessInbound {
             };
             (req, buf)
         } else {
+            // Buffer the header reads to avoid one syscall per field (~6-10 recvfrom
+            // calls per connection without this). A 64-byte buffer is large enough to
+            // hold the entire VLESS request header in one kernel round-trip.
+            // Any payload bytes read ahead into the buffer are recovered and prepended
+            // back onto the stream via PrependedStream before the relay starts.
+            let mut buf_reader = BufReader::with_capacity(64, &mut stream);
             let req =
-                with_handshake_timeout(self.handshake_timeout, decode_request(&mut stream)).await;
+                with_handshake_timeout(self.handshake_timeout, decode_request(&mut buf_reader))
+                    .await;
+            let leftover = buf_reader.buffer().to_vec();
+            drop(buf_reader);
+            if !leftover.is_empty() {
+                stream = Box::new(PrependedStream::new(stream, leftover));
+            }
             (req, Vec::new())
         };
-        metrics::histogram!("proxy_inbound_parse_seconds", "inbound" => self.tag.clone())
+        metrics::histogram!("proxy_inbound_parse_seconds", "inbound" => self.tag.to_string())
             .record(t_parse.elapsed().as_secs_f64());
 
         match request {
@@ -152,7 +171,7 @@ impl InboundHandler for VlessInbound {
                         stream.flush().await?;
 
                         if req.command == Command::Udp {
-                            return relay_vless_udp(stream).await;
+                            return relay_vless_udp(stream, self.dns.clone()).await;
                         }
 
                         let mut relay_stream = stream;
@@ -164,7 +183,7 @@ impl InboundHandler for VlessInbound {
                             relay_stream = wrap_vision_inbound_stream(relay_stream, req.uuid);
                         }
 
-                        let ctx = Context::new(&self.tag, source)
+                        let ctx = Context::new(self.tag.clone(), source)
                             .with_user(user.email.clone())
                             .with_vision(req.flow == "xtls-rprx-vision");
 
