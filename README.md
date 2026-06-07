@@ -78,8 +78,8 @@ live in [docs/16-environment-cheatsheet.md](docs/16-environment-cheatsheet.md).
 Linux release candidates can be installed from GitHub Releases:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.4/scripts/install.sh \
-  | VERSION=v0.1.0-rc.4 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.5/scripts/install.sh \
+  | VERSION=v0.1.0-rc.5 bash
 ```
 
 The installer downloads the Linux release archive, verifies its `.sha256`, puts
@@ -94,23 +94,23 @@ Black UI panel setup and operations are documented in [docs/black-ui.md](docs/bl
 To install and validate a config in the same step:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.4/scripts/install.sh \
-  | VERSION=v0.1.0-rc.4 CONFIG_PATH=/path/to/config.json bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.5/scripts/install.sh \
+  | VERSION=v0.1.0-rc.5 CONFIG_PATH=/path/to/config.json bash
 ```
 
 For a generated Linux VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.4/scripts/install.sh \
-  | VERSION=v0.1.0-rc.4 SETUP=reality PUBLIC_HOST=example.com bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.5/scripts/install.sh \
+  | VERSION=v0.1.0-rc.5 SETUP=reality PUBLIC_HOST=example.com bash
 ```
 
 For the standard domain setup, point DNS at the VPS first and make sure ports 80
 and 443 are open:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.4/scripts/install.sh \
-  | VERSION=v0.1.0-rc.4 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.5/scripts/install.sh \
+  | VERSION=v0.1.0-rc.5 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 ## Fast Profile
