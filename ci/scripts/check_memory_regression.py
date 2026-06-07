@@ -4,6 +4,23 @@ import sys
 from pathlib import Path
 
 
+MISSING_SENTINEL = object()
+
+
+def get_number(data, path):
+    value = data
+    for key in path.split("."):
+        if not isinstance(value, dict) or key not in value:
+            return MISSING_SENTINEL
+        value = value[key]
+    if value is None:
+        return MISSING_SENTINEL
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return MISSING_SENTINEL
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print("usage: check_memory_regression.py <baseline.json> <result.json>", file=sys.stderr)
@@ -12,15 +29,32 @@ def main() -> int:
     baseline = json.loads(Path(sys.argv[1]).read_text())
     result = json.loads(Path(sys.argv[2]).read_text())
 
-    memory = result.get("memory") or {}
-    peak_rss_kb = float(memory.get("peak_rss_kb") or 10**12)
-    peak_fd = float(memory.get("peak_fd") or 10**12)
-    peak_threads = float(memory.get("peak_threads") or 10**12)
-    rps = float(result.get("requests_per_second") or 0.0)
-    p95 = float((result.get("latency_ms") or {}).get("p95") or 10**12)
-    p99 = float((result.get("latency_ms") or {}).get("p99") or 10**12)
-
     failures = []
+    values = {
+        "memory.peak_rss_kb": get_number(result, "memory.peak_rss_kb"),
+        "memory.peak_fd": get_number(result, "memory.peak_fd"),
+        "memory.peak_threads": get_number(result, "memory.peak_threads"),
+        "requests_per_second": get_number(result, "requests_per_second"),
+        "latency_ms.p95": get_number(result, "latency_ms.p95"),
+        "latency_ms.p99": get_number(result, "latency_ms.p99"),
+    }
+    for key, value in values.items():
+        if value is MISSING_SENTINEL:
+            failures.append(f"missing required result field: {key}")
+
+    if failures:
+        print("MEMORY PERF REGRESSION DETECTED")
+        for item in failures:
+            print(f"- {item}")
+        return 1
+
+    peak_rss_kb = values["memory.peak_rss_kb"]
+    peak_fd = values["memory.peak_fd"]
+    peak_threads = values["memory.peak_threads"]
+    rps = values["requests_per_second"]
+    p95 = values["latency_ms.p95"]
+    p99 = values["latency_ms.p99"]
+
     if peak_rss_kb > float(baseline["max_peak_rss_kb"]):
         failures.append(f"peak_rss_kb regression: {peak_rss_kb} > {baseline['max_peak_rss_kb']}")
     if peak_fd > float(baseline["max_peak_fd"]):
