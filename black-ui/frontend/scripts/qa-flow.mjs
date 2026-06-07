@@ -109,10 +109,15 @@ async function main() {
 async function addInbound(page, tag, port) {
   await nav(page, "Inbounds");
   await page.getByRole("button", { name: "New Inbound", exact: true }).click();
+  // Basic tab (default) — fill core fields
   await page.getByLabel("Tag", { exact: true }).fill(tag);
   await page.getByLabel("Listen host", { exact: true }).fill("127.0.0.1");
   await page.getByLabel("Port", { exact: true }).fill(port);
-  await page.getByLabel("Transport", { exact: true }).selectOption("ws");
+  // Transport tab — pick network type
+  await page.getByRole("button", { name: "Transport", exact: true }).click();
+  await page.getByLabel("Network", { exact: true }).selectOption("ws");
+  // Advanced tab — fill stream settings JSON
+  await page.getByRole("button", { name: "Advanced", exact: true }).click();
   await page
     .getByLabel("Stream settings JSON", { exact: true })
     .fill(JSON.stringify({ network: "ws", security: "none", wsSettings: { path: `/${tag}` } }));
