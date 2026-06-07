@@ -68,7 +68,7 @@ pub struct Ss2022Stream {
 
     // Write state
     write_counter: u64,
-    write_buf: BytesMut, // encrypted bytes waiting to be flushed
+    write_buf: BytesMut,  // encrypted bytes waiting to be flushed
     write_buf_pos: usize, // cursor: bytes already sent from write_buf
     response_header: Option<[u8; 43]>,
 }
