@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "test:unit": "vitest run",
+    "qa": "node scripts/qa-all.mjs",
     "qa:flow": "node scripts/qa-flow.mjs",
     "qa:inbounds:panel": "node scripts/qa-inbounds-structured.mjs --headed --restore-settings",
     "qa:outbounds:panel": "node scripts/qa-outbounds-structured.mjs --headed --restore-settings",

@@ -25,13 +25,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, warn};
 
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::InboundHandler;
-use blackwire_common::{BoxedStream, Network, ProxyError};
+use blackwire_common::{BoxedStream, Network, PrependedStream, ProxyError};
 
 use super::auth::{cmd_key, validate_auth_id, MAX_TIME_DIFF_SECS};
 use super::codec::{
@@ -104,13 +104,13 @@ impl Default for VmessUserRegistry {
 
 /// VMess inbound handler that authenticates and dispatches TCP streams.
 pub struct VmessInbound {
-    tag: String,
+    tag: Arc<str>,
     registry: Arc<VmessUserRegistry>,
 }
 
 impl VmessInbound {
     /// Build a VMess inbound handler with a tag and user registry.
-    pub fn new(tag: impl Into<String>, registry: Arc<VmessUserRegistry>) -> Arc<Self> {
+    pub fn new(tag: impl Into<Arc<str>>, registry: Arc<VmessUserRegistry>) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
             registry,
@@ -134,9 +134,15 @@ impl InboundHandler for VmessInbound {
         source: SocketAddr,
         dispatcher: Arc<dyn Dispatcher>,
     ) -> Result<(), ProxyError> {
+        // Buffer the header reads to reduce per-connection syscalls.
+        // VMess header wire sequence: auth_id(16) + enc_len(18) + nonce(8) + enc_header(N+16).
+        // A 128-byte BufReader covers the fixed fields (42 bytes) and most headers in one
+        // recvfrom call. Any payload bytes read ahead are recovered via PrependedStream.
+        let mut buf_reader = BufReader::with_capacity(128, &mut stream);
+
         // 1. Read 16-byte auth ID.
         let mut auth_id = [0u8; 16];
-        stream.read_exact(&mut auth_id).await?;
+        buf_reader.read_exact(&mut auth_id).await?;
 
         // 2. Identify user.
         let user = match self.registry.find_by_auth(&auth_id) {
@@ -149,13 +155,13 @@ impl InboundHandler for VmessInbound {
 
         debug!(source = %source, user = %user.email, "VMess authenticated");
 
-        // 3. Read encrypted length (18 bytes) — buffered before we have the nonce.
+        // 3. Read encrypted length (18 bytes).
         let mut enc_len = [0u8; 18];
-        stream.read_exact(&mut enc_len).await?;
+        buf_reader.read_exact(&mut enc_len).await?;
 
-        // 4. Read 8-byte connection nonce (appears after enc_len on wire).
+        // 4. Read 8-byte connection nonce.
         let mut connection_nonce = [0u8; 8];
-        stream.read_exact(&mut connection_nonce).await?;
+        buf_reader.read_exact(&mut connection_nonce).await?;
 
         // 5. Decrypt header length using nonce.
         let header_len =
@@ -163,7 +169,7 @@ impl InboundHandler for VmessInbound {
 
         // 6. Decrypt request header.
         let request = match decode_header(
-            &mut stream,
+            &mut buf_reader,
             &user.cmd_key,
             &auth_id,
             &connection_nonce,
@@ -177,6 +183,13 @@ impl InboundHandler for VmessInbound {
                 return Err(e);
             }
         };
+
+        // Recover any payload bytes over-read into the BufReader's internal buffer.
+        let leftover = buf_reader.buffer().to_vec();
+        drop(buf_reader);
+        if !leftover.is_empty() {
+            stream = Box::new(PrependedStream::new(stream, leftover));
+        }
 
         warn!(source = %source, dest = %request.dest, security = ?request.security, "VMess header decoded");
 
@@ -204,7 +217,7 @@ impl InboundHandler for VmessInbound {
 
         let vmess_stream: BoxedStream = Box::new(vmess_stream);
 
-        let ctx = Context::new(&self.tag, source).with_user(user.email);
+        let ctx = Context::new(self.tag.clone(), source).with_user(user.email);
         dispatcher.dispatch(ctx, request.dest, vmess_stream).await
     }
 }

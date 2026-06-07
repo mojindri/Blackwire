@@ -19,6 +19,7 @@ const adminUser = getArg(args, "--admin-user", "admin");
 const adminPassword = getArg(args, "--admin-pass", "password123");
 const headed = argv.has("--headed");
 const keepSettings = argv.has("--keep-settings");
+const writeDocReport = !argv.has("--no-doc-report");
 
 const qaRunId = `qa-${Date.now().toString(36)}`;
 const defaultConfigPath = path.join(tmpdir(), "black-ui-qa-advanced-config", `${qaRunId}-config.json`);
@@ -380,7 +381,7 @@ async function main() {
   } finally {
     const report = buildReport();
     await writeFile(reportJsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-    await writeMarkdownReport(report);
+    if (writeDocReport) await writeMarkdownReport(report);
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
     const relevantConsole = consoleMessages.filter((item) => !item.includes("401"));
@@ -813,7 +814,7 @@ async function waitForAuthenticatedShell(page) {
 
 async function primeAuthCookie(context) {
   try {
-    const db = new DatabaseSync(path.join(repoRoot, "black-ui", "data", "black-ui.db"));
+    const db = new DatabaseSync(panelDbPath());
     const row = db.prepare("SELECT token FROM sessions ORDER BY created_at DESC LIMIT 1").get();
     if (!row?.token) return;
     await context.addCookies([
@@ -871,7 +872,11 @@ async function purgeQaOutbounds() {
 }
 
 function openDb() {
-  return new DatabaseSync(path.join(repoRoot, "black-ui", "data", "black-ui.db"));
+  return new DatabaseSync(panelDbPath());
+}
+
+function panelDbPath() {
+  return path.join(process.env.BLACK_UI_DATA_DIR || path.join(repoRoot, "black-ui", "data"), "black-ui.db");
 }
 
 function nowIso() {

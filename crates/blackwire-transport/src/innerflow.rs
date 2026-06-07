@@ -1,8 +1,16 @@
 use bytes::Bytes;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
+
+/// Number of `PacketClass` variants; sizes the per-class queue array.
+const CLASS_COUNT: usize = 5;
+
+/// Run the full stale sweep (across all classes) once per this many dequeues.
+/// The dequeued class always front-drops stale packets eagerly; this periodic
+/// sweep only reclaims memory from starved classes without scanning every call.
+const STALE_SWEEP_INTERVAL: u32 = 64;
 
 /// Latency class assigned to a packet, used to prioritise traffic in the inner-flow scheduler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,7 +50,7 @@ impl PacketClass {
         }
     }
 
-    fn dequeue_order() -> [Self; 5] {
+    fn dequeue_order() -> [Self; CLASS_COUNT] {
         [
             Self::Control,
             Self::Interactive,
@@ -50,6 +58,17 @@ impl PacketClass {
             Self::WebFirstByte,
             Self::Bulk,
         ]
+    }
+
+    /// Stable array index for this class in the scheduler's per-class queues.
+    const fn index(self) -> usize {
+        match self {
+            Self::Control => 0,
+            Self::Dns => 1,
+            Self::Interactive => 2,
+            Self::WebFirstByte => 3,
+            Self::Bulk => 4,
+        }
     }
 }
 
@@ -110,11 +129,17 @@ impl InnerFlowPacket {
 }
 
 /// Deficit-round-robin scheduler that prioritises latency-sensitive packet classes over bulk traffic.
+///
+/// Per-class queues are held in a fixed array indexed by each class's stable
+/// position rather than a `HashMap`, so enqueue/dequeue do no hashing —
+/// important on the TUN/NAT packet hot path that runs tens of thousands of
+/// times per second.
 #[derive(Debug)]
 pub struct InnerFlowScheduler {
-    queues: HashMap<PacketClass, VecDeque<InnerFlowPacket>>,
+    queues: [VecDeque<InnerFlowPacket>; CLASS_COUNT],
     quantum_bytes: usize,
     max_packets_per_flow: usize,
+    dequeues_since_sweep: u32,
 }
 
 impl Default for InnerFlowScheduler {
@@ -127,16 +152,17 @@ impl InnerFlowScheduler {
     /// Create a scheduler with the given per-flow quantum (bytes) and maximum per-class queue depth.
     pub fn new(quantum_bytes: usize, max_packets_per_flow: usize) -> Self {
         Self {
-            queues: HashMap::new(),
+            queues: std::array::from_fn(|_| VecDeque::new()),
             quantum_bytes: quantum_bytes.max(256),
             max_packets_per_flow: max_packets_per_flow.max(1),
+            dequeues_since_sweep: 0,
         }
     }
 
     /// Enqueue a packet; drops the oldest packet in its class queue if the queue is full.
     pub fn enqueue(&mut self, packet: InnerFlowPacket) {
         let class = packet.class;
-        let queue = self.queues.entry(class).or_default();
+        let queue = &mut self.queues[class.index()];
         if queue.len() >= self.max_packets_per_flow {
             queue.pop_front();
             record_innerflow_drop(class, "queue-full");
@@ -145,30 +171,44 @@ impl InnerFlowScheduler {
         queue.push_back(packet);
     }
 
-    /// Dequeue the next packet according to priority order, dropping any stale packets first.
+    /// Dequeue the next packet according to priority order, skipping (and dropping)
+    /// any packets that have already exceeded their class deadline.
     pub fn dequeue(&mut self) -> Option<InnerFlowPacket> {
-        self.drop_stale();
+        // Periodically reclaim memory from starved classes that are never
+        // reached by the priority loop below; the hot path otherwise only
+        // front-drops stale packets from the class it actually serves.
+        self.dequeues_since_sweep = self.dequeues_since_sweep.wrapping_add(1);
+        if self.dequeues_since_sweep >= STALE_SWEEP_INTERVAL {
+            self.dequeues_since_sweep = 0;
+            self.drop_stale();
+        }
+
+        let now = Instant::now();
         for class in PacketClass::dequeue_order() {
-            let Some(queue) = self.queues.get_mut(&class) else {
-                continue;
-            };
-            let Some(packet) = queue.pop_front() else {
-                continue;
-            };
-            let bytes = packet.payload.len().max(1);
-            let rounds = bytes.div_ceil(self.quantum_bytes);
-            if matches!(class, PacketClass::Bulk) && rounds > 1 {
-                record_bulk_fairness();
+            let deadline = class.deadline();
+            let queue = &mut self.queues[class.index()];
+            while let Some(packet) = queue.pop_front() {
+                if let Some(deadline) = deadline {
+                    if now.duration_since(packet.enqueued_at) > deadline {
+                        record_innerflow_drop(class, "deadline");
+                        continue;
+                    }
+                }
+                let bytes = packet.payload.len().max(1);
+                let rounds = bytes.div_ceil(self.quantum_bytes);
+                if matches!(class, PacketClass::Bulk) && rounds > 1 {
+                    record_bulk_fairness();
+                }
+                record_innerflow_dequeue(class);
+                return Some(packet);
             }
-            record_innerflow_dequeue(class);
-            return Some(packet);
         }
         None
     }
 
     /// Returns `true` if all per-class queues are empty.
     pub fn is_empty(&self) -> bool {
-        self.queues.values().all(VecDeque::is_empty)
+        self.queues.iter().all(VecDeque::is_empty)
     }
 
     fn drop_stale(&mut self) {
@@ -177,9 +217,7 @@ impl InnerFlowScheduler {
             let Some(deadline) = class.deadline() else {
                 continue;
             };
-            let Some(queue) = self.queues.get_mut(&class) else {
-                continue;
-            };
+            let queue = &mut self.queues[class.index()];
             let before = queue.len();
             queue.retain(|packet| now.duration_since(packet.enqueued_at) <= deadline);
             let dropped = before.saturating_sub(queue.len());

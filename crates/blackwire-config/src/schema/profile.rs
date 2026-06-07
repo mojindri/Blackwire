@@ -237,9 +237,14 @@ pub struct FastLinuxConfig {
     #[serde(default = "FastLinuxConfig::default_zerocopy_min_bytes")]
     pub zerocopy_min_bytes: usize,
 
-    /// io_uring backend preference. The splice relay already attempts io_uring
-    /// first on Linux when this is not disabled.
-    #[serde(default)]
+    /// io_uring backend preference for the splice relay.
+    /// Default is `disabled` (epoll splice). Set to `auto` to probe io_uring at
+    /// runtime; set to `require` to mandate it (startup fails if unavailable).
+    /// Note: benchmarks on commodity VPS hardware showed io_uring splice incurred
+    /// a severe throughput regression vs epoll splice (−66% churn, −25% keepalive),
+    /// so `disabled` is the safe default. Enable only after validating on your
+    /// specific host.
+    #[serde(default = "FastLinuxConfig::default_io_uring")]
     pub io_uring: FastExperimentalBackendPolicy,
 
     /// AF_XDP backend preference. This is intentionally experimental and is not
@@ -252,6 +257,10 @@ impl FastLinuxConfig {
     fn default_zerocopy_min_bytes() -> usize {
         16 * 1024
     }
+
+    fn default_io_uring() -> FastExperimentalBackendPolicy {
+        FastExperimentalBackendPolicy::Disabled
+    }
 }
 
 impl Default for FastLinuxConfig {
@@ -259,7 +268,7 @@ impl Default for FastLinuxConfig {
         Self {
             zerocopy: FastZerocopyPolicy::default(),
             zerocopy_min_bytes: Self::default_zerocopy_min_bytes(),
-            io_uring: FastExperimentalBackendPolicy::default(),
+            io_uring: Self::default_io_uring(),
             af_xdp: FastExperimentalBackendPolicy::default(),
         }
     }
@@ -354,16 +363,21 @@ pub enum FastRelayFlushPolicy {
     Immediate,
     /// Flush when a direction reaches EOF/shutdown.
     Deferred,
+    /// Coalesce flushes per burst: flush only when the source pauses or reaches
+    /// EOF. Keeps bulk syscall pressure low without delaying interactive writes.
+    Adaptive,
 }
 
 /// TCP connection pool strategy for the Fast Profile outbound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FastPoolPolicy {
-    /// Ramp pool size based on destination hotness.
-    Adaptive,
-    /// Disable pooling entirely (default).
+    /// Ramp pool size based on destination hotness (default).
+    /// Pooling only activates for destinations that exceed `min_hotness_for_pool`
+    /// recent requests; one-shot destinations are never pooled.
     #[default]
+    Adaptive,
+    /// Disable pooling entirely.
     Disabled,
     /// Use a fixed pool size set by `poolSize`.
     Fixed,

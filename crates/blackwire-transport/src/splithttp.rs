@@ -16,6 +16,7 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
 use blackwire_common::{BoxedStream, ProxyError, ReunionStream};
+use bytes::{Buf, BufMut, BytesMut};
 use dashmap::DashMap;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tracing::debug;
@@ -42,6 +43,11 @@ pub enum SplitHttpAcceptResult {
 pub type PacketUpH2TunnelFn = Arc<dyn Fn(SplitHttpAcceptResult) + Send + Sync>;
 
 const MAX_HEADER_BYTES: usize = 16384;
+
+/// Maximum bytes accepted for a single packet-up POST body. XHTTP uplink packets
+/// are small (one MTU-ish chunk per POST); without a cap a malicious client could
+/// stream an unbounded body (or send a huge Content-Length) and exhaust memory.
+const MAX_PACKET_UP_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 /// Normalized XHTTP mode (subset implemented in this crate).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -472,10 +478,17 @@ pub async fn splithttp_accept_h2_packet_up(
             let mut body = request.into_body();
             let mut payload = Vec::new();
             let mut body_error = false;
+            let mut body_too_large = false;
             while let Some(chunk) = body.data().await {
                 match chunk {
                     Ok(chunk) => {
                         let _ = body.flow_control().release_capacity(chunk.len());
+                        // Cap accumulation: reject an unbounded uplink body instead
+                        // of growing payload until memory is exhausted.
+                        if payload.len() + chunk.len() > MAX_PACKET_UP_BODY_BYTES {
+                            body_too_large = true;
+                            break;
+                        }
                         payload.extend_from_slice(&chunk);
                     }
                     Err(_) => {
@@ -483,6 +496,14 @@ pub async fn splithttp_accept_h2_packet_up(
                         break;
                     }
                 }
+            }
+
+            if body_too_large {
+                let _ = respond.send_response(
+                    http::Response::builder().status(413).body(()).unwrap(),
+                    true,
+                );
+                continue;
             }
 
             if body_error {
@@ -810,14 +831,27 @@ async fn read_request_body(stream: &mut BoxedStream, request: &str) -> Result<Ve
         .is_some_and(|v| v.eq_ignore_ascii_case("chunked"))
     {
         let mut framed = SplitHttpStream::new(stream);
+        // Bounded read: cap the chunked body so a never-ending stream cannot
+        // exhaust memory. take() yields EOF at the limit; a body that long is rejected.
         let mut body = Vec::new();
-        framed.read_to_end(&mut body).await?;
+        let limit = MAX_PACKET_UP_BODY_BYTES as u64;
+        let read = (&mut framed).take(limit + 1).read_to_end(&mut body).await?;
+        if read as u64 > limit {
+            return Err(ProxyError::Protocol(
+                "SplitHTTP chunked body exceeds maximum size".into(),
+            ));
+        }
         return Ok(body);
     }
     if let Some(clen) = headers.get("content-length") {
         let n: usize = clen
             .parse()
             .map_err(|_| ProxyError::Protocol("SplitHTTP invalid Content-Length".into()))?;
+        if n > MAX_PACKET_UP_BODY_BYTES {
+            return Err(ProxyError::Protocol(
+                "SplitHTTP Content-Length exceeds maximum size".into(),
+            ));
+        }
         let mut body = vec![0u8; n];
         stream.read_exact(&mut body).await?;
         return Ok(body);
@@ -931,7 +965,11 @@ impl AsyncWrite for PrependedChunkStream {
 
 struct SplitHttpStream<S> {
     inner: S,
-    read_buf: Vec<u8>,
+    // BytesMut so front-consumption is O(1) `advance` rather than O(n) `Vec::drain`.
+    read_buf: BytesMut,
+    // Reused across every `poll_write` to frame a chunk without a fresh heap
+    // allocation (and without `format!`) per write.
+    write_buf: BytesMut,
     chunk_remaining: usize,
     need_chunk_crlf: bool,
     eof: bool,
@@ -941,12 +979,36 @@ impl<S> SplitHttpStream<S> {
     fn new(inner: S) -> Self {
         Self {
             inner,
-            read_buf: Vec::new(),
+            read_buf: BytesMut::new(),
+            write_buf: BytesMut::new(),
             chunk_remaining: 0,
             need_chunk_crlf: false,
             eof: false,
         }
     }
+}
+
+/// Append `value` as an uppercase ASCII-hex chunk-size, without `format!`.
+fn put_chunk_size_hex(buf: &mut BytesMut, value: usize) {
+    if value == 0 {
+        buf.put_u8(b'0');
+        return;
+    }
+    // usize is at most 16 hex digits; build into a stack scratch, then emit.
+    let mut digits = [0u8; 16];
+    let mut n = value;
+    let mut i = digits.len();
+    while n != 0 {
+        i -= 1;
+        let nibble = (n & 0xf) as u8;
+        digits[i] = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'A' + (nibble - 10)
+        };
+        n >>= 4;
+    }
+    buf.put_slice(&digits[i..]);
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
@@ -976,7 +1038,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
                         Poll::Pending => return Poll::Pending,
                     }
                 }
-                self.read_buf.drain(..2);
+                self.read_buf.advance(2);
                 self.need_chunk_crlf = false;
             }
 
@@ -985,7 +1047,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
                     let line = String::from_utf8_lossy(&self.read_buf[..line_end]);
                     let size = usize::from_str_radix(line.trim(), 16)
                         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                    self.read_buf.drain(..line_end + 2);
+                    self.read_buf.advance(line_end + 2);
                     if size == 0 {
                         self.eof = true;
                         return Poll::Ready(Ok(()));
@@ -1015,7 +1077,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
                     .min(self.chunk_remaining)
                     .min(self.read_buf.len());
                 buf.put_slice(&self.read_buf[..n]);
-                self.read_buf.drain(..n);
+                self.read_buf.advance(n);
                 self.chunk_remaining -= n;
                 if self.chunk_remaining == 0 {
                     self.need_chunk_crlf = true;
@@ -1365,10 +1427,15 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for SplitHttpStream<S> {
         if buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
-        let mut framed = format!("{:X}\r\n", buf.len()).into_bytes();
-        framed.extend_from_slice(buf);
-        framed.extend_from_slice(b"\r\n");
-        match Pin::new(&mut self.inner).poll_write(cx, &framed) {
+        // Frame the chunk into the reused buffer: "<hex-len>\r\n<data>\r\n".
+        let this = &mut *self;
+        this.write_buf.clear();
+        this.write_buf.reserve(buf.len() + 20);
+        put_chunk_size_hex(&mut this.write_buf, buf.len());
+        this.write_buf.extend_from_slice(b"\r\n");
+        this.write_buf.extend_from_slice(buf);
+        this.write_buf.extend_from_slice(b"\r\n");
+        match Pin::new(&mut this.inner).poll_write(cx, &this.write_buf) {
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(buf.len())),
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
             Poll::Pending => Poll::Pending,
