@@ -708,19 +708,23 @@ async function waitForAuthenticatedShell(page) {
 
 async function primeAuthCookie(context) {
   try {
-    const db = new DatabaseSync(path.join("..", "data", "black-ui.db"));
+    const db = new DatabaseSync(panelDbPath());
     const row = db.prepare("SELECT token FROM sessions ORDER BY created_at DESC LIMIT 1").get();
     if (!row?.token) return;
     await context.addCookies([
       {
         name: "black_ui_session",
         value: row.token,
-        url: "http://127.0.0.1:18180/"
+        url: uiUrl
       }
     ]);
   } catch {
     // If the DB is unavailable, fall back to the normal auth flow.
   }
+}
+
+function panelDbPath() {
+  return path.join(process.env.BLACK_UI_DATA_DIR || path.join("..", "data"), "black-ui.db");
 }
 
 async function readSettingsFromUI(page) {
