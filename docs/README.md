@@ -1,7 +1,24 @@
 # Documentation
 
-This folder is the project documentation map. Keep long-lived facts in one
-place: duplicate summaries drift quickly.
+This folder has two layers:
+
+- user/operator docs for installing and running Blackwire
+- developer/evidence docs for support status, tests, parity, and internals
+
+Keep long-lived facts in one place. Beginner pages should link to the release
+contract and feature matrix instead of carrying their own support tables.
+
+## Start Here
+
+| Goal | Read |
+| --- | --- |
+| Install, configure, operate, troubleshoot, or use Black UI | [user-guide.md](user-guide.md) |
+| Understand supported, experimental, or unsupported release paths | [release.md](release.md) |
+| Check detailed feature status and evidence | [feature-matrix.md](feature-matrix.md) |
+| Choose a validation command | [test-workflows.md](test-workflows.md), [commands.md](commands.md) |
+| Understand the codebase | [00-project-map.md](00-project-map.md) |
+| Review readiness/security/device gates | [readiness.md](readiness.md) |
+| Review backlog and parity roadmap | [roadmap.md](roadmap.md) |
 
 ## Sources Of Truth
 
@@ -10,85 +27,63 @@ place: duplicate summaries drift quickly.
 | What is supported, experimental, or unsupported for release? | [release.md](release.md) |
 | What changed between release-facing snapshots? | [../CHANGELOG.md](../CHANGELOG.md) |
 | What is the detailed feature status and evidence? | [feature-matrix.md](feature-matrix.md) |
-| Which tests/gates should be run? | [11-testing.md](11-testing.md) |
-| Which `make` command should I use day to day? | [test-workflows.md](test-workflows.md) |
-| What exact Make targets exist? | [15-make-command-guide.md](15-make-command-guide.md), [make-target-inventory.md](make-target-inventory.md) |
-| How do I operate an installed Linux VPS? | [installed-command-guide.md](installed-command-guide.md) |
+| Which tests/gates should be run? | [11-testing.md](11-testing.md), [test-workflows.md](test-workflows.md) |
+| Which commands should I use? | [commands.md](commands.md) |
 | What does the external-client matrix prove? | [parity-status.md](parity-status.md), [../labs/realistic/external-clients/README.md](../labs/realistic/external-clients/README.md) |
 | What local report results have been summarized for the repo? | [performance-evidence.md](performance-evidence.md) |
-| What is the abuse-prevention / traffic-policy backlog? | [traffic-policy-roadmap.md](traffic-policy-roadmap.md) |
-| What is the network-resilience hardening backlog? | [network-resilience-roadmap.md](network-resilience-roadmap.md) |
+| What backlog remains? | [roadmap.md](roadmap.md) |
 
-Guideline: beginner docs should explain concepts and link to these files for
-status. They should not carry independent support matrices or PASS/SKIP counts.
+## User Docs
 
-Recommended reading order:
+- [user-guide.md](user-guide.md)
+  Install, Black UI, service operations, config basics, troubleshooting, and
+  advanced operator notes.
+- [08-config-for-dummies.md](08-config-for-dummies.md)
+  Longer field-by-field config explanation.
+- [fast-profile.md](fast-profile.md)
+  Constraints and policy for the latency-first profile.
+
+## Beginner Concepts
+
+Read these when protocol names or config structure are still fuzzy:
 
 1. [00-project-map.md](00-project-map.md)
-   Start here if you want the big picture first.
 2. [01-request-lifecycle.md](01-request-lifecycle.md)
-   Read this next if you want to understand what happens when traffic enters the proxy.
 3. [02-crate-guide.md](02-crate-guide.md)
-   Read this when you are ready to navigate the workspace crate by crate.
 4. [03-protocols-and-transports.md](03-protocols-and-transports.md)
-   Read this when names like VLESS, VMess, REALITY, TLS, WebSocket, and gRPC start blending together.
-
-Related docs:
-
-- [parity-status.md](parity-status.md)
-  Shipped parity, external-client matrix SKIPs (vs server support), backlog.
-- [feature-matrix.md](feature-matrix.md)
-  Evidence-based feature status.
-- [performance-evidence.md](performance-evidence.md)
-  Local report summaries for load, slowloris, memory, fuzz, security hygiene,
-  netem, packet capture, and benchmark artifacts.
-- [xray-parity-source-of-truth.md](xray-parity-source-of-truth.md)
-  Upstream-first rules for wire parity.
-- [traffic-policy-roadmap.md](traffic-policy-roadmap.md)
-  TODOs for BitTorrent/P2P blocking, UDP policy, limits, quotas, and panel UX.
-- [network-resilience-roadmap.md](network-resilience-roadmap.md)
-  TODOs for DNS hardening, REALITY checks, path diversity, active-probe resistance, and panel exposure.
-- [../tests/interop/README.md](../tests/interop/README.md)
-  REALITY and Xray interop notes, including `d0` and `d1`.
-- [../labs/realistic/README.md](../labs/realistic/README.md)
-  Realistic Docker and two-VPS test gates.
-
-Second-wave deep dives:
-
 5. [04-reality-for-dummies.md](04-reality-for-dummies.md)
-   The practical, plain-English explanation of REALITY in this repo.
 6. [05-vless-vmess-trojan-comparison.md](05-vless-vmess-trojan-comparison.md)
-   Helps separate the three most confusing proxy protocols.
-7. [06-how-to-debug.md](06-how-to-debug.md)
-   A workflow for debugging this codebase without getting lost.
-8. [07-how-to-add-a-new-protocol-or-transport.md](07-how-to-add-a-new-protocol-or-transport.md)
-   Contributor guide for extending the repo cleanly.
+7. [10-glossary.md](10-glossary.md)
 
-Third-wave practical docs:
+## Developer Docs
 
-9. [08-config-for-dummies.md](08-config-for-dummies.md)
-   Annotated config guide with examples and field meanings.
-10. [09-trace-one-connection-in-code.md](09-trace-one-connection-in-code.md)
-   File-by-file walkthrough of one real connection path.
-11. [10-glossary.md](10-glossary.md)
-   Plain-English dictionary of project terms.
-12. [11-testing.md](11-testing.md)
-   How to run every test tier: unit, integration, Docker, Xray interop, VPS matrix, TUN privileged.
-13. [test-workflows.md](test-workflows.md)
-   Which `verify-*` command to run for everyday dev, lab, VPS, and release gates.
-14. [15-make-command-guide.md](15-make-command-guide.md)
-   Command-oriented map for Make targets and when to use each one.
-15. [16-environment-cheatsheet.md](16-environment-cheatsheet.md)
-   One-page separation of local, Docker, Lima VM, real VPS, and direct-on-VPS debugging commands.
-16. [installed-command-guide.md](installed-command-guide.md)
-   Start/stop, uninstall, logs, config edits, and examples for installed Linux VPS users.
-17. [make-target-inventory.md](make-target-inventory.md)
-   Full target inventory (canonical, lab, interop, compatibility aliases).
+- [06-how-to-debug.md](06-how-to-debug.md)
+- [07-how-to-add-a-new-protocol-or-transport.md](07-how-to-add-a-new-protocol-or-transport.md)
+- [09-trace-one-connection-in-code.md](09-trace-one-connection-in-code.md)
+- [11-testing.md](11-testing.md)
+- [commands.md](commands.md)
+- [readiness.md](readiness.md)
 
-Example-driven learning:
+## Validation And Evidence
+
+- [test-workflows.md](test-workflows.md)
+- [performance-evidence.md](performance-evidence.md)
+- [performance.md](performance.md)
+- [latency-lab.md](latency-lab.md)
+- [xray-parity-source-of-truth.md](xray-parity-source-of-truth.md)
+- [roadmap.md](roadmap.md)
+- [external-client-failure-triage.md](external-client-failure-triage.md)
+- [panel-qa.md](panel-qa.md)
+- [../tests/interop/README.md](../tests/interop/README.md)
+- [../labs/realistic/README.md](../labs/realistic/README.md)
+
+## Example-Driven Learning
 
 - [../examples/vless-client-server/README.md](../examples/vless-client-server/README.md)
 - [../examples/reality-client-server/README.md](../examples/reality-client-server/README.md)
+- [../examples/hysteria2-client-server/README.md](../examples/hysteria2-client-server/README.md)
 - [../examples/vless-ws-local/README.md](../examples/vless-ws-local/README.md)
 - [../examples/http-vmess-grpc-local/README.md](../examples/http-vmess-grpc-local/README.md)
 - [../examples/ss2022-local/README.md](../examples/ss2022-local/README.md)
+- [../examples/dns-fakeip-routing/README.md](../examples/dns-fakeip-routing/README.md)
+- [../examples/tun-local/README.md](../examples/tun-local/README.md)

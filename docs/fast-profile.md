@@ -5,7 +5,7 @@ Blackwire has two operating modes:
 | Mode | Purpose |
 |---|---|
 | **Compat** (default) | Broad protocol/transport matrix, Xray/sing-box interop, experiments, feature parity work |
-| **Fast** | Narrow, latency-first production path — strict defaults, lower complexity, benchmarked head-to-head against Xray and sing-box |
+| **Fast** | Narrow, latency-first controlled-deployment path — strict defaults, lower complexity, benchmarked head-to-head against Xray and sing-box |
 
 These are different promises. Compatibility Mode may be slower or more complex — that is intentional and acceptable. Fast Profile rejects useful features when they add latency overhead.
 

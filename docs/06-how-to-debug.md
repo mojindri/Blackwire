@@ -192,7 +192,7 @@ The live peer can reveal requirements your self-interop does not enforce.
 Read:
 
 - [crates/blackwire-cli/src/main.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-cli/src/main.rs)
-- [crates/blackwire-core/src/instance.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance.rs)
+- [crates/blackwire-core/src/instance/mod.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance/mod.rs)
 
 Check:
 
@@ -320,4 +320,3 @@ Always rephrase the problem into something concrete like:
 - "the client is waiting for TLS while the server expects plaintext"
 
 Once the bug is stated that specifically, the fix is usually obvious.
-

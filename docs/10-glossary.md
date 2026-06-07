@@ -365,7 +365,7 @@ It owns listener tasks and startup composition.
 
 Defined in:
 
-- [crates/blackwire-core/src/instance.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance.rs)
+- [crates/blackwire-core/src/instance/mod.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance/mod.rs)
 
 ## `ConfigManager`
 
@@ -395,4 +395,3 @@ If you are confused by a term, ask:
 4. Is it about runtime wiring?
 
 That usually tells you which crate to look at next.
-

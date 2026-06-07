@@ -6,7 +6,8 @@ This is a pre-1.0 project. The project as a whole is **not yet production-ready*
 even though many individual protocol paths have strong test and interop evidence.
 The table below is the release support contract. Any area not listed as
 **Supported** carries an explicit caveat and should be treated as personal,
-lab, or controlled-deployment only.
+lab, or controlled-deployment only. No release-candidate label is a production
+readiness guarantee.
 
 This file owns release support labels. Detailed feature evidence lives in
 [feature-matrix.md](feature-matrix.md), and gate commands live in
@@ -88,7 +89,7 @@ make perf                   # Lima VM latency benchmark
 SSH_SERVER=<server-ip> SSH_CLIENT=<client-ip> make verify-remote
 ```
 
-Latest VPS gate evidence (2026-05-30): `make -C labs/realistic interop-server-vps` passed using two production VPS hosts (`SSH_SERVER=<server-host>`, `SSH_CLIENT=<client-host>`) with PASS/SKIP-only outcomes; `ss2022-udp` is PASS for both Xray and sing-box. See `labs/realistic/reports/external-clients-vps/summary.txt`.
+Latest VPS gate evidence (2026-05-30): `make -C labs/realistic interop-server-vps` passed using two real VPS hosts (`SSH_SERVER=<server-host>`, `SSH_CLIENT=<client-host>`) with PASS/SKIP-only outcomes; `ss2022-udp` is PASS for both Xray and sing-box. See `labs/realistic/reports/external-clients-vps/summary.txt`.
 
 ---
 
@@ -153,9 +154,8 @@ supports `linux/amd64` and `linux/arm64`, verifies the release `.sha256`, instal
 the binary to `/usr/local/bin/blackwire`, creates `/etc/blackwire`, and installs
 a systemd unit when systemd is available.
 
-Installed command usage, service control, uninstall, config edits, and examples
-are documented in [installed-command-guide.md](installed-command-guide.md).
-Black UI companion panel setup is documented in [black-ui.md](black-ui.md).
+Installed command usage, service control, uninstall, config edits, examples, and
+Black UI companion panel setup are documented in [user-guide.md](user-guide.md).
 
 Prerelease install:
 
@@ -223,7 +223,7 @@ To install the Black UI companion panel with the Linux release assets:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.5/scripts/install.sh \
-  | VERSION=v0.1.0-rc.5 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
+  | VERSION=v0.1.0-rc.5 INSTALL_BLACK_UI=1 bash
 ```
 
 When combined with `SETUP=domain`, the installer reverse-proxies Black UI at
@@ -254,7 +254,7 @@ sudo apt install blackwire
 ```
 
 This repository is unsigned for the release-candidate line. Add GPG signing
-before recommending it as the stable production install path.
+before recommending it as a stable install path.
 
 ## Other Package Repositories
 
