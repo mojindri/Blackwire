@@ -138,7 +138,7 @@ impl OutboundHandler for RealityVlessOutbound {
         &self,
         _ctx: &blackwire_app::context::Context,
         dest: &blackwire_common::Address,
-        early_payload: Option<Vec<u8>>,
+        early_payload: Option<&[u8]>,
     ) -> Result<OutboundConnectResult, ProxyError> {
         let stream = self.reality.dial().await?;
         connect_vless_on_stream_with_early_payload(

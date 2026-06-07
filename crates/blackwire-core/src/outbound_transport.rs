@@ -80,7 +80,7 @@ impl OutboundHandler for TransportVlessOutbound {
         &self,
         _ctx: &Context,
         dest: &Address,
-        early_payload: Option<Vec<u8>>,
+        early_payload: Option<&[u8]>,
     ) -> Result<OutboundConnectResult, ProxyError> {
         debug!(server = %self.server, dest = %dest, "VLESS transport outbound connecting with early payload");
         let stream = connect_transport(self.server, &self.stream_settings).await?;
@@ -137,7 +137,7 @@ impl OutboundHandler for TransportTrojanOutbound {
         &self,
         _ctx: &Context,
         dest: &Address,
-        early_payload: Option<Vec<u8>>,
+        early_payload: Option<&[u8]>,
     ) -> Result<OutboundConnectResult, ProxyError> {
         debug!(server = %self.server, dest = %dest, "Trojan transport outbound connecting with early payload");
         let stream = connect_transport(self.server, &self.stream_settings).await?;
