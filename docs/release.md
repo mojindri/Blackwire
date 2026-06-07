@@ -128,24 +128,15 @@ gh workflow run release-assets.yml -f tag=v0.1.0-rc.5
 
 ## Container Image
 
-`.github/workflows/container-image.yml` publishes the Docker image to GHCR when a
-`v*` tag is pushed, or manually through `workflow_dispatch` with a tag input.
+CI does not publish Docker images. Docker remains available for local builds,
+examples, and interop labs through `deploy/docker/Dockerfile`:
 
-For prerelease tags such as `v0.1.0-rc.5`, the workflow publishes:
+```sh
+docker build -f deploy/docker/Dockerfile -t blackwire:local .
+```
 
-- `ghcr.io/<owner>/<repo>:v0.1.0-rc.5`
-- `ghcr.io/<owner>/<repo>:0.1.0-rc.5`
-- `ghcr.io/<owner>/<repo>:rc`
-
-For stable tags such as `v0.1.0`, the workflow publishes:
-
-- `ghcr.io/<owner>/<repo>:v0.1.0`
-- `ghcr.io/<owner>/<repo>:0.1.0`
-- `ghcr.io/<owner>/<repo>:latest`
-
-The image is built for `linux/amd64` and `linux/arm64`, includes OCI labels,
-uses the GitHub Actions Docker build cache, and requests SBOM/provenance
-attestations from BuildKit.
+Release publishing is focused on GitHub release archives, Debian packages, and
+the static apt repository below.
 
 ## Install Script
 
