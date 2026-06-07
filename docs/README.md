@@ -54,6 +54,7 @@ Read these when protocol names or config structure are still fuzzy:
 5. [04-reality-for-dummies.md](04-reality-for-dummies.md)
 6. [05-vless-vmess-trojan-comparison.md](05-vless-vmess-trojan-comparison.md)
 7. [10-glossary.md](10-glossary.md)
+8. [12-proxy-protocols-from-scratch.md](12-proxy-protocols-from-scratch.md)
 
 ## Developer Docs
 
