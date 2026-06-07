@@ -384,7 +384,12 @@ async fn run_client_driver(
 /// backpressure on the sender — matching xray's window-bounded behaviour.
 ///
 /// `recv_buf` is a caller-supplied scratch buffer (pre-allocated once per driver).
-fn drain_kcp_recv_into(kcp: &mut Kcp, pending: &mut VecDeque<Bytes>, max: usize, recv_buf: &mut [u8]) {
+fn drain_kcp_recv_into(
+    kcp: &mut Kcp,
+    pending: &mut VecDeque<Bytes>,
+    max: usize,
+    recv_buf: &mut [u8],
+) {
     loop {
         if pending.len() >= max {
             break; // window full — stop ACKing so sender slows down
