@@ -16,7 +16,7 @@ see `make help-compat`.
 | `make verify-sweep` | Broad quick gate before a larger change |
 | `make verify-release` | Pre-release / slow full gate |
 
-See also: `make help`, `make help-compat`, `docs/make-target-inventory.md`.
+See also: `make help`, `make help-compat`, and [commands.md](commands.md).
 
 ## 1. Everyday development
 

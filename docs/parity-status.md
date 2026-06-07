@@ -2,7 +2,7 @@
 
 Current status for wire parity with [Xray-core](https://github.com/XTLS/Xray-core) and [sing-box](https://github.com/SagerNet/sing-box). Evidence: [feature-matrix.md](feature-matrix.md), [xray-parity-source-of-truth.md](xray-parity-source-of-truth.md).
 
-**Strict rule:** In-tree or uncommitted code does **not** move a feature to **Supported** without step **4** in the [priority ladder](xray-parity-roadmap.md) (external-client matrix PASS), unless listed under intentional deviations.
+**Strict rule:** In-tree or uncommitted code does **not** move a feature to **Supported** without external-client matrix proof in the [roadmap](roadmap.md), unless listed under intentional deviations.
 
 ## Local gates
 
@@ -17,11 +17,11 @@ VPS promotion (`SSH_SERVER`, `SSH_CLIENT`):
 make -C labs/realistic interop-server-vps
 ```
 
-Latest verified VPS run (2026-05-30): `make -C labs/realistic interop-server-vps` with two production VPS hosts (`SSH_SERVER=<server-host>`, `SSH_CLIENT=<client-host>`) produced PASS/SKIP-only outcomes and `ss2022-udp` PASS for both Xray and sing-box. Summary: `labs/realistic/reports/external-clients-vps/summary.txt`.
+Latest verified VPS run (2026-05-30): `make -C labs/realistic interop-server-vps` with two real VPS hosts (`SSH_SERVER=<server-host>`, `SSH_CLIENT=<client-host>`) produced PASS/SKIP-only outcomes and `ss2022-udp` PASS for both Xray and sing-box. Summary: `labs/realistic/reports/external-clients-vps/summary.txt`.
 
 ## Strict priority queue (work order)
 
-See [xray-parity-roadmap.md](xray-parity-roadmap.md). Summary:
+See [roadmap.md](roadmap.md). Summary:
 
 | Priority | Item | Matrix / proof today |
 |----------|------|----------------------|
@@ -76,6 +76,6 @@ See [xray-parity-roadmap.md](xray-parity-roadmap.md). Summary:
 
 ## Related
 
-- [xray-parity-roadmap.md](xray-parity-roadmap.md)
+- [roadmap.md](roadmap.md)
 - [labs/realistic/external-clients/README.md](../labs/realistic/external-clients/README.md)
 - [external-client-failure-triage.md](external-client-failure-triage.md)

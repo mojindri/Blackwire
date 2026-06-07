@@ -143,7 +143,7 @@ Your new handler should fit those trait contracts cleanly.
 
 That means you will usually need to update:
 
-- `crates/blackwire-core/src/instance.rs`
+- `crates/blackwire-core/src/instance/mod.rs`
 
 and possibly add a small helper module beside:
 
@@ -354,4 +354,3 @@ Before calling a new protocol or transport "done", check:
 - docs mention where it fits
 
 If those are true, the feature is probably integrated correctly.
-

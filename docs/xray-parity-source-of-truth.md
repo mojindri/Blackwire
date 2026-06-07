@@ -84,7 +84,7 @@ Listed in [feature-matrix.md](feature-matrix.md) intentional deviations (e.g. VM
 
 - [feature-matrix.md](feature-matrix.md) — current status (evidence-based)
 - [parity-status.md](parity-status.md) — shipped gates, matrix SKIPs, backlog
-- [xray-parity-roadmap.md](xray-parity-roadmap.md) — gap tracker
+- [roadmap.md](roadmap.md) — gap tracker
 - [reality-interop.md](reality-interop.md) — REALITY upstream links and lab gates
 - [labs/realistic/external-clients/README.md](../labs/realistic/external-clients/README.md) — server-compat lab
 - [11-testing.md](11-testing.md) — verification tiers
