@@ -6,6 +6,36 @@ This project is pre-1.0. The support contract is owned by
 [docs/release.md](docs/release.md), and detailed feature evidence is owned by
 [docs/feature-matrix.md](docs/feature-matrix.md).
 
+## 0.1.0-rc.5 - 2026-06-07
+
+### Added
+
+- Aggregate Black UI QA command covering the smoke flow, structured inbound matrix, structured outbound matrix, and advanced config panel checks.
+- Competitive and latency benchmark harnesses for relay, Fast Profile, Hysteria2 bad-network behavior, QUIC/datagram/FEC, TUN, and memory/CPU profiling.
+- Connection manager, runtime stats, data-plane planning, AF_XDP scaffolding, and expanded metrics coverage.
+- InnerFlow, QUIC bad-network controls, Hysteria2 datagram/FEC work, and expanded TUN packet/session/runtime paths.
+- Release-facing performance evidence, license policy, third-party reference docs, and Black UI panel QA reports.
+
+### Changed
+
+- Fast-path relay, stream, WebSocket, gRPC, VMess, SS2022, mKCP, ShadowTLS, router, DNS, and TUN paths received allocation, copy, buffering, and hot-path CPU reductions.
+- Black UI gained structured inbound, outbound, user, and advanced config editors with broader validation and preservation of unknown JSON keys.
+- CI now cancels in-progress runs on newer pushes and includes stricter source-policy and documentation checks.
+- Xray interop configs now use current `allowInsecure` handling.
+
+### Fixed
+
+- QA flow now rebuilds current frontend assets before exercising the panel and matches the current structured UI controls.
+- Strict rustdoc/clippy gates were satisfied with missing docs, broken link, formatting, and test-helper fixes.
+- TLS certificate generation now happens before rendering Xray client configs.
+- Multiple audit findings around leakage, parser handling, body caps, and generated config safety were addressed.
+
+### Validation
+
+- `npm run qa` passed for Black UI aggregate coverage during rc.5 preparation.
+- Inbound structured panel QA passed VLESS, VMess, Trojan, Shadowsocks, Hysteria2, WS, gRPC, HTTPUpgrade, SplitHTTP, KCP, QUIC, TLS, sniffing/limits, delete, and edit/toggle cases.
+- Main was fast-forwarded to `origin/main` before release preparation.
+
 ## 0.1.0-rc.4 - 2026-06-01
 
 ### Added
