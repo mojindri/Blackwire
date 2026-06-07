@@ -24,13 +24,10 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
-use aes_gcm::{
-    aead::{consts::U16, generic_array::GenericArray, AeadInPlace},
-    Aes256Gcm, KeyInit,
-};
 use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use blackwire_common::aead::{AeadAlgorithm, AeadKey};
 use blackwire_common::{BoxedStream, BufferPool};
 
 /// Maximum plaintext chunk payload size (16 KiB).
@@ -59,8 +56,8 @@ fn make_nonce(counter: u64) -> [u8; 12] {
 /// stateful: the nonce counter increments with every encrypted field.
 pub struct Ss2022Stream {
     inner: BoxedStream,
-    read_cipher: Aes256Gcm,
-    write_cipher: Aes256Gcm,
+    read_cipher: AeadKey,
+    write_cipher: AeadKey,
 
     // Read state
     read_counter: u64,
@@ -71,7 +68,8 @@ pub struct Ss2022Stream {
 
     // Write state
     write_counter: u64,
-    write_buf: BytesMut, // encrypted bytes waiting to be flushed
+    write_buf: BytesMut,  // encrypted bytes waiting to be flushed
+    write_buf_pos: usize, // cursor: bytes already sent from write_buf
     response_header: Option<[u8; 43]>,
 }
 
@@ -108,14 +106,17 @@ impl Ss2022Stream {
     ) -> Self {
         Self {
             inner,
-            read_cipher: Aes256Gcm::new(GenericArray::from_slice(read_subkey)),
-            write_cipher: Aes256Gcm::new(GenericArray::from_slice(write_subkey)),
+            read_cipher: AeadKey::new(AeadAlgorithm::Aes256Gcm, read_subkey)
+                .expect("32-byte SS-2022 subkey"),
+            write_cipher: AeadKey::new(AeadAlgorithm::Aes256Gcm, write_subkey)
+                .expect("32-byte SS-2022 subkey"),
             read_counter: read_start_nonce,
             read_buf: initial_read.freeze(),
             read_raw: ss2022_buffer_pool().acquire(MAX_CHUNK_SIZE + 256),
             read_len_scratch: [0u8; 2],
             write_counter: write_start_nonce,
             write_buf: ss2022_buffer_pool().acquire(MAX_CHUNK_SIZE + 256),
+            write_buf_pos: 0,
             response_header,
         }
     }
@@ -132,15 +133,9 @@ impl Ss2022Stream {
 
         let len_nonce = make_nonce(self.read_counter);
         self.read_len_scratch.copy_from_slice(&src[..2]);
-        let len_tag = GenericArray::<u8, U16>::clone_from_slice(&src[2..18]);
         if self
             .read_cipher
-            .decrypt_in_place_detached(
-                GenericArray::from_slice(&len_nonce),
-                &[],
-                &mut self.read_len_scratch,
-                &len_tag,
-            )
+            .open_detached(&len_nonce, &[], &src[2..18], &mut self.read_len_scratch)
             .is_err()
         {
             return Some(Err(io::Error::new(
@@ -167,43 +162,31 @@ impl Ss2022Stream {
 
         let mut data_ct = src.split_to(data_len + 16);
         let data_nonce = make_nonce(self.read_counter);
-        let data_tag = GenericArray::<u8, U16>::clone_from_slice(&data_ct[data_len..]);
-        data_ct.truncate(data_len);
-        if self
+        // `data_ct` holds ciphertext || tag; decrypt in place, then drop the tag.
+        let plain_len = match self
             .read_cipher
-            .decrypt_in_place_detached(
-                GenericArray::from_slice(&data_nonce),
-                &[],
-                &mut data_ct,
-                &data_tag,
-            )
-            .is_err()
+            .open_combined(&data_nonce, &[], &mut data_ct)
         {
-            return Some(Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "SS-2022: data chunk decryption failed",
-            )));
-        }
+            Ok(n) => n,
+            Err(_) => {
+                return Some(Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "SS-2022: data chunk decryption failed",
+                )));
+            }
+        };
+        data_ct.truncate(plain_len);
         self.read_counter += 1;
 
         let plain = data_ct.freeze();
         Some(Ok(plain))
     }
 
-    fn encrypt_append(
-        cipher: &Aes256Gcm,
-        nonce: &[u8; 12],
-        dst: &mut BytesMut,
-        data: &[u8],
-        error: &'static str,
-    ) -> io::Result<()> {
+    fn encrypt_append(cipher: &AeadKey, nonce: &[u8; 12], dst: &mut BytesMut, data: &[u8]) {
         let start = dst.len();
         dst.extend_from_slice(data);
-        let tag = cipher
-            .encrypt_in_place_detached(GenericArray::from_slice(nonce), &[], &mut dst[start..])
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        dst.extend_from_slice(tag.as_slice());
-        Ok(())
+        let tag = cipher.seal_detached(nonce, &[], &mut dst[start..]);
+        dst.extend_from_slice(&tag);
     }
 
     /// Encrypt `data` directly into the write buffer (length ciphertext + data ciphertext).
@@ -218,18 +201,11 @@ impl Ss2022Stream {
                 &header_nonce,
                 dst,
                 fixed_header.as_slice(),
-                "SS-2022: response header encrypt failed",
-            )?;
+            );
             self.write_counter += 1;
 
             let data_nonce = make_nonce(self.write_counter);
-            Self::encrypt_append(
-                &self.write_cipher,
-                &data_nonce,
-                dst,
-                data,
-                "SS-2022: response payload encrypt failed",
-            )?;
+            Self::encrypt_append(&self.write_cipher, &data_nonce, dst, data);
             self.write_counter += 1;
             return Ok(());
         }
@@ -242,18 +218,11 @@ impl Ss2022Stream {
             &len_nonce,
             dst,
             data_len.to_be_bytes().as_slice(),
-            "SS-2022: chunk length encrypt failed",
-        )?;
+        );
         self.write_counter += 1;
 
         let data_nonce = make_nonce(self.write_counter);
-        Self::encrypt_append(
-            &self.write_cipher,
-            &data_nonce,
-            dst,
-            data,
-            "SS-2022: chunk payload encrypt failed",
-        )?;
+        Self::encrypt_append(&self.write_cipher, &data_nonce, dst, data);
         self.write_counter += 1;
         Ok(())
     }
@@ -276,7 +245,13 @@ impl AsyncRead for Ss2022Stream {
             if !self.read_buf.is_empty() {
                 let n = self.read_buf.len().min(buf.remaining());
                 buf.put_slice(&self.read_buf[..n]);
-                let _ = self.read_buf.split_to(n);
+                if n == self.read_buf.len() {
+                    // Release the reference to the pool allocation so read_raw
+                    // can extend in-place without triggering a copy.
+                    self.read_buf = Bytes::new();
+                } else {
+                    let _ = self.read_buf.split_to(n);
+                }
                 return Poll::Ready(Ok(()));
             }
 
@@ -344,9 +319,13 @@ impl AsyncWrite for Ss2022Stream {
     ) -> Poll<io::Result<usize>> {
         // If previous ciphertext is still queued, drain it before accepting more
         // plaintext so we propagate backpressure to callers.
-        while !self.write_buf.is_empty() {
+        while {
             let this = self.as_mut().get_mut();
-            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf) {
+            this.write_buf_pos < this.write_buf.len()
+        } {
+            let this = self.as_mut().get_mut();
+            let pos = this.write_buf_pos;
+            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf[pos..]) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Ready(Ok(0)) => {
@@ -356,8 +335,15 @@ impl AsyncWrite for Ss2022Stream {
                     )));
                 }
                 Poll::Ready(Ok(n)) => {
-                    let _ = this.write_buf.split_to(n);
+                    this.write_buf_pos += n;
                 }
+            }
+        }
+        {
+            let this = self.as_mut().get_mut();
+            if this.write_buf_pos >= this.write_buf.len() {
+                this.write_buf.clear();
+                this.write_buf_pos = 0;
             }
         }
 
@@ -370,9 +356,13 @@ impl AsyncWrite for Ss2022Stream {
         }
 
         // Opportunistically drain newly-buffered ciphertext too.
-        while !self.write_buf.is_empty() {
+        loop {
             let this = self.as_mut().get_mut();
-            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf) {
+            if this.write_buf_pos >= this.write_buf.len() {
+                break;
+            }
+            let pos = this.write_buf_pos;
+            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf[pos..]) {
                 Poll::Pending => break,
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Ready(Ok(0)) => {
@@ -382,18 +372,28 @@ impl AsyncWrite for Ss2022Stream {
                     )));
                 }
                 Poll::Ready(Ok(n)) => {
-                    let _ = this.write_buf.split_to(n);
+                    this.write_buf_pos += n;
                 }
+            }
+        }
+        {
+            let this = self.as_mut().get_mut();
+            if this.write_buf_pos >= this.write_buf.len() {
+                this.write_buf.clear();
+                this.write_buf_pos = 0;
             }
         }
         Poll::Ready(Ok(chunk.len()))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        // Split field borrows without cloning the buffer. Ss2022Stream: Unpin.
-        while !self.write_buf.is_empty() {
+        while {
             let this = self.as_mut().get_mut();
-            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf) {
+            this.write_buf_pos < this.write_buf.len()
+        } {
+            let this = self.as_mut().get_mut();
+            let pos = this.write_buf_pos;
+            match Pin::new(this.inner.as_mut()).poll_write(cx, &this.write_buf[pos..]) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Ready(Ok(0)) => {
@@ -403,8 +403,15 @@ impl AsyncWrite for Ss2022Stream {
                     )));
                 }
                 Poll::Ready(Ok(n)) => {
-                    let _ = this.write_buf.split_to(n);
+                    this.write_buf_pos += n;
                 }
+            }
+        }
+        {
+            let this = self.as_mut().get_mut();
+            if this.write_buf_pos >= this.write_buf.len() {
+                this.write_buf.clear();
+                this.write_buf_pos = 0;
             }
         }
         Pin::new(self.inner.as_mut()).poll_flush(cx)

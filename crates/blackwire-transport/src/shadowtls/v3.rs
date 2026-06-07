@@ -121,10 +121,7 @@ impl V3FrameEncoder {
     }
 
     fn new(psk: &[u8], server_random: &[u8; 32], direction: &[u8]) -> Self {
-        let mut mac = match ShadowHmac::new_from_slice(psk) {
-            Ok(v) => v,
-            Err(_) => panic!("HMAC accepts any key length"),
-        };
+        let mut mac = ShadowHmac::new_from_slice(psk).expect("PSK must be non-empty");
         mac.update(server_random);
         mac.update(direction);
         Self { mac }
@@ -132,6 +129,21 @@ impl V3FrameEncoder {
 
     /// Wrap plaintext into one authenticated TLS ApplicationData record.
     pub fn encode_application_data(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, ProxyError> {
+        let mut out = Vec::new();
+        self.encode_application_data_into(plaintext, &mut out)?;
+        Ok(out)
+    }
+
+    /// Encode one authenticated ApplicationData record into `out` (cleared first).
+    ///
+    /// Assembles the 5-byte TLS header, 4-byte rolling HMAC tag, and plaintext in a
+    /// single buffer — no intermediate payload `Vec` — and lets callers reuse `out`
+    /// across frames to avoid a per-frame record allocation.
+    pub fn encode_application_data_into(
+        &mut self,
+        plaintext: &[u8],
+        out: &mut Vec<u8>,
+    ) -> Result<(), ProxyError> {
         if plaintext.len() > MAX_TLS_PLAINTEXT {
             return Err(ProxyError::Protocol(format!(
                 "ShadowTLS v3 plaintext too large: {}",
@@ -143,10 +155,19 @@ impl V3FrameEncoder {
         self.mac.update(plaintext);
         self.mac.update(&tag);
 
-        let mut payload = Vec::with_capacity(TAG_LEN + plaintext.len());
-        payload.extend_from_slice(&tag);
-        payload.extend_from_slice(plaintext);
-        Ok(encode_tls_record(TLS_APPLICATION_DATA, &payload))
+        let body_len = (TAG_LEN + plaintext.len()) as u16;
+        out.clear();
+        out.reserve(TLS_HEADER_LEN + TAG_LEN + plaintext.len());
+        out.extend_from_slice(&[
+            TLS_APPLICATION_DATA,
+            0x03,
+            0x03,
+            (body_len >> 8) as u8,
+            body_len as u8,
+        ]);
+        out.extend_from_slice(&tag);
+        out.extend_from_slice(plaintext);
+        Ok(())
     }
 }
 
@@ -182,6 +203,21 @@ impl V3FrameDecoder {
         record: &[u8],
     ) -> Result<(V3FrameKind, Vec<u8>), ProxyError> {
         let payload = application_payload(record)?;
+        let kind = self.verify_payload(payload)?;
+        let data = match kind {
+            V3FrameKind::ResidualHandshake => Vec::new(),
+            V3FrameKind::Data => payload[TAG_LEN..].to_vec(),
+        };
+        Ok((kind, data))
+    }
+
+    /// Authenticate a raw ApplicationData payload (4-byte tag || data) and advance
+    /// the rolling MAC state, returning only the frame kind.
+    ///
+    /// The data bytes are not copied — callers that already hold the payload (e.g.
+    /// the streaming read path) use this to avoid reassembling the record and
+    /// cloning the plaintext.
+    pub(crate) fn verify_payload(&mut self, payload: &[u8]) -> Result<V3FrameKind, ProxyError> {
         if payload.len() < TAG_LEN {
             return Err(ProxyError::Protocol(
                 "ShadowTLS v3 ApplicationData frame too short".into(),
@@ -194,7 +230,7 @@ impl V3FrameDecoder {
             let tag = next_tag(mac, data);
             if tag.as_slice().ct_eq(candidate).unwrap_u8() == 1 {
                 mac.update(data);
-                return Ok((V3FrameKind::ResidualHandshake, Vec::new()));
+                return Ok(V3FrameKind::ResidualHandshake);
             }
         }
 
@@ -205,7 +241,7 @@ impl V3FrameDecoder {
         self.residual_mac = None;
         self.data_mac.update(data);
         self.data_mac.update(candidate);
-        Ok((V3FrameKind::Data, data.to_vec()))
+        Ok(V3FrameKind::Data)
     }
 }
 
@@ -221,15 +257,18 @@ pub fn taint_backend_application_data(
     record: &[u8],
 ) -> Result<Vec<u8>, ProxyError> {
     let payload = application_payload(record)?;
-    let mut processed = payload.to_vec();
-    xor_with_handshake_mask(&mut processed, psk, server_random);
+    // Assemble [tag | processed] in one buffer: reserve the tag prefix, copy the
+    // payload after it, XOR in place, then backfill the tag. Avoids a separate
+    // `processed` allocation per record.
+    let mut tainted = Vec::with_capacity(TAG_LEN + payload.len());
+    tainted.resize(TAG_LEN, 0);
+    tainted.extend_from_slice(payload);
+    xor_with_handshake_mask(&mut tainted[TAG_LEN..], psk, server_random);
 
-    let tag = next_tag(residual_mac, &processed);
-    residual_mac.update(&processed);
+    let tag = next_tag(residual_mac, &tainted[TAG_LEN..]);
+    residual_mac.update(&tainted[TAG_LEN..]);
+    tainted[..TAG_LEN].copy_from_slice(&tag);
 
-    let mut tainted = Vec::with_capacity(TAG_LEN + processed.len());
-    tainted.extend_from_slice(&tag);
-    tainted.extend_from_slice(&processed);
     Ok(encode_tls_record(TLS_APPLICATION_DATA, &tainted))
 }
 
@@ -447,20 +486,22 @@ impl AsyncRead for V3Stream {
                     self.body_pos += n;
                 }
 
-                let mut record = Vec::with_capacity(TLS_HEADER_LEN + self.body_buf.len());
-                record.extend_from_slice(&self.header_buf);
-                record.extend_from_slice(&self.body_buf);
                 self.read_phase = READ_PHASE_HEADER;
                 self.header_pos = 0;
                 self.body_pos = 0;
 
-                match self.decoder.decode_application_data(&record) {
-                    Ok((V3FrameKind::ResidualHandshake, _)) => continue,
-                    Ok((V3FrameKind::Data, data)) if data.is_empty() => continue,
-                    Ok((V3FrameKind::Data, data)) => {
-                        self.plain_buf = data;
-                        self.plain_pos = 0;
-                        self.read_phase = READ_PHASE_PLAINTEXT;
+                // body_buf already holds the ApplicationData payload (tag || data),
+                // so authenticate it in place — no record reassembly, no plaintext
+                // clone. On a data frame, reuse plain_buf's capacity for the copy.
+                let this = self.as_mut().get_mut();
+                match this.decoder.verify_payload(&this.body_buf) {
+                    Ok(V3FrameKind::ResidualHandshake) => continue,
+                    Ok(V3FrameKind::Data) if this.body_buf.len() == TAG_LEN => continue,
+                    Ok(V3FrameKind::Data) => {
+                        this.plain_buf.clear();
+                        this.plain_buf.extend_from_slice(&this.body_buf[TAG_LEN..]);
+                        this.plain_pos = 0;
+                        this.read_phase = READ_PHASE_PLAINTEXT;
                     }
                     Err(e) => {
                         return Poll::Ready(Err(io::Error::new(
@@ -503,13 +544,13 @@ impl AsyncWrite for V3Stream {
         }
 
         let chunk_len = buf.len().min(MAX_TLS_PLAINTEXT);
-        let record = self
-            .encoder
-            .encode_application_data(&buf[..chunk_len])
+        let this = self.as_mut().get_mut();
+        // Encode straight into the reused write_buf — no fresh record Vec per frame.
+        this.encoder
+            .encode_application_data_into(&buf[..chunk_len], &mut this.write_buf)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-        self.write_buf = record;
-        self.write_pos = 0;
-        self.write_chunk_len = chunk_len;
+        this.write_pos = 0;
+        this.write_chunk_len = chunk_len;
 
         while self.write_pos < self.write_buf.len() {
             let this = self.as_mut().get_mut();
@@ -540,17 +581,17 @@ impl AsyncWrite for V3Stream {
 
 fn client_hello_hmac(record: &[u8], psk: &[u8]) -> Result<[u8; TAG_LEN], ProxyError> {
     let offset = session_id_offset(record)?;
-    let mut signed = record[TLS_HEADER_LEN..].to_vec();
+    let body = &record[TLS_HEADER_LEN..];
     let sid_offset_in_handshake = offset - TLS_HEADER_LEN;
-    signed
-        [sid_offset_in_handshake + SESSION_ID_RANDOM_LEN..sid_offset_in_handshake + SESSION_ID_LEN]
-        .fill(0);
+    // The 4-byte tag slot inside SessionID is zeroed for the HMAC. Feed the body to
+    // the MAC in three slices around that slot instead of copying the whole body.
+    let zero_start = sid_offset_in_handshake + SESSION_ID_RANDOM_LEN;
+    let zero_end = sid_offset_in_handshake + SESSION_ID_LEN;
 
-    let mut mac = match ShadowHmac::new_from_slice(psk) {
-        Ok(v) => v,
-        Err(_) => panic!("HMAC accepts any key length"),
-    };
-    mac.update(&signed);
+    let mut mac = ShadowHmac::new_from_slice(psk).expect("HMAC accepts any key length");
+    mac.update(&body[..zero_start]);
+    mac.update(&[0u8; SESSION_ID_LEN - SESSION_ID_RANDOM_LEN]);
+    mac.update(&body[zero_end..]);
     Ok(first_tag(mac))
 }
 

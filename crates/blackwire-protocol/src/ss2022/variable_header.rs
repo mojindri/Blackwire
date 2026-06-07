@@ -20,8 +20,9 @@ pub fn build_request_variable_header(
 
 /// Parse variable header plaintext after decryption.
 ///
-/// Returns destination address and any initial payload bytes after padding.
-pub fn parse_variable_header(data: &[u8]) -> Result<(Address, Vec<u8>), ProxyError> {
+/// Returns the destination address and a slice into `data` for the initial
+/// payload (zero-copy — the caller copies when needed).
+pub fn parse_variable_header(data: &[u8]) -> Result<(Address, &[u8]), ProxyError> {
     if data.is_empty() {
         return Err(ProxyError::Protocol(
             "SS-2022: empty variable header".into(),
@@ -41,5 +42,5 @@ pub fn parse_variable_header(data: &[u8]) -> Result<(Address, Vec<u8>), ProxyErr
         return Err(ProxyError::Protocol("SS-2022: truncated padding".into()));
     }
     let pos = pos + pad_len;
-    Ok((dest, data[pos..].to_vec()))
+    Ok((dest, &data[pos..]))
 }

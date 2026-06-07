@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::task::{Context, Poll};
 
+use bytes::{Buf, BytesMut};
 use tokio::sync::{mpsc, Mutex};
 
 const DEFAULT_MAX_BUFFERED: usize = 64;
@@ -20,7 +21,8 @@ pub struct UploadPacket {
 struct QueueState {
     next_seq: u64,
     heap: BinaryHeap<Reverse<(u64, Vec<u8>)>>,
-    pending: Vec<u8>,
+    // BytesMut so the reader consumes from the front with O(1) `advance`.
+    pending: BytesMut,
     closed: bool,
     max_buffered: usize,
 }
@@ -69,7 +71,7 @@ impl UploadQueue {
             state: Mutex::new(QueueState {
                 next_seq: 0,
                 heap: BinaryHeap::new(),
-                pending: Vec::new(),
+                pending: BytesMut::new(),
                 closed: false,
                 max_buffered,
             }),
@@ -156,7 +158,7 @@ impl tokio::io::AsyncRead for UploadQueueReader {
             if !st.pending.is_empty() {
                 let n = buf.remaining().min(st.pending.len());
                 buf.put_slice(&st.pending[..n]);
-                st.pending.drain(..n);
+                st.pending.advance(n);
                 return Poll::Ready(Ok(()));
             }
 

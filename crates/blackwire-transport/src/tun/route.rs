@@ -745,7 +745,9 @@ async fn try_best_effort(cmd: &[&str], label: &str) {
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 async fn run(args: &[&str]) -> Result<()> {
-    let (prog, rest) = args.split_first().expect("non-empty command");
+    let (prog, rest) = args
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("empty command"))?;
     let status = Command::new(prog)
         .args(rest)
         .status()
@@ -760,7 +762,9 @@ async fn run(args: &[&str]) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 async fn run_output(args: &[&str]) -> Result<String> {
-    let (prog, rest) = args.split_first().expect("non-empty command");
+    let (prog, rest) = args
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("empty command"))?;
     let output = Command::new(prog)
         .args(rest)
         .output()
