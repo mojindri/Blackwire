@@ -13,12 +13,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, BufReader};
 use tracing::debug;
 
 use blackwire_app::context::Context;
 use blackwire_app::features::{OutboundConnectResult, OutboundHandler};
-use blackwire_common::{tcp_connect, Address, BoxedStream, ProxyError};
+use blackwire_common::{tcp_connect, Address, BoxedStream, PrependedStream, ProxyError};
 
 use super::auth::{cmd_key, generate_auth_id};
 use super::codec::{
@@ -80,7 +80,7 @@ impl OutboundHandler for VmessOutbound {
         &self,
         _ctx: &Context,
         dest: &Address,
-        early_payload: Option<Vec<u8>>,
+        early_payload: Option<&[u8]>,
     ) -> Result<OutboundConnectResult, ProxyError> {
         debug!(server = %self.server, dest = %dest, "VMess outbound connecting with early payload");
 
@@ -121,7 +121,16 @@ pub async fn connect_vmess_on_stream(
 
     let resp_key = response_body_key(&key);
     let resp_iv = response_body_iv(&iv);
-    read_response_header(&mut stream, v, &resp_key, &resp_iv).await?;
+
+    // Buffer the response header reads (enc_len 18B + enc_hdr variable) to reduce
+    // syscalls. Leftover bytes are recovered via PrependedStream for the AEAD relay.
+    let mut buf_reader = BufReader::with_capacity(64, &mut stream);
+    read_response_header(&mut buf_reader, v, &resp_key, &resp_iv).await?;
+    let leftover = buf_reader.buffer().to_vec();
+    drop(buf_reader);
+    if !leftover.is_empty() {
+        stream = Box::new(PrependedStream::new(stream, leftover));
+    }
 
     // Wrap in VMess body framing.
     let wrapped: BoxedStream = Box::new(VmessStream::new_bidir(
@@ -144,10 +153,10 @@ pub async fn connect_vmess_on_stream_with_early_payload(
     uuid: &[u8; 16],
     cmd_key_bytes: &[u8; 16],
     dest: &Address,
-    early_payload: Option<Vec<u8>>,
+    early_payload: Option<&[u8]>,
 ) -> Result<OutboundConnectResult, ProxyError> {
     let mut stream = connect_vmess_on_stream(stream, uuid, cmd_key_bytes, dest).await?;
-    let wrote_early_payload = if let Some(payload) = early_payload.as_deref() {
+    let wrote_early_payload = if let Some(payload) = early_payload {
         if !payload.is_empty() {
             stream.write_all(payload).await?;
             stream.flush().await?;

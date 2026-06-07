@@ -30,8 +30,11 @@ use tracing::{debug, warn};
 
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
+use blackwire_app::dns::DnsModule;
 use blackwire_app::features::InboundHandler;
-use blackwire_common::{Address, BoxedStream, Network, ProxyError};
+use tokio::io::BufReader;
+
+use blackwire_common::{Address, BoxedStream, Network, PrependedStream, ProxyError};
 
 use super::codec::{compute_token, decode_request, CMD_CONNECT, CMD_UDP_ASSOCIATE, TOKEN_LEN};
 
@@ -55,11 +58,14 @@ use super::udp::relay_trojan_udp;
 /// A Trojan inbound handler.
 pub struct TrojanInbound {
     /// The inbound tag from config.
-    tag: String,
+    tag: Arc<str>,
 
     /// Pre-computed 56-char auth tokens for each configured password.
     /// We compare against these on every connection.
     tokens: Vec<[u8; TOKEN_LEN]>,
+
+    /// DNS module for UDP relay domain resolution.
+    dns: Option<Arc<DnsModule>>,
 }
 
 impl TrojanInbound {
@@ -68,7 +74,12 @@ impl TrojanInbound {
     /// # Arguments
     /// * `tag`       — unique inbound tag from config
     /// * `passwords` — list of accepted Trojan passwords
-    pub fn new(tag: impl Into<String>, passwords: &[String]) -> Arc<Self> {
+    /// * `dns`       — optional DNS module for UDP relay resolution
+    pub fn new(
+        tag: impl Into<Arc<str>>,
+        passwords: &[String],
+        dns: Option<Arc<DnsModule>>,
+    ) -> Arc<Self> {
         let tokens = passwords
             .iter()
             .map(|p| {
@@ -82,6 +93,7 @@ impl TrojanInbound {
         Arc::new(Self {
             tag: tag.into(),
             tokens,
+            dns,
         })
     }
 
@@ -111,11 +123,19 @@ impl InboundHandler for TrojanInbound {
         source: SocketAddr,
         dispatcher: Arc<dyn Dispatcher>,
     ) -> Result<(), ProxyError> {
-        // Decode the Trojan request header (token + CRLF + address + CRLF).
-        let request = decode_request(&mut stream).await.map_err(|e| {
+        // Buffer the header reads to collapse ~5-6 small recvfrom syscalls into one.
+        // The Trojan header (token 56B + CRLF + cmd + atyp + addr + CRLF) fits in 128 bytes.
+        // Any payload read ahead is recovered via PrependedStream.
+        let mut buf_reader = BufReader::with_capacity(128, &mut stream);
+        let request = decode_request(&mut buf_reader).await.map_err(|e| {
             debug!(source = %source, error = %e, "Trojan header parse failed");
             e
         })?;
+        let leftover = buf_reader.buffer().to_vec();
+        drop(buf_reader);
+        if !leftover.is_empty() {
+            stream = Box::new(PrependedStream::new(stream, leftover));
+        }
 
         // Validate the token in constant time.
         if !self.validate_token(&request.token) {
@@ -130,10 +150,10 @@ impl InboundHandler for TrojanInbound {
         );
 
         if is_trojan_udp_associate(&request) {
-            return relay_trojan_udp(stream).await;
+            return relay_trojan_udp(stream, self.dns.clone()).await;
         }
 
-        let ctx = Context::new(&self.tag, source);
+        let ctx = Context::new(self.tag.clone(), source);
         dispatcher.dispatch(ctx, request.dest, stream).await
     }
 }
@@ -145,7 +165,7 @@ mod tests {
     /// Validate that a correct token is accepted and a wrong one is rejected.
     #[test]
     fn token_validation() {
-        let handler = TrojanInbound::new("test", &["correct-password".to_string()]);
+        let handler = TrojanInbound::new("test", &["correct-password".to_string()], None);
 
         let good = compute_token("correct-password");
         let mut good_arr = [0u8; TOKEN_LEN];
@@ -162,7 +182,7 @@ mod tests {
     /// Multiple passwords: any valid one is accepted.
     #[test]
     fn multi_password_validation() {
-        let handler = TrojanInbound::new("test", &["pass1".to_string(), "pass2".to_string()]);
+        let handler = TrojanInbound::new("test", &["pass1".to_string(), "pass2".to_string()], None);
 
         for pw in &["pass1", "pass2"] {
             let token_str = compute_token(pw);

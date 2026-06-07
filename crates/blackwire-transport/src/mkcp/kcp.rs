@@ -1,5 +1,5 @@
 use super::segment::{Segment, CMD_ACK, CMD_PUSH, CMD_WASK, CMD_WINS, OVERHEAD};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use std::collections::VecDeque;
 
 const RTO_NDL: u32 = 30;
@@ -388,9 +388,11 @@ impl Kcp {
                 seg.ts = current;
                 seg.wnd = wnd_unused;
                 seg.una = rcv_nxt;
-                let mut buf = BytesMut::with_capacity(OVERHEAD + seg.data.len());
+                // Encode directly into a Vec — Vec<u8>: BufMut — avoiding the
+                // BytesMut + to_vec() double allocation per segment.
+                let mut buf = Vec::with_capacity(OVERHEAD + seg.data.len());
                 seg.encode(&mut buf);
-                out.push(buf.to_vec());
+                out.push(buf);
                 if seg.xmit >= dead_link {
                     self.state = -1;
                 }
@@ -440,13 +442,23 @@ impl Kcp {
     }
 
     fn encode_seg(&self, seg: &Segment) -> Vec<u8> {
-        let mut buf = BytesMut::with_capacity(OVERHEAD + seg.data.len());
+        let mut buf = Vec::with_capacity(OVERHEAD + seg.data.len());
         seg.encode(&mut buf);
-        buf.to_vec()
+        buf
     }
 
     fn parse_una(&mut self, una: u32) {
-        self.snd_buf.retain(|s| s.sn >= una);
+        // `snd_buf` is ordered by ascending `sn` (segments are only ever
+        // `push_back`ed in send order), so every acknowledged segment is at the
+        // front. Pop them directly — O(acked) — instead of `retain`, which
+        // rescans and shifts the entire send window on every incoming packet.
+        while let Some(front) = self.snd_buf.front() {
+            if front.sn < una {
+                self.snd_buf.pop_front();
+            } else {
+                break;
+            }
+        }
     }
     fn shrink_buf(&mut self) {
         self.snd_una = self.snd_buf.front().map(|s| s.sn).unwrap_or(self.snd_nxt);
@@ -473,7 +485,11 @@ impl Kcp {
         if sn < self.snd_una || sn >= self.snd_nxt {
             return;
         }
-        self.snd_buf.retain(|s| s.sn != sn);
+        // `snd_buf` is sorted by `sn`, so binary-search to the single matching
+        // segment instead of scanning the whole window with `retain`.
+        if let Ok(idx) = self.snd_buf.binary_search_by(|s| s.sn.cmp(&sn)) {
+            self.snd_buf.remove(idx);
+        }
     }
 
     fn parse_fastack(&mut self, sn: u32) {
@@ -494,16 +510,13 @@ impl Kcp {
         if sn >= self.rcv_nxt + self.rcv_wnd as u32 || sn < self.rcv_nxt {
             return;
         }
-        if self.rcv_buf.iter().any(|s| s.sn == sn) {
-            return;
+        // `rcv_buf` is kept sorted ascending by `sn`, so a single binary search
+        // both rejects duplicates and locates the insertion point, replacing the
+        // previous two linear scans (`any` + `rposition`) over the receive window.
+        match self.rcv_buf.binary_search_by(|s| s.sn.cmp(&sn)) {
+            Ok(_) => return, // duplicate segment already buffered
+            Err(pos) => self.rcv_buf.insert(pos, seg),
         }
-        let pos = self
-            .rcv_buf
-            .iter()
-            .rposition(|s| s.sn < sn)
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        self.rcv_buf.insert(pos, seg);
         self.move_rcv_buf();
     }
 

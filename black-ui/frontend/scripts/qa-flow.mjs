@@ -8,6 +8,7 @@ const uiData = `${workDir}/ui-data`;
 const bwConfig = `${workDir}/blackwire.json`;
 const uiBase = "http://127.0.0.1:18094";
 const grpcAddress = "127.0.0.1:26294";
+const frontendDir = `${repoRoot}/black-ui/frontend`;
 const processes = [];
 
 async function main() {
@@ -29,6 +30,7 @@ async function main() {
   );
 
   await run("cargo", ["run", "-q", "-p", "blackwire", "--", "test", "-c", bwConfig]);
+  await run("npm", ["exec", "--", "vite", "build"], { cwd: frontendDir });
   processes.push(spawn("cargo", ["run", "-q", "-p", "blackwire", "--", "run", "-c", bwConfig], { cwd: repoRoot }));
   await waitForPort(26294);
   processes.push(
@@ -67,6 +69,7 @@ async function main() {
   await page.getByLabel("Subscription host", { exact: true }).fill("127.0.0.1");
   await page.getByRole("button", { name: "Save Settings", exact: true }).click();
   await strip(page, /Settings saved/);
+  await waitForIdle(page);
 
   await addInbound(page, "qa-main", "26320");
   await addUser(page, "qa@example.com", "qa-main :26320");
@@ -83,16 +86,19 @@ async function main() {
     throw new Error("last inbound delete button should be disabled");
   }
   await page.getByText("Create another inbound before deleting this one.").waitFor();
+  await page.locator(".drawer").getByRole("button", { name: "Close", exact: true }).click();
   await addInbound(page, "qa-delete", "26321");
   await page.getByRole("button", { name: /qa-delete/ }).click();
   await page.getByRole("button", { name: "Delete", exact: true }).click();
-  await page.waitForFunction(() => !document.body.innerText.includes("qa-delete"));
+  await page.getByRole("button", { name: "qa-delete", exact: true }).waitFor({ state: "detached" });
 
   await nav(page, "Config");
   await page.getByRole("button", { name: "Validate", exact: true }).click();
   await strip(page, /Config valid/);
+  await waitForIdle(page);
   await page.getByRole("button", { name: "Apply", exact: true }).click();
   await strip(page, /synchronized|saved/);
+  await waitForIdle(page);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload({ waitUntil: "networkidle" });
@@ -108,23 +114,30 @@ async function main() {
 
 async function addInbound(page, tag, port) {
   await nav(page, "Inbounds");
-  await page.getByRole("button", { name: "New", exact: true }).click();
+  await page.getByRole("button", { name: "New Inbound", exact: true }).click();
+  // Basic tab (default) — fill core fields
   await page.getByLabel("Tag", { exact: true }).fill(tag);
   await page.getByLabel("Listen host", { exact: true }).fill("127.0.0.1");
   await page.getByLabel("Port", { exact: true }).fill(port);
-  await page.getByLabel("Transport", { exact: true }).selectOption("ws");
-  await page
-    .getByLabel("Stream settings JSON", { exact: true })
-    .fill(JSON.stringify({ network: "ws", security: "none", wsSettings: { path: `/${tag}` } }));
+  // Transport tab — pick network type
+  await page.getByRole("button", { name: "Transport", exact: true }).click();
+  await page.getByLabel("Network", { exact: true }).selectOption("ws");
+  await page.getByLabel("Path", { exact: true }).fill(`/${tag}`);
   await page.getByRole("button", { name: "Save Inbound", exact: true }).click();
-  await page.getByText(tag).waitFor();
+  await page.getByRole("button", { name: tag, exact: true }).waitFor();
 }
 
 async function addUser(page, email, inboundLabel) {
   await nav(page, "Users");
   await page.getByRole("button", { name: "Add User", exact: true }).click();
   await page.getByLabel("Email", { exact: true }).fill(email);
-  await page.getByLabel("Inbound", { exact: true }).selectOption({ label: inboundLabel });
+  const inboundSelect = page.getByLabel("Inbound", { exact: true });
+  const inboundValue = await inboundSelect.locator("option").evaluateAll(
+    (options, prefix) => options.find((option) => option.textContent?.trim().startsWith(prefix))?.value ?? null,
+    inboundLabel
+  );
+  if (!inboundValue) throw new Error(`inbound option not found for ${inboundLabel}`);
+  await inboundSelect.selectOption(inboundValue);
   await page.getByLabel("Generate UUID", { exact: true }).click();
   await page.waitForFunction(() => Array.from(document.querySelectorAll("input")).some((input) => input.value.includes("-")));
   await page.getByRole("button", { name: "Save User", exact: true }).click();
@@ -133,10 +146,23 @@ async function addUser(page, email, inboundLabel) {
 
 async function nav(page, name) {
   await page.getByRole("button", { name, exact: true }).click();
+  await page.getByRole("heading", { name, exact: true }).waitFor();
 }
 
 async function strip(page, pattern) {
   await page.waitForFunction((source) => new RegExp(source, "i").test(document.querySelector(".strip-message")?.textContent ?? ""), pattern.source);
+}
+
+async function waitForIdle(page) {
+  await page.getByRole("button", { name: "Refresh", exact: true }).waitFor({ state: "visible" });
+  await page.waitForFunction(
+    () => {
+      const refresh = Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.trim() === "Refresh");
+      return refresh instanceof HTMLButtonElement && !refresh.disabled;
+    },
+    undefined,
+    { timeout: 30000 }
+  );
 }
 
 async function waitForHttp(url) {
@@ -169,8 +195,8 @@ async function waitForPort(port) {
   throw new Error(`timed out waiting for port ${port}`);
 }
 
-async function run(command, args) {
-  const child = spawn(command, args, { cwd: repoRoot, stdio: "inherit" });
+async function run(command, args, options = {}) {
+  const child = spawn(command, args, { cwd: repoRoot, stdio: "inherit", ...options });
   const code = await new Promise((resolve) => child.on("close", resolve));
   if (code !== 0) throw new Error(`${command} ${args.join(" ")} failed with ${code}`);
 }

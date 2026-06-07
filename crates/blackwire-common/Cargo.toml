@@ -8,6 +8,15 @@ authors.workspace = true
 
 # blackwire-common deliberately has no internal dependencies.
 # It sits at the bottom of the dependency graph.
+[features]
+# Data-plane AEAD backend selection. The default uses aws-lc-rs (BoringSSL
+# assembly: ~2-4x faster bulk AES-GCM than the pure-Rust path). Enabling
+# `aead-rustcrypto` flips the active backend to RustCrypto as a fallback. Both
+# backends are always compiled so the cross-validation tests can assert
+# byte-identical output (wire compatibility).
+default = []
+aead-rustcrypto = []
+
 [dependencies]
 bytes.workspace        = true
 thiserror.workspace    = true
@@ -16,6 +25,9 @@ parking_lot.workspace  = true
 crossbeam-queue.workspace = true
 tracing.workspace      = true
 metrics.workspace      = true
+aws-lc-rs.workspace    = true
+aes-gcm.workspace      = true
+chacha20poly1305.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true

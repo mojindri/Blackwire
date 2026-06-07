@@ -47,6 +47,20 @@ pub fn encode_udp_datagram(dest: &Address, payload: &[u8]) -> Result<Vec<u8>, Pr
     Ok(buf.into())
 }
 
+/// Zero-allocation variant: encodes the datagram into a caller-supplied `buf` (cleared first).
+/// Use this in hot loops where the buffer can be reused across calls.
+pub fn encode_udp_datagram_into(
+    dest: &Address,
+    payload: &[u8],
+    buf: &mut Vec<u8>,
+) -> Result<(), ProxyError> {
+    buf.clear();
+    buf.extend_from_slice(&[0, 0, 0]);
+    write_socks5_address(buf, dest)?;
+    buf.extend_from_slice(payload);
+    Ok(())
+}
+
 async fn resolve_udp_dest(dest: &Address) -> Result<SocketAddr, ProxyError> {
     match dest {
         Address::Ipv4(ip, port) => Ok(SocketAddr::new((*ip).into(), *port)),
@@ -78,6 +92,7 @@ pub async fn relay_socks5_udp(
 
     let mut buf = vec![0u8; 65535];
     let mut reply_buf = vec![0u8; 65535];
+    let mut encode_buf = Vec::with_capacity(512);
     let mut ctrl = [0u8; 64];
 
     loop {
@@ -110,10 +125,11 @@ pub async fn relay_socks5_udp(
                 )
                 .await
                 {
-                    if m > 0 {
-                        if let Ok(pkt) = encode_udp_datagram(&dest, &reply_buf[..m]) {
-                            let _ = udp.send_to(&pkt, peer).await;
-                        }
+                    if m > 0
+                        && encode_udp_datagram_into(&dest, &reply_buf[..m], &mut encode_buf)
+                            .is_ok()
+                    {
+                        let _ = udp.send_to(&encode_buf, peer).await;
                     }
                 }
             }
