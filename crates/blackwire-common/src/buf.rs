@@ -84,13 +84,13 @@ impl PoolClass {
 /// pool.release(buf);                // return it when done
 /// ```
 pub struct BufferPool {
-    /// Pre-allocated 4 KiB buffers.
+    /// Queue of reusable 4 KiB buffers.
     small: ArrayQueue<BytesMut>,
-    /// Pre-allocated 16 KiB buffers.
+    /// Queue of reusable 16 KiB buffers.
     medium: ArrayQueue<BytesMut>,
-    /// Pre-allocated 64 KiB buffers.
+    /// Queue of reusable 64 KiB buffers.
     large: ArrayQueue<BytesMut>,
-    /// Pre-allocated 256 KiB buffers.
+    /// Queue of reusable 256 KiB buffers.
     huge: ArrayQueue<BytesMut>,
 }
 

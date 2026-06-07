@@ -268,7 +268,7 @@ fn http_host(data: &[u8]) -> Option<String> {
     let first = text.lines().next()?;
 
     // The first line must start with a known HTTP method.
-    // If it doesn't, these bytes are probably not an HTTP request at all.
+    // If it does not, these bytes are probably not an HTTP request at all.
     if !first.starts_with("GET ")
         && !first.starts_with("POST ")
         && !first.starts_with("PUT ")

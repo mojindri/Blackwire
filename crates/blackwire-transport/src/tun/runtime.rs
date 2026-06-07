@@ -146,7 +146,7 @@ impl TunRuntime {
         let mut write_batch = TunPacketBatch::new(self.config.batch);
         let mut evict_tick = tokio::time::interval(EVICT_INTERVAL);
         let mut batch_tick = tokio::time::interval(BATCH_FLUSH_INTERVAL);
-        // Skip the immediate first tick so eviction doesn't run before any
+        // Skip the immediate first tick so eviction does not run before any
         // flows are even established.
         evict_tick.tick().await;
         batch_tick.tick().await;

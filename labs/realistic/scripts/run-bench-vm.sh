@@ -50,7 +50,7 @@ fi
 
 if ! limactl list --format '{{.Name}}' 2>/dev/null | grep -qx "$LIMA_INSTANCE"; then
   echo "ERROR: Lima instance does not exist: $LIMA_INSTANCE" | tee -a "$REPORT"
-  echo "Run make check-browser first; it creates the Lima VM." | tee -a "$REPORT"
+  echo "Run make verify-lab-lima first; it creates the Lima VM." | tee -a "$REPORT"
   exit 1
 fi
 

@@ -3,8 +3,7 @@
 This repo uses **`verify-*`** as the canonical Make surface. Run commands from
 your **local checkout** (not from inside a VPS shell).
 
-Legacy names (`check`, `check-browser`, `check-vps`, `ci-all`, …) still work —
-see `make help-compat`.
+Use the canonical commands below.
 
 ## Canonical commands
 
@@ -16,7 +15,7 @@ see `make help-compat`.
 | `make verify-sweep` | Broad quick gate before a larger change |
 | `make verify-release` | Pre-release / slow full gate |
 
-See also: `make help`, `make help-compat`, and [commands.md](commands.md).
+See also: `make help`, `make help-internal`, and [commands.md](commands.md).
 
 ## 1. Everyday development
 
@@ -112,13 +111,9 @@ Expect **tens of minutes to hours** depending on fuzz/soak settings.
 | Fuzz long | `fuzz-long` | nightly, time |
 | Security extras | `security` | optional `cargo-audit`, `cargo-deny` |
 
-## 7. Deprecated aliases
+## 7. Command list
 
-Old names (`check`, `ci-all`, `check-vps`, …) still work and print:
-
-`Deprecated alias: use make <canonical-target>`
-
-List: `make help-compat`.
+Use [commands.md](commands.md) for the current command list.
 
 ## 8. Cleanup
 
