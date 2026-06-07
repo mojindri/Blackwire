@@ -314,9 +314,11 @@ async fn read_mux_frame<R: AsyncReadExt + Unpin>(
             "mux: invalid metadata length {meta_len}"
         )));
     }
-    let mut meta_buf = vec![0u8; meta_len];
-    reader.read_exact(&mut meta_buf).await?;
-    let meta = parse_metadata(&meta_buf)?;
+    // Metadata is bounded by MAX_META_LEN; read it into a stack buffer and parse
+    // in place instead of heap-allocating a throwaway Vec on every frame.
+    let mut meta_buf = [0u8; MAX_META_LEN];
+    reader.read_exact(&mut meta_buf[..meta_len]).await?;
+    let meta = parse_metadata(&meta_buf[..meta_len])?;
     let payload = if meta.option & OPT_DATA != 0 {
         let data_len = reader.read_u16().await? as usize;
         if data_len > MAX_DATA_LEN {
