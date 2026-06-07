@@ -26,7 +26,7 @@ fn login_throttles() -> &'static Mutex<HashMap<String, LoginThrottle>> {
 
 pub fn require(headers: &HeaderMap, state: &AppState) -> Result<i64, AppError> {
     let token = session_token(headers).ok_or_else(AppError::unauthorized)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     let row = conn
         .query_row(
             "SELECT admin_id, created_at FROM sessions WHERE token = ?1",
@@ -55,7 +55,7 @@ pub fn create_admin_session(
     password: &str,
 ) -> Result<(String, String), AppError> {
     check_login_throttle(username)?;
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     let row = conn
         .query_row(
             "SELECT id, username, password_hash, salt FROM admins WHERE username = ?1",
@@ -152,7 +152,7 @@ pub fn create_first_admin(
             "username is required and password must be at least 8 characters",
         ));
     }
-    let conn = state.db.lock().unwrap();
+    let conn = state.lock_db()?;
     if !db::setup_required(&conn).map_err(AppError::internal)? {
         return Err(AppError::bad_request("setup already completed"));
     }
@@ -172,7 +172,7 @@ pub fn create_first_admin(
 
 pub fn delete_session(headers: &HeaderMap, state: &AppState) -> Result<(), AppError> {
     if let Some(token) = session_token(headers) {
-        let conn = state.db.lock().unwrap();
+        let conn = state.lock_db()?;
         conn.execute("DELETE FROM sessions WHERE token = ?1", params![token])
             .map_err(|e| AppError::internal(e.into()))?;
     }

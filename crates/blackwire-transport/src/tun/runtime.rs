@@ -183,14 +183,14 @@ impl TunRuntime {
                 Some(pkt) = tun_rx.recv() => {
                     let now = std::time::Instant::now();
                     write_batch.push(pkt, now);
-                    while !write_batch.should_flush(std::time::Instant::now()) {
+                    while !write_batch.should_flush(now) {
                         match tun_rx.try_recv() {
-                            Ok(pkt) => write_batch.push(pkt, std::time::Instant::now()),
+                            Ok(pkt) => write_batch.push(pkt, now),
                             Err(mpsc::error::TryRecvError::Empty) => break,
                             Err(mpsc::error::TryRecvError::Disconnected) => break,
                         }
                     }
-                    if write_batch.should_flush(std::time::Instant::now()) {
+                    if write_batch.should_flush(now) {
                         if let Err(e) = flush_tun_batch(&mut writer, &mut write_batch).await {
                             warn!(%e, "TUN device write error");
                         }

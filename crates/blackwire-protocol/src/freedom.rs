@@ -635,7 +635,7 @@ impl OutboundHandler for FreedomOutbound {
         &self,
         ctx: &Context,
         dest: &Address,
-        _early_payload: Option<Vec<u8>>,
+        _early_payload: Option<&[u8]>,
     ) -> Result<OutboundConnectResult, ProxyError> {
         // Leave early bytes in the dispatcher path so pooled Freedom sockets
         // still get first-use stale-socket retry protection.

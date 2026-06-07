@@ -470,7 +470,11 @@ impl Instance {
 
         if config.profile == ProfileMode::Fast {
             let fast = config.fast.as_ref().cloned().unwrap_or_default();
-            let adaptive_pool = PoolConfig::default();
+            let adaptive_pool = match fast.pool {
+                FastPoolPolicy::Adaptive => PoolConfig::fast_profile(),
+                FastPoolPolicy::Fixed => PoolConfig::fixed(8),
+                FastPoolPolicy::Disabled => PoolConfig::default(),
+            };
             info!(
                 pool_policy = ?fast.pool,
                 adaptive_pool_max_per_dest = adaptive_pool.max_per_dest,
@@ -538,8 +542,10 @@ impl Instance {
                     })?;
                     let socket = std::sync::Arc::new(socket);
                     info!(tag = %in_cfg.tag, addr = %addr, "starting SS-2022 UDP inbound");
+                    let dns_for_udp = dns.clone();
                     let task = tokio::spawn(async move {
-                        blackwire_protocol::ss2022::udp::relay_ss2022_udp(socket, psk).await;
+                        blackwire_protocol::ss2022::udp::relay_ss2022_udp(socket, psk, dns_for_udp)
+                            .await;
                     });
                     tasks.push(task);
                     if net == "udp" {
@@ -551,12 +557,12 @@ impl Instance {
             let handshake_timeout = handshake_timeout_for(in_cfg, &config.limits);
 
             let handler: Arc<dyn InboundHandler> = match in_cfg.protocol {
-                Protocol::Socks => Socks5Inbound::new(&in_cfg.tag),
+                Protocol::Socks => Socks5Inbound::new(in_cfg.tag.as_str()),
                 Protocol::Vless => {
-                    build_vless_inbound(in_cfg, &vless_registries, handshake_timeout)
+                    build_vless_inbound(in_cfg, &vless_registries, handshake_timeout, dns.clone())
                         .with_context(|| format!("building VLESS inbound '{}'", in_cfg.tag))?
                 }
-                Protocol::Trojan => build_trojan_inbound(in_cfg)
+                Protocol::Trojan => build_trojan_inbound(in_cfg, dns.clone())
                     .with_context(|| format!("building Trojan inbound '{}'", in_cfg.tag))?,
                 Protocol::Vmess => build_vmess_inbound(in_cfg)
                     .with_context(|| format!("building VMess inbound '{}'", in_cfg.tag))?,

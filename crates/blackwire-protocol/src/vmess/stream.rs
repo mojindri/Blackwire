@@ -24,12 +24,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
-use aes_gcm::{
-    aead::{generic_array::GenericArray, AeadInPlace},
-    Aes128Gcm, KeyInit,
-};
-use bytes::{BufMut, Bytes, BytesMut};
-use chacha20poly1305::ChaCha20Poly1305;
+use bytes::{BufMut, BytesMut};
 use md5::{Digest as Md5Digest, Md5};
 use rand::RngExt;
 use shake::{
@@ -38,6 +33,7 @@ use shake::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use blackwire_common::aead::{AeadAlgorithm, AeadKey, TAG_LEN};
 use blackwire_common::{BoxedStream, BufferPool};
 
 use super::codec::Security;
@@ -62,57 +58,38 @@ fn chunk_nonce(counter: u16, iv: &[u8; 16]) -> [u8; 12] {
 }
 
 enum BodyCipher {
-    Aes128Gcm(Box<Aes128Gcm>),
-    ChaCha20Poly1305(Box<ChaCha20Poly1305>),
+    Aead(AeadKey),
     None,
 }
 
 impl BodyCipher {
     fn new(security: Security, key: &[u8; 16]) -> Self {
         match security {
-            Security::Aes128Gcm => {
-                Self::Aes128Gcm(Box::new(Aes128Gcm::new(GenericArray::from_slice(key))))
-            }
-            Security::ChaCha20Poly1305 => Self::ChaCha20Poly1305(Box::new(ChaCha20Poly1305::new(
-                GenericArray::from_slice(&chacha_key(key)),
-            ))),
+            Security::Aes128Gcm => Self::Aead(
+                AeadKey::new(AeadAlgorithm::Aes128Gcm, key).expect("16-byte AES-128 key"),
+            ),
+            Security::ChaCha20Poly1305 => Self::Aead(
+                AeadKey::new(AeadAlgorithm::ChaCha20Poly1305, &chacha_key(key))
+                    .expect("32-byte ChaCha20 key"),
+            ),
             Security::None => Self::None,
         }
     }
 
     fn overhead(&self) -> usize {
         match self {
-            Self::Aes128Gcm(_) | Self::ChaCha20Poly1305(_) => 16,
+            Self::Aead(_) => TAG_LEN,
             Self::None => 0,
         }
     }
 
     fn encrypt_append(&self, nonce: &[u8; 12], dst: &mut BytesMut, data: &[u8]) -> Result<(), ()> {
         match self {
-            Self::Aes128Gcm(cipher) => {
+            Self::Aead(cipher) => {
                 let start = dst.len();
                 dst.extend_from_slice(data);
-                let tag = cipher
-                    .encrypt_in_place_detached(
-                        GenericArray::from_slice(nonce),
-                        &[],
-                        &mut dst[start..],
-                    )
-                    .map_err(|_| ())?;
-                dst.extend_from_slice(tag.as_slice());
-                Ok(())
-            }
-            Self::ChaCha20Poly1305(cipher) => {
-                let start = dst.len();
-                dst.extend_from_slice(data);
-                let tag = cipher
-                    .encrypt_in_place_detached(
-                        GenericArray::from_slice(nonce),
-                        &[],
-                        &mut dst[start..],
-                    )
-                    .map_err(|_| ())?;
-                dst.extend_from_slice(tag.as_slice());
+                let tag = cipher.seal_detached(nonce, &[], &mut dst[start..]);
+                dst.extend_from_slice(&tag);
                 Ok(())
             }
             Self::None => {
@@ -125,12 +102,11 @@ impl BodyCipher {
     /// Decrypt ciphertext in place (buffer holds ciphertext || tag on input).
     fn decrypt_in_place(&self, nonce: &[u8; 12], buf: &mut Vec<u8>) -> Result<(), ()> {
         match self {
-            Self::Aes128Gcm(cipher) => cipher
-                .decrypt_in_place(GenericArray::from_slice(nonce), &[], buf)
-                .map_err(|_| ()),
-            Self::ChaCha20Poly1305(cipher) => cipher
-                .decrypt_in_place(GenericArray::from_slice(nonce), &[], buf)
-                .map_err(|_| ()),
+            Self::Aead(cipher) => {
+                let plain_len = cipher.open_combined(nonce, &[], buf).map_err(|_| ())?;
+                buf.truncate(plain_len);
+                Ok(())
+            }
             Self::None => Ok(()),
         }
     }
@@ -177,10 +153,12 @@ pub struct VmessStream {
     read_counter: u16,
     read_size_mask: Option<SizeMask>,
     read_global_padding: bool,
-    read_buf: Bytes,
     read_raw_buf: BytesMut,
-    /// Reused AEAD decrypt buffer (avoids per-chunk `Vec` from `Aead::decrypt`).
+    /// Reused AEAD decrypt buffer. After a successful chunk decrypt it holds the
+    /// plaintext, drained out to callers via `read_scratch_pos` — no per-chunk Vec.
     decrypt_scratch: Vec<u8>,
+    /// Read cursor into `decrypt_scratch`: bytes before it have been delivered.
+    read_scratch_pos: usize,
     /// Decoded (size, padding_len) from a previous partial read of the chunk header.
     /// Prevents re-advancing the SizeMask when the chunk body has not yet arrived.
     read_pending: Option<(usize, usize)>,
@@ -220,9 +198,9 @@ impl VmessStream {
             read_counter: 0,
             read_size_mask: chunk_masking.then(|| SizeMask::new(read_iv)),
             read_global_padding: options & REQUEST_OPTION_GLOBAL_PADDING != 0,
-            read_buf: Bytes::new(),
             read_raw_buf: vmess_buffer_pool().acquire(MAX_CHUNK_SIZE + 256),
             decrypt_scratch: Vec::with_capacity(MAX_CHUNK_SIZE + 32),
+            read_scratch_pos: 0,
             read_pending: None,
             write_cipher: BodyCipher::new(security, write_key),
             write_iv: *write_iv,
@@ -270,7 +248,11 @@ impl VmessStream {
         encoded.to_be_bytes()
     }
 
-    fn try_decrypt_chunk(&mut self, src: &mut BytesMut) -> Option<Result<Bytes, io::Error>> {
+    /// Decrypt one full chunk from `src` into `decrypt_scratch`, resetting the read
+    /// cursor. Returns `Some(Ok(()))` when a chunk was decoded (plaintext in
+    /// `decrypt_scratch`, possibly empty to signal EOF), `None` when more bytes are
+    /// needed, or `Some(Err(..))` on a protocol/crypto error.
+    fn try_decrypt_chunk(&mut self, src: &mut BytesMut) -> Option<Result<(), io::Error>> {
         // Re-use a previously decoded header if the chunk body was incomplete last call.
         // This prevents the SizeMask from being advanced a second time for the same chunk,
         // matching Xray's ShakeSizeParser caching approach (body.go sizeParser interface).
@@ -324,12 +306,11 @@ impl VmessStream {
         }
         self.read_counter = self.read_counter.wrapping_add(1);
 
-        // Empty plaintext signals EOF (matches Xray body reader).
-        let plaintext = Bytes::from(std::mem::replace(
-            &mut self.decrypt_scratch,
-            Vec::with_capacity(MAX_CHUNK_SIZE + 32),
-        ));
-        Some(Ok(plaintext))
+        // Plaintext now lives in decrypt_scratch; reset the read cursor. An empty
+        // plaintext signals EOF (matches Xray body reader) and is surfaced by the
+        // caller checking whether the scratch is empty.
+        self.read_scratch_pos = 0;
+        Some(Ok(()))
     }
 
     fn append_encrypted_chunk(&mut self, dst: &mut BytesMut, data: &[u8]) -> io::Result<()> {
@@ -370,23 +351,25 @@ impl AsyncRead for VmessStream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         loop {
-            if !self.read_buf.is_empty() {
-                let n = self.read_buf.len().min(buf.remaining());
-                buf.put_slice(&self.read_buf[..n]);
-                let _ = self.read_buf.split_to(n);
+            // Deliver any not-yet-consumed plaintext from the decrypt scratch.
+            if self.read_scratch_pos < self.decrypt_scratch.len() {
+                let me = self.as_mut().get_mut();
+                let avail = &me.decrypt_scratch[me.read_scratch_pos..];
+                let n = avail.len().min(buf.remaining());
+                buf.put_slice(&avail[..n]);
+                me.read_scratch_pos += n;
                 return Poll::Ready(Ok(()));
             }
 
             // Consume any fully-buffered ciphertext before polling the socket.
             let mut raw = std::mem::take(&mut self.read_raw_buf);
             match self.try_decrypt_chunk(&mut raw) {
-                Some(Ok(pt)) => {
+                Some(Ok(())) => {
                     self.read_raw_buf = raw;
-                    if pt.is_empty() {
-                        return Poll::Ready(Ok(()));
+                    if self.decrypt_scratch.is_empty() {
+                        return Poll::Ready(Ok(())); // empty plaintext = EOF
                     }
-                    self.read_buf = pt;
-                    continue;
+                    continue; // loop back to deliver the decoded plaintext
                 }
                 Some(Err(e)) => {
                     self.read_raw_buf = raw;
@@ -397,35 +380,39 @@ impl AsyncRead for VmessStream {
                 }
             }
 
-            let mut tmp = [0u8; READ_CHUNK_SIZE];
-            let mut tmp_buf = ReadBuf::new(&mut tmp);
-            match Pin::new(self.inner.as_mut()).poll_read(cx, &mut tmp_buf) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                Poll::Ready(Ok(())) => {
-                    let filled = tmp_buf.filled().len();
-                    if filled == 0 {
-                        return Poll::Ready(Ok(()));
-                    }
-                    self.read_raw_buf.extend_from_slice(&tmp[..filled]);
+            // Read more ciphertext directly into read_raw_buf's spare capacity,
+            // avoiding a large temporary buffer on the async poll stack.
+            let me = self.as_mut().get_mut();
+            me.read_raw_buf.reserve(READ_CHUNK_SIZE);
+            let filled = {
+                let dst = me.read_raw_buf.spare_capacity_mut();
+                let mut tmp_buf = ReadBuf::uninit(dst);
+                match Pin::new(me.inner.as_mut()).poll_read(cx, &mut tmp_buf) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                    Poll::Ready(Ok(())) => tmp_buf.filled().len(),
+                }
+            };
+            if filled == 0 {
+                return Poll::Ready(Ok(()));
+            }
+            // SAFETY: poll_read initialized `filled` bytes in the spare capacity.
+            unsafe { me.read_raw_buf.advance_mut(filled) };
 
-                    let mut raw = std::mem::take(&mut self.read_raw_buf);
-                    match self.try_decrypt_chunk(&mut raw) {
-                        Some(Ok(pt)) => {
-                            if pt.is_empty() {
-                                self.read_raw_buf = raw;
-                                return Poll::Ready(Ok(()));
-                            }
-                            self.read_buf = pt;
-                            // Emit one decrypted chunk per poll_read. Keep any
-                            // remaining ciphertext in read_raw_buf for subsequent polls.
-                        }
-                        Some(Err(e)) => {
-                            self.read_raw_buf = raw;
-                            return Poll::Ready(Err(e));
-                        }
-                        None => {}
+            let mut raw = std::mem::take(&mut self.read_raw_buf);
+            match self.try_decrypt_chunk(&mut raw) {
+                Some(Ok(())) => {
+                    self.read_raw_buf = raw;
+                    if self.decrypt_scratch.is_empty() {
+                        return Poll::Ready(Ok(())); // empty plaintext = EOF
                     }
+                    // Loop back to deliver. Any remaining ciphertext stays buffered.
+                }
+                Some(Err(e)) => {
+                    self.read_raw_buf = raw;
+                    return Poll::Ready(Err(e));
+                }
+                None => {
                     self.read_raw_buf = raw;
                 }
             }

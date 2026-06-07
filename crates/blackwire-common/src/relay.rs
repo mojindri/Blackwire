@@ -5,11 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use std::collections::VecDeque;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::pin;
 
@@ -64,6 +64,15 @@ pub enum RelayFlushPolicy {
     Immediate,
     /// Flush on EOF/shutdown only. This lowers syscall pressure for bulk flows.
     Deferred,
+    /// Coalesce flushes during an active burst, flushing only when the source
+    /// pauses (the reader returns `Pending`) or reaches EOF.
+    ///
+    /// This keeps bulk throughput's low syscall pressure (one flush per burst
+    /// instead of one per write) while preserving interactive latency on
+    /// wrapped transports such as TLS/WebSocket, where a buffered partial record
+    /// would otherwise sit unflushed until the next write under
+    /// [`Deferred`](RelayFlushPolicy::Deferred).
+    Adaptive,
 }
 
 /// Options for [`copy_bidirectional_v2`].
@@ -111,10 +120,17 @@ impl RelayV2Stats {
     }
 }
 
-/// Growable FIFO ring buffer used by the v2 relay.
+/// Growable FIFO buffer used by the v2 relay.
+///
+/// Backed by a `BytesMut` plus a read cursor so the reader consumes from the
+/// front in O(1) (`consume` just advances the cursor) and always sees a single
+/// contiguous `front_slice` — unlike a `VecDeque<u8>` ring, which can wrap and
+/// expose only a partial leading segment. Consumed front space is reclaimed by
+/// compaction only when the tail runs out of room, keeping memmoves rare.
 #[derive(Debug)]
 pub struct RelayRingBuffer {
-    buf: VecDeque<u8>,
+    buf: BytesMut,
+    start: usize,
     max_capacity: usize,
 }
 
@@ -124,14 +140,15 @@ impl RelayRingBuffer {
         let initial_capacity = initial_capacity.max(1);
         let max_capacity = max_capacity.max(initial_capacity);
         Self {
-            buf: VecDeque::with_capacity(initial_capacity),
+            buf: BytesMut::with_capacity(initial_capacity),
+            start: 0,
             max_capacity,
         }
     }
 
     /// Number of bytes currently held in the buffer.
     pub fn len(&self) -> usize {
-        self.buf.len()
+        self.buf.len() - self.start
     }
 
     /// Current allocated capacity of the buffer.
@@ -146,25 +163,36 @@ impl RelayRingBuffer {
 
     /// True if the buffer holds no bytes.
     pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
+        self.len() == 0
     }
 
     /// Append as many bytes from `bytes` as fit; returns the number appended.
     pub fn push_slice(&mut self, bytes: &[u8]) -> usize {
         let n = bytes.len().min(self.remaining_capacity());
-        self.buf.extend(&bytes[..n]);
+        if n == 0 {
+            return 0;
+        }
+        // Reclaim consumed front space if the tail can't hold the new bytes.
+        if self.buf.capacity() - self.buf.len() < n {
+            self.compact();
+        }
+        self.buf.extend_from_slice(&bytes[..n]);
         n
     }
 
-    /// A contiguous view of the leading bytes in the buffer (may not be all bytes).
+    /// A contiguous view of the leading bytes in the buffer.
     pub fn front_slice(&self) -> &[u8] {
-        self.buf.as_slices().0
+        &self.buf[self.start..]
     }
 
     /// Remove the first `n` bytes from the front of the buffer.
     pub fn consume(&mut self, n: usize) {
-        let n = n.min(self.buf.len());
-        self.buf.drain(..n);
+        self.start += n.min(self.len());
+        if self.start == self.buf.len() {
+            // Fully drained — reset to the front so capacity is fully usable.
+            self.buf.clear();
+            self.start = 0;
+        }
     }
 
     /// Attempt to double the buffer capacity up to `max_capacity`. Returns `false` if already at max.
@@ -174,14 +202,29 @@ impl RelayRingBuffer {
             return false;
         }
         let next = capacity.saturating_mul(2).min(self.max_capacity).max(1);
-        self.buf.reserve_exact(next.saturating_sub(capacity));
+        self.buf.reserve(next.saturating_sub(self.buf.len()));
         true
+    }
+
+    /// Move live bytes to the front of the allocation, dropping consumed prefix.
+    /// Uses `copy_within` (not `BytesMut::advance`) so `capacity()` stays stable
+    /// and equal to the underlying allocation; only `grow` changes capacity.
+    fn compact(&mut self) {
+        if self.start == 0 {
+            return;
+        }
+        let live = self.buf.len() - self.start;
+        self.buf.copy_within(self.start.., 0);
+        self.buf.truncate(live);
+        self.start = 0;
     }
 }
 
 struct RelayDirectionState {
     pending: RelayRingBuffer,
-    scratch: Vec<u8>,
+    /// Read scratch, borrowed from the shared pool and returned on drop so each
+    /// relay direction reuses a pooled allocation instead of a fresh `Vec`.
+    scratch: BytesMut,
     read_eof: bool,
     shutdown_sent: bool,
     flush_pending: bool,
@@ -195,9 +238,11 @@ struct RelayDirectionState {
 impl RelayDirectionState {
     fn new(options: RelayV2Options) -> Self {
         let initial = options.initial_buffer.max(1);
+        let mut scratch = relay_pool().acquire(initial);
+        scratch.resize(initial, 0);
         Self {
             pending: RelayRingBuffer::new(initial, options.max_buffer.max(initial)),
-            scratch: vec![0; initial],
+            scratch,
             read_eof: false,
             shutdown_sent: false,
             flush_pending: false,
@@ -211,6 +256,12 @@ impl RelayDirectionState {
 
     fn done(&self) -> bool {
         self.read_eof && self.pending.is_empty() && self.shutdown_sent
+    }
+}
+
+impl Drop for RelayDirectionState {
+    fn drop(&mut self) {
+        relay_pool().release(std::mem::take(&mut self.scratch));
     }
 }
 
@@ -292,7 +343,12 @@ where
                 state.bytes += n as u64;
                 state.write_ops += 1;
                 progressed = true;
-                if flush_policy == RelayFlushPolicy::Immediate {
+                // Immediate and Adaptive both mark unflushed data; they differ in
+                // *when* the flush fires (see the flush block below).
+                if matches!(
+                    flush_policy,
+                    RelayFlushPolicy::Immediate | RelayFlushPolicy::Adaptive
+                ) {
                     state.flush_pending = true;
                 }
             }
@@ -301,7 +357,13 @@ where
         }
     }
 
-    if state.flush_pending && state.pending.is_empty() {
+    // Immediate flush: the write buffer just drained, so push it out now —
+    // before the read below can refill the buffer. This preserves the
+    // "flush after every write" contract.
+    if flush_policy == RelayFlushPolicy::Immediate
+        && state.flush_pending
+        && state.pending.is_empty()
+    {
         match Pin::new(&mut *writer).poll_flush(cx) {
             Poll::Ready(Ok(())) => {
                 state.flush_pending = false;
@@ -313,27 +375,10 @@ where
         }
     }
 
-    if state.read_eof && state.pending.is_empty() && !state.shutdown_sent {
-        if flush_policy == RelayFlushPolicy::Deferred {
-            match Pin::new(&mut *writer).poll_flush(cx) {
-                Poll::Ready(Ok(())) => {
-                    state.flush_ops += 1;
-                    progressed = true;
-                }
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                Poll::Pending => return Poll::Ready(Ok(progressed)),
-            }
-        }
-        match Pin::new(writer).poll_shutdown(cx) {
-            Poll::Ready(Ok(())) => {
-                state.shutdown_sent = true;
-                progressed = true;
-            }
-            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-            Poll::Pending => return Poll::Ready(Ok(progressed)),
-        }
-    }
-
+    // Read after the immediate flush so `Adaptive` can observe whether the source
+    // still has data ready this round. `read_pending` is true when the reader had
+    // nothing to hand us — i.e. the burst has drained and a flush is worthwhile.
+    let mut read_pending = false;
     if !state.read_eof && state.pending.remaining_capacity() > 0 {
         let read_len = state.pending.remaining_capacity().min(state.scratch.len());
         let mut read_buf = ReadBuf::new(&mut state.scratch[..read_len]);
@@ -361,7 +406,49 @@ where
                 }
             }
             Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+            Poll::Pending => read_pending = true,
+        }
+    }
+
+    // Adaptive flush: coalesce a run of back-to-back writes into a single flush,
+    // firing only once the source has paused (reader Pending) or hit EOF.
+    if flush_policy == RelayFlushPolicy::Adaptive
+        && state.flush_pending
+        && state.pending.is_empty()
+        && (read_pending || state.read_eof)
+    {
+        match Pin::new(&mut *writer).poll_flush(cx) {
+            Poll::Ready(Ok(())) => {
+                state.flush_pending = false;
+                state.flush_ops += 1;
+                progressed = true;
+            }
+            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
             Poll::Pending => {}
+        }
+    }
+
+    if state.read_eof && state.pending.is_empty() && !state.shutdown_sent {
+        // Deferred deferred all flushes to here; Adaptive may still have a
+        // pending flush if EOF arrived in the same round as the final write.
+        if state.flush_pending || flush_policy == RelayFlushPolicy::Deferred {
+            match Pin::new(&mut *writer).poll_flush(cx) {
+                Poll::Ready(Ok(())) => {
+                    state.flush_pending = false;
+                    state.flush_ops += 1;
+                    progressed = true;
+                }
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Pending => return Poll::Ready(Ok(progressed)),
+            }
+        }
+        match Pin::new(writer).poll_shutdown(cx) {
+            Poll::Ready(Ok(())) => {
+                state.shutdown_sent = true;
+                progressed = true;
+            }
+            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+            Poll::Pending => return Poll::Ready(Ok(progressed)),
         }
     }
 
@@ -483,6 +570,9 @@ async fn copy_one_way_with_idle<R, W>(
         last_activity.store(now_ms(), Ordering::Relaxed);
     }
 
+    // Propagate EOF to the peer so it doesn't stall waiting for data that will
+    // never arrive (idle timeout fired or reader errored on the other half).
+    let _ = writer.shutdown().await;
     pool.release(buf);
 }
 
@@ -589,6 +679,64 @@ mod tests {
         assert_eq!(stats.byte_totals(), (6, 6));
         assert!(stats.read_ops >= 2);
         assert!(stats.write_ops >= 2);
+    }
+
+    #[tokio::test]
+    async fn relay_v2_adaptive_coalesces_flushes_for_a_burst() {
+        // A burst of back-to-back writes from one side should be covered by far
+        // fewer flushes under Adaptive than under Immediate, while delivering the
+        // exact same bytes. We drive many small writes before reading them out so
+        // the relay sees a run of writes between source pauses.
+        // A small ring (1 KiB) forces the 16 KiB payload across many
+        // read→write cycles, so Immediate flushes once per cycle while Adaptive
+        // coalesces them until the source pauses.
+        const RING: usize = 1024;
+        const TOTAL: usize = 16 * 1024;
+        async fn run(policy: RelayFlushPolicy) -> RelayV2Stats {
+            let (mut a_client, a_relay) = tokio::io::duplex(64 * 1024);
+            let (mut b_client, b_relay) = tokio::io::duplex(64 * 1024);
+
+            let relay = tokio::spawn(copy_bidirectional_v2(
+                a_relay,
+                b_relay,
+                RelayV2Options {
+                    initial_buffer: RING,
+                    max_buffer: RING,
+                    flush_policy: policy,
+                },
+            ));
+
+            // Hand the whole payload to the relay up front, then let it drain.
+            a_client.write_all(&[0xABu8; TOTAL]).await.unwrap();
+            a_client.shutdown().await.unwrap();
+            b_client.shutdown().await.unwrap();
+
+            let mut got = Vec::new();
+            b_client.read_to_end(&mut got).await.unwrap();
+            assert_eq!(got.len(), TOTAL);
+            relay.await.unwrap().unwrap()
+        }
+
+        let immediate = run(RelayFlushPolicy::Immediate).await;
+        let adaptive = run(RelayFlushPolicy::Adaptive).await;
+
+        // Same payload moved either way.
+        assert_eq!(immediate.bytes_a_to_b, TOTAL as u64);
+        assert_eq!(adaptive.bytes_a_to_b, TOTAL as u64);
+        // Adaptive must not flush more than Immediate, and for a coalesced burst
+        // it should flush strictly fewer times.
+        assert!(
+            adaptive.flush_ops <= immediate.flush_ops,
+            "adaptive flushes ({}) should not exceed immediate ({})",
+            adaptive.flush_ops,
+            immediate.flush_ops
+        );
+        assert!(
+            adaptive.flush_ops < immediate.flush_ops,
+            "adaptive ({}) should coalesce below immediate ({})",
+            adaptive.flush_ops,
+            immediate.flush_ops
+        );
     }
 
     #[tokio::test]
