@@ -13,8 +13,7 @@
 //! 4. Raw payload bytes follow immediately.
 //!
 //! The server validates the token. If valid, it relays traffic to the
-//! destination. If invalid (or if auth fails), it forwards the connection to a
-//! fallback HTTPS server — so probes see a real web page.
+//! destination. If invalid, the current inbound handler rejects the connection.
 //!
 //! # Modules
 //!

@@ -10,18 +10,20 @@
 //!
 //! # The relay loop
 //!
-//! The default relay is implemented using `tokio::io::copy_bidirectional`. This
-//! runs two concurrent copy loops:
+//! The default relay is implemented by the app relay helper. The legacy
+//! userspace path runs two pooled copy loops:
 //!   - Inbound → Outbound: read from the client, write to the server
 //!   - Outbound → Inbound: read from the server, write to the client
 //!
-//! Both loops run until either side closes the connection or an error occurs.
+//! Relay Engine v2 can instead drive both directions from one future with
+//! growable ring buffers. Both userspace engines run until either side closes
+//! the connection or an error occurs.
 //!
 //! # Linux splice(2)
 //!
-//! On Linux, raw TCP-to-TCP relays use `splice(2)`, which moves bytes through
-//! kernel pipes without copying them into userspace. Non-Linux builds and
-//! non-raw streams keep using `copy_bidirectional`.
+//! On Linux, raw TCP-to-TCP relays may use `splice(2)`, which moves bytes through
+//! kernel pipes without copying them into userspace. Non-Linux builds, non-raw
+//! streams, and splice fallbacks use the configured userspace relay engine.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -483,10 +485,10 @@ impl Dispatcher for DefaultDispatcher {
 
         // Relay bytes bidirectionally until either side closes.
         //
-        // The relay helper uses Linux splice(2) for raw TCP-to-TCP streams and
-        // falls back to copy_bidirectional for every other stream type.
+        // The relay helper may use Linux splice(2) for raw TCP-to-TCP streams and
+        // falls back to the configured userspace relay engine for other stream types.
         //
-        // Both paths run two concurrent copy loops:
+        // Both paths relay both directions:
         //   inbound → outbound (client sending data to the server)
         //   outbound → inbound (server sending data back to the client)
         //

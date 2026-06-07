@@ -57,10 +57,9 @@ impl OutboundConnectResult {
 ///
 /// # Fallback on failure
 ///
-/// If authentication fails, the handler MUST NOT close the connection.
-/// Instead, it should forward all received bytes (including the auth header)
-/// to the configured fallback backend. This makes the server indistinguishable
-/// from a real HTTPS server to probers and censors.
+/// If a fallback backend is configured, active-probe-resistant handlers should
+/// forward all received bytes (including the auth header) to that backend on
+/// authentication failure. Handlers without a fallback may fail closed.
 #[async_trait]
 pub trait InboundHandler: Send + Sync + 'static {
     /// The unique tag for this inbound, as configured in config.json.

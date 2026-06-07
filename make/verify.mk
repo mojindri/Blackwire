@@ -31,7 +31,7 @@ verify-local:
 	BENCH_IO_TIMEOUT_MS=30000 cargo test --workspace --all-targets
 	@echo "==> verify-local complete"
 
-# Compatibility shape for the old `make check` (local-total, no Lima/VPS).
+# Local compatibility gate shape without Lima/VPS.
 verify-check-compat: verify-local
 	@echo "==> [verify-check-compat] lab Docker + production helpers + fuzz-smoke"
 	$(MAKE) verify-lab-docker

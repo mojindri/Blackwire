@@ -172,7 +172,7 @@ impl RelayRingBuffer {
         if n == 0 {
             return 0;
         }
-        // Reclaim consumed front space if the tail can't hold the new bytes.
+        // Reclaim consumed front space if the tail cannot hold the new bytes.
         if self.buf.capacity() - self.buf.len() < n {
             self.compact();
         }
@@ -570,7 +570,7 @@ async fn copy_one_way_with_idle<R, W>(
         last_activity.store(now_ms(), Ordering::Relaxed);
     }
 
-    // Propagate EOF to the peer so it doesn't stall waiting for data that will
+    // Propagate EOF to the peer so it does not stall waiting for data that will
     // never arrive (idle timeout fired or reader errored on the other half).
     let _ = writer.shutdown().await;
     pool.release(buf);

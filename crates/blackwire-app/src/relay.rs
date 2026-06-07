@@ -10,10 +10,11 @@
 //!
 //! # Linux splice(2)
 //!
-//! On Linux, when **both** sides are raw `TcpStream`s, we try `splice(2)` first.
-//! Splice moves data through kernel pipes — bytes never touch userspace buffers,
-//! which saves CPU on large transfers. If either stream is wrapped (TLS, WebSocket,
-//! REALITY, etc.) or splice fails, we fall back to `tokio::io::copy_bidirectional`.
+//! On Linux, when **both** sides are raw `TcpStream`s, policy may select
+//! `splice(2)`. Splice moves data through kernel pipes — bytes never touch
+//! userspace buffers, which saves CPU on large transfers. If either stream is
+//! wrapped (TLS, WebSocket, REALITY, etc.) or splice fails, we use the configured
+//! userspace relay engine.
 
 use std::io;
 #[cfg(target_os = "linux")]

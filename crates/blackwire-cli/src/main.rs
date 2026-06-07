@@ -1644,7 +1644,7 @@ fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
 
     // `EnvFilter::try_from_default_env()` reads `RUST_LOG`.
-    // If that env var isn't set, fall back to "info".
+    // If that env var is not set, fall back to "info".
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     fmt()

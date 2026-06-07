@@ -15,7 +15,7 @@
 //!
 //! ```text
 //! version(1)=1 | iv(16) | key(16) | v(1) | options(1) | pad_sec(1) | reserved(1)=0
-//! | command(1)=1 | port(2 BE) | atyp(1) | addr(var) | padding(pad_len) | fnv32a(4)
+//! | command(1) | port(2 BE) | atyp(1) | addr(var) | padding(pad_len) | fnv32a(4)
 //! ```
 //!
 //! # Response wire layout (server → client)
@@ -156,7 +156,7 @@ pub fn response_body_iv(request_iv: &[u8; 16]) -> [u8; 16] {
 
 // ── Encoder ───────────────────────────────────────────────────────────────────
 
-/// Encode a VMess AEAD request header.
+/// Encode a VMess AEAD TCP request header.
 ///
 /// Returns `(iv, key, v, connection_nonce, enc_len_bytes(18), enc_header_bytes)`.
 pub fn encode_header(

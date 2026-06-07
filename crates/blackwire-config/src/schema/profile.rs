@@ -390,7 +390,7 @@ pub enum FastSplicePolicy {
     /// Use splice only after `ADAPTIVE_SPLICE_MIN_BYTES` have been relayed (default).
     #[default]
     Adaptive,
-    /// Never use splice; always use `copy_bidirectional`.
+    /// Never use splice; always use the configured userspace relay engine.
     Disabled,
     /// Always use splice for eligible (raw TCP) streams.
     Always,

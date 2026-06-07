@@ -56,7 +56,6 @@ Important:
 
 - For normal usage, invoke commands from your local repo checkout.
 - **Canonical gates:** `verify-local`, `verify-lab`, `verify-remote`, `verify-sweep`, `verify-release` — see [test-workflows.md](test-workflows.md).
-- Legacy `make check`, `make check-browser`, `make check-vps` remain as compatibility aliases.
 - VPS commands are launched locally; they SSH into remote machines.
 - Pass `SSH_KEY=~/.ssh/id_ed25519` (and optionally `SSH_USER` / `SSH_PORT`) for VPS work.
 - SSH directly into a VPS only for debugging, service inspection, or manual recovery.

@@ -832,9 +832,9 @@ pub fn try_into_vision_stream(
 ///
 /// # Why not just use `BoxedStream` directly?
 ///
-/// `tokio::io::copy_bidirectional` requires two separate `AsyncRead +
-/// AsyncWrite` references. Creating a `Link` by splitting a stream is the
-/// clean way to get those two independent handles.
+/// Some relay and adapter paths need independent read and write handles for
+/// the same stream. Creating a `Link` by splitting a stream is the clean way
+/// to get those two handles.
 pub struct Link {
     /// The reading half: bytes coming from the remote end.
     pub reader: Box<dyn AsyncRead + Send + Unpin + 'static>,

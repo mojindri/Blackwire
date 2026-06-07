@@ -13,8 +13,7 @@
 //! # Server (`tls_accept`)
 //!
 //! The server performs a TLS handshake as the accepting party. It loads its
-//! certificate and private key from PEM strings. PEM parsing is done with the
-//! same hand-rolled parser used in `quic.rs` — no extra dependencies needed.
+//! certificate and private key from PEM strings using the shared `pem` module.
 //!
 //! # Security note
 //!

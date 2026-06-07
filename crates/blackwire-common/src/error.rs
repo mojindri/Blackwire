@@ -52,9 +52,8 @@ pub enum ProxyError {
 
     /// An operation did not complete within the allowed time.
     ///
-    /// Timeouts are used for security: if a client connects but does not send
-    /// the expected authentication data within 300ms, we treat it as a probe
-    /// and forward to the fallback backend.
+    /// Timeouts are used for bounded handshakes, routing DNS, fallback relays,
+    /// and other operations that must not block indefinitely.
     #[error("timeout")]
     Timeout,
 

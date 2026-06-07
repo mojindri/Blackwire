@@ -7,7 +7,6 @@ Discovery:
 
 ```sh
 make help
-make help-compat
 make help-internal
 ```
 
@@ -100,24 +99,8 @@ make perf
 make perf-remote
 ```
 
-## Legacy Aliases
-
-These still work and print a deprecation hint:
-
-| Old | Prefer |
-| --- | --- |
-| `make check` / `make local-total` | `make verify-check-compat` |
-| `make check-browser` | `make verify-lab-lima` |
-| `make check-vps` | `verify-check-compat` + `verify-remote` |
-| `make ci` / `make local-fast` | `make verify-local` |
-| `make ci-vps` / `make vps` | `make verify-remote` |
-| `make local-fuzz` | `make fuzz-smoke` |
-| `make local-fuzz-total` | `make fuzz-long` |
-| `make check-perf-vm` | `make perf` |
-| `make perf-vps` / `make check-perf-vps` | `make perf-remote` |
-
-Full current target details are discoverable with `make help`,
-`make help-compat`, and `make help-internal`.
+Full current target details are discoverable with `make help` and
+`make help-internal`.
 
 Related docs:
 

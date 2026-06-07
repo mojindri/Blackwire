@@ -13,8 +13,8 @@
 //!
 //! `load_geoip` and `load_geosite` cache the last loaded result keyed by the
 //! file's BLAKE3 content hash. On a hot-reload where the database file has not
-//! changed, the cached `Arc<HashMap<...>>` is cloned instead of re-parsing the
-//! binary protobuf — avoiding the 5–10 MB re-parse + 100 k+ entry rebuild.
+//! changed, the parsed matcher map is cloned instead of re-parsing the binary
+//! protobuf — avoiding the 5–10 MB decode + 100 k+ entry rebuild.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -51,8 +51,8 @@ fn geosite_cache() -> &'static Mutex<Option<GeoCache<GeoSiteMatcher>>> {
 ///
 /// The result is cached by BLAKE3 content hash: if the file has not changed
 /// since the last call (same hash), the cached `Arc<HashMap>` is cloned
-/// instead of re-parsing the protobuf — making hot-reloads with unchanged
-/// geo databases essentially free.
+/// instead of re-parsing the protobuf. Hot-reloads with unchanged geo databases
+/// still clone the map, but avoid the expensive decode and matcher rebuild.
 ///
 /// Returns an empty `HashMap` if the file is missing, unreadable, or corrupt.
 pub fn load_geoip(path: impl AsRef<Path>) -> HashMap<String, GeoIpMatcher> {

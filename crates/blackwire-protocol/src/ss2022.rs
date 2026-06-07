@@ -24,11 +24,12 @@
 //!
 //! # Key derivation
 //!
-//! Password → PSK via blake3 hash:
-//!   `psk = blake3::hash(password.as_bytes())`
+//! Password → PSK:
+//!   Base64-encoded 32-byte keys are used directly (xray/sing-box compatible);
+//!   otherwise `psk = blake3::hash(password.as_bytes())`.
 //!
 //! Per-session subkey:
-//!   `subkey = blake3::derive_key("ss-subkey", psk || salt)`
+//!   `subkey = blake3::derive_key("shadowsocks 2022 session subkey", psk || salt)`
 //!
 //! # Modules
 //!
