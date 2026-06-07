@@ -23,8 +23,9 @@
 //!
 //! # Binary-only
 //!
-//! This module only handles `Binary` frames. `Text` frames and control frames
-//! (Ping, Pong, Close) are handled internally by tungstenite.
+//! Binary frames are passed through directly. Text frames are exposed as their
+//! UTF-8 bytes for compatibility with tolerant WebSocket peers. Control frames
+//! (Ping, Pong, Close) are handled by tungstenite or translated to stream EOF.
 
 use std::io;
 use std::pin::Pin;
@@ -201,7 +202,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for WsStream<S> {
                 buf.put_slice(&self.read_buf[..n]);
                 if n >= self.read_buf.len() {
                     // Release the frame allocation as soon as it is fully consumed
-                    // so a large frame read in small chunks isn't pinned.
+                    // so a large frame read in small chunks is not pinned.
                     self.read_buf = Bytes::new();
                 } else {
                     let _ = self.read_buf.split_to(n);

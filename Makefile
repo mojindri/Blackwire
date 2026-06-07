@@ -1,4 +1,4 @@
-# Makefile — public verification workflow + compatibility aliases.
+# Makefile — public verification workflow.
 #
 # Canonical entrypoints:
 #   make help
@@ -8,13 +8,12 @@
 #   make verify-sweep
 #   make verify-release
 #
-# Run `make help-compat` for deprecated aliases and `make help-internal` for atoms.
+# Run `make help-internal` for annotated atomic targets.
 
 -include .env.vm
 include make/verify.mk
-include make/aliases.mk
 
-.PHONY: all build dev test fmt fmt-check lint lint-strict audit deny update-geoip fuzz-build \
+.PHONY: all ci build dev test fmt fmt-check lint lint-strict audit deny update-geoip fuzz-build \
 	fmt fmt-check lint audit audit-optional deny-optional fuzz-smoke \
 	clean clean-generated clean-all-generated clean-reports clean-pcaps clean-lima-artifacts clean-bench \
 	bench bench-build bench-xray bench-singbox bench-smoke \
@@ -22,16 +21,20 @@ include make/aliases.mk
 	competitive-quic competitive-expensive competitive-all competitive-report \
 	bench-protocol bench-protocol-quick bench-flamegraph \
 	shared-path-local-gate \
-	help help-compat help-internal bench-vm-smoke bench-vm-total bench-vps-smoke bench-vps-total \
-	perf perf-vps lima-stop lima-browser-baseline lima-fingerprint-total \
+	help help-internal bench-vm-smoke bench-vm-total bench-vps-smoke bench-vps-total \
+	perf lima-stop lima-browser-baseline lima-fingerprint-total \
 	local-load local-slowloris local-pcap local-fingerprint-compare local-netem local-hostility \
 	local-ci-matrix local-chrome-baseline-real local-chrome-baseline-docker \
 	local-fingerprint-total local-fingerprint-verify vm-browser-setup vm-browser-baseline \
 	vm-fingerprint-total vm-start-default vm-wait-default vm-fingerprint-default \
-	vm-print-defaults local-total-with-vm gen-keys ci-strict
+	vm-print-defaults gen-keys ci-strict
 
 # Default target: build in release mode.
 all: build
+
+ci:
+	@echo "ERROR: 'make ci' was removed. Use 'make verify-local'." >&2
+	@exit 2
 
 ## build: Compile the project in release mode.
 build:
@@ -140,27 +143,8 @@ help:
 	@echo "  make clean-generated - remove reports/logs/pcaps/bench outputs"
 	@echo ""
 	@echo "Discovery:"
-	@echo "  make help-compat     - deprecated aliases (check, ci-all, vps, …)"
 	@echo "  make help-internal   - annotated atomic targets"
 	@echo "  docs/test-workflows.md"
-
-## help-compat: Show deprecated aliases and their canonical replacements.
-help-compat:
-	@echo "Deprecated aliases (still work, print a hint when run):"
-	@echo "  make check              -> verify-check-compat"
-	@echo "  make check-browser      -> verify-lab-lima"
-	@echo "  make check-vps          -> verify-check-compat + verify-remote"
-	@echo "  make check-all-local    -> verify-check-compat + verify-lab-lima"
-	@echo "  make ci / local-fast    -> verify-local"
-	@echo "  make ci-all / local     -> labs/realistic ci (verify-lab superset)"
-	@echo "  make local-total        -> verify-check-compat"
-	@echo "  make ci-vps / vps       -> verify-remote"
-	@echo "  make perf / check-perf-vm -> bench-vm-total"
-	@echo "  make perf-vps           -> perf-remote"
-	@echo ""
-	@echo "See docs/make-target-inventory.md for the full mapping."
-
-# Compatibility aliases (ci, ci-all, check, vps, …) live in make/aliases.mk.
 
 .PHONY: clean-reports clean-pcaps clean-lima-artifacts clean-generated clean-all-generated
 
@@ -188,7 +172,7 @@ clean-all-generated: clean-generated ## Remove generated repo reports plus Rust 
 
 
 .PHONY: bench bench-build bench-xray bench-singbox bench-smoke bench-remote \
-        bench-vm-smoke bench-vm-total bench-vps-smoke bench-vps-total check-perf-vm check-perf-vps check-perf-total clean-bench
+        bench-vm-smoke bench-vm-total bench-vps-smoke bench-vps-total clean-bench
 
 ## bench: Docker benchmark — build image + run full xray/singbox/blackwire comparison + print report
 bench:
@@ -226,15 +210,7 @@ bench-vps-smoke:
 bench-vps-total:
 	$(MAKE) -C labs/realistic bench-vps-total
 
-check-perf-vm: bench-vm-total ## Deprecated: use make perf (see help-compat).
-
-check-perf-vps: bench-vps-total ## Deprecated: use make perf-remote.
-
-check-perf-total: check-perf-vm check-perf-vps
-
 perf: bench-vm-total ## Lima VM performance benchmark.
-
-perf-vps: bench-vps-total ## VPS performance benchmark (needs SSH_SERVER/SSH_CLIENT).
 
 clean-bench:
 	rm -rf labs/realistic/reports/production/bench benches/reports labs/competitive/reports/*.jsonl labs/competitive/reports/*.md labs/competitive/reports/*.log
@@ -369,7 +345,7 @@ vm-browser-baseline:
 vm-fingerprint-total:
 	$(MAKE) -C labs/realistic vm-fingerprint-total
 
-.PHONY: vm-start-default vm-wait-default vm-fingerprint-default local-total-with-vm vm-print-defaults
+.PHONY: vm-start-default vm-wait-default vm-fingerprint-default vm-print-defaults
 
 vm-start-default: ## Bootstrap/find VM launcher, create .env.vm template, then start VM if configured.
 	@if [ ! -f .env.vm ]; then \
@@ -440,8 +416,6 @@ vm-fingerprint-default: vm-start-default vm-wait-default ## Start/wait for VM, t
 	VM_EXPECT_SNI=$${VM_EXPECT_SNI:-$(VM_EXPECT_SNI)} \
 	$(MAKE) vm-fingerprint-total
 
-local-total-with-vm: local-total vm-fingerprint-default ## Run local-total, then start/wait VM fingerprint check.
-
 vm-print-defaults: ## Print VM defaults loaded from .env.vm and environment.
 	@echo "VM_NAME=$${VM_NAME:-$(VM_NAME)}"
 	@echo "VM_START_CMD=$${VM_START_CMD:-$(VM_START_CMD)}"
@@ -457,15 +431,13 @@ vm-print-defaults: ## Print VM defaults loaded from .env.vm and environment.
 
 
 
-.PHONY: lima-browser-baseline lima-fingerprint-total local-total-with-lima lima-stop
+.PHONY: lima-browser-baseline lima-fingerprint-total lima-stop
 
 lima-browser-baseline:
 	$(MAKE) -C labs/realistic lima-browser-baseline
 
 lima-fingerprint-total:
 	$(MAKE) -C labs/realistic lima-fingerprint-total
-
-local-total-with-lima: local-total lima-fingerprint-total ## Run local-total, then fully automated Li   ma browser fingerprint check.
 
 lima-stop: ## Stop the default Lima VM instance. Override with LIMA_INSTANCE=<name>.
 	@INSTANCE="$${LIMA_INSTANCE:-blackwire-browser}"; \

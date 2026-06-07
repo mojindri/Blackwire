@@ -25,10 +25,10 @@
 //! response. If the server immediately closes the connection or returns an error,
 //! the censor knows it is a proxy.
 //!
-//! The defence: when authentication fails, we do NOT close the connection.
-//! Instead we forward everything (including the already-read header bytes) to
-//! a fallback backend (usually Nginx on localhost:80 serving a real website).
-//! The prober gets back a real web page and cannot tell the difference.
+//! The defence, when configured: on authentication failure, forward everything
+//! (including the already-read header bytes) to a fallback backend (usually
+//! Nginx on localhost:80 serving a real website). Without a fallback, the
+//! inbound handler fails closed.
 //!
 //! # Modules
 //!   - `codec`    — wire format encoding and decoding

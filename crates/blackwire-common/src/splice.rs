@@ -44,8 +44,8 @@
 //!   - We are on Linux (compile-time check via `#[cfg(target_os = "linux")]`)
 //!   - Both streams are raw TCP sockets that expose a file descriptor
 //!
-//! If either condition is false, the dispatcher falls back to
-//! `tokio::io::copy_bidirectional` (the userspace copy path).
+//! If either condition is false, the dispatcher falls back to its configured
+//! userspace relay engine.
 //!
 //! # Async integration
 //!
@@ -647,7 +647,7 @@ mod linux {
                     Err(e) => return Err(e),
                 }
             }
-            // Yield periodically on sustained bulk streams so relay tasks don't
+            // Yield periodically on sustained bulk streams so relay tasks do not
             // monopolize the worker. The readable/writeable awaits already yield
             // for small or backpressured streams; keep the explicit yield coarse
             // to avoid adding scheduler overhead to hot splice loops.
@@ -963,4 +963,4 @@ pub use linux::splice_bidirectional;
 pub use linux::{splice_bidirectional_with_backend, SpliceBackendPolicy};
 
 // On non-Linux we just re-export nothing. Callers use `#[cfg(target_os = "linux")]`
-// to decide whether to call splice or fall back to copy_bidirectional.
+// to decide whether to call splice or use the userspace relay path.

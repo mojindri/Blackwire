@@ -266,7 +266,7 @@ impl DestPool {
     /// slots discarded; caller must subtract that from `AdaptivePool::global_idle`.
     fn try_take(&self, idle_ttl: Duration) -> (Option<(TcpStream, Duration)>, usize) {
         // Update LRU timestamp unconditionally so a destination with all-stale
-        // or empty idle slots isn't treated as cold by evict_lru().
+        // or empty idle slots is not treated as cold by evict_lru().
         self.last_used_ms.store(now_ms(), Ordering::Relaxed);
         let mut guard = self.idle.lock();
         let now = Instant::now();
@@ -332,7 +332,7 @@ impl DestPool {
         }
 
         // Pre-reserve slots with a CAS loop so two concurrent replenish() calls
-        // can't both read the same global_idle and both claim the full budget.
+        // cannot both read the same global_idle and both claim the full budget.
         let to_spawn = loop {
             let cur = pool.global_idle.load(Ordering::Relaxed);
             let budget = (pool.max_global_idle as i64 - cur).max(0) as usize;

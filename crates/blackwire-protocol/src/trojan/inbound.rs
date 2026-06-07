@@ -6,7 +6,7 @@
 //! 2. Compare it (in constant time) against the expected token derived from
 //!    each configured password.
 //! 3. If valid: read the SOCKS5 address, then relay to the dispatcher.
-//! 4. If invalid: silently close or forward to a fallback (active-probe defence).
+//! 4. If invalid: reject the connection without sending a Trojan error response.
 //!
 //! # TLS requirement
 //!
@@ -16,10 +16,8 @@
 //!
 //! # Active-probe resistance
 //!
-//! If the auth token is wrong we do not send any error response. We simply
-//! drop the connection (or forward to a fallback). An active prober sees the
-//! same behaviour as a real HTTPS server — it cannot tell whether we are a
-//! proxy or a normal web server.
+//! If the auth token is wrong we do not send a Trojan error response. The current
+//! handler returns `AuthFailed`, and the caller closes the connection.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

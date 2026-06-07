@@ -7,7 +7,7 @@
 //! - `GET /metrics` → Prometheus text format
 //! - `GET /version` → JSON `{"version":"0.1.0"}`
 //!
-//! # Metrics
+//! # Selected metrics
 //!
 //! | Metric | Type | Labels |
 //! |--------|------|--------|

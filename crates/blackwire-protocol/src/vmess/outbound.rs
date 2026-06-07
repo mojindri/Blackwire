@@ -5,7 +5,7 @@
 //! 1. Dial TCP to the VMess server.
 //! 2. Generate auth ID.
 //! 3. Encode and encrypt the request header.
-//! 4. Send: `auth_id(16) || enc_len(18) || encrypted_header`.
+//! 4. Send: `auth_id(16) || enc_len(18) || connection_nonce(8) || encrypted_header`.
 //! 5. Wrap the stream in AEAD chunk framing.
 //! 6. Return the wrapped stream for bidirectional relay.
 

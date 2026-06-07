@@ -30,8 +30,8 @@ impl DnsResolver {
     /// If all provided servers fail to parse, we fall back to the system
     /// resolver with a warning — matching xray's `NewLocalDNSClient()` fallback.
     ///
-    /// Plain IP addresses (e.g. `"8.8.8.8"`) are supported.
-    /// DoT/DoH URLs are skipped with a warning.
+    /// Plain IP addresses plus `udp://`, `tcp://`, `tls://`, and `https://`
+    /// upstreams are supported.
     pub async fn new(servers: &[String]) -> Result<Self, ProxyError> {
         let resolver = if servers.is_empty() {
             build_system_resolver()?

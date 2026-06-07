@@ -92,7 +92,7 @@ pub enum Command {
     Tcp,
     /// UDP association.
     Udp,
-    /// Mux.Cool (Xray CMD 0x03) — relayed like TCP until full mux framing is implemented.
+    /// Mux.Cool (Xray CMD 0x03) — demultiplexed by the VLESS mux relay.
     Mux,
 }
 
@@ -107,7 +107,7 @@ pub enum Command {
 ///
 /// Returns `ProxyError::Protocol` if:
 ///   - The version byte is not 0x00
-///   - The command byte is not 0x01 or 0x02
+///   - The command byte is not 0x01, 0x02, or 0x03
 ///   - The address type is unknown
 ///   - The domain name is not valid UTF-8
 ///   - The stream ended unexpectedly (e.g. client disconnected mid-header)

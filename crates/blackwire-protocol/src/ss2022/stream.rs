@@ -10,7 +10,8 @@
 //! └──────────────────────────────────────────────────┘
 //! ```
 //!
-//! The nonce for each chunk is a 12-byte big-endian counter. The same subkey
+//! The nonce for each chunk is a 12-byte value with the 64-bit counter encoded
+//! little-endian in the first 8 bytes. The same subkey
 //! is used for both the length field and the data field, but with separate
 //! nonce values (counter increments once per field).
 //!

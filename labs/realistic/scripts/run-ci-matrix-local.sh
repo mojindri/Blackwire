@@ -29,10 +29,10 @@ run_step() {
   fi
 }
 
-run_step local-fast make local-fast
+run_step verify-local make verify-local
 run_step local-load make local-load
 run_step local-slowloris make local-slowloris
-run_step local-prod make local-prod
+run_step prod-readiness make -C labs/realistic prod-readiness
 run_step pcap-local make local-pcap
 run_step fingerprint-compare make local-fingerprint-compare
 run_step netem-local make local-netem

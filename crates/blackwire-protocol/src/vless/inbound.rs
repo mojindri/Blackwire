@@ -8,18 +8,19 @@
 //!   3. If the UUID is valid: sends the VLESS response header, then hands
 //!      the stream to the dispatcher to relay to the destination.
 //!   4. If the UUID is NOT valid: forwards the entire connection (including
-//!      already-read bytes) to the fallback backend WITHOUT closing.
+//!      already-read bytes) to the fallback backend when one is configured;
+//!      otherwise drops the connection.
 //!
 //! # The fallback is critical for security
 //!
 //! If we closed the connection on auth failure, a censor could run a script
 //! that connects to our port and observes: "the server closes the connection
-//! immediately for random data — it must be a proxy." By forwarding to a real
-//! web server instead, we make the server indistinguishable from a normal
-//! HTTPS endpoint.
+//! immediately for random data — it must be a proxy." When a fallback is
+//! configured, forwarding to a real web server instead makes the server harder
+//! to distinguish from a normal HTTPS endpoint.
 //!
 //! The fallback address is typically "127.0.0.1:80" where Nginx is serving
-//! a real website. The censor probes us and gets a real web page back.
+//! a real website; probes then see whatever that backend returns.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
