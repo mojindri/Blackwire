@@ -25,6 +25,7 @@ START_NGINX="${PERF_START_NGINX:-0}"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 RAW_LOG="$OUT_DIR/memory-profile-nginx-${PAYLOAD}-${TS}.log"
 OUT_JSON="$OUT_DIR/memory-profile-nginx-${PAYLOAD}-${TS}.json"
+OUT_HEY_LOG="$OUT_DIR/memory-profile-nginx-${PAYLOAD}-${TS}.hey.log"
 TMP_DIR="$(mktemp -d)"
 SERVER_CFG="$TMP_DIR/server.json"
 CLIENT_CFG="$TMP_DIR/client.json"
@@ -168,17 +169,18 @@ echo "sample_interval_s=$SAMPLE_INTERVAL_SEC sample_count=$SAMPLE_COUNT"
 SAMPLER_PID="$!"
 
 "$HEY_BIN" -z "${DURATION}s" -c "$CONCURRENCY" -x "socks5://127.0.0.1:${CLIENT_PORT}" "$URL" >"$HEY_LOG" 2>&1 || true
+cp "$HEY_LOG" "$OUT_HEY_LOG"
 wait "$SAMPLER_PID" || true
 SAMPLER_PID=""
 
 rps="$(awk '/Requests\/sec:/ {print $2}' "$HEY_LOG" | tail -n1)"
-p95_s="$(awk '/ 95% in / {print $3}' "$HEY_LOG" | tail -n1)"
-p99_s="$(awk '/ 99% in / {print $3}' "$HEY_LOG" | tail -n1)"
+p95_s="$(awk '$1 == "95%" && $2 == "in" {print $3}' "$HEY_LOG" | tail -n1)"
+p99_s="$(awk '$1 == "99%" && $2 == "in" {print $3}' "$HEY_LOG" | tail -n1)"
 ok_200="$(awk '/\[200\]/ {print $2}' "$HEY_LOG" | tail -n1)"
 ok_200="${ok_200:-0}"
 rps="${rps:-0}"
-p95_s="${p95_s:-0}"
-p99_s="${p99_s:-0}"
+p95_ms="$(awk -v s="$p95_s" 'BEGIN { if (s == "") print "null"; else printf "%.3f", s * 1000.0 }')"
+p99_ms="$(awk -v s="$p99_s" 'BEGIN { if (s == "") print "null"; else printf "%.3f", s * 1000.0 }')"
 
 read -r peak_rss peak_vms peak_threads peak_fd <<EOF
 $(awk '
@@ -203,8 +205,8 @@ cat >"$OUT_JSON" <<EOF
   "url": "$URL",
   "requests_per_second": $rps,
   "latency_ms": {
-    "p95": $(awk -v s="$p95_s" 'BEGIN { printf "%.3f", s * 1000.0 }'),
-    "p99": $(awk -v s="$p99_s" 'BEGIN { printf "%.3f", s * 1000.0 }')
+    "p95": $p95_ms,
+    "p99": $p99_ms
   },
   "status_200_count": $ok_200,
   "memory": {
@@ -213,7 +215,8 @@ cat >"$OUT_JSON" <<EOF
     "peak_threads": ${peak_threads:-0},
     "peak_fd": ${peak_fd:-0}
   },
-  "raw_log": "$RAW_LOG"
+  "raw_log": "$RAW_LOG",
+  "hey_log": "$OUT_HEY_LOG"
 }
 EOF
 
