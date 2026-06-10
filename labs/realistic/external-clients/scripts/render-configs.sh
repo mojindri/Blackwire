@@ -98,6 +98,7 @@ done
     # reject non-base64 strings at startup, which would mask server-side rejection.
     export SS2022_PASSWORD="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     export HYSTERIA2_PASSWORD="wrong-${HYSTERIA2_PASSWORD}"
+    export TUIC_PASSWORD="wrong-${TUIC_PASSWORD}"
     export SHADOWTLS_PASSWORD="wrong-${SHADOWTLS_PASSWORD}"
     export REALITY_SHORT_ID="0000000000000000"
     for tpl in "$LAB_DIR/configs/xray"/*.json.tmpl; do
