@@ -57,35 +57,55 @@ const MAX_PACKET_SIZE: usize = 64 * 1024;
 /// TUIC v5 user credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TuicUser {
+    /// User UUID used by the TUIC v5 authentication command.
     pub uuid: Uuid,
+    /// Shared password paired with [`TuicUser::uuid`] for authentication.
     pub password: String,
 }
 
 /// Configuration for a TUIC v5 inbound server.
 #[derive(Debug, Clone)]
 pub struct TuicServerConfig {
+    /// Logical inbound tag used for logging and routing metadata.
     pub tag: String,
+    /// UDP socket address the QUIC listener binds to.
     pub addr: SocketAddr,
+    /// Accepted TUIC users for authenticate commands.
     pub users: Vec<TuicUser>,
+    /// PEM-encoded TLS certificate chain served by the QUIC endpoint.
     pub cert_pem: String,
+    /// PEM-encoded private key for [`TuicServerConfig::cert_pem`].
     pub key_pem: String,
+    /// Optional server name advertised by the TLS configuration.
     pub server_name: Option<String>,
+    /// Optional maximum number of concurrent QUIC connections.
     pub max_connections: Option<usize>,
+    /// Maximum time to wait for the initial TUIC authenticate command.
     pub auth_timeout: Duration,
+    /// QUIC socket fan-out and reuse settings.
     pub socket: QuicSocketConfig,
+    /// Whether native TUIC UDP datagrams are accepted and relayed.
     pub enable_udp: bool,
 }
 
 /// Configuration for a TUIC v5 outbound client.
 #[derive(Debug, Clone)]
 pub struct TuicClientConfig {
+    /// Remote TUIC server UDP socket address.
     pub server: SocketAddr,
+    /// TLS SNI used when connecting to [`TuicClientConfig::server`].
     pub server_name: String,
+    /// Client UUID sent in the TUIC authenticate command.
     pub uuid: Uuid,
+    /// Client password used with [`TuicClientConfig::uuid`] for authentication.
     pub password: String,
+    /// Whether TLS certificate verification is disabled for lab/self-signed deployments.
     pub skip_cert_verify: bool,
+    /// Number of local QUIC endpoints to shard outbound TCP streams across.
     pub endpoint_shards: usize,
+    /// QUIC socket fan-out and reuse settings.
     pub socket: QuicSocketConfig,
+    /// Whether native TUIC UDP datagrams are enabled for this client.
     pub enable_udp: bool,
 }
 
@@ -95,10 +115,12 @@ pub struct TuicServer {
 }
 
 impl TuicServer {
+    /// Create a TUIC v5 server from validated configuration.
     pub fn new(config: TuicServerConfig) -> Self {
         Self { config }
     }
 
+    /// Serve QUIC connections and relay accepted TUIC TCP/UDP sessions through `dispatcher`.
     pub async fn serve(&self, dispatcher: Arc<dyn Dispatcher>) -> Result<()> {
         let endpoints = self.server_endpoints()?;
         info!(addr = %self.config.addr, endpoints = endpoints.len(), "TUIC v5 server listening");
@@ -323,6 +345,7 @@ struct TuicClientSession {
 }
 
 impl TuicClient {
+    /// Create a reusable TUIC v5 outbound client.
     pub fn new(config: TuicClientConfig) -> Self {
         let shard_count = config.endpoint_shards.clamp(1, MAX_CLIENT_SESSIONS);
         let sessions = (0..shard_count).map(|_| Mutex::new(None)).collect();
@@ -333,6 +356,7 @@ impl TuicClient {
         }
     }
 
+    /// Open a TUIC TCP proxy stream to `dest`.
     pub async fn connect_and_dial(&self, dest: &Address) -> Result<BoxedStream, ProxyError> {
         let shard = self.next_session.fetch_add(1, Ordering::Relaxed) % self.sessions.len();
         let session = self.session(shard).await?;
@@ -379,6 +403,7 @@ pub struct TuicOutboundHandler {
 }
 
 impl TuicOutboundHandler {
+    /// Create an outbound handler that dials destinations via TUIC v5.
     pub fn new(config: TuicClientConfig, tag: String) -> Arc<Self> {
         Arc::new(Self {
             client: Arc::new(TuicClient::new(config)),
@@ -549,14 +574,20 @@ async fn read_u16(recv: &mut RecvStream) -> Result<u16, ProxyError> {
     Ok(u16::from_be_bytes(raw))
 }
 
+/// TUIC v5 UDP packet command payload carried in QUIC DATAGRAM frames.
 #[derive(Debug, Clone)]
 pub struct TuicUdpPacket {
+    /// UDP association identifier.
     pub assoc_id: u16,
+    /// Packet sequence identifier within the association.
     pub pkt_id: u16,
+    /// Destination or source address encoded in the packet command.
     pub addr: Address,
+    /// UDP payload bytes.
     pub data: Bytes,
 }
 
+/// Encode a TUIC v5 UDP packet command for QUIC DATAGRAM transmission.
 pub fn encode_udp_packet(packet: &TuicUdpPacket) -> Result<Bytes, ProxyError> {
     let mut buf = BytesMut::new();
     buf.put_u8(TUIC_VERSION);
@@ -574,6 +605,7 @@ pub fn encode_udp_packet(packet: &TuicUdpPacket) -> Result<Bytes, ProxyError> {
     Ok(buf.freeze())
 }
 
+/// Decode a TUIC v5 UDP packet command received from a QUIC DATAGRAM frame.
 pub fn decode_udp_packet(mut raw: Bytes) -> Result<TuicUdpPacket, ProxyError> {
     if raw.len() < 10 {
         return Err(ProxyError::Protocol("TUIC UDP packet too short".into()));
@@ -772,6 +804,7 @@ pub struct TuicUdpSession {
 }
 
 impl TuicUdpSession {
+    /// Establish an authenticated TUIC v5 UDP association.
     pub async fn connect(config: &TuicClientConfig) -> Result<Self, ProxyError> {
         let endpoint = build_client_endpoint_with_alpn_and_socket(
             config.skip_cert_verify,
@@ -793,10 +826,12 @@ impl TuicUdpSession {
         })
     }
 
+    /// Return the underlying QUIC connection for advanced diagnostics.
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
 
+    /// Send one UDP datagram to `dest` through this TUIC association.
     pub async fn send(&self, dest: Address, data: &[u8]) -> Result<(), ProxyError> {
         let packet = TuicUdpPacket {
             assoc_id: self.assoc_id,
@@ -810,6 +845,7 @@ impl TuicUdpSession {
             .map_err(|e| ProxyError::Transport(format!("TUIC send_datagram: {e}")))
     }
 
+    /// Receive the next UDP datagram for this TUIC association.
     pub async fn recv(&self) -> Result<TuicUdpPacket, ProxyError> {
         loop {
             let raw = self
@@ -825,6 +861,7 @@ impl TuicUdpSession {
     }
 }
 
+/// Encode a TUIC v5 dissociate command for `assoc_id`.
 pub fn encode_dissociate(assoc_id: u16) -> Bytes {
     let mut buf = BytesMut::new();
     buf.put_u8(TUIC_VERSION);
@@ -833,6 +870,7 @@ pub fn encode_dissociate(assoc_id: u16) -> Bytes {
     buf.freeze()
 }
 
+/// Encode a TUIC v5 heartbeat command.
 pub fn encode_heartbeat() -> Bytes {
     Bytes::from_static(&[TUIC_VERSION, CMD_HEARTBEAT])
 }
