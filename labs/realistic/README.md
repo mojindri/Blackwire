@@ -18,7 +18,7 @@ It has two jobs:
 | All local pre-push checks | `make -C labs/realistic finalize` |
 | Same matrix on two VPS hosts | `SSH_SERVER=… SSH_CLIENT=… make -C labs/realistic interop-server-vps` |
 
-**External-client matrix (Docker):** `external-clients/scenarios.env` is the source of truth. It currently defines 19 scenario rows; each row runs the configured Xray and/or sing-box positive and negative cases. Rows with `-` in a client column are **SKIP** because of upstream client/config limits, not missing blackwire server transports — see [docs/parity-status.md](../../docs/parity-status.md).
+**External-client matrix (Docker):** `external-clients/scenarios.env` is the source of truth. It currently defines 20 scenario rows; each row runs the configured Xray and/or sing-box positive and negative cases. Rows with `-` in a client column are **SKIP** because of upstream client/config limits, not missing blackwire server transports — see [docs/parity-status.md](../../docs/parity-status.md).
 
 Source of truth: [docs/xray-parity-source-of-truth.md](../../docs/xray-parity-source-of-truth.md).
 

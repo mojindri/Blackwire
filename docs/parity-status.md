@@ -51,6 +51,7 @@ See [roadmap.md](roadmap.md). Summary:
 | Lab row | blackwire server | Xray client | sing-box client | Why SKIP |
 |---------|------------------|-------------|-----------------|----------|
 | `vless-quic` | Yes | SKIP | PASS | Xray 26+ removed legacy QUIC transport |
+| `tuic` | Yes | SKIP | configured | sing-box supports TUIC outbound; Xray has no TUIC client row in this lab; run matrix for PASS evidence |
 | `vless-shadowtls` | Yes | SKIP | SKIP | Xray 26+ / sing-box model mismatch — server e2e |
 | `vless-mkcp` | Yes | SKIP | SKIP | sing-box no mKCP; Xray 26 finalmask |
 | `vless-splithttp-packet-up` | Yes | PASS | SKIP | Upstream [sing-box](https://github.com/SagerNet/sing-box) has no xHTTP `packet-up`; Xray proves row |

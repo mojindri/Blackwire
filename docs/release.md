@@ -44,7 +44,7 @@ Validated by CI, the e2e test suite, and the realistic lab mandatory matrix.
 
 Treat these as unstable — they may be promoted or downgraded in later releases.
 
-- TUIC v5 (QUIC v5 TCP proxy and native UDP relay; missing external-client lab proof)
+- TUIC v5 (QUIC v5 TCP proxy and native UDP relay; external-client lab row added with sing-box proof path; remains Experimental pending broader soak/hostile-network coverage)
 
 - Stats API (gRPC) (uptime, RSS, task count wired; no soak or observability validation)
 - Black UI companion panel and live-apply workflows for controlled deployments; do not expose the panel directly to the public internet without a hardened HTTPS reverse proxy and access controls

@@ -66,26 +66,26 @@ ssh_server() {
     ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_SERVER}" "$@"
 }
 
-preflight_udp_8389() {
-    local marker="/tmp/blackwire-vps-udp8389.ok"
-    local pidfile="/tmp/blackwire-vps-udp8389.pid"
+preflight_udp_port() {
+    local port="$1"
+    local marker="/tmp/blackwire-vps-udp${port}.ok"
+    local pidfile="/tmp/blackwire-vps-udp${port}.pid"
 
-    ssh_server "rm -f '${marker}' '${pidfile}'; nohup sh -c \"timeout 8 socat -u UDP-RECV:8389 SYSTEM:'printf ok > ${marker}'\" >/tmp/blackwire-vps-udp8389.log 2>&1 & echo \$! > '${pidfile}'" \
-        > "$REPORT_DIR/preflight-udp-prepare.log" 2>&1 || return 1
+    ssh_server "rm -f '${marker}' '${pidfile}'; nohup sh -c \"timeout 8 socat -u UDP-RECV:${port} SYSTEM:'printf ok > ${marker}'\" >/tmp/blackwire-vps-udp${port}.log 2>&1 & echo \$! > '${pidfile}'" \
+        > "$REPORT_DIR/preflight-udp-${port}-prepare.log" 2>&1 || return 1
     sleep 1
-    ssh_client "printf probe | nc -u -w2 '${SERVER_HOST}' 8389" \
-        > "$REPORT_DIR/preflight-udp-send.log" 2>&1 || true
+    ssh_client "printf probe | nc -u -w2 '${SERVER_HOST}' '${port}'" \
+        > "$REPORT_DIR/preflight-udp-${port}-send.log" 2>&1 || true
     sleep 1
-    if ! ssh_server "test -f '${marker}'" > "$REPORT_DIR/preflight-udp-check.log" 2>&1; then
+    if ! ssh_server "test -f '${marker}'" > "$REPORT_DIR/preflight-udp-${port}-check.log" 2>&1; then
         ssh_server "if [ -f '${pidfile}' ]; then kill \$(cat '${pidfile}') >/dev/null 2>&1 || true; fi; rm -f '${marker}' '${pidfile}'" \
-            > "$REPORT_DIR/preflight-udp-cleanup.log" 2>&1 || true
+            > "$REPORT_DIR/preflight-udp-${port}-cleanup.log" 2>&1 || true
         return 1
     fi
     ssh_server "if [ -f '${pidfile}' ]; then kill \$(cat '${pidfile}') >/dev/null 2>&1 || true; fi; rm -f '${marker}' '${pidfile}'" \
-        >> "$REPORT_DIR/preflight-udp-cleanup.log" 2>&1 || true
+        >> "$REPORT_DIR/preflight-udp-${port}-cleanup.log" 2>&1 || true
     return 0
 }
-
 copy_to_client() {
     scp "${SCP_OPTS[@]}" -r \
         "$GENERATED_DIR/xray" \
@@ -110,6 +110,7 @@ port_for_protocol() {
         ss2022) echo 8388 ;;
         ss2022-udp) echo 8389 ;;
         hysteria2) echo 4433 ;;
+        tuic) echo 9443 ;;
         vless-reality) echo 10443 ;;
         vless-shadowtls) echo 8450 ;;
         vless-mkcp) echo 8451 ;;
@@ -166,7 +167,7 @@ wait_for_server_port() {
             sleep ${PORT_WAIT_SLEEP}; done; exit 1" || return 1
         return 0
     fi
-    if [[ "$protocol" == "hysteria2" || "$protocol" == "vless-quic" || "$protocol" == "vless-mkcp" ]]; then
+    if [[ "$protocol" == "hysteria2" || "$protocol" == "tuic" || "$protocol" == "vless-quic" || "$protocol" == "vless-mkcp" ]]; then
         sleep 2
         return 0
     fi
@@ -190,7 +191,7 @@ start_server() {
 
 requires_udp_probe() {
     case "$1" in
-        trojan-udp|ss2022-udp) return 0 ;;
+        trojan-udp|ss2022-udp|tuic) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -372,9 +373,14 @@ ssh_server 'test -x /usr/local/bin/blackwire && test -d /etc/blackwire/generated
     echo "ERROR: SERVER VPS needs blackwire binary, generated configs, and certs." >&2
     exit 1
 }
-preflight_udp_8389 || {
+preflight_udp_port 8389 || {
     echo "ERROR: UDP preflight to SERVER:8389 failed (likely firewall or routing issue)." >&2
     echo "Check server setup includes UDP 8389 allow rule and re-run vps-server-setup." >&2
+    exit 1
+}
+preflight_udp_port 9443 || {
+    echo "ERROR: UDP preflight to SERVER:9443 failed (likely firewall or routing issue)." >&2
+    echo "Check server setup includes UDP 9443 allow rule and re-run vps-server-setup." >&2
     exit 1
 }
 ssh_client "mkdir -p '$REMOTE_DIR/generated'" > "$REPORT_DIR/remote-mkdir.log" 2>&1
