@@ -55,14 +55,15 @@ export function OutboundDrawer({
   const protocolOptions = useMemo(
     () =>
       capabilities?.protocols.filter((item) =>
-        ["freedom", "vless", "vmess", "trojan", "shadowsocks", "hysteria2"].includes(item.key)
+        ["freedom", "vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic"].includes(item.key)
       ) ?? [
         { key: "freedom", label: "Freedom", status: "supported", notes: "" },
         { key: "vless", label: "VLESS", status: "supported", notes: "" },
         { key: "vmess", label: "VMess", status: "supported", notes: "" },
         { key: "trojan", label: "Trojan", status: "supported", notes: "" },
         { key: "shadowsocks", label: "Shadowsocks", status: "supported", notes: "" },
-        { key: "hysteria2", label: "Hysteria2", status: "supported", notes: "" }
+        { key: "hysteria2", label: "Hysteria2", status: "supported", notes: "" },
+        { key: "tuic", label: "TUIC v5", status: "supported", notes: "QUIC v5 TCP and UDP" }
       ],
     [capabilities]
   );
@@ -165,8 +166,8 @@ export function OutboundDrawer({
               <Field label="Protocol">
                 <Select value={state.protocol} onChange={(e) => updateStructured({ protocol: e.target.value })}>
                   {protocolOptions.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
+                    <option key={item.key} value={item.key} disabled={item.status === "unsupported"} title={item.notes}>
+                      {item.status === "supported" ? item.label : `${item.label} (${item.status})`}
                     </option>
                   ))}
                 </Select>
@@ -208,10 +209,21 @@ export function OutboundDrawer({
               </Field>
             ) : null}
 
-            {state.protocol === "hysteria2" ? (
-              <Field label="Server" hint="Client-side Hysteria2 target, for example 127.0.0.1:443 or [::1]:443">
+            {state.protocol === "hysteria2" || state.protocol === "tuic" ? (
+              <Field label="Server" hint={`Client-side ${state.protocol === "tuic" ? "TUIC v5" : "Hysteria2"} target, for example 127.0.0.1:443 or [::1]:443`}>
                 <Input value={state.server} onChange={(e) => updateStructured({ server: e.target.value })} placeholder="127.0.0.1:443" />
               </Field>
+            ) : null}
+
+            {state.protocol === "tuic" ? (
+              <div className="configurator-grid">
+                <Field label="UUID" hint="Maps to settings.uuid for TUIC v5 authentication.">
+                  <Input value={state.userId} onChange={(e) => updateStructured({ userId: e.target.value })} placeholder="550e8400-e29b-41d4-a716-446655440000" />
+                </Field>
+                <Field label="Password">
+                  <Input value={state.password} onChange={(e) => updateStructured({ password: e.target.value })} placeholder="secret-password" />
+                </Field>
+              </div>
             ) : null}
           </section>
         ) : null}
