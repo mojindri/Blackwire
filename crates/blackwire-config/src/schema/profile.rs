@@ -584,6 +584,7 @@ fn protocol_name(p: &Protocol) -> &'static str {
         Protocol::Trojan => "trojan",
         Protocol::Shadowsocks => "shadowsocks",
         Protocol::Hysteria2 => "hysteria2",
+        Protocol::Tuic => "tuic",
         Protocol::ShadowTls => "shadowtls",
         Protocol::Socks => "socks",
         Protocol::Http => "http",
@@ -668,7 +669,7 @@ fn protocol_cost(config: &Config) -> ProtocolCost {
                 supports_splice = false;
                 supports_early_data = false;
             }
-            Protocol::Hysteria2 => {
+            Protocol::Hysteria2 | Protocol::Tuic => {
                 cpu = bump_cost(cpu, CostClass::Medium);
                 latency = bump_cost(latency, CostClass::Medium);
                 copy_mode = CopyMode::Framed;
@@ -718,7 +719,7 @@ fn protocol_cost(config: &Config) -> ProtocolCost {
                 supports_splice = false;
                 supports_early_data = false;
             }
-            Protocol::Hysteria2 => {
+            Protocol::Hysteria2 | Protocol::Tuic => {
                 cpu = bump_cost(cpu, CostClass::Medium);
                 latency = bump_cost(latency, CostClass::Medium);
                 copy_mode = CopyMode::Framed;

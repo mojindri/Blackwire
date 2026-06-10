@@ -27,6 +27,7 @@ pub mod hysteria2;
 /// Packet classification and deficit-round-robin scheduler for TUN inner flows.
 pub mod innerflow;
 pub mod quic;
+pub mod tuic;
 
 // TLS and WebSocket transports
 pub mod tls;
@@ -94,6 +95,10 @@ pub use tls::{
     build_server_config as tls_build_server_config, build_tls_acceptor,
     cached_client_config as tls_cached_client_config, tls_accept, tls_accept_tls13,
     tls_accept_with_acceptor, tls_connect, tls_connect_with_config,
+};
+pub use tuic::{
+    TuicClient, TuicClientConfig, TuicOutboundHandler, TuicServer, TuicServerConfig, TuicUdpPacket,
+    TuicUdpSession, TuicUser,
 };
 pub use tun::{
     build_tcp_packet, build_tcp_rst, create_tun, current_tun_support, ensure_tun_runtime_supported,

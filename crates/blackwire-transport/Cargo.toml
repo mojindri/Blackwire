@@ -58,6 +58,7 @@ sha1.workspace              = true
 hmac.workspace              = true
 rand.workspace              = true
 rand_core.workspace         = true
+uuid.workspace              = true
 reed-solomon-erasure.workspace = true
 hex.workspace               = true
 base64.workspace            = true

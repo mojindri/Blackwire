@@ -27,7 +27,11 @@ pub fn build_value(state: &AppState) -> Result<Value> {
             .map(|u| client_entry(&inbound.protocol, u))
             .collect();
         let mut settings_json = object_or_empty(&inbound.settings)?;
-        if !clients.is_empty()
+        if inbound.protocol == "tuic" {
+            if !clients.is_empty() || settings_json.get("users").is_none() {
+                settings_json["users"] = Value::Array(clients);
+            }
+        } else if !clients.is_empty()
             || (protocol_uses_clients(&inbound.protocol) && settings_json.get("clients").is_none())
         {
             settings_json["clients"] = Value::Array(clients);
@@ -203,6 +207,7 @@ pub fn subscription_link(
         "trojan" => trojan_link(settings, inbound, user),
         "shadowsocks" => shadowsocks_link(settings, inbound, user),
         "hysteria2" => hysteria2_link(settings, inbound, user),
+        "tuic" => tuic_link(settings, inbound, user),
         other => Err(anyhow!(
             "subscription link for protocol '{other}' requires manual config export"
         )),
@@ -407,6 +412,23 @@ fn hysteria2_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
     ))
 }
 
+fn tuic_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Result<String> {
+    let password = credential_string(user, "password").unwrap_or_else(|| user.uuid.clone());
+    let mut params = vec![format!("uuid={}", util::url_escape(&user.uuid))];
+    if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
+        params.push(format!("sni={}", util::url_escape(&value)));
+    }
+    Ok(format!(
+        "tuic://{}:{}@{}:{}?{}#{}",
+        util::url_escape(&user.uuid),
+        util::url_escape(&password),
+        settings.subscription_host,
+        inbound.port,
+        params.join("&"),
+        util::url_escape(&user.email)
+    ))
+}
+
 fn share_network(inbound: &Inbound) -> String {
     let security = stream_security(inbound);
     if inbound.transport == "reality" || security.as_deref() == Some("reality") {
@@ -449,6 +471,10 @@ fn client_entry(protocol: &str, user: &ManagedUser) -> Value {
         "hysteria2" => {
             entry.entry("auth").or_insert_with(|| json!(user.uuid));
         }
+        "tuic" => {
+            entry.entry("uuid").or_insert_with(|| json!(user.uuid));
+            entry.entry("password").or_insert_with(|| json!(user.uuid));
+        }
         _ => {}
     }
     Value::Object(entry)
@@ -457,7 +483,7 @@ fn client_entry(protocol: &str, user: &ManagedUser) -> Value {
 fn protocol_uses_clients(protocol: &str) -> bool {
     matches!(
         protocol,
-        "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2"
+        "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "tuic"
     )
 }
 

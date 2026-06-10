@@ -179,7 +179,9 @@ These are the byte formats and handshakes that clients and remote proxy servers 
 - Trojan
 - Shadowsocks-2022
 
-There are also references to future/advanced pieces, but the main ownership is the protocols above.
+TUIC v5 is implemented in the QUIC transport crate and wired by `blackwire-core`;
+keep its config wiring, Black UI selection support, and interop evidence aligned
+with the protocol bytes when changing it.
 
 ### Read First
 

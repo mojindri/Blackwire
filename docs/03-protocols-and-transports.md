@@ -30,6 +30,7 @@ Examples:
 - VMess
 - Trojan
 - Shadowsocks-2022
+- TUIC v5
 
 Protocols usually answer questions like:
 
@@ -217,6 +218,20 @@ A modern Shadowsocks variant using stronger, more explicit crypto design.
 ### Mental Model
 
 It is less "send one plain header and relay raw bytes" and more "create an encrypted session format."
+
+## TUIC v5
+
+### What It Is
+
+TUIC v5 is a QUIC-based proxy protocol with an authenticate command,
+per-stream TCP connect commands, and QUIC DATAGRAM packet commands for UDP.
+
+### Main Characteristics
+
+- QUIC/TLS transport with v5 command bytes
+- TLS exporter based authentication using UUID and password
+- TCP proxying on bidirectional QUIC streams
+- UDP relay over QUIC DATAGRAM packets
 
 ## Supported Transports In This Repo
 

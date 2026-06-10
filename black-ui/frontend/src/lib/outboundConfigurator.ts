@@ -72,7 +72,7 @@ export function createOutboundEditorState(outbound?: Outbound | null): OutboundE
     security,
     address: stringValue(settings.value.address) ?? "",
     port: numberString(settings.value.port),
-    userId: stringValue(user0?.id) ?? "",
+    userId: stringValue(user0?.id) ?? stringValue(settings.value.uuid) ?? "",
     password: stringValue(settings.value.password) ?? "",
     method: stringValue(settings.value.method) ?? "",
     server: stringValue(settings.value.server) ?? "",
@@ -135,7 +135,7 @@ export function buildOutboundInput(state: OutboundEditorState): OutboundInput {
     delete settings.users;
   }
 
-  if (state.protocol === "trojan" || state.protocol === "shadowsocks") {
+  if (state.protocol === "trojan" || state.protocol === "shadowsocks" || state.protocol === "tuic") {
     applyStringField(settings, "password", state.password);
   } else {
     delete settings.password;
@@ -147,12 +147,19 @@ export function buildOutboundInput(state: OutboundEditorState): OutboundInput {
     delete settings.method;
   }
 
-  if (state.protocol === "hysteria2") {
+  if (state.protocol === "hysteria2" || state.protocol === "tuic") {
     applyStringField(settings, "server", state.server);
     delete settings.address;
     delete settings.port;
   } else {
     delete settings.server;
+  }
+
+  if (state.protocol === "tuic") {
+    applyStringField(settings, "uuid", state.userId);
+    delete settings.method;
+  } else {
+    delete settings.uuid;
   }
 
   streamSettings.network = state.network;
@@ -325,11 +332,23 @@ export function validateOutboundState(state: OutboundEditorState): OutboundValid
     }
   }
 
-  if (state.protocol === "hysteria2") {
+  if (state.protocol === "hysteria2" || state.protocol === "tuic") {
+    const label = state.protocol === "tuic" ? "TUIC v5" : "Hysteria2";
     if (!state.server.trim()) {
-      issues.push({ field: "server", message: "Hysteria2 outbound requires a server address." });
+      issues.push({ field: "server", message: `${label} outbound requires a server address.` });
     } else if (!isSocketAddr(state.server.trim())) {
-      issues.push({ field: "server", message: "Hysteria2 server must look like 127.0.0.1:443 or [::1]:443." });
+      issues.push({ field: "server", message: `${label} server must look like 127.0.0.1:443 or [::1]:443.` });
+    }
+  }
+
+  if (state.protocol === "tuic") {
+    if (!state.userId.trim()) {
+      issues.push({ field: "userId", message: "TUIC v5 requires a UUID." });
+    } else if (!isUuid(state.userId.trim())) {
+      issues.push({ field: "userId", message: "TUIC v5 UUID must be valid." });
+    }
+    if (!state.password.trim()) {
+      issues.push({ field: "password", message: "TUIC v5 requires a password." });
     }
   }
 

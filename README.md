@@ -20,7 +20,7 @@ instead of accepting Xray or sing-box config files as drop-in input.
 ## Features
 
 - Multi-protocol runtime: VLESS, VMess AEAD, Trojan, Shadowsocks 2022,
-  Hysteria2, SOCKS5, HTTP CONNECT, and selected tunnel/TUN paths.
+  Hysteria2, TUIC v5, SOCKS5, HTTP CONNECT, and selected tunnel/TUN paths.
 - Modern transports and security: TCP, WebSocket, gRPC, HTTPUpgrade, SplitHTTP,
   mKCP, QUIC, TLS, REALITY, and ShadowTLS where documented as supported.
 - Routing and DNS: domain/IP/port/source/inbound rules, geosite/geoip matching,
