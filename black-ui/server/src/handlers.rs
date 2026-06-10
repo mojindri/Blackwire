@@ -1005,7 +1005,7 @@ fn validate_inbound(input: &InboundInput) -> Result<(), AppError> {
     }
     if !matches!(
         input.protocol.as_str(),
-        "socks" | "http" | "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2"
+        "socks" | "http" | "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "tuic"
     ) {
         return Err(AppError::bad_request("unsupported inbound protocol"));
     }
@@ -1028,7 +1028,7 @@ fn validate_outbound(input: &OutboundInput) -> Result<(), AppError> {
     }
     if !matches!(
         input.protocol.as_str(),
-        "freedom" | "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2"
+        "freedom" | "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "tuic"
     ) {
         return Err(AppError::bad_request("unsupported outbound protocol"));
     }
@@ -1070,6 +1070,16 @@ fn validate_outbound(input: &OutboundInput) -> Result<(), AppError> {
             server.parse::<SocketAddr>().map_err(|e| {
                 AppError::bad_request(format!("invalid Hysteria2 outbound server '{server}': {e}"))
             })?;
+        }
+        "tuic" => {
+            let server = require_json_string(&settings, "server", "TUIC outbound")?;
+            server.parse::<SocketAddr>().map_err(|e| {
+                AppError::bad_request(format!("invalid TUIC outbound server '{server}': {e}"))
+            })?;
+            let uuid = require_json_string(&settings, "uuid", "TUIC outbound")?;
+            Uuid::parse_str(uuid.trim())
+                .map_err(|e| AppError::bad_request(format!("invalid TUIC uuid: {e}")))?;
+            require_json_string(&settings, "password", "TUIC outbound")?;
         }
         _ => {}
     }

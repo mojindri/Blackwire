@@ -15,6 +15,9 @@ pub enum Protocol {
     Shadowsocks,
     /// Hysteria2 — QUIC-based.
     Hysteria2,
+    /// TUIC v5 — QUIC-based multiplexed TCP/UDP proxy.
+    #[serde(rename = "tuic", alias = "tuic-v5")]
+    Tuic,
     /// ShadowTLS — wraps another protocol inside a real TLS handshake.
     ShadowTls,
     /// SOCKS5 local proxy protocol.

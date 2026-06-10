@@ -60,6 +60,10 @@ sudo cat /etc/blackwire/client-info.txt
 
 ## Black UI
 
+Black UI reads runtime capabilities from the companion server. TUIC v5 is
+available in the inbound and outbound protocol pickers as an experimental QUIC
+protocol with TCP proxy and native UDP relay support.
+
 Black UI is the companion web panel for controlled deployments and operator
 testing. Do not expose it directly to the public internet.
 

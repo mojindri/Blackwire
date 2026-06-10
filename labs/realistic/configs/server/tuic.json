@@ -1,0 +1,25 @@
+{
+  "log": { "level": "info" },
+  "inbounds": [
+    {
+      "tag": "tuic-in",
+      "protocol": "tuic",
+      "listen": "0.0.0.0",
+      "port": 9443,
+      "settings": {
+        "users": [{ "uuid": "${TUIC_UUID}", "password": "${TUIC_PASSWORD}" }],
+        "network": "tcp,udp"
+      },
+      "streamSettings": {
+        "network": "quic",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${EXTERNAL_TLS_SERVER_NAME}",
+          "certificateFile": "/etc/blackwire/certs/cert.pem",
+          "keyFile": "/etc/blackwire/certs/key.pem"
+        }
+      }
+    }
+  ],
+  "outbounds": [{ "tag": "freedom", "protocol": "freedom" }]
+}

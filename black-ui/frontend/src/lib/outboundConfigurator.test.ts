@@ -44,6 +44,11 @@ describe("outboundConfigurator", () => {
         protocol: "hysteria2",
         patch: { server: "127.0.0.1:8443" },
         expectedSettings: { server: "127.0.0.1:8443" }
+      },
+      {
+        protocol: "tuic",
+        patch: { server: "127.0.0.1:8444", userId: "8b9a2f4a-5e51-47a6-b012-75c9dfe8bc30", password: "secret" },
+        expectedSettings: { server: "127.0.0.1:8444", uuid: "8b9a2f4a-5e51-47a6-b012-75c9dfe8bc30", password: "secret" }
       }
     ] as const;
 
@@ -65,8 +70,11 @@ describe("outboundConfigurator", () => {
       if (testCase.protocol !== "shadowsocks") {
         expect(settings.method, `${testCase.protocol} method leak`).toBeUndefined();
       }
-      if (testCase.protocol !== "hysteria2") {
+      if (!["hysteria2", "tuic"].includes(testCase.protocol)) {
         expect(settings.server, `${testCase.protocol} server leak`).toBeUndefined();
+      }
+      if (testCase.protocol !== "tuic") {
+        expect(settings.uuid, `${testCase.protocol} uuid leak`).toBeUndefined();
       }
     }
   });

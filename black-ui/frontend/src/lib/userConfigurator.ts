@@ -1,6 +1,6 @@
 import type { Inbound, ManagedUser, UserInput } from "./types";
 
-export type UserProtocol = "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "unknown";
+export type UserProtocol = "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "tuic" | "unknown";
 
 export interface UserEditorState {
   inboundId: number;
@@ -75,7 +75,7 @@ export function syncCredentialFromFields(state: UserEditorState, protocol: UserP
   delete credential.auth;
   delete credential.method;
 
-  if (protocol === "trojan" || protocol === "shadowsocks") {
+  if (protocol === "trojan" || protocol === "shadowsocks" || protocol === "tuic") {
     if (state.password.trim()) credential.password = state.password.trim();
   }
   if (protocol === "hysteria2") {
@@ -100,7 +100,7 @@ export function buildUserInput(state: UserEditorState, protocol: UserProtocol): 
   delete next.auth;
   delete next.method;
 
-  if (protocol === "trojan" || protocol === "shadowsocks") {
+  if (protocol === "trojan" || protocol === "shadowsocks" || protocol === "tuic") {
     if (state.password.trim()) next.password = state.password.trim();
   }
   if (protocol === "hysteria2") {
@@ -144,9 +144,9 @@ export function validateUserState(state: UserEditorState, protocol: UserProtocol
   } else if (!isUuid(state.uuid.trim())) {
     issues.push({ field: "uuid", message: "UUID must be valid." });
   }
-  if (protocol === "trojan" || protocol === "shadowsocks") {
+  if (protocol === "trojan" || protocol === "shadowsocks" || protocol === "tuic") {
     if (!state.password.trim()) {
-      issues.push({ field: "password", message: `${protocol === "trojan" ? "Trojan" : "Shadowsocks"} users require a password.` });
+      issues.push({ field: "password", message: `${protocol === "tuic" ? "TUIC v5" : protocol === "trojan" ? "Trojan" : "Shadowsocks"} users require a password.` });
     }
   }
   if (protocol === "hysteria2" && !state.auth.trim()) {

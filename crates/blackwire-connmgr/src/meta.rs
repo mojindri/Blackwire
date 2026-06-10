@@ -29,6 +29,8 @@ pub enum Protocol {
     Shadowsocks,
     /// Hysteria2 protocol.
     Hysteria2,
+    /// TUIC v5 protocol.
+    Tuic,
     /// Unrecognized or not yet determined protocol.
     Unknown,
 }
@@ -47,6 +49,7 @@ impl Protocol {
             Protocol::Trojan => "trojan",
             Protocol::Shadowsocks => "shadowsocks",
             Protocol::Hysteria2 => "hysteria2",
+            Protocol::Tuic => "tuic",
             Protocol::Unknown => "unknown",
         }
     }

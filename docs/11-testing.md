@@ -62,7 +62,7 @@ Important:
 
 The external-client lab (Docker and VPS) is the first gate for GUI/app compatibility.
 The automated scenario set is defined by `labs/realistic/external-clients/scenarios.env`
-(currently 19 scenario rows).
+(currently 20 scenario rows).
 Each row runs up to 4 cases: Xray positive + negative and sing-box positive + negative.
 Client columns set to `-` are expected **SKIP** when upstream clients lack that
 transport or mode (QUIC on Xray 26+, ShadowTLS, mKCP, etc.) — see

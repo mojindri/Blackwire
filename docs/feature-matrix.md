@@ -63,9 +63,9 @@ No claim of full Xray/sing-box feature parity is made. See the Unsupported rows 
 ## Protocols
 
 Inbound handlers registered in `blackwire-core/src/instance/mod.rs`:
-`Socks`, `Vless`, `Trojan`, `Vmess`, `Http`, `Shadowsocks`, `Hysteria2`.
+`Socks`, `Vless`, `Trojan`, `Vmess`, `Http`, `Shadowsocks`, `Hysteria2`, `Tuic`.
 
-Outbound handlers: `Freedom`, `Vless`, `Hysteria2`, `Trojan`, `Vmess`, `Shadowsocks`.
+Outbound handlers: `Freedom`, `Vless`, `Hysteria2`, `Tuic`, `Trojan`, `Vmess`, `Shadowsocks`.
 
 
 | Protocol                              | Inbound | Outbound | Status           | Evidence / notes                                                                                                                                         |
@@ -84,6 +84,7 @@ Outbound handlers: `Freedom`, `Vless`, `Hysteria2`, `Trojan`, `Vmess`, `Shadowso
 | Shadowsocks 2022                      | Yes     | Yes      | **Supported**    | `ss2022/`; e2e `e2e_ss2022.rs`, `e2e_ss2022_local.rs`                                                                                                    |
 | SS2022 UDP relay (SIP022)             | Yes     | Yes      | **Supported**    | `ss2022/udp.rs` (sing-box SIP022 wire); e2e `e2e_ss2022_udp.rs` PASS; matrix `ss2022-udp` Xray+sing-box **PASS**                                         |
 | Hysteria2                             | Yes     | Yes      | **Supported**    | `blackwire-transport/hysteria2/`, `blackwire-core/hysteria2.rs`; e2e `e2e_hysteria2_vless.rs` + `e2e_hysteria2_udp.rs`; matrix `hysteria2` Xray+sing-box **PASS** |
+| TUIC v5                               | Yes     | Yes      | **Experimental** | `blackwire-transport/src/tuic.rs` + `blackwire-core/src/tuic.rs`; TCP and native UDP e2e coverage in `e2e_tuic.rs`; Black UI supports `protocol: tuic`; external-client lab row `tuic` is configured for sing-box positive/negative auth with Xray intentionally SKIP; run the Docker/VPS matrix before promotion to Supported. |
 | ShadowTLS as `protocol` enum          | No      | No       | **Unsupported**  | Only `security: shadowtls` on TCP inbounds/outbounds                                                                                                     |
 | DNS / dokodemo / tun inbound protocol | No      | No       | **Unsupported**  | Not in `Protocol` enum                                                                                                                                   |
 

@@ -31,7 +31,7 @@ invocations.
 
 Tune waits: `MATRIX_PORT_WAIT_TRIES`, `MATRIX_PORT_WAIT_SLEEP`, `MATRIX_SOCKS_WAIT_TRIES`, `MATRIX_SOCKS_WAIT_SLEEP`.
 
-**19 scenario rows** in `scenarios.env`. Each row runs the configured Xray and/or sing-box positive and negative cases. Some client columns are `-`, which means **SKIP** because upstream cannot run that client transport or mode.
+**20 scenario rows** in `scenarios.env`. Each row runs the configured Xray and/or sing-box positive and negative cases. Some client columns are `-`, which means **SKIP** because upstream cannot run that client transport or mode.
 
 Optional failure capture: `MATRIX_PCAP_ON_FAIL=1 make interop-server-docker`.
 
@@ -75,7 +75,7 @@ labs/realistic/reports/external-clients/
 
 The automated matrix is driven by `external-clients/scenarios.env`.
 
-`scenarios.env` drives the matrix (19 scenario rows including `trojan-udp`, `vless-mux`, ShadowTLS, mKCP, sniffing, and SplitHTTP packet-up).
+`scenarios.env` drives the matrix (20 scenario rows including `tuic`, `trojan-udp`, `vless-mux`, ShadowTLS, mKCP, sniffing, and SplitHTTP packet-up).
 
 **Mux.Cool:** `vless-mux` runs **Xray only** (`sing-box` column is `-` — smux is not wire-compatible with Mux.Cool).
 Both Docker and VPS runners read the same file; tune waits with `MATRIX_PORT_WAIT_*`
@@ -93,6 +93,7 @@ blackwire lacks the server transport. See [docs/parity-status.md](../../../docs/
 | Row | Typical SKIP reason |
 |-----|---------------------|
 | `vless-quic` | Xray 26+ removed QUIC client transport (sing-box proves row) |
+| `tuic` | Xray client is SKIP; sing-box row exercises TUIC v5 TCP and native UDP |
 | `vless-splithttp` | stream-one only (not packet-up); was SKIP until mode aligned |
 | `vless-splithttp-packet-up` | Xray PASS; sing-box SKIP (upstream has no packet-up) |
 | `vless-shadowtls` | Xray/sing-box client models differ from VLESS+`shadowtls` stream |
