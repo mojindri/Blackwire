@@ -164,3 +164,26 @@ base64      = "0.22"
 num_cpus    = "1"
 chrono      = { version = "0.4", features = ["serde", "clock"] }
 rusqlite    = { version = "0.37", features = ["bundled"] }
+
+# ── Build profiles ───────────────────────────────────────────────────────────
+# Release builds optimise for the proxy's CPU-bound hot paths (crypto, framing,
+# routing). `panic = "unwind"` is kept deliberately: each connection runs in its
+# own Tokio task, and unwinding lets a single panicking connection fail in
+# isolation instead of aborting the whole process and dropping every other
+# connection.
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+panic         = "unwind"
+strip         = "debuginfo"
+
+# Keep debug builds fast to compile while still exercising the same code paths.
+[profile.dev]
+opt-level = 0
+
+# Benchmarks and profiling builds want full release-grade optimisation.
+[profile.bench]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
