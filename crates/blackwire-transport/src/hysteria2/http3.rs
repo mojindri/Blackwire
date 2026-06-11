@@ -46,9 +46,28 @@ struct ScheduledUdpDatagram {
 }
 
 /// Per-session upstream socket plus a last-used timestamp for idle eviction.
+///
+/// Each session owns one persistent reader task that copies every upstream UDP
+/// reply back to the client. The reader is aborted when the session is dropped
+/// (idle eviction or connection teardown), which also releases the socket FD.
 struct UdpSession {
     sock: Arc<UdpSocket>,
     last_used: Instant,
+    reader: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for UdpSession {
+    fn drop(&mut self) {
+        self.reader.abort();
+    }
+}
+
+/// Convert an upstream reply's source address into a datagram destination.
+fn destination_from_socketaddr(addr: SocketAddr) -> Destination {
+    match addr.ip() {
+        std::net::IpAddr::V4(ip) => Destination::V4(ip, addr.port()),
+        std::net::IpAddr::V6(ip) => Destination::V6(ip, addr.port()),
+    }
 }
 
 /// Serve one QUIC connection: HTTP/3 auth, then TCP proxy streams on QUIC bidi streams.
@@ -212,6 +231,79 @@ async fn serve_udp_sessions(
     }
 }
 
+/// Persistent per-session reader: copy every upstream UDP reply back to the
+/// client as a QUIC datagram.
+///
+/// One of these runs for the lifetime of each [`UdpSession`]. It replaces the
+/// previous design of spawning a task per datagram (each doing a single
+/// `recv_from`), removing both the per-datagram task spawn and the per-datagram
+/// reply-buffer allocation from the hot path. Reply buffers are borrowed from a
+/// per-connection pool. The task exits on socket error, on a closed scheduler
+/// channel, or when the session is dropped and aborts it.
+async fn run_session_reader(
+    sock: Arc<UdpSocket>,
+    session_id: u32,
+    fec_encoder: Arc<std::sync::Mutex<FecEncoder>>,
+    reply_pool: Arc<BufferPool>,
+    scheduled_tx: mpsc::Sender<ScheduledUdpDatagram>,
+    datagram_policy: super::udp::DatagramPolicy,
+) {
+    // Monotonic per-session packet id so the client's FEC dedup window can tell
+    // replies apart. Wrapping is harmless given the small dedup window.
+    let mut packet_id: u16 = 0;
+    loop {
+        let mut buf = reply_pool.acquire(65535);
+        buf.resize(buf.capacity(), 0);
+        match sock.recv_from(&mut buf).await {
+            Ok((n, src)) => {
+                let data = bytes::Bytes::copy_from_slice(&buf[..n]);
+                reply_pool.release(buf);
+
+                let dest = destination_from_socketaddr(src);
+                let tx_lane = datagram_policy.lane_for(&dest, data.len());
+                let response_dg = UdpDatagram {
+                    session_id,
+                    packet_id,
+                    frag_id: 0,
+                    frag_num: 1,
+                    dest: dest.clone(),
+                    data,
+                };
+                packet_id = packet_id.wrapping_add(1);
+
+                let encoded = encode_udp_datagram(&response_dg);
+                let parity = fec_encoder.lock().ok().and_then(|mut encoder| {
+                    if matches!(tx_lane, DatagramLane::Priority) {
+                        encoder.protect(&response_dg, &encoded)
+                    } else {
+                        None
+                    }
+                });
+                record_datagram_packet(tx_lane.class(), "tx");
+                let class = super::udp::packet_class_for(&dest, response_dg.data.len());
+                let flow = super::udp::flow_key_for(&dest, session_id);
+                let mut packet = InnerFlowPacket::new(class, flow, encoded);
+                if let Some(parity) = parity {
+                    packet.followups.push(parity);
+                }
+                if scheduled_tx
+                    .send(ScheduledUdpDatagram { packet })
+                    .await
+                    .is_err()
+                {
+                    // Scheduler gone (connection torn down) — stop reading.
+                    break;
+                }
+            }
+            Err(e) => {
+                reply_pool.release(buf);
+                warn!("Hysteria2 UDP session reader recv error: {e}");
+                break;
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_udp_datagram(
     _conn: Connection,
@@ -245,7 +337,6 @@ async fn handle_udp_datagram(
     };
 
     let session_id = dg.session_id;
-    let packet_id = dg.packet_id;
     let payload = dg.data;
     let dest = dg.dest;
     let tx_lane = datagram_policy.lane_for(&dest, payload.len());
@@ -253,27 +344,70 @@ async fn handle_udp_datagram(
         matches!(tx_lane, DatagramLane::Priority) && datagram_policy.should_fast_retry_dns(&dest);
 
     // Fast DNS retry can leave duplicate upstream replies. Isolate only that
-    // retry path; ordinary priority traffic keeps the per-session socket.
-    let sock = if use_isolated_priority_socket {
-        match UdpSocket::bind("0.0.0.0:0").await {
+    // retry path on a throwaway socket with its own one-shot reader; ordinary
+    // traffic uses the per-session socket whose persistent reader copies replies
+    // back without a per-datagram task spawn.
+    if use_isolated_priority_socket {
+        let packet_id = dg.packet_id;
+        let permit = match Arc::clone(&worker_limiter).try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                warn!(
+                    tag = %inbound_tag,
+                    max = MAX_UDP_WORKERS_PER_CONN,
+                    "Hysteria2 UDP worker limit reached; dropping datagram"
+                );
+                return;
+            }
+        };
+        let sock = match UdpSocket::bind("0.0.0.0:0").await {
             Ok(new_sock) => Arc::new(new_sock),
             Err(e) => {
                 warn!(tag = %inbound_tag, "Hysteria2 UDP: priority socket bind failed: {e}");
                 return;
             }
-        }
-    } else if let Some(mut entry) = sessions.get_mut(&session_id) {
+        };
+        tokio::spawn(priority_retry_roundtrip(
+            sock,
+            dest,
+            dest_addr,
+            payload,
+            session_id,
+            packet_id,
+            tx_lane,
+            datagram_policy,
+            fec_encoder,
+            reply_pool,
+            scheduled_tx,
+            permit,
+        ));
+        return;
+    }
+
+    // Common path: reuse (or create) the per-session socket and its persistent
+    // reader, then send upstream inline. `send_to` only queues into the kernel
+    // socket buffer, so it does not block the datagram loop.
+    let sock = if let Some(mut entry) = sessions.get_mut(&session_id) {
         entry.last_used = Instant::now();
         Arc::clone(&entry.sock)
     } else {
         match UdpSocket::bind("0.0.0.0:0").await {
             Ok(new_sock) => {
                 let s = Arc::new(new_sock);
+                let reader = tokio::spawn(run_session_reader(
+                    Arc::clone(&s),
+                    session_id,
+                    Arc::clone(&fec_encoder),
+                    Arc::clone(&reply_pool),
+                    scheduled_tx.clone(),
+                    datagram_policy,
+                ));
                 sessions.insert(
                     session_id,
                     UdpSession {
                         sock: Arc::clone(&s),
                         last_used: Instant::now(),
+                        reader,
                     },
                 );
                 s
@@ -285,91 +419,95 @@ async fn handle_udp_datagram(
         }
     };
 
-    let permit = match Arc::clone(&worker_limiter).try_acquire_owned() {
-        Ok(p) => p,
-        Err(_) => {
-            warn!(
-                tag = %inbound_tag,
-                max = MAX_UDP_WORKERS_PER_CONN,
-                "Hysteria2 UDP worker limit reached; dropping datagram"
-            );
-            return;
-        }
-    };
+    if let Err(e) = sock.send_to(payload.as_ref(), dest_addr).await {
+        warn!("Hysteria2 UDP send to {dest_addr}: {e}");
+    }
+}
 
+/// One-shot send + reply for the isolated fast-DNS-retry priority path.
+///
+/// This path keeps a per-datagram task because it binds a throwaway socket,
+/// optionally re-sends after a short delay, and reads a single reply with a
+/// timeout — semantics that do not fit the persistent per-session reader.
+#[allow(clippy::too_many_arguments)]
+async fn priority_retry_roundtrip(
+    sock: Arc<UdpSocket>,
+    dest: Destination,
+    dest_addr: SocketAddr,
+    payload: bytes::Bytes,
+    session_id: u32,
+    packet_id: u16,
+    tx_lane: DatagramLane,
+    datagram_policy: super::udp::DatagramPolicy,
+    fec_encoder: Arc<std::sync::Mutex<FecEncoder>>,
+    reply_pool: Arc<BufferPool>,
+    scheduled_tx: mpsc::Sender<ScheduledUdpDatagram>,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) {
+    let _permit = permit;
+    if let Err(e) = sock.send_to(payload.as_ref(), dest_addr).await {
+        warn!("Hysteria2 UDP send to {dest_addr}: {e}");
+        return;
+    }
+
+    let retry_payload = payload.clone();
+    let retry_sock = Arc::clone(&sock);
+    let delay = std::time::Duration::from_millis(datagram_policy.fast_dns_retry_delay_ms.max(1));
     tokio::spawn(async move {
-        let _permit = permit;
-        if let Err(e) = sock.send_to(payload.as_ref(), dest_addr).await {
-            warn!("Hysteria2 UDP send to {dest_addr}: {e}");
-            return;
-        }
-
-        if matches!(tx_lane, DatagramLane::Priority) && datagram_policy.should_fast_retry_dns(&dest)
-        {
-            let retry_payload = payload.clone();
-            let retry_sock = Arc::clone(&sock);
-            let delay =
-                std::time::Duration::from_millis(datagram_policy.fast_dns_retry_delay_ms.max(1));
-            tokio::spawn(async move {
-                sleep(delay).await;
-                if let Err(e) = retry_sock.send_to(retry_payload.as_ref(), dest_addr).await {
-                    warn!("Hysteria2 UDP fast-retry send failed: {e}");
-                }
-            });
-        }
-
-        // Borrow a pooled 64 KiB buffer (the max UDP datagram size) instead of
-        // allocating one per reply. `acquire` returns a cleared buffer; size it
-        // to the full capacity so `recv_from` can fill it, then return it to the
-        // pool once the reply bytes have been copied out into the response.
-        let mut buf = reply_pool.acquire(65535);
-        buf.resize(buf.capacity(), 0);
-        let recv_result = timeout(UDP_REPLY_TIMEOUT, sock.recv_from(&mut buf)).await;
-        match recv_result {
-            Err(_) => {
-                reply_pool.release(buf);
-                warn!("Hysteria2 UDP recv from {dest_addr}: reply timeout");
-            }
-            Ok(Err(e)) => {
-                reply_pool.release(buf);
-                warn!("Hysteria2 UDP recv from {dest_addr}: {e}");
-            }
-            Ok(Ok((n, _src))) => {
-                let data = bytes::Bytes::copy_from_slice(&buf[..n]);
-                reply_pool.release(buf);
-                let response_dg = UdpDatagram {
-                    session_id,
-                    packet_id,
-                    frag_id: 0,
-                    frag_num: 1,
-                    dest: dest.clone(),
-                    data,
-                };
-                let encoded = encode_udp_datagram(&response_dg);
-                let parity = fec_encoder.lock().ok().and_then(|mut encoder| {
-                    if matches!(tx_lane, DatagramLane::Priority) {
-                        encoder.protect(&response_dg, &encoded)
-                    } else {
-                        None
-                    }
-                });
-                record_datagram_packet(tx_lane.class(), "tx");
-                let class = super::udp::packet_class_for(&dest, response_dg.data.len());
-                let flow = super::udp::flow_key_for(&dest, session_id);
-                let mut packet = InnerFlowPacket::new(class, flow, encoded);
-                if let Some(parity) = parity {
-                    packet.followups.push(parity);
-                }
-                if scheduled_tx
-                    .send(ScheduledUdpDatagram { packet })
-                    .await
-                    .is_err()
-                {
-                    warn!("Hysteria2 UDP: scheduled datagram channel closed");
-                }
-            }
+        sleep(delay).await;
+        if let Err(e) = retry_sock.send_to(retry_payload.as_ref(), dest_addr).await {
+            warn!("Hysteria2 UDP fast-retry send failed: {e}");
         }
     });
+
+    // Borrow a pooled 64 KiB buffer (the max UDP datagram size) instead of
+    // allocating one per reply; return it once the reply bytes are copied out.
+    let mut buf = reply_pool.acquire(65535);
+    buf.resize(buf.capacity(), 0);
+    match timeout(UDP_REPLY_TIMEOUT, sock.recv_from(&mut buf)).await {
+        Err(_) => {
+            reply_pool.release(buf);
+            warn!("Hysteria2 UDP recv from {dest_addr}: reply timeout");
+        }
+        Ok(Err(e)) => {
+            reply_pool.release(buf);
+            warn!("Hysteria2 UDP recv from {dest_addr}: {e}");
+        }
+        Ok(Ok((n, _src))) => {
+            let data = bytes::Bytes::copy_from_slice(&buf[..n]);
+            reply_pool.release(buf);
+            let response_dg = UdpDatagram {
+                session_id,
+                packet_id,
+                frag_id: 0,
+                frag_num: 1,
+                dest: dest.clone(),
+                data,
+            };
+            let encoded = encode_udp_datagram(&response_dg);
+            let parity = fec_encoder.lock().ok().and_then(|mut encoder| {
+                if matches!(tx_lane, DatagramLane::Priority) {
+                    encoder.protect(&response_dg, &encoded)
+                } else {
+                    None
+                }
+            });
+            record_datagram_packet(tx_lane.class(), "tx");
+            let class = super::udp::packet_class_for(&dest, response_dg.data.len());
+            let flow = super::udp::flow_key_for(&dest, session_id);
+            let mut packet = InnerFlowPacket::new(class, flow, encoded);
+            if let Some(parity) = parity {
+                packet.followups.push(parity);
+            }
+            if scheduled_tx
+                .send(ScheduledUdpDatagram { packet })
+                .await
+                .is_err()
+            {
+                warn!("Hysteria2 UDP: scheduled datagram channel closed");
+            }
+        }
+    }
 }
 
 async fn send_scheduled_udp_datagrams(
