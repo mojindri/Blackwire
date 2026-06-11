@@ -69,3 +69,7 @@ harness = false
 [[bench]]
 name = "e2e_trojan_tcp"
 harness = false
+
+[[bench]]
+name = "udp_relay"
+harness = false
