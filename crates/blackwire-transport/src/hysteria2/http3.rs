@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context as _, Result};
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
-use blackwire_common::{BoxedStream, ReunionStream};
+use blackwire_common::{BoxedStream, BufferPool, ReunionStream};
 use dashmap::DashMap;
 use h3_quinn::Connection as H3QuinnConnection;
 use http::{Response, StatusCode};
@@ -167,6 +167,10 @@ async fn serve_udp_sessions(
     // session_id → per-session upstream socket bound on 0.0.0.0:0
     let sessions: Arc<DashMap<u32, UdpSession>> = Arc::new(DashMap::new());
     let worker_limiter = Arc::new(Semaphore::new(MAX_UDP_WORKERS_PER_CONN));
+    // Per-connection pool for the upstream UDP reply buffers. Reusing buffers
+    // across datagrams avoids a 64 KiB heap allocation per relayed datagram on
+    // the hot path (one alloc/free pair per packet at high datagram rates).
+    let reply_pool = BufferPool::new();
     let mut fec_decoder = FecDecoder::new(fec);
     let fec_encoder = Arc::new(std::sync::Mutex::new(FecEncoder::new(fec)));
     let (scheduled_tx, scheduled_rx) = mpsc::channel(SCHEDULED_UDP_CHANNEL_CAP);
@@ -198,6 +202,7 @@ async fn serve_udp_sessions(
                 Arc::clone(&sessions),
                 Arc::clone(&worker_limiter),
                 Arc::clone(&fec_encoder),
+                Arc::clone(&reply_pool),
                 scheduled_tx.clone(),
                 dg,
                 datagram_policy,
@@ -214,6 +219,7 @@ async fn handle_udp_datagram(
     sessions: Arc<DashMap<u32, UdpSession>>,
     worker_limiter: Arc<Semaphore>,
     fec_encoder: Arc<std::sync::Mutex<FecEncoder>>,
+    reply_pool: Arc<BufferPool>,
     scheduled_tx: mpsc::Sender<ScheduledUdpDatagram>,
     dg: UdpDatagram,
     datagram_policy: super::udp::DatagramPolicy,
@@ -312,22 +318,32 @@ async fn handle_udp_datagram(
             });
         }
 
-        let mut buf = vec![0u8; 65535];
-        match timeout(UDP_REPLY_TIMEOUT, sock.recv_from(&mut buf)).await {
+        // Borrow a pooled 64 KiB buffer (the max UDP datagram size) instead of
+        // allocating one per reply. `acquire` returns a cleared buffer; size it
+        // to the full capacity so `recv_from` can fill it, then return it to the
+        // pool once the reply bytes have been copied out into the response.
+        let mut buf = reply_pool.acquire(65535);
+        buf.resize(buf.capacity(), 0);
+        let recv_result = timeout(UDP_REPLY_TIMEOUT, sock.recv_from(&mut buf)).await;
+        match recv_result {
             Err(_) => {
+                reply_pool.release(buf);
                 warn!("Hysteria2 UDP recv from {dest_addr}: reply timeout");
             }
             Ok(Err(e)) => {
+                reply_pool.release(buf);
                 warn!("Hysteria2 UDP recv from {dest_addr}: {e}");
             }
             Ok(Ok((n, _src))) => {
+                let data = bytes::Bytes::copy_from_slice(&buf[..n]);
+                reply_pool.release(buf);
                 let response_dg = UdpDatagram {
                     session_id,
                     packet_id,
                     frag_id: 0,
                     frag_num: 1,
                     dest: dest.clone(),
-                    data: bytes::Bytes::copy_from_slice(&buf[..n]),
+                    data,
                 };
                 let encoded = encode_udp_datagram(&response_dg);
                 let parity = fec_encoder.lock().ok().and_then(|mut encoder| {
