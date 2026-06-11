@@ -6,6 +6,24 @@ This project is pre-1.0. The support contract is owned by
 [docs/release.md](docs/release.md), and detailed feature evidence is owned by
 [docs/feature-matrix.md](docs/feature-matrix.md).
 
+## Unreleased
+
+### Changed
+
+- Release builds now enable thin LTO, a single codegen unit, and debug-info
+  stripping for the whole workspace, trimming the proxy's CPU-bound hot paths
+  (crypto, framing, routing) without changing runtime behaviour. Per-connection
+  task isolation is preserved by keeping `panic = "unwind"`.
+- Hysteria2 UDP relay reuses a per-connection buffer pool for upstream reply
+  buffers instead of allocating a fresh 64 KiB buffer per relayed datagram,
+  reducing allocator pressure on high-rate UDP workloads.
+- Hysteria2 UDP relay now copies upstream replies back through one persistent
+  reader task per session instead of spawning a Tokio task per datagram. The
+  common send path runs inline, eliminating a per-datagram task spawn and its
+  scheduling/allocation overhead; reader tasks are bounded by the per-connection
+  session cap and torn down on idle eviction or connection close. The rare
+  fast-DNS-retry priority path keeps its isolated one-shot socket semantics.
+
 ## 0.1.0-rc.5 - 2026-06-07
 
 ### Added
