@@ -175,7 +175,7 @@ struct ExplainCostArgs {
 /// Arguments for the `hy2-udp-bench` subcommand.
 #[derive(clap::Args)]
 struct Hy2UdpBenchArgs {
-    /// Hysteria2 server UDP socket, e.g. <server-host>:10310.
+    /// Hysteria2 server UDP socket, e.g. `server-host:10310`.
     #[arg(long = "server", value_name = "ADDR")]
     server: std::net::SocketAddr,
 

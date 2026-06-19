@@ -51,6 +51,12 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "supported",
                 "QUIC/HTTP3 TCP stream proxy and UDP",
             ),
+            item(
+                "tuic",
+                "TUIC v5",
+                "supported",
+                "QUIC v5 TCP proxy and native UDP relay",
+            ),
         ],
         transports: vec![
             item("tcp", "TCP", "supported", "Raw TCP transport"),
@@ -188,5 +194,23 @@ fn item(
         label,
         status,
         notes,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blackwire_capabilities;
+
+    #[test]
+    fn tuic_v5_is_reported_as_supported() {
+        let capabilities = blackwire_capabilities();
+        let tuic = capabilities
+            .protocols
+            .iter()
+            .find(|item| item.key == "tuic")
+            .expect("TUIC v5 capability should be visible to Black UI");
+
+        assert_eq!(tuic.status, "supported");
+        assert!(tuic.notes.contains("native UDP"));
     }
 }

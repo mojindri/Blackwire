@@ -59,13 +59,14 @@ export function InboundDrawer({
   const protocolOptions = useMemo(
     () =>
       capabilities?.protocols.filter((item) =>
-        ["vless", "vmess", "trojan", "shadowsocks", "hysteria2", "socks", "http"].includes(item.key)
+        ["vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic", "socks", "http"].includes(item.key)
       ) ?? [
         { key: "vless", label: "VLESS", status: "supported", notes: "" },
         { key: "vmess", label: "VMess", status: "supported", notes: "" },
         { key: "trojan", label: "Trojan", status: "supported", notes: "" },
         { key: "shadowsocks", label: "Shadowsocks", status: "supported", notes: "" },
         { key: "hysteria2", label: "Hysteria2", status: "supported", notes: "" },
+        { key: "tuic", label: "TUIC v5", status: "supported", notes: "QUIC v5 TCP and UDP" },
         { key: "socks", label: "SOCKS5", status: "supported", notes: "" },
         { key: "http", label: "HTTP CONNECT", status: "supported", notes: "" }
       ],
@@ -176,8 +177,8 @@ export function InboundDrawer({
               <Field label="Protocol">
                 <Select value={state.protocol} onChange={(e) => updateStructured({ protocol: e.target.value })}>
                   {protocolOptions.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
+                    <option key={item.key} value={item.key} disabled={item.status === "unsupported"} title={item.notes}>
+                      {item.status === "supported" ? item.label : `${item.label} (${item.status})`}
                     </option>
                   ))}
                 </Select>
