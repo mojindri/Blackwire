@@ -44,6 +44,7 @@ port_for_protocol() {
         ss2022) echo 8388 ;;
         ss2022-udp) echo 8389 ;;
         hysteria2) echo 4433 ;;
+        tuic) echo 9443 ;;
         vless-reality) echo 10443 ;;
         vless-shadowtls) echo 8450 ;;
         vless-mkcp) echo 8451 ;;
@@ -242,7 +243,7 @@ wait_for_server_port() {
         echo "tls-cover:443 or blackwire-server:${port} not ready for $protocol" >&2
         return 1
     fi
-    if [[ "$protocol" == "hysteria2" || "$protocol" == "vless-quic" || "$protocol" == "vless-mkcp" ]]; then
+    if [[ "$protocol" == "hysteria2" || "$protocol" == "tuic" || "$protocol" == "vless-quic" || "$protocol" == "vless-mkcp" ]]; then
         sleep 2
         return 0
     fi
@@ -278,7 +279,7 @@ wait_for_server_port() {
 
 requires_udp_probe() {
     case "$1" in
-        trojan-udp|vless-udp|ss2022-udp) return 0 ;;
+        trojan-udp|vless-udp|ss2022-udp|tuic) return 0 ;;
         *) return 1 ;;
     esac
 }
