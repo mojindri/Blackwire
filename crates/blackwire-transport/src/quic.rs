@@ -125,6 +125,8 @@ pub fn build_server_endpoint_with_alpn_and_socket(
         .try_into()
         .expect("constant 30s idle timeout fits in quinn IdleTimeout");
     transport.max_idle_timeout(Some(idle_timeout));
+    transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
+    transport.datagram_send_buffer_size(2 * 1024 * 1024);
     server_config.transport_config(Arc::new(transport));
 
     endpoint_server_with_socket(server_config, addr, socket_config)
@@ -322,7 +324,11 @@ pub fn build_client_endpoint_with_alpn_and_socket(
     let quic_client_config = QuicClientConfig::try_from(tls_config)
         .context("failed to build QUIC client config from TLS config")?;
 
-    let client_config = ClientConfig::new(Arc::new(quic_client_config));
+    let mut client_config = ClientConfig::new(Arc::new(quic_client_config));
+    let mut transport = TransportConfig::default();
+    transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
+    transport.datagram_send_buffer_size(2 * 1024 * 1024);
+    client_config.transport_config(Arc::new(transport));
 
     // Bind to any available local port.
     let bind_addr = "0.0.0.0:0"
