@@ -1,0 +1,13 @@
+Origin: Blackwire
+Label: Blackwire
+Suite: stable
+Codename: stable
+Date: Fri, 19 Jun 2026 22:03:20 +0000
+Architectures: amd64 arm64
+Components: main
+Description: Blackwire apt repository
+SHA256:
+ a576eed76e0452b069c5a4b1c5042857052aac0e0c0c6d715e667a7079d75ed7              581 main/binary-amd64/Packages
+ 91234234e45375c33437f638a8305c01f9b5b4597b1b6a205df877084e88930f              581 main/binary-arm64/Packages
+ a7038b0a9338f8034c66e4e9c95c43f8b2817312b6bc365db884ef9c908b5346              399 main/binary-amd64/Packages.gz
+ 49adb862365ed523bc678798ee496e9228a7468929912695fc25f2d055ca6dfb              399 main/binary-arm64/Packages.gz

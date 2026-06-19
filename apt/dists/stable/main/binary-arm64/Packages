@@ -1,0 +1,15 @@
+Package: blackwire
+Version: 0.1.0-rc.6
+Architecture: arm64
+Maintainer: Blackwire maintainers <noreply@example.invalid>
+Filename: pool/main/blackwire_0.1.0-rc.6_arm64.deb
+Size: 5773732
+MD5sum: d1c3fd6b0a44ff12e20e9892476d91ef
+SHA1: be257d3c0cab66bda821e1fa485cdbc4d2d8c706
+SHA256: f3f9b02ecc8ae6728c9b7017395c25febbd5da905ea7cce60ce6b869ffbbf764
+Section: net
+Priority: optional
+Description: Rust-native proxy runtime for server and local proxy paths
+ Blackwire is a Rust-native proxy runtime targeting selected Xray-core
+ and sing-box wire-compatible server and local proxy paths.
+
