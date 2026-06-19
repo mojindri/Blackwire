@@ -176,9 +176,10 @@ impl UdpRelayPair {
     /// keeping up to `window` datagrams in flight, reading every echo back.
     ///
     /// Pipelining keeps the server's UDP relay continuously busy so the
-    /// measurement reflects per-datagram server cost (task spawn vs inline send
-    /// + shared reader) rather than a single datagram's QUIC round-trip latency,
-    /// which on loopback dwarfs that cost. Returns the number of echoes read.
+    /// measurement reflects per-datagram server cost from task spawning versus
+    /// the inline-send plus shared-reader path, rather than a single
+    /// datagram's QUIC round-trip latency, which on loopback dwarfs that cost.
+    /// Returns the number of echoes read.
     async fn relay(&self, count: usize, window: usize, payload_len: usize) -> usize {
         let dest = blackwire_transport::UdpDestination::V4(Ipv4Addr::LOCALHOST, self.echo_port);
         let payload = Bytes::from(vec![0xABu8; payload_len]);
