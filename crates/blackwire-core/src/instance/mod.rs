@@ -64,6 +64,7 @@ use crate::hysteria2::{
     build_hysteria2_outbound, socket_config_from_quic, start_hysteria2_inbound,
 };
 use crate::outbound_transport::uses_quic;
+use crate::tuic::{build_tuic_outbound, start_tuic_inbound};
 mod helpers;
 
 pub(crate) use helpers::{
@@ -366,6 +367,8 @@ impl Instance {
                     config.fec.as_ref(),
                 )
                 .with_context(|| format!("building Hysteria2 outbound '{}'", out_cfg.tag))?,
+                Protocol::Tuic => build_tuic_outbound(out_cfg, config.quic.as_ref())
+                    .with_context(|| format!("building TUIC outbound '{}'", out_cfg.tag))?,
                 Protocol::Trojan => build_trojan_outbound(out_cfg)
                     .with_context(|| format!("building Trojan outbound '{}'", out_cfg.tag))?,
                 Protocol::Vmess => build_vmess_outbound(out_cfg)
@@ -501,7 +504,7 @@ impl Instance {
                 .parse()
                 .with_context(|| format!("invalid listen address for inbound '{}'", in_cfg.tag))?;
 
-            // Hysteria2 runs its own QUIC server — it does not use TcpServerTransport.
+            // Hysteria2 and TUIC run their own QUIC servers — they do not use TcpServerTransport.
             if in_cfg.protocol == Protocol::Hysteria2 {
                 info!(tag = %in_cfg.tag, addr = %addr, "starting Hysteria2 inbound listener");
                 let dispatcher_for_h2 = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
@@ -513,6 +516,14 @@ impl Instance {
                     dispatcher_for_h2,
                 )
                 .with_context(|| format!("starting Hysteria2 inbound '{}'", in_cfg.tag))?;
+                tasks.push(task);
+                continue;
+            }
+            if in_cfg.protocol == Protocol::Tuic {
+                info!(tag = %in_cfg.tag, addr = %addr, "starting TUIC v5 inbound listener");
+                let dispatcher_for_tuic = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
+                let task = start_tuic_inbound(in_cfg, config.quic.as_ref(), dispatcher_for_tuic)
+                    .with_context(|| format!("starting TUIC inbound '{}'", in_cfg.tag))?;
                 tasks.push(task);
                 continue;
             }
