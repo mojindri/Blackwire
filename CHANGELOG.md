@@ -6,7 +6,14 @@ This project is pre-1.0. The support contract is owned by
 [docs/release.md](docs/release.md), and detailed feature evidence is owned by
 [docs/feature-matrix.md](docs/feature-matrix.md).
 
-## Unreleased
+## 0.1.0-rc.6 - 2026-06-19
+
+### Added
+
+- TUIC v5 experimental support with TCP proxying, native UDP relay coverage, Black UI config support, and an external-client lab row.
+- Hysteria2 UDP relay datagram throughput benchmark coverage.
+- Linux arm64 package smoke CI for Raspberry Pi 5-class native arm64 builds and Debian package inspection.
+- Beginner proxy protocol guide and consolidated operator/user documentation.
 
 ### Changed
 
@@ -23,6 +30,20 @@ This project is pre-1.0. The support contract is owned by
   scheduling/allocation overhead; reader tasks are bounded by the per-connection
   session cap and torn down on idle eviction or connection close. The rare
   fast-DNS-retry priority path keeps its isolated one-shot socket semantics.
+- Cross-platform CI names architecture coverage explicitly and includes Windows arm64.
+- Container image publishing was removed from CI; release publishing remains focused on GitHub archives, Debian packages, and the apt repository.
+- Benchmark and performance workflows were repaired to tolerate current Criterion paths and baseline variants.
+
+### Fixed
+
+- Hysteria2 UDP e2e tests now reserve UDP ports to reduce bind races.
+- TUIC and benchmark documentation now satisfy strict rustdoc/clippy CI.
+- Nginx memory latency parsing and benchmark gate path handling were repaired.
+
+### Validation
+
+- Current `main` includes native Linux arm64 workspace tests and Debian arm64 package smoke coverage.
+- Release asset workflow remains tag-driven and builds Linux x86_64, Linux arm64, macOS, Windows, Debian packages, and Black UI Linux assets.
 
 ## 0.1.0-rc.5 - 2026-06-07
 
