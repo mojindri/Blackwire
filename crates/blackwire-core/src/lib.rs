@@ -23,6 +23,7 @@ mod reality;
 mod reload;
 mod ss2022;
 mod trojan;
+mod tuic;
 mod vmess;
 mod ws_tls;
 

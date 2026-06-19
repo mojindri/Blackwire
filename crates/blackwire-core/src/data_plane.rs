@@ -121,6 +121,8 @@ pub enum InboundKind {
     Shadowsocks,
     /// Hysteria2 inbound listener.
     Hysteria2,
+    /// TUIC v5 inbound listener.
+    Tuic,
     /// SOCKS5 inbound listener.
     Socks,
     /// HTTP CONNECT proxy inbound listener.
@@ -144,6 +146,8 @@ pub enum OutboundKind {
     Shadowsocks,
     /// Hysteria2 outbound.
     Hysteria2,
+    /// TUIC v5 outbound.
+    Tuic,
     /// Direct/freedom outbound (no proxy).
     Freedom,
     /// SOCKS5 outbound.
@@ -343,6 +347,7 @@ fn inbound_kind(protocol: &Protocol) -> InboundKind {
         Protocol::Trojan => InboundKind::Trojan,
         Protocol::Shadowsocks => InboundKind::Shadowsocks,
         Protocol::Hysteria2 => InboundKind::Hysteria2,
+        Protocol::Tuic => InboundKind::Tuic,
         Protocol::ShadowTls => InboundKind::ShadowTls,
         Protocol::Socks => InboundKind::Socks,
         Protocol::Http => InboundKind::Http,
@@ -357,6 +362,7 @@ fn outbound_kind(protocol: &Protocol) -> OutboundKind {
         Protocol::Trojan => OutboundKind::Trojan,
         Protocol::Shadowsocks => OutboundKind::Shadowsocks,
         Protocol::Hysteria2 => OutboundKind::Hysteria2,
+        Protocol::Tuic => OutboundKind::Tuic,
         Protocol::ShadowTls => OutboundKind::ShadowTls,
         Protocol::Socks => OutboundKind::Socks,
         Protocol::Http => OutboundKind::Http,
@@ -387,6 +393,7 @@ fn plan_label(
             "socks-freedom-direct"
         }
         (InboundKind::Hysteria2, _, _, _, _) => "hysteria2-datagram",
+        (InboundKind::Tuic, _, _, _, _) => "tuic-v5-quic",
         (InboundKind::Freedom, _, _, _, _) => "tun-packet-nat",
         (_, NetworkType::Ws, _, _, _) => "ws-wrapped-copy",
         (_, NetworkType::Grpc, _, _, _) => "grpc-h2-data",

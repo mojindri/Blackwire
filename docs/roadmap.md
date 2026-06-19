@@ -105,7 +105,6 @@ Backlog:
 
 Rust competitor parity backlog:
 
-- TUIC v5
 - NaiveProxy
 - Classic Shadowsocks AEAD
 - Snell v3
