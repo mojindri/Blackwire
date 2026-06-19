@@ -13,7 +13,7 @@ use tokio::time::timeout;
 const TEST_PASSWORD: &str = "hysteria2-udp-test-pw";
 
 fn unused_local_port() -> u16 {
-    std::net::TcpListener::bind(("127.0.0.1", 0))
+    std::net::UdpSocket::bind(("127.0.0.1", 0))
         .expect("port reserve")
         .local_addr()
         .unwrap()
