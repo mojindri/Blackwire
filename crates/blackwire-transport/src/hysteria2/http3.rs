@@ -107,6 +107,7 @@ pub async fn serve_connection(
     });
 
     let inbound_tag = config.tag.clone();
+    let user = config.user.clone();
 
     // Spawn the UDP datagram relay concurrently with the TCP stream accept loop.
     let udp_conn = conn.clone();
@@ -126,6 +127,7 @@ pub async fn serve_connection(
 
         let dispatcher = Arc::clone(&dispatcher);
         let tag = inbound_tag.clone();
+        let user = user.clone();
         let congestion = config.congestion.clone();
         tokio::spawn(async move {
             let dest = match timeout(TCP_REQUEST_TIMEOUT, tcp::server_read_request(&mut recv)).await
@@ -155,7 +157,7 @@ pub async fn serve_connection(
                 sniffed_domain: None,
                 source: None,
                 inbound_tag: tag.into(),
-                user: None,
+                user: user.map(Into::into),
                 sniffed_protocol: None,
                 vision_flow: false,
             };
