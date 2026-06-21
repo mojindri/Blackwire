@@ -83,7 +83,9 @@ pub async fn sync_config(state: &AppState, addr: &str) -> Result<()> {
             _ => continue,
         };
         if current_inbound_tags.contains(&tag) {
-            continue;
+            client
+                .remove_inbound(RemoveInboundRequest { tag: tag.clone() })
+                .await?;
         }
         client
             .add_inbound(AddInboundRequest {
@@ -398,7 +400,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_config_skips_empty_vless_and_updates_existing_runtime_tags() {
+    async fn sync_config_skips_empty_vless_and_refreshes_existing_runtime_tags() {
         let data_dir =
             std::env::temp_dir().join(format!("black-ui-runtime-test-{}", util::random_token(8)));
         std::fs::create_dir_all(&data_dir).unwrap();
@@ -443,7 +445,7 @@ mod tests {
         };
 
         let fake = Arc::new(FakeManagement {
-            inbounds: Mutex::new(vec!["stale-inbound".into()]),
+            inbounds: Mutex::new(vec!["stale-inbound".into(), "active-vless".into()]),
             outbounds: Mutex::new(vec!["freedom".into(), "stale-outbound".into()]),
             operations: Mutex::new(vec![]),
         });
@@ -458,6 +460,7 @@ mod tests {
 
         let operations = fake.operations.lock().unwrap().clone();
         assert!(operations.contains(&"remove-inbound:stale-inbound".into()));
+        assert!(operations.contains(&"remove-inbound:active-vless".into()));
         assert!(operations.contains(&"add-inbound:active-vless".into()));
         assert!(!operations.contains(&"add-inbound:empty-vless".into()));
         assert!(operations.contains(&"remove-outbound:stale-outbound".into()));
