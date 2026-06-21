@@ -189,7 +189,11 @@ protect_config_for_service() {
     group="$(service_group)"
     if getent group "$group" >/dev/null 2>&1; then
         sudo_cmd chown "root:$group" "$path"
-        sudo_cmd chmod 0640 "$path"
+        if [ "$INSTALL_BLACK_UI" = "1" ]; then
+            sudo_cmd chmod 0660 "$path"
+        else
+            sudo_cmd chmod 0640 "$path"
+        fi
     else
         sudo_cmd chmod 0644 "$path"
         log "group '$group' not found; left $path world-readable so the service can read it"
@@ -198,7 +202,12 @@ protect_config_for_service() {
 
 prepare_runtime_dirs() {
     group="$(service_group)"
-    sudo_cmd install -d -m 0755 "$PREFIX/bin" "$CONFIG_DIR"
+    sudo_cmd install -d -m 0755 "$PREFIX/bin"
+    if [ "$INSTALL_BLACK_UI" = "1" ] && getent group "$group" >/dev/null 2>&1; then
+        sudo_cmd install -d -m 0770 -o root -g "$group" "$CONFIG_DIR"
+    else
+        sudo_cmd install -d -m 0755 "$CONFIG_DIR"
+    fi
     sudo_cmd install -d -m 0750 -o "$SERVICE_USER" -g "$group" "$STATE_DIR" "$RUN_DIR"
 }
 
