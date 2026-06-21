@@ -604,11 +604,7 @@ pub async fn reset_usage(
 ) -> ApiResult<ManagedUser> {
     let _ = auth::require(&headers, &state)?;
     let conn = state.lock_db()?;
-    conn.execute(
-        "UPDATE users SET upload_bytes=0, download_bytes=0, updated_at=?1 WHERE id=?2",
-        params![util::now(), id],
-    )
-    .map_err(|e| AppError::internal(e.into()))?;
+    db::reset_user_usage(&conn, id).map_err(AppError::internal)?;
     Ok(Json(user_or_404(&conn, id)?))
 }
 
@@ -666,7 +662,7 @@ pub async fn bulk_users(
                 "enable" => db::touch_user_status(&conn, id, true, "active"),
                 "disable" => db::touch_user_status(&conn, id, false, "disabled manually"),
                 "delete" => conn.execute("DELETE FROM users WHERE id=?1", params![id]).map(|_| ()).map_err(Into::into),
-                "resetUsage" => conn.execute("UPDATE users SET upload_bytes=0, download_bytes=0, updated_at=?1 WHERE id=?2", params![util::now(), id]).map(|_| ()).map_err(Into::into),
+                "resetUsage" => db::reset_user_usage(&conn, id),
                 "setLimit" => conn.execute("UPDATE users SET traffic_limit_bytes=?1, updated_at=?2 WHERE id=?3", params![input.traffic_limit_bytes, util::now(), id]).map(|_| ()).map_err(Into::into),
                 "extendExpiry" => conn.execute("UPDATE users SET expiry_at=?1, updated_at=?2 WHERE id=?3", params![input.expiry_at, util::now(), id]).map(|_| ()).map_err(Into::into),
                 _ => return Err(AppError::bad_request("unknown bulk action")),

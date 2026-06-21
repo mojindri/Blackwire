@@ -21,7 +21,7 @@ use std::io;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use blackwire_common::relay::{RelayFlushPolicy, RelayV2Options};
+use blackwire_common::relay::{RelayFlushPolicy, RelayTrafficRecorder, RelayV2Options};
 use blackwire_common::BoxedStream;
 #[cfg(target_os = "linux")]
 use blackwire_common::{BufferPool, LowerState};
@@ -90,6 +90,7 @@ pub(crate) async fn relay_bidirectional_with_splice_policy(
 }
 
 /// Relay bytes with explicit Fast Profile splice and userspace relay policies.
+#[allow(dead_code)]
 pub async fn relay_bidirectional_with_policies(
     inbound: BoxedStream,
     outbound: BoxedStream,
@@ -97,6 +98,28 @@ pub async fn relay_bidirectional_with_policies(
     relay_policy: FastRelayConfig,
     linux_policy: FastLinuxConfig,
     vision_policy: VisionConfig,
+) -> io::Result<(u64, u64)> {
+    relay_bidirectional_with_policies_and_recorder(
+        inbound,
+        outbound,
+        splice_policy,
+        relay_policy,
+        linux_policy,
+        vision_policy,
+        None,
+    )
+    .await
+}
+
+/// Relay bytes with explicit policies and optional live traffic accounting.
+pub async fn relay_bidirectional_with_policies_and_recorder(
+    inbound: BoxedStream,
+    outbound: BoxedStream,
+    splice_policy: FastSplicePolicy,
+    relay_policy: FastRelayConfig,
+    linux_policy: FastLinuxConfig,
+    vision_policy: VisionConfig,
+    traffic_recorder: Option<RelayTrafficRecorder>,
 ) -> io::Result<(u64, u64)> {
     #[cfg(target_os = "linux")]
     {
@@ -116,6 +139,7 @@ pub async fn relay_bidirectional_with_policies(
                             relay_policy,
                             linux_policy,
                             vision_policy,
+                            traffic_recorder,
                         )
                         .await;
                     }
@@ -126,7 +150,13 @@ pub async fn relay_bidirectional_with_policies(
                     "reason" => "inbound_wrapped"
                 )
                 .increment(1);
-                return userspace_copy_bidirectional(inbound, outbound, relay_policy).await;
+                return userspace_copy_bidirectional(
+                    inbound,
+                    outbound,
+                    relay_policy,
+                    traffic_recorder,
+                )
+                .await;
             }
         };
 
@@ -143,7 +173,13 @@ pub async fn relay_bidirectional_with_policies(
                 } else {
                     Box::new(PrependedStream::new(inbound, inbound_prefix))
                 };
-                return userspace_copy_bidirectional(inbound, outbound, relay_policy).await;
+                return userspace_copy_bidirectional(
+                    inbound,
+                    outbound,
+                    relay_policy,
+                    traffic_recorder,
+                )
+                .await;
             }
         };
 
@@ -175,8 +211,13 @@ pub async fn relay_bidirectional_with_policies(
             }
 
             let (up, down) =
-                userspace_copy_bidirectional(Box::new(inbound), Box::new(outbound), relay_policy)
-                    .await?;
+                userspace_copy_bidirectional(
+                    Box::new(inbound),
+                    Box::new(outbound),
+                    relay_policy,
+                    traffic_recorder,
+                )
+                .await?;
             record_relay_path_bytes(
                 userspace_relay_path(relay_policy, "copy", "copy_v2"),
                 up + prefix_up,
@@ -192,6 +233,7 @@ pub async fn relay_bidirectional_with_policies(
                 prefix_up,
                 prefix_down,
                 linux_policy,
+                traffic_recorder,
             )
             .await;
         }
@@ -215,8 +257,13 @@ pub async fn relay_bidirectional_with_policies(
         )
         .increment(1);
         let (up, down) =
-            userspace_copy_bidirectional(Box::new(inbound), Box::new(outbound), relay_policy)
-                .await?;
+            userspace_copy_bidirectional(
+                Box::new(inbound),
+                Box::new(outbound),
+                relay_policy,
+                traffic_recorder,
+            )
+            .await?;
         record_relay_path_bytes(
             userspace_relay_path(relay_policy, "copy", "copy_v2"),
             up + prefix_up,
@@ -230,7 +277,7 @@ pub async fn relay_bidirectional_with_policies(
         let _ = splice_policy;
         let _ = linux_policy;
         let _ = vision_policy;
-        userspace_copy_bidirectional(inbound, outbound, relay_policy).await
+        userspace_copy_bidirectional(inbound, outbound, relay_policy, traffic_recorder).await
     }
 }
 
@@ -242,6 +289,7 @@ async fn relay_vision_inbound_with_splice_policy(
     relay_policy: FastRelayConfig,
     linux_policy: FastLinuxConfig,
     vision_policy: VisionConfig,
+    traffic_recorder: Option<RelayTrafficRecorder>,
 ) -> io::Result<(u64, u64)> {
     use blackwire_common::{try_into_tcp_stream_with_prefix, PrependedStream};
 
@@ -260,7 +308,13 @@ async fn relay_vision_inbound_with_splice_policy(
             false,
         );
         let (up, down) =
-            userspace_copy_bidirectional(Box::new(inbound), outbound, relay_policy).await?;
+            userspace_copy_bidirectional(
+                Box::new(inbound),
+                outbound,
+                relay_policy,
+                traffic_recorder,
+            )
+            .await?;
         record_relay_path_bytes(
             userspace_relay_path(relay_policy, "vision_copy", "vision_copy_v2"),
             up,
@@ -288,7 +342,13 @@ async fn relay_vision_inbound_with_splice_policy(
                 false,
                 false,
             );
-            return userspace_copy_bidirectional(Box::new(inbound), outbound, relay_policy).await;
+            return userspace_copy_bidirectional(
+                Box::new(inbound),
+                outbound,
+                relay_policy,
+                traffic_recorder,
+            )
+            .await;
         }
     };
 
@@ -337,6 +397,9 @@ async fn relay_vision_inbound_with_splice_policy(
                     if !inbound_prefix.is_empty() {
                         outbound.write_all(&inbound_prefix).await?;
                         up += inbound_prefix.len() as u64;
+                        if let Some(recorder) = &traffic_recorder {
+                            recorder.record(inbound_prefix.len() as u64, 0);
+                        }
                         metrics::counter!("blackwire_vision_cached_bytes_total")
                             .increment(inbound_prefix.len() as u64);
                     }
@@ -382,6 +445,7 @@ async fn relay_vision_inbound_with_splice_policy(
                                 inbound,
                                 Box::new(outbound),
                                 relay_policy,
+                                traffic_recorder,
                             )
                             .await?;
                             record_relay_path_bytes(
@@ -412,6 +476,7 @@ async fn relay_vision_inbound_with_splice_policy(
                         inbound_inner,
                         Box::new(outbound),
                         relay_policy,
+                        traffic_recorder,
                     )
                     .await?;
                     record_relay_path_bytes(
@@ -459,6 +524,9 @@ async fn relay_vision_inbound_with_splice_policy(
                 } else {
                     inbound.write_all(&down_buf.as_slice()[..n]).await?;
                     down += n as u64;
+                    if let Some(recorder) = &traffic_recorder {
+                        recorder.record(0, n as u64);
+                    }
                     down_full_read_streak =
                         update_full_read_streak(down_full_read_streak, n, down_buf.len());
                 }
@@ -478,6 +546,9 @@ async fn relay_vision_inbound_with_splice_policy(
                     )
                     .await?;
                     up += report.bytes as u64;
+                    if let Some(recorder) = &traffic_recorder {
+                        recorder.record(report.bytes as u64, 0);
+                    }
                     up_full_read_streak =
                         update_full_read_streak(up_full_read_streak, n, up_buf.len());
                 }
@@ -712,6 +783,7 @@ async fn adaptive_copy_then_splice(
     prefix_up: u64,
     prefix_down: u64,
     linux_policy: FastLinuxConfig,
+    traffic_recorder: Option<RelayTrafficRecorder>,
 ) -> io::Result<(u64, u64)> {
     let mut up = 0u64;
     let mut down = 0u64;
@@ -781,6 +853,9 @@ async fn adaptive_copy_then_splice(
                 } else {
                     inbound.write_all(&down_buf.as_slice()[..n]).await?;
                     down += n as u64;
+                    if let Some(recorder) = &traffic_recorder {
+                        recorder.record(0, n as u64);
+                    }
                     down_full_read_streak =
                         update_full_read_streak(down_full_read_streak, n, down_buf.len());
                 }
@@ -793,6 +868,9 @@ async fn adaptive_copy_then_splice(
                 } else {
                     outbound.write_all(&up_buf.as_slice()[..n]).await?;
                     up += n as u64;
+                    if let Some(recorder) = &traffic_recorder {
+                        recorder.record(n as u64, 0);
+                    }
                     up_full_read_streak =
                         update_full_read_streak(up_full_read_streak, n, up_buf.len());
                 }
@@ -916,16 +994,23 @@ async fn userspace_copy_bidirectional(
     inbound: BoxedStream,
     outbound: BoxedStream,
     relay_policy: FastRelayConfig,
+    traffic_recorder: Option<RelayTrafficRecorder>,
 ) -> io::Result<(u64, u64)> {
     match relay_policy.engine {
         FastRelayEngine::Legacy => {
-            blackwire_common::relay::copy_bidirectional_pooled(inbound, outbound).await
+            blackwire_common::relay::copy_bidirectional_pooled_with_recorder(
+                inbound,
+                outbound,
+                traffic_recorder,
+            )
+            .await
         }
         FastRelayEngine::V2 => {
-            let stats = blackwire_common::relay::copy_bidirectional_v2(
+            let stats = blackwire_common::relay::copy_bidirectional_v2_with_recorder(
                 inbound,
                 outbound,
                 relay_v2_options(relay_policy),
+                traffic_recorder,
             )
             .await?;
             metrics::counter!("proxy_relay_v2_flushes_total").increment(stats.flush_ops);

@@ -26,6 +26,7 @@
 //! streams, and splice fallbacks use the configured userspace relay engine.
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -62,7 +63,8 @@ const POOLED_FIRST_WRITE_GUARD_BUF_SIZE: usize = 2048;
 use std::collections::HashMap;
 
 use blackwire_common::{
-    tcp_connect, Address, BoxedStream, PooledStream, PrependedStream, ProxyError,
+    relay::RelayTrafficRecorder, tcp_connect, Address, BoxedStream, PooledStream, PrependedStream,
+    ProxyError,
 };
 use blackwire_config::schema::{
     FastConfig, FastLinuxConfig, FastRelayConfig, FastSplicePolicy, FirstPacketBoostConfig,
@@ -493,20 +495,34 @@ impl Dispatcher for DefaultDispatcher {
         //   outbound → inbound (server sending data back to the client)
         //
         // It returns the total bytes sent in each direction when finished.
-        let relay = crate::relay::relay_bidirectional_with_policies(
+        let live_traffic_recorded = Arc::new(AtomicBool::new(false));
+        let live_traffic_flag = Arc::clone(&live_traffic_recorded);
+        let inbound_tag = Arc::clone(&ctx.inbound_tag);
+        let user = ctx.user.as_ref().map(Arc::clone);
+        let traffic_recorder = RelayTrafficRecorder::new(move |up, down| {
+            if up == 0 && down == 0 {
+                return;
+            }
+            live_traffic_flag.store(true, Ordering::Relaxed);
+            runtime_stats::record_relay_traffic(inbound_tag.as_ref(), user.as_deref(), up, down);
+        });
+        let prewritten_up = prewritten_up + prewritten_early_up;
+
+        let relay = crate::relay::relay_bidirectional_with_policies_and_recorder(
             inbound_stream,
             outbound_stream,
             self.splice_policy,
             self.relay_policy,
             self.linux_policy,
             self.vision_policy,
+            Some(traffic_recorder),
         );
         tokio::pin!(relay);
         let result = tokio::select! {
             biased;
             _ = cancel.cancelled() => Err(ProxyError::Transport("connection closed by manager".into())),
             result = &mut relay => result
-                .map(|(up, down)| (up + prewritten_up + prewritten_early_up, down))
+                .map(|(up, down)| (up + prewritten_up, down))
                 .map_err(ProxyError::Io),
         };
 
@@ -550,8 +566,22 @@ impl Dispatcher for DefaultDispatcher {
         let (rx_bytes, tx_bytes) = result.unwrap_or((0, 0));
         conn.finish(rx_bytes, tx_bytes, close_reason);
         record_connection_closed(&ctx.inbound_tag, rx_bytes, tx_bytes, elapsed);
-        if let Some(user) = ctx.user.as_deref() {
-            runtime_stats::record_user_traffic(user, rx_bytes, tx_bytes);
+        if live_traffic_recorded.load(Ordering::Relaxed) {
+            if prewritten_up > 0 {
+                runtime_stats::record_relay_traffic(
+                    &ctx.inbound_tag,
+                    ctx.user.as_deref(),
+                    prewritten_up,
+                    0,
+                );
+            }
+        } else {
+            runtime_stats::record_relay_traffic(
+                &ctx.inbound_tag,
+                ctx.user.as_deref(),
+                rx_bytes,
+                tx_bytes,
+            );
         }
 
         Ok(())
