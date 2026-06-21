@@ -9,6 +9,7 @@ use crate::{config, db, runtime, state::AppState, util};
 
 pub fn spawn(state: AppState) {
     tokio::spawn(async move {
+        let mut force_live_sync = true;
         loop {
             let interval = match state.db.lock() {
                 Ok(conn) => db::load_settings(&conn)
@@ -18,21 +19,31 @@ pub fn spawn(state: AppState) {
                 Err(_) => 30,
             };
             tokio::time::sleep(Duration::from_secs(interval)).await;
-            if let Err(e) = run_once(&state).await {
+            if let Err(e) = run_once_with_options(&state, force_live_sync).await {
                 warn!(error = %e, "quota/expiry enforcement failed");
             }
+            force_live_sync = false;
         }
     });
 }
 
 pub(crate) async fn run_once(state: &AppState) -> Result<()> {
+    run_once_with_options(state, false).await
+}
+
+pub(crate) async fn run_startup_once(state: &AppState) -> Result<()> {
+    run_once_with_options(state, true).await
+}
+
+async fn run_once_with_options(state: &AppState, force_live_sync: bool) -> Result<()> {
     let settings = {
         let conn = state.lock_db()?;
         db::load_settings(&conn)?
     };
 
     refresh_traffic_with_settings(state, &settings).await?;
-    enforce_limits(state, &settings).await
+    let changed = enforce_limits(state).await?;
+    reconcile_config(state, &settings, changed || force_live_sync).await
 }
 
 async fn refresh_traffic_with_settings(
@@ -48,7 +59,7 @@ async fn refresh_traffic_with_settings(
     Ok(())
 }
 
-async fn enforce_limits(state: &AppState, settings: &crate::models::Settings) -> Result<()> {
+async fn enforce_limits(state: &AppState) -> Result<bool> {
     let mut changed = false;
     {
         let conn = state.lock_db()?;
@@ -79,14 +90,32 @@ async fn enforce_limits(state: &AppState, settings: &crate::models::Settings) ->
         }
     }
 
-    if changed {
+    Ok(changed)
+}
+
+async fn reconcile_config(
+    state: &AppState,
+    settings: &crate::models::Settings,
+    force_live_sync: bool,
+) -> Result<()> {
+    let desired = config::build_value(state)?;
+    let file_needs_write = std::fs::read_to_string(&settings.config_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .map_or(true, |current| current != desired);
+
+    let mut sync_needed = force_live_sync;
+    if file_needs_write {
         if let Err(e) = config::write(state) {
             warn!(error = %e, "enforcement: config write failed");
+        } else {
+            sync_needed = true;
         }
-        if settings.grpc_enabled {
-            if let Err(e) = runtime::sync_config(state, &settings.grpc_address).await {
-                warn!(error = %e, "enforcement: live sync failed after user enforcement");
-            }
+    }
+
+    if sync_needed && settings.grpc_enabled {
+        if let Err(e) = runtime::sync_config(state, &settings.grpc_address).await {
+            warn!(error = %e, "enforcement: live sync failed after user enforcement");
         }
     }
     Ok(())
