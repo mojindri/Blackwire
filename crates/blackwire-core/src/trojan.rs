@@ -3,15 +3,15 @@
 //! Reads Trojan-specific settings from config JSON and builds the
 //! `TrojanInbound` / `TrojanOutbound` handlers.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 
 use blackwire_app::dns::DnsModule;
 use blackwire_app::features::{InboundHandler, OutboundHandler};
 use blackwire_protocol::trojan::{TrojanInbound, TrojanOutbound, TrojanOutboundConfig};
 
+use crate::net::socket_addr_from_address_port;
 use crate::outbound_transport::{uses_outbound_transport, TransportTrojanOutbound};
 
 /// Build a Trojan inbound handler from config.
@@ -57,9 +57,11 @@ pub(crate) fn build_trojan_outbound(
     let port = settings["port"]
         .as_u64()
         .ok_or_else(|| anyhow::anyhow!("Trojan outbound '{}' missing 'port'", cfg.tag))?;
-    let server: SocketAddr = format!("{server_str}:{port}")
-        .parse()
-        .with_context(|| format!("invalid Trojan server address '{server_str}:{port}'"))?;
+    let server = socket_addr_from_address_port(
+        server_str,
+        port,
+        &format!("invalid Trojan server address for outbound '{}'", cfg.tag),
+    )?;
 
     let password = settings["password"]
         .as_str()

@@ -20,6 +20,7 @@ use blackwire_protocol::vless::{
 use blackwire_transport::MkcpServerConfig;
 use dashmap::DashMap;
 
+use crate::net::socket_addr_from_address_port;
 use crate::outbound_transport::{uses_outbound_transport, TransportVlessOutbound};
 use crate::reality::{build_reality_client, uses_reality, RealityVlessOutbound};
 
@@ -215,9 +216,11 @@ pub(crate) fn build_vless_outbound(
     let port = settings["port"]
         .as_u64()
         .ok_or_else(|| anyhow::anyhow!("VLESS outbound missing 'port'"))?;
-    let server: SocketAddr = format!("{server_str}:{port}")
-        .parse()
-        .with_context(|| format!("invalid VLESS server address '{server_str}:{port}'"))?;
+    let server = socket_addr_from_address_port(
+        server_str,
+        port,
+        &format!("invalid VLESS server address for outbound '{}'", cfg.tag),
+    )?;
 
     let uuid_str = settings["users"][0]["id"]
         .as_str()
