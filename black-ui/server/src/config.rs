@@ -26,6 +26,11 @@ pub fn build_value(state: &AppState) -> Result<Value> {
             .filter(|u| u.inbound_id == inbound.id && u.enabled && u.enforcement_status == "active")
             .map(|u| client_entry(&inbound.protocol, u))
             .collect();
+        if clients.is_empty()
+            && (inbound.protocol == "tuic" || protocol_uses_clients(&inbound.protocol))
+        {
+            continue;
+        }
         let mut settings_json = object_or_empty(&inbound.settings)?;
         if inbound.protocol == "tuic" {
             settings_json["users"] = Value::Array(clients);
