@@ -18,6 +18,7 @@ pub mod data_plane;
 mod http;
 mod hysteria2;
 pub mod instance;
+mod net;
 mod outbound_transport;
 mod reality;
 mod reload;

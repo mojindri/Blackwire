@@ -84,6 +84,21 @@ async fn instance_starts_plain_socks_on_ephemeral_port_and_drop_aborts_tasks() {
 }
 
 #[tokio::test]
+async fn instance_accepts_ipv6_listen_address() {
+    let cfg = base_config(
+        json!([socks_inbound("socks-v6", "::1", 0)]),
+        json!([freedom_outbound("direct")]),
+    );
+
+    let instance = timeout(SHORT, Instance::from_config(Arc::new(cfg)))
+        .await
+        .expect("from_config timed out")
+        .expect("IPv6 listen address should start");
+
+    drop(instance);
+}
+
+#[tokio::test]
 async fn instance_wait_returns_after_drop_is_not_required_for_cleanup() {
     let cfg = base_config(
         json!([http_inbound("http-in", "127.0.0.1", 0)]),
@@ -113,6 +128,55 @@ async fn instance_rejects_invalid_listen_address_before_spawning_listener() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Outbound builder validation
 // ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn split_address_port_outbounds_accept_ipv6_literals() {
+    let cfg = base_config(
+        json!([]),
+        json!([
+            {
+                "tag": "vless-v6",
+                "protocol": "vless",
+                "settings": {
+                    "address": "::1",
+                    "port": 443,
+                    "users": [{ "id": "00000000-0000-4000-8000-000000000001" }]
+                }
+            },
+            {
+                "tag": "vmess-v6",
+                "protocol": "vmess",
+                "settings": {
+                    "address": "::1",
+                    "port": 443,
+                    "users": [{ "id": "00000000-0000-4000-8000-000000000001" }]
+                }
+            },
+            {
+                "tag": "trojan-v6",
+                "protocol": "trojan",
+                "settings": {
+                    "address": "::1",
+                    "port": 443,
+                    "password": "password"
+                }
+            },
+            {
+                "tag": "ss-v6",
+                "protocol": "shadowsocks",
+                "settings": {
+                    "address": "::1",
+                    "port": 8388,
+                    "password": "password"
+                }
+            }
+        ]),
+    );
+
+    Instance::from_config(Arc::new(cfg))
+        .await
+        .expect("IPv6 split address/port outbounds should build");
+}
 
 #[tokio::test]
 async fn vless_outbound_requires_address_port_and_user_id() {
