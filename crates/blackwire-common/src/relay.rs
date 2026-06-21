@@ -46,12 +46,45 @@ where
     A: AsyncRead + AsyncWrite + Unpin,
     B: AsyncRead + AsyncWrite + Unpin,
 {
+    copy_bidirectional_pooled_with_recorder(a, b, None).await
+}
+
+/// Callback used by relay helpers to publish bytes as they are successfully
+/// written, instead of waiting for the whole connection to close.
+#[derive(Clone)]
+pub struct RelayTrafficRecorder(Arc<dyn Fn(u64, u64) + Send + Sync>);
+
+impl std::fmt::Debug for RelayTrafficRecorder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("RelayTrafficRecorder").finish_non_exhaustive()
+    }
+}
+
+impl RelayTrafficRecorder {
+    pub fn new(record: impl Fn(u64, u64) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(record))
+    }
+
+    pub fn record(&self, up: u64, down: u64) {
+        (self.0)(up, down);
+    }
+}
+
+pub async fn copy_bidirectional_pooled_with_recorder<A, B>(
+    a: A,
+    b: B,
+    recorder: Option<RelayTrafficRecorder>,
+) -> io::Result<(u64, u64)>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+    B: AsyncRead + AsyncWrite + Unpin,
+{
     let (a_rx, a_tx) = tokio::io::split(a);
     let (b_rx, b_tx) = tokio::io::split(b);
     let pool = relay_pool();
     let (r_up, r_down) = tokio::join!(
-        copy_one_pooled(a_rx, b_tx, pool),
-        copy_one_pooled(b_rx, a_tx, pool),
+        copy_one_pooled(a_rx, b_tx, pool, recorder.clone(), true),
+        copy_one_pooled(b_rx, a_tx, pool, recorder, false),
     );
     Ok((r_up?, r_down?))
 }
@@ -279,6 +312,19 @@ where
     A: AsyncRead + AsyncWrite + Unpin,
     B: AsyncRead + AsyncWrite + Unpin,
 {
+    copy_bidirectional_v2_with_recorder(a, b, options, None).await
+}
+
+pub async fn copy_bidirectional_v2_with_recorder<A, B>(
+    a: A,
+    b: B,
+    options: RelayV2Options,
+    recorder: Option<RelayTrafficRecorder>,
+) -> io::Result<RelayV2Stats>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+    B: AsyncRead + AsyncWrite + Unpin,
+{
     let (mut a_rx, mut a_tx) = tokio::io::split(a);
     let (mut b_rx, mut b_tx) = tokio::io::split(b);
     let mut up = RelayDirectionState::new(options);
@@ -287,12 +333,28 @@ where
     poll_fn(|cx| loop {
         let mut progressed = false;
 
-        match poll_relay_direction(cx, &mut a_rx, &mut b_tx, &mut up, options.flush_policy) {
+        match poll_relay_direction(
+            cx,
+            &mut a_rx,
+            &mut b_tx,
+            &mut up,
+            options.flush_policy,
+            recorder.as_ref(),
+            true,
+        ) {
             Poll::Ready(Ok(moved)) => progressed |= moved,
             Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
             Poll::Pending => {}
         }
-        match poll_relay_direction(cx, &mut b_rx, &mut a_tx, &mut down, options.flush_policy) {
+        match poll_relay_direction(
+            cx,
+            &mut b_rx,
+            &mut a_tx,
+            &mut down,
+            options.flush_policy,
+            recorder.as_ref(),
+            false,
+        ) {
             Poll::Ready(Ok(moved)) => progressed |= moved,
             Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
             Poll::Pending => {}
@@ -322,6 +384,8 @@ fn poll_relay_direction<R, W>(
     writer: &mut W,
     state: &mut RelayDirectionState,
     flush_policy: RelayFlushPolicy,
+    recorder: Option<&RelayTrafficRecorder>,
+    is_upload: bool,
 ) -> Poll<io::Result<bool>>
 where
     R: AsyncRead + Unpin,
@@ -342,6 +406,13 @@ where
                 state.pending.consume(n);
                 state.bytes += n as u64;
                 state.write_ops += 1;
+                if let Some(recorder) = recorder {
+                    if is_upload {
+                        recorder.record(n as u64, 0);
+                    } else {
+                        recorder.record(0, n as u64);
+                    }
+                }
                 progressed = true;
                 // Immediate and Adaptive both mark unflushed data; they differ in
                 // *when* the flush fires (see the flush block below).
@@ -455,7 +526,13 @@ where
     Poll::Ready(Ok(progressed))
 }
 
-async fn copy_one_pooled<R, W>(mut reader: R, mut writer: W, pool: &BufferPool) -> io::Result<u64>
+async fn copy_one_pooled<R, W>(
+    mut reader: R,
+    mut writer: W,
+    pool: &BufferPool,
+    recorder: Option<RelayTrafficRecorder>,
+    is_upload: bool,
+) -> io::Result<u64>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -483,6 +560,13 @@ where
             break;
         }
         total += n as u64;
+        if let Some(recorder) = &recorder {
+            if is_upload {
+                recorder.record(n as u64, 0);
+            } else {
+                recorder.record(0, n as u64);
+            }
+        }
     }
     // Always propagate EOF to the peer, even when the reader side hit an error
     // (e.g. ECONNRESET from a remote RST). Without this, the write half is left
@@ -679,6 +763,44 @@ mod tests {
         assert_eq!(stats.byte_totals(), (6, 6));
         assert!(stats.read_ops >= 2);
         assert!(stats.write_ops >= 2);
+    }
+
+    #[tokio::test]
+    async fn relay_v2_recorder_reports_written_chunks() {
+        let (mut a_client, a_relay) = tokio::io::duplex(4096);
+        let (mut b_client, b_relay) = tokio::io::duplex(4096);
+        let totals = Arc::new(std::sync::Mutex::new((0u64, 0u64)));
+        let recorder_totals = Arc::clone(&totals);
+        let recorder = RelayTrafficRecorder::new(move |up, down| {
+            let mut totals = recorder_totals.lock().unwrap();
+            totals.0 += up;
+            totals.1 += down;
+        });
+
+        let relay = tokio::spawn(copy_bidirectional_v2_with_recorder(
+            a_relay,
+            b_relay,
+            RelayV2Options {
+                initial_buffer: 8,
+                max_buffer: 64,
+                flush_policy: RelayFlushPolicy::Deferred,
+            },
+            Some(recorder),
+        ));
+
+        a_client.write_all(b"from-a").await.unwrap();
+        b_client.write_all(b"from-b").await.unwrap();
+        a_client.shutdown().await.unwrap();
+        b_client.shutdown().await.unwrap();
+
+        let mut got_a = Vec::new();
+        let mut got_b = Vec::new();
+        a_client.read_to_end(&mut got_a).await.unwrap();
+        b_client.read_to_end(&mut got_b).await.unwrap();
+
+        let stats = relay.await.unwrap().unwrap();
+        assert_eq!(stats.byte_totals(), (6, 6));
+        assert_eq!(*totals.lock().unwrap(), (6, 6));
     }
 
     #[tokio::test]
