@@ -78,7 +78,15 @@ pub fn build_value(state: &AppState) -> Result<Value> {
 
     let mut root = json!({
         "log": section_or_default(&sections, "log", json!({ "level": "info", "json": false }))?,
-        "api": section_or_default(&sections, "api", json!({ "listen": settings.grpc_address }))?,
+        "api": section_or_default(
+            &sections,
+            "api",
+            json!({
+                "listen": settings.grpc_address,
+                "tag": "api",
+                "services": ["HandlerService", "StatsService"],
+            }),
+        )?,
         "inbounds": inbound_json,
         "outbounds": outbound_json,
     });
