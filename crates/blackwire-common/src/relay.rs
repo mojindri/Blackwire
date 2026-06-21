@@ -56,7 +56,8 @@ pub struct RelayTrafficRecorder(Arc<dyn Fn(u64, u64) + Send + Sync>);
 
 impl std::fmt::Debug for RelayTrafficRecorder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("RelayTrafficRecorder").finish_non_exhaustive()
+        f.debug_tuple("RelayTrafficRecorder")
+            .finish_non_exhaustive()
     }
 }
 

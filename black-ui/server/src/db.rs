@@ -423,7 +423,10 @@ pub fn reset_user_usage(conn: &Connection, id: i64) -> Result<()> {
         "UPDATE users SET upload_bytes=0, download_bytes=0, updated_at=?1 WHERE id=?2",
         params![util::now(), id],
     )?;
-    conn.execute("DELETE FROM user_traffic_cursors WHERE user_id=?1", params![id])?;
+    conn.execute(
+        "DELETE FROM user_traffic_cursors WHERE user_id=?1",
+        params![id],
+    )?;
     Ok(())
 }
 
