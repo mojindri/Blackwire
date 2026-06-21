@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context as _, Result};
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
+use blackwire_app::runtime_stats;
 use blackwire_common::{BoxedStream, BufferPool, ReunionStream};
 use dashmap::DashMap;
 use h3_quinn::Connection as H3QuinnConnection;
@@ -115,8 +116,17 @@ pub async fn serve_connection(
     let datagram_enabled = config.datagram_enabled;
     let datagram_policy = config.datagram_policy;
     let fec = config.fec;
+    let udp_user = user.clone();
     tokio::spawn(async move {
-        serve_udp_sessions(udp_conn, udp_tag, datagram_enabled, fec, datagram_policy).await;
+        serve_udp_sessions(
+            udp_conn,
+            udp_tag,
+            udp_user,
+            datagram_enabled,
+            fec,
+            datagram_policy,
+        )
+        .await;
     });
 
     loop {
@@ -177,6 +187,7 @@ pub async fn serve_connection(
 async fn serve_udp_sessions(
     conn: Connection,
     inbound_tag: String,
+    user: Option<String>,
     datagram_enabled: bool,
     fec: super::udp::FecPolicy,
     datagram_policy: super::udp::DatagramPolicy,
@@ -220,6 +231,7 @@ async fn serve_udp_sessions(
             handle_udp_datagram(
                 conn.clone(),
                 inbound_tag.clone(),
+                user.clone(),
                 Arc::clone(&sessions),
                 Arc::clone(&worker_limiter),
                 Arc::clone(&fec_encoder),
@@ -244,6 +256,8 @@ async fn serve_udp_sessions(
 /// channel, or when the session is dropped and aborts it.
 async fn run_session_reader(
     sock: Arc<UdpSocket>,
+    inbound_tag: Arc<str>,
+    user: Option<Arc<str>>,
     session_id: u32,
     fec_encoder: Arc<std::sync::Mutex<FecEncoder>>,
     reply_pool: Arc<BufferPool>,
@@ -260,6 +274,12 @@ async fn run_session_reader(
             Ok((n, src)) => {
                 let data = bytes::Bytes::copy_from_slice(&buf[..n]);
                 reply_pool.release(buf);
+                runtime_stats::record_relay_traffic(
+                    inbound_tag.as_ref(),
+                    user.as_deref(),
+                    0,
+                    n as u64,
+                );
 
                 let dest = destination_from_socketaddr(src);
                 let tx_lane = datagram_policy.lane_for(&dest, data.len());
@@ -310,6 +330,7 @@ async fn run_session_reader(
 async fn handle_udp_datagram(
     _conn: Connection,
     inbound_tag: String,
+    user: Option<String>,
     sessions: Arc<DashMap<u32, UdpSession>>,
     worker_limiter: Arc<Semaphore>,
     fec_encoder: Arc<std::sync::Mutex<FecEncoder>>,
@@ -371,6 +392,8 @@ async fn handle_udp_datagram(
         };
         tokio::spawn(priority_retry_roundtrip(
             sock,
+            Arc::from(inbound_tag),
+            user.map(Arc::from),
             dest,
             dest_addr,
             payload,
@@ -398,6 +421,8 @@ async fn handle_udp_datagram(
                 let s = Arc::new(new_sock);
                 let reader = tokio::spawn(run_session_reader(
                     Arc::clone(&s),
+                    Arc::from(inbound_tag.clone()),
+                    user.as_deref().map(Arc::from),
                     session_id,
                     Arc::clone(&fec_encoder),
                     Arc::clone(&reply_pool),
@@ -423,6 +448,8 @@ async fn handle_udp_datagram(
 
     if let Err(e) = sock.send_to(payload.as_ref(), dest_addr).await {
         warn!("Hysteria2 UDP send to {dest_addr}: {e}");
+    } else {
+        runtime_stats::record_relay_traffic(&inbound_tag, user.as_deref(), payload.len() as u64, 0);
     }
 }
 
@@ -434,6 +461,8 @@ async fn handle_udp_datagram(
 #[allow(clippy::too_many_arguments)]
 async fn priority_retry_roundtrip(
     sock: Arc<UdpSocket>,
+    inbound_tag: Arc<str>,
+    user: Option<Arc<str>>,
     dest: Destination,
     dest_addr: SocketAddr,
     payload: bytes::Bytes,
@@ -451,6 +480,12 @@ async fn priority_retry_roundtrip(
         warn!("Hysteria2 UDP send to {dest_addr}: {e}");
         return;
     }
+    runtime_stats::record_relay_traffic(
+        inbound_tag.as_ref(),
+        user.as_deref(),
+        payload.len() as u64,
+        0,
+    );
 
     let retry_payload = payload.clone();
     let retry_sock = Arc::clone(&sock);
@@ -478,6 +513,7 @@ async fn priority_retry_roundtrip(
         Ok(Ok((n, _src))) => {
             let data = bytes::Bytes::copy_from_slice(&buf[..n]);
             reply_pool.release(buf);
+            runtime_stats::record_relay_traffic(inbound_tag.as_ref(), user.as_deref(), 0, n as u64);
             let response_dg = UdpDatagram {
                 session_id,
                 packet_id,

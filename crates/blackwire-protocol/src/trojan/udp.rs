@@ -13,6 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
 
 use blackwire_app::dns::DnsModule;
+use blackwire_app::runtime_stats;
 use blackwire_common::{Address, BoxedStream, ProxyError};
 
 use super::codec::{encode_udp_datagram_into, parse_udp_datagram};
@@ -25,6 +26,8 @@ use super::codec::{encode_udp_datagram_into, parse_udp_datagram};
 pub async fn relay_trojan_udp(
     stream: BoxedStream,
     dns: Option<Arc<DnsModule>>,
+    inbound_tag: Arc<str>,
+    user: Option<Arc<str>>,
 ) -> Result<(), ProxyError> {
     let (mut reader, mut writer) = tokio::io::split(stream);
     let udp = Arc::new(
@@ -72,9 +75,21 @@ pub async fn relay_trojan_udp(
                         continue;
                     }
                     let upstream = resolve_udp_dest(&dest, dns.as_deref()).await?;
+                    runtime_stats::record_relay_traffic(
+                        inbound_tag.as_ref(),
+                        user.as_deref(),
+                        payload.len() as u64,
+                        0,
+                    );
                     if let Some(rn) =
                         exchange_udp_datagram(&udp, upstream, payload, &mut reply_buf).await?
                     {
+                        runtime_stats::record_relay_traffic(
+                            inbound_tag.as_ref(),
+                            user.as_deref(),
+                            0,
+                            rn as u64,
+                        );
                         encode_udp_datagram_into(&dest, &reply_buf[..rn], &mut encode_buf)?;
                         writer
                             .write_all(&encode_buf)
@@ -166,9 +181,14 @@ mod tests {
         let dest = Address::Ipv4(std::net::Ipv4Addr::LOCALHOST, port);
         let dg = encode_udp_datagram(&dest, b"ping").unwrap();
         let relay = tokio::spawn(async move {
-            relay_trojan_udp(Box::new(server) as BoxedStream, None)
-                .await
-                .unwrap();
+            relay_trojan_udp(
+                Box::new(server) as BoxedStream,
+                None,
+                Arc::from("trojan-udp-test"),
+                Some(Arc::from("trojan-user-test")),
+            )
+            .await
+            .unwrap();
         });
 
         client.write_all(&dg).await.unwrap();

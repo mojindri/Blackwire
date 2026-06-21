@@ -27,7 +27,7 @@ pub mod outbound;
 pub mod udp;
 
 pub use codec::compute_token;
-pub use inbound::TrojanInbound;
+pub use inbound::{TrojanInbound, TrojanUser};
 pub use outbound::{
     connect_trojan_on_stream, connect_trojan_on_stream_with_early_payload, TrojanOutbound,
     TrojanOutboundConfig,
