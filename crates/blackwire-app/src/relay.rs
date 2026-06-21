@@ -210,14 +210,13 @@ pub async fn relay_bidirectional_with_policies_and_recorder(
                 .await;
             }
 
-            let (up, down) =
-                userspace_copy_bidirectional(
-                    Box::new(inbound),
-                    Box::new(outbound),
-                    relay_policy,
-                    traffic_recorder,
-                )
-                .await?;
+            let (up, down) = userspace_copy_bidirectional(
+                Box::new(inbound),
+                Box::new(outbound),
+                relay_policy,
+                traffic_recorder,
+            )
+            .await?;
             record_relay_path_bytes(
                 userspace_relay_path(relay_policy, "copy", "copy_v2"),
                 up + prefix_up,
@@ -256,14 +255,13 @@ pub async fn relay_bidirectional_with_policies_and_recorder(
             "reason" => "splice_error"
         )
         .increment(1);
-        let (up, down) =
-            userspace_copy_bidirectional(
-                Box::new(inbound),
-                Box::new(outbound),
-                relay_policy,
-                traffic_recorder,
-            )
-            .await?;
+        let (up, down) = userspace_copy_bidirectional(
+            Box::new(inbound),
+            Box::new(outbound),
+            relay_policy,
+            traffic_recorder,
+        )
+        .await?;
         record_relay_path_bytes(
             userspace_relay_path(relay_policy, "copy", "copy_v2"),
             up + prefix_up,
@@ -307,14 +305,13 @@ async fn relay_vision_inbound_with_splice_policy(
             false,
             false,
         );
-        let (up, down) =
-            userspace_copy_bidirectional(
-                Box::new(inbound),
-                outbound,
-                relay_policy,
-                traffic_recorder,
-            )
-            .await?;
+        let (up, down) = userspace_copy_bidirectional(
+            Box::new(inbound),
+            outbound,
+            relay_policy,
+            traffic_recorder,
+        )
+        .await?;
         record_relay_path_bytes(
             userspace_relay_path(relay_policy, "vision_copy", "vision_copy_v2"),
             up,
