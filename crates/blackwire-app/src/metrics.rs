@@ -838,7 +838,6 @@ pub fn record_relay_error(inbound: &str) {
 /// Call this after the relay finishes to decrement the active gauge and
 /// record bytes / duration.
 pub fn record_connection_closed(inbound: &str, rx_bytes: u64, tx_bytes: u64, duration: Duration) {
-    runtime_stats::record_relay_traffic(inbound, None, rx_bytes, tx_bytes);
     if !metrics_enabled() {
         return;
     }

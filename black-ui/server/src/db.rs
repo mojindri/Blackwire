@@ -418,6 +418,15 @@ pub fn touch_user_status(conn: &Connection, id: i64, enabled: bool, status: &str
     Ok(())
 }
 
+pub fn reset_user_usage(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE users SET upload_bytes=0, download_bytes=0, updated_at=?1 WHERE id=?2",
+        params![util::now(), id],
+    )?;
+    conn.execute("DELETE FROM user_traffic_cursors WHERE user_id=?1", params![id])?;
+    Ok(())
+}
+
 pub fn apply_user_traffic_snapshot(conn: &Connection, users: &[UserTraffic]) -> Result<()> {
     let now = util::now();
     for traffic in users {
@@ -624,5 +633,48 @@ mod tests {
         .unwrap();
         let user = load_users(&conn).unwrap().remove(0);
         assert_eq!((user.upload_bytes, user.download_bytes), (280, 1250));
+    }
+
+    #[test]
+    fn reset_usage_clears_runtime_cursor() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn, Path::new("/tmp/black-ui-db-reset-traffic-test")).unwrap();
+        let now = util::now();
+        conn.execute(
+            "INSERT INTO inbounds (tag, listen, port, protocol, enabled, transport, settings, stream_settings, sniffing, limits, created_at, updated_at)
+             VALUES ('in', '127.0.0.1', 443, 'vless', 1, 'ws', '', '{}', '', '', ?1, ?1)",
+            params![now],
+        )
+        .unwrap();
+        let inbound_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO users (inbound_id, email, uuid, flow, credential_json, note, enabled, traffic_limit_bytes, expiry_at, upload_bytes, download_bytes, sub_token, enforcement_status, created_at, updated_at)
+             VALUES (?1, 'quota-reset@example.local', '22222222-2222-4222-8222-222222222222', '', '{}', '', 1, NULL, NULL, 0, 0, 'token-reset', 'active', ?2, ?2)",
+            params![inbound_id, now],
+        )
+        .unwrap();
+        let user_id = conn.last_insert_rowid();
+
+        apply_user_traffic_snapshot(
+            &conn,
+            &[UserTraffic {
+                email: "quota-reset@example.local".into(),
+                upload_bytes: 100,
+                download_bytes: 900,
+            }],
+        )
+        .unwrap();
+        reset_user_usage(&conn, user_id).unwrap();
+
+        let user = load_users(&conn).unwrap().remove(0);
+        assert_eq!((user.upload_bytes, user.download_bytes), (0, 0));
+        let cursor_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM user_traffic_cursors WHERE user_id=?1",
+                params![user_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cursor_count, 0);
     }
 }
