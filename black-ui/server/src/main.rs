@@ -18,13 +18,16 @@ mod util;
 use anyhow::Result;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let state = state::AppState::open()?;
+    if let Err(e) = enforcement::run_startup_once(&state).await {
+        warn!(error = %e, "startup quota/expiry enforcement failed");
+    }
     enforcement::spawn(state.clone());
 
     let addr: SocketAddr = std::env::var("BLACK_UI_LISTEN")
