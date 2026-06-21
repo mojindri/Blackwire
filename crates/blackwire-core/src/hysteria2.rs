@@ -73,6 +73,7 @@ fn parse_server_config(
     let s = &cfg.settings;
 
     let password = s["auth"].as_str().unwrap_or_default().to_string();
+    let user = hysteria2_user_label(s, &password);
 
     let up_mbps = s["upMbps"].as_u64().unwrap_or(100);
     let down_mbps = s["downMbps"].as_u64().unwrap_or(100);
@@ -113,6 +114,7 @@ fn parse_server_config(
         tag: cfg.tag.clone(),
         addr,
         password,
+        user,
         up_mbps,
         down_mbps,
         cert_pem,
@@ -123,6 +125,25 @@ fn parse_server_config(
         datagram_enabled,
         fec,
         datagram_policy,
+    })
+}
+
+fn hysteria2_user_label(settings: &serde_json::Value, password: &str) -> Option<String> {
+    let clients = settings.get("clients")?.as_array()?;
+    clients.iter().find_map(|client| {
+        let auth = client
+            .get("auth")
+            .or_else(|| client.get("password"))
+            .and_then(|value| value.as_str())?;
+        if auth != password {
+            return None;
+        }
+        client
+            .get("email")
+            .or_else(|| client.get("name"))
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
     })
 }
 
@@ -450,4 +471,48 @@ fn require_field<'a>(value: &'a str, field: &str) -> Result<&'a str> {
         anyhow::bail!("{field} must not be empty");
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::hysteria2_user_label;
+
+    #[test]
+    fn hysteria2_user_label_matches_auth_client() {
+        let settings = json!({
+            "auth": "secret",
+            "clients": [
+                { "email": "alice@example.test", "auth": "secret" },
+                { "email": "bob@example.test", "auth": "other" }
+            ]
+        });
+
+        assert_eq!(
+            hysteria2_user_label(&settings, "secret").as_deref(),
+            Some("alice@example.test")
+        );
+    }
+
+    #[test]
+    fn hysteria2_user_label_accepts_password_alias() {
+        let settings = json!({
+            "clients": [{ "name": "mobile", "password": "secret" }]
+        });
+
+        assert_eq!(
+            hysteria2_user_label(&settings, "secret").as_deref(),
+            Some("mobile")
+        );
+    }
+
+    #[test]
+    fn hysteria2_user_label_ignores_nonmatching_clients() {
+        let settings = json!({
+            "clients": [{ "email": "alice@example.test", "auth": "other" }]
+        });
+
+        assert!(hysteria2_user_label(&settings, "secret").is_none());
+    }
 }

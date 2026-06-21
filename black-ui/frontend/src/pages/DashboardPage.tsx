@@ -4,8 +4,12 @@ import type { AppData } from "../lib/types";
 import { formatBytes } from "../lib/format";
 
 export function DashboardPage({ data }: { data: AppData }) {
-  const totalUpload = data.users.reduce((sum, user) => sum + user.uploadBytes, 0);
-  const totalDownload = data.users.reduce((sum, user) => sum + user.downloadBytes, 0);
+  const cachedUserUpload = data.users.reduce((sum, user) => sum + user.uploadBytes, 0);
+  const cachedUserDownload = data.users.reduce((sum, user) => sum + user.downloadBytes, 0);
+  const liveInboundUpload = data.traffic.inbounds.reduce((sum, inbound) => sum + inbound.uploadBytes, 0);
+  const liveInboundDownload = data.traffic.inbounds.reduce((sum, inbound) => sum + inbound.downloadBytes, 0);
+  const totalUpload = Math.max(cachedUserUpload, liveInboundUpload);
+  const totalDownload = Math.max(cachedUserDownload, liveInboundDownload);
   return (
     <div className="page">
       <div className="page-title">
