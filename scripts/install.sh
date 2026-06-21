@@ -31,6 +31,7 @@ REALITY_DEST="${REALITY_DEST:-www.microsoft.com:443}"
 REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-www.microsoft.com}"
 PUBLIC_HOST="${PUBLIC_HOST:-<server-ip-or-domain>}"
 OPEN_FIREWALL="${OPEN_FIREWALL:-0}"
+BLACKWIRE_API_LISTEN="${BLACKWIRE_API_LISTEN:-127.0.0.1:62789}"
 SERVICE_USER="${SERVICE_USER:-nobody}"
 SERVICE_GROUP="${SERVICE_GROUP:-}"
 INSTALL_BLACK_UI="${INSTALL_BLACK_UI:-0}"
@@ -149,6 +150,40 @@ service_group() {
     fi
 }
 
+api_config_section() {
+    [ "$INSTALL_BLACK_UI" = "1" ] || return 0
+    cat <<JSON
+  "api": {
+    "listen": "$BLACKWIRE_API_LISTEN"
+  },
+JSON
+}
+
+resolve_socket_addr() {
+    value="$1"
+    name="$2"
+    host="${value%:*}"
+    port="${value##*:}"
+
+    [ "$host" != "$value" ] || die "$name must be host:port"
+    validate_port "$port" "$name port"
+
+    case "$host" in
+        ''|*[!0-9.]*)
+            if command -v getent >/dev/null 2>&1; then
+                resolved="$(getent ahostsv4 "$host" | awk 'NR == 1 { print $1 }')"
+            else
+                resolved=""
+            fi
+            [ -n "$resolved" ] || die "$name host '$host' must resolve to an IPv4 address"
+            printf '%s:%s\n' "$resolved" "$port"
+            ;;
+        *)
+            printf '%s:%s\n' "$host" "$port"
+            ;;
+    esac
+}
+
 protect_config_for_service() {
     path="$1"
     group="$(service_group)"
@@ -159,6 +194,12 @@ protect_config_for_service() {
         sudo_cmd chmod 0644 "$path"
         log "group '$group' not found; left $path world-readable so the service can read it"
     fi
+}
+
+prepare_runtime_dirs() {
+    group="$(service_group)"
+    sudo_cmd install -d -m 0755 "$PREFIX/bin" "$CONFIG_DIR"
+    sudo_cmd install -d -m 0750 -o "$SERVICE_USER" -g "$group" "$STATE_DIR" "$RUN_DIR"
 }
 
 generate_server_config() {
@@ -176,6 +217,7 @@ generate_server_config() {
     "level": "info",
     "json": false
   },
+$(api_config_section)
   "inbounds": [
     {
       "tag": "vless-in",
@@ -219,6 +261,7 @@ Security: none
 INFO
             ;;
         vless-reality)
+            REALITY_DEST="$(resolve_socket_addr "$REALITY_DEST" REALITY_DEST)"
             x25519="$("$PREFIX/bin/blackwire" x25519)"
             private_key="$(printf '%s\n' "$x25519" | awk -F': ' '/Private key/ { print $2 }')"
             public_key="$(printf '%s\n' "$x25519" | awk -F': ' '/Public key/ { print $2 }')"
@@ -230,6 +273,7 @@ INFO
     "level": "info",
     "json": false
   },
+$(api_config_section)
   "inbounds": [
     {
       "tag": "vless-reality-in",
@@ -298,6 +342,7 @@ INFO
     "level": "info",
     "json": false
   },
+$(api_config_section)
   "inbounds": [
     {
       "tag": "vless-ws-in",
@@ -364,6 +409,7 @@ INFO
     "level": "info",
     "json": false
   },
+$(api_config_section)
   "inbounds": [
     {
       "tag": "trojan-tls-in",
@@ -794,7 +840,9 @@ install_black_ui() {
     )
     ui_binary="$(find "$ui_workdir" -type f -name black-ui -perm -111 | head -n 1)"
     [ -n "$ui_binary" ] || die "black-ui binary not found in $ui_asset"
-    sudo_cmd install -d -m 0755 "$PREFIX/bin" "$BLACK_UI_DATA_DIR" "$BLACK_UI_STATIC_DIR"
+    group="$(service_group)"
+    sudo_cmd install -d -m 0755 "$PREFIX/bin" "$BLACK_UI_STATIC_DIR"
+    sudo_cmd install -d -m 0750 -o "$SERVICE_USER" -g "$group" "$BLACK_UI_DATA_DIR"
     sudo_cmd install -m 0755 "$ui_binary" "$PREFIX/bin/black-ui"
     ui_dist="$(find "$ui_workdir" -type d -path '*/frontend/dist' | head -n 1)"
     if [ -n "$ui_dist" ]; then
@@ -835,8 +883,13 @@ install_config() {
     fi
 
     if [ -f "$CONFIG_DIR/config.json" ]; then
-        "$PREFIX/bin/blackwire" test -c "$CONFIG_DIR/config.json"
+        sudo_cmd "$PREFIX/bin/blackwire" test -c "$CONFIG_DIR/config.json"
+        protect_config_for_service "$CONFIG_DIR/config.json"
         log "config validation passed: $CONFIG_DIR/config.json"
+        if [ "$INSTALL_BLACK_UI" = "1" ] && ! sudo_cmd grep -Eq '"api"[[:space:]]*:' "$CONFIG_DIR/config.json"; then
+            log "black-ui is installed, but $CONFIG_DIR/config.json has no api listener; gRPC live apply will be unavailable"
+            log "add: \"api\": { \"listen\": \"$BLACKWIRE_API_LISTEN\" }"
+        fi
     fi
 }
 
@@ -931,7 +984,7 @@ main() {
     binary="$(find "$workdir" -type f -name blackwire -perm -111 | head -n 1)"
     [ -n "$binary" ] || die "blackwire binary not found in $asset"
 
-    sudo_cmd install -d -m 0755 "$PREFIX/bin" "$CONFIG_DIR" "$STATE_DIR" "$RUN_DIR"
+    prepare_runtime_dirs
     sudo_cmd install -m 0755 "$binary" "$PREFIX/bin/blackwire"
 
     if [ ! -f "$CONFIG_DIR/config.json" ]; then
