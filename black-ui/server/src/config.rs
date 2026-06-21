@@ -28,12 +28,8 @@ pub fn build_value(state: &AppState) -> Result<Value> {
             .collect();
         let mut settings_json = object_or_empty(&inbound.settings)?;
         if inbound.protocol == "tuic" {
-            if !clients.is_empty() || settings_json.get("users").is_none() {
-                settings_json["users"] = Value::Array(clients);
-            }
-        } else if !clients.is_empty()
-            || (protocol_uses_clients(&inbound.protocol) && settings_json.get("clients").is_none())
-        {
+            settings_json["users"] = Value::Array(clients);
+        } else if protocol_uses_clients(&inbound.protocol) {
             settings_json["clients"] = Value::Array(clients);
         }
         let mut entry = json!({
