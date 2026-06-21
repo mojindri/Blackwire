@@ -393,7 +393,10 @@ fn hysteria2_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
     let auth = credential_string(user, "auth")
         .or_else(|| credential_string(user, "password"))
         .unwrap_or_else(|| user.uuid.clone());
-    let mut params = vec!["insecure=1".to_string()];
+    let mut params = Vec::new();
+    if hysteria2_share_requires_insecure(inbound) {
+        params.push("insecure=1".to_string());
+    }
     if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
         params.push(format!("sni={}", util::url_escape(&value)));
     }
@@ -410,6 +413,24 @@ fn hysteria2_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
         query,
         util::url_escape(&user.email)
     ))
+}
+
+fn hysteria2_share_requires_insecure(inbound: &Inbound) -> bool {
+    if stream_bool(inbound, "/tlsSettings/allowInsecure")
+        || stream_bool(inbound, "/tlsSettings/insecure")
+        || stream_bool(inbound, "/tlsSettings/skipCertVerify")
+    {
+        return true;
+    }
+
+    let Some(cert_file) = stream_value(inbound, "/tlsSettings/certificateFile") else {
+        return false;
+    };
+    let cert_file = cert_file.to_ascii_lowercase();
+    if cert_file.contains("/letsencrypt/") || cert_file.ends_with("/fullchain.pem") {
+        return false;
+    }
+    cert_file.starts_with("/etc/blackwire/certs/")
 }
 
 fn tuic_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Result<String> {
@@ -553,6 +574,13 @@ fn stream_value(inbound: &Inbound, pointer: &str) -> Option<String> {
             None
         })
         .filter(|v| !v.is_empty())
+}
+
+fn stream_bool(inbound: &Inbound, pointer: &str) -> bool {
+    serde_json::from_str::<Value>(&inbound.stream_settings)
+        .ok()
+        .and_then(|v| v.pointer(pointer).and_then(Value::as_bool))
+        .unwrap_or(false)
 }
 
 fn stream_security(inbound: &Inbound) -> Option<String> {
@@ -837,7 +865,8 @@ mod tests {
               "network": "tcp",
               "security": "tls",
               "tlsSettings": {
-                "serverName": "www.microsoft.com"
+                "serverName": "www.microsoft.com",
+                "certificateFile": "/etc/blackwire/certs/hysteria2.crt"
               }
             }"#
             .into(),
@@ -869,6 +898,67 @@ mod tests {
         assert_eq!(
             link,
             "hysteria2://secret@203.0.113.10:443?insecure=1&sni=www.microsoft.com#hysteria2%40example.local"
+        );
+    }
+
+    #[test]
+    fn hysteria2_subscription_omits_insecure_for_public_cert() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "hysteria2-in".into(),
+            listen: "::".into(),
+            port: 443,
+            protocol: "hysteria2".into(),
+            enabled: true,
+            transport: "quic".into(),
+            settings: r#"{"auth":"secret"}"#.into(),
+            stream_settings: r#"{
+              "network": "tcp",
+              "security": "tls",
+              "tlsSettings": {
+                "serverName": "www.microsoft.com",
+                "certificateFile": "/etc/letsencrypt/live/example.com/fullchain.pem"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "hysteria2@example.local".into(),
+            uuid: "fallback-auth".into(),
+            flow: String::new(),
+            credential: json!({"auth": "secret"}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = hysteria2_link(&settings, &inbound, &user).unwrap();
+        assert_eq!(
+            link,
+            "hysteria2://secret@203.0.113.10:443?sni=www.microsoft.com#hysteria2%40example.local"
         );
     }
 }
