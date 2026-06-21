@@ -25,24 +25,30 @@ pub fn spawn(state: AppState) {
     });
 }
 
-async fn run_once(state: &AppState) -> Result<()> {
+pub(crate) async fn run_once(state: &AppState) -> Result<()> {
     let settings = {
         let conn = state.lock_db()?;
         db::load_settings(&conn)?
     };
 
+    refresh_traffic_with_settings(state, &settings).await?;
+    enforce_limits(state, &settings).await
+}
+
+async fn refresh_traffic_with_settings(
+    state: &AppState,
+    settings: &crate::models::Settings,
+) -> Result<()> {
     if settings.grpc_enabled {
         if let Ok(snapshot) = runtime::fetch_traffic(&settings.grpc_address).await {
             let conn = state.lock_db()?;
-            for u in snapshot.users {
-                conn.execute(
-                    "UPDATE users SET upload_bytes=?1, download_bytes=?2 WHERE email=?3",
-                    params![u.upload_bytes, u.download_bytes, u.email],
-                )?;
-            }
+            db::apply_user_traffic_snapshot(&conn, &snapshot.users)?;
         }
     }
+    Ok(())
+}
 
+async fn enforce_limits(state: &AppState, settings: &crate::models::Settings) -> Result<()> {
     let mut changed = false;
     {
         let conn = state.lock_db()?;

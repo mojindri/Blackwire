@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::{
-    auth, capabilities, config, db,
+    auth, capabilities, config, db, enforcement,
     error::{ApiResult, AppError},
     firewall,
     models::{
@@ -414,6 +414,9 @@ pub async fn list_users(
     headers: HeaderMap,
 ) -> ApiResult<Vec<ManagedUser>> {
     let _ = auth::require(&headers, &state)?;
+    if let Err(e) = enforcement::run_once(&state).await {
+        tracing::warn!(error = %e, "list_users: quota enforcement refresh failed");
+    }
     let conn = state.lock_db()?;
     Ok(Json(db::load_users(&conn).map_err(AppError::internal)?))
 }
@@ -454,7 +457,13 @@ pub async fn create_user(
         )
         .map_err(|e| AppError::bad_request(e.to_string()))?;
         let id = conn.last_insert_rowid();
-        let user = user_or_404(&conn, id)?;
+        let mut user = user_or_404(&conn, id)?;
+        if user.enabled {
+            if let Some(status) = user_limit_status(&user)? {
+                db::touch_user_status(&conn, id, false, status).map_err(AppError::internal)?;
+                user = user_or_404(&conn, id)?;
+            }
+        }
         let inbound = db::load_inbound(&conn, user.inbound_id)
             .map_err(AppError::internal)?
             .ok_or_else(|| AppError::bad_request("inbound not found"))?;
@@ -502,7 +511,13 @@ pub async fn update_user(
             ],
         )
         .map_err(|e| AppError::bad_request(e.to_string()))?;
-        let user = user_or_404(&conn, id)?;
+        let mut user = user_or_404(&conn, id)?;
+        if user.enabled {
+            if let Some(status) = user_limit_status(&user)? {
+                db::touch_user_status(&conn, id, false, status).map_err(AppError::internal)?;
+                user = user_or_404(&conn, id)?;
+            }
+        }
         let inbound = db::load_inbound(&conn, user.inbound_id)
             .map_err(AppError::internal)?
             .ok_or_else(|| AppError::bad_request("inbound not found"))?;
@@ -658,6 +673,9 @@ pub async fn bulk_users(
             }
             .map_err(AppError::internal)?;
         }
+    }
+    if let Err(e) = enforcement::run_once(&state).await {
+        tracing::warn!(error = %e, "bulk_users: quota enforcement refresh failed");
     }
     apply_all(&state, true).await
 }
@@ -973,19 +991,30 @@ fn subscription_link(state: &AppState, token: &str) -> anyhow::Result<String> {
     if !user.enabled || user.enforcement_status != "active" {
         anyhow::bail!("user disabled");
     }
-    if let Some(expiry) = &user.expiry_at {
-        if DateTime::parse_from_rfc3339(expiry)?.with_timezone(&chrono::Utc) <= chrono::Utc::now() {
-            anyhow::bail!("user expired");
-        }
-    }
-    if let Some(limit) = user.traffic_limit_bytes {
-        if limit > 0 && user.upload_bytes + user.download_bytes >= limit {
-            anyhow::bail!("quota exceeded");
-        }
+    if let Some(status) = user_limit_status(&user).map_err(|e| anyhow::anyhow!(e.to_string()))? {
+        anyhow::bail!(status);
     }
     let inbound = db::load_inbound(&conn, user.inbound_id)?
         .ok_or_else(|| anyhow::anyhow!("inbound missing"))?;
     config::subscription_link(&settings, &inbound, &user)
+}
+
+fn user_limit_status(user: &ManagedUser) -> Result<Option<&'static str>, AppError> {
+    if let Some(expiry) = &user.expiry_at {
+        if DateTime::parse_from_rfc3339(expiry)
+            .map_err(|e| AppError::bad_request(format!("invalid expiry_at: {e}")))?
+            .with_timezone(&chrono::Utc)
+            <= chrono::Utc::now()
+        {
+            return Ok(Some("expired"));
+        }
+    }
+    if let Some(limit) = user.traffic_limit_bytes {
+        if limit > 0 && user.upload_bytes.saturating_add(user.download_bytes) >= limit {
+            return Ok(Some("quota exceeded"));
+        }
+    }
+    Ok(None)
 }
 
 fn current_settings(state: &AppState) -> Result<Settings, AppError> {

@@ -4,7 +4,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::{
-    models::{ConfigSection, Inbound, ManagedUser, Outbound, Settings},
+    models::{ConfigSection, Inbound, ManagedUser, Outbound, Settings, UserTraffic},
     util,
 };
 
@@ -77,6 +77,13 @@ pub fn init(conn: &Connection, data_dir: &Path) -> Result<()> {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(inbound_id) REFERENCES inbounds(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS user_traffic_cursors (
+            user_id INTEGER PRIMARY KEY,
+            last_upload_bytes INTEGER NOT NULL DEFAULT 0,
+            last_download_bytes INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
         "#,
     )?;
@@ -411,6 +418,76 @@ pub fn touch_user_status(conn: &Connection, id: i64, enabled: bool, status: &str
     Ok(())
 }
 
+pub fn apply_user_traffic_snapshot(conn: &Connection, users: &[UserTraffic]) -> Result<()> {
+    let now = util::now();
+    for traffic in users {
+        let Some((user_id, stored_upload, stored_download)) = conn
+            .query_row(
+                "SELECT id, upload_bytes, download_bytes FROM users WHERE email=?1",
+                params![traffic.email],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+        else {
+            continue;
+        };
+
+        let raw_upload = traffic.upload_bytes.max(0);
+        let raw_download = traffic.download_bytes.max(0);
+        let cursor = conn
+            .query_row(
+                "SELECT last_upload_bytes, last_download_bytes FROM user_traffic_cursors WHERE user_id=?1",
+                params![user_id],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+
+        let (next_upload, next_download) = match cursor {
+            Some((last_upload, last_download)) => {
+                let upload_delta = if raw_upload >= last_upload {
+                    raw_upload - last_upload
+                } else {
+                    0
+                };
+                let download_delta = if raw_download >= last_download {
+                    raw_download - last_download
+                } else {
+                    0
+                };
+                (
+                    stored_upload.saturating_add(upload_delta),
+                    stored_download.saturating_add(download_delta),
+                )
+            }
+            None => (
+                stored_upload.max(raw_upload),
+                stored_download.max(raw_download),
+            ),
+        };
+
+        conn.execute(
+            "UPDATE users SET upload_bytes=?1, download_bytes=?2 WHERE id=?3",
+            params![next_upload, next_download, user_id],
+        )?;
+        conn.execute(
+            "INSERT INTO user_traffic_cursors (user_id, last_upload_bytes, last_download_bytes, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(user_id) DO UPDATE SET
+                last_upload_bytes=excluded.last_upload_bytes,
+                last_download_bytes=excluded.last_download_bytes,
+                updated_at=excluded.updated_at",
+            params![user_id, raw_upload, raw_download, now],
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +556,73 @@ mod tests {
         assert_eq!(inbound.settings, "");
         assert_eq!(count(&conn, "outbounds").unwrap(), 1);
         assert_eq!(count(&conn, "config_sections").unwrap(), 10);
+    }
+
+    #[test]
+    fn traffic_snapshots_accumulate_deltas_without_losing_restart_history() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn, Path::new("/tmp/black-ui-db-traffic-test")).unwrap();
+        let now = util::now();
+        conn.execute(
+            "INSERT INTO inbounds (tag, listen, port, protocol, enabled, transport, settings, stream_settings, sniffing, limits, created_at, updated_at)
+             VALUES ('in', '127.0.0.1', 443, 'vless', 1, 'ws', '', '{}', '', '', ?1, ?1)",
+            params![now],
+        )
+        .unwrap();
+        let inbound_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO users (inbound_id, email, uuid, flow, credential_json, note, enabled, traffic_limit_bytes, expiry_at, upload_bytes, download_bytes, sub_token, enforcement_status, created_at, updated_at)
+             VALUES (?1, 'quota@example.local', '11111111-1111-4111-8111-111111111111', '', '{}', '', 1, NULL, NULL, 0, 0, 'token', 'active', ?2, ?2)",
+            params![inbound_id, now],
+        )
+        .unwrap();
+
+        apply_user_traffic_snapshot(
+            &conn,
+            &[UserTraffic {
+                email: "quota@example.local".into(),
+                upload_bytes: 100,
+                download_bytes: 900,
+            }],
+        )
+        .unwrap();
+        let user = load_users(&conn).unwrap().remove(0);
+        assert_eq!((user.upload_bytes, user.download_bytes), (100, 900));
+
+        apply_user_traffic_snapshot(
+            &conn,
+            &[UserTraffic {
+                email: "quota@example.local".into(),
+                upload_bytes: 250,
+                download_bytes: 1200,
+            }],
+        )
+        .unwrap();
+        let user = load_users(&conn).unwrap().remove(0);
+        assert_eq!((user.upload_bytes, user.download_bytes), (250, 1200));
+
+        apply_user_traffic_snapshot(
+            &conn,
+            &[UserTraffic {
+                email: "quota@example.local".into(),
+                upload_bytes: 10,
+                download_bytes: 20,
+            }],
+        )
+        .unwrap();
+        let user = load_users(&conn).unwrap().remove(0);
+        assert_eq!((user.upload_bytes, user.download_bytes), (250, 1200));
+
+        apply_user_traffic_snapshot(
+            &conn,
+            &[UserTraffic {
+                email: "quota@example.local".into(),
+                upload_bytes: 40,
+                download_bytes: 70,
+            }],
+        )
+        .unwrap();
+        let user = load_users(&conn).unwrap().remove(0);
+        assert_eq!((user.upload_bytes, user.download_bytes), (280, 1250));
     }
 }
