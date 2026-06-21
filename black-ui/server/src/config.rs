@@ -393,7 +393,7 @@ fn hysteria2_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
     let auth = credential_string(user, "auth")
         .or_else(|| credential_string(user, "password"))
         .unwrap_or_else(|| user.uuid.clone());
-    let mut params = Vec::new();
+    let mut params = vec!["insecure=1".to_string()];
     if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
         params.push(format!("sni={}", util::url_escape(&value)));
     }
@@ -810,5 +810,65 @@ mod tests {
         assert!(link.contains("fp=chrome"));
         assert!(link.contains("spx=%2F"));
         assert!(link.ends_with("#Mollah"));
+    }
+
+    #[test]
+    fn hysteria2_subscription_includes_insecure_for_self_signed_cert() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "hysteria2-in".into(),
+            listen: "::".into(),
+            port: 443,
+            protocol: "hysteria2".into(),
+            enabled: true,
+            transport: "quic".into(),
+            settings: r#"{"auth":"secret"}"#.into(),
+            stream_settings: r#"{
+              "network": "tcp",
+              "security": "tls",
+              "tlsSettings": {
+                "serverName": "www.microsoft.com"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "hysteria2@example.local".into(),
+            uuid: "fallback-auth".into(),
+            flow: String::new(),
+            credential: json!({"auth": "secret"}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = hysteria2_link(&settings, &inbound, &user).unwrap();
+        assert_eq!(
+            link,
+            "hysteria2://secret@203.0.113.10:443?insecure=1&sni=www.microsoft.com#hysteria2%40example.local"
+        );
     }
 }
