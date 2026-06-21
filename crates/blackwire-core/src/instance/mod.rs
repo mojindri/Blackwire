@@ -546,15 +546,24 @@ impl Instance {
                         })?
                         .to_string();
                     let psk = blackwire_protocol::ss2022::password_to_psk(&password);
+                    let ss2022_user = crate::ss2022::ss2022_user_label(&in_cfg.settings, &password);
                     let socket = TokioUdpSocket::bind(addr).await.with_context(|| {
                         format!("binding SS-2022 UDP inbound '{}' on {}", in_cfg.tag, addr)
                     })?;
                     let socket = std::sync::Arc::new(socket);
                     info!(tag = %in_cfg.tag, addr = %addr, "starting SS-2022 UDP inbound");
                     let dns_for_udp = dns.clone();
+                    let udp_tag = std::sync::Arc::<str>::from(in_cfg.tag.clone());
+                    let udp_user = ss2022_user.as_deref().map(std::sync::Arc::<str>::from);
                     let task = tokio::spawn(async move {
-                        blackwire_protocol::ss2022::udp::relay_ss2022_udp(socket, psk, dns_for_udp)
-                            .await;
+                        blackwire_protocol::ss2022::udp::relay_ss2022_udp(
+                            socket,
+                            psk,
+                            dns_for_udp,
+                            udp_tag,
+                            udp_user,
+                        )
+                        .await;
                     });
                     tasks.push(task);
                     if net == "udp" {

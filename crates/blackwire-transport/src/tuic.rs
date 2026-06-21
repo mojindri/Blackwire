@@ -15,7 +15,9 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
-use blackwire_app::{context::Context, dispatcher::Dispatcher, features::OutboundHandler};
+use blackwire_app::{
+    context::Context, dispatcher::Dispatcher, features::OutboundHandler, runtime_stats,
+};
 use blackwire_common::{Address, BoxedStream, ProxyError, ReunionStream};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
@@ -61,6 +63,14 @@ pub struct TuicUser {
     pub uuid: Uuid,
     /// Shared password paired with [`TuicUser::uuid`] for authentication.
     pub password: String,
+    /// Optional label used for per-user traffic statistics.
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct TuicAuthUser {
+    password: String,
+    label: Option<Arc<str>>,
 }
 
 /// Configuration for a TUIC v5 inbound server.
@@ -213,7 +223,15 @@ async fn serve_connection(
         config
             .users
             .iter()
-            .map(|u| (u.uuid, u.password.clone()))
+            .map(|u| {
+                (
+                    u.uuid,
+                    TuicAuthUser {
+                        password: u.password.clone(),
+                        label: u.label.as_deref().map(Arc::from),
+                    },
+                )
+            })
             .collect::<HashMap<_, _>>(),
     );
     let (auth_tx, auth_rx) = watch::channel::<Option<Uuid>>(None);
@@ -230,7 +248,11 @@ async fn serve_connection(
     if config.enable_udp {
         let udp_conn = conn.clone();
         let udp_auth = auth_rx.clone();
-        tokio::spawn(async move { serve_udp_datagrams(udp_conn, udp_auth).await });
+        let udp_users = Arc::clone(&users);
+        let udp_tag = Arc::<str>::from(config.tag.clone());
+        tokio::spawn(
+            async move { serve_udp_datagrams(udp_conn, udp_auth, udp_users, udp_tag).await },
+        );
     }
 
     loop {
@@ -238,11 +260,13 @@ async fn serve_connection(
         let dispatcher = Arc::clone(&dispatcher);
         let tag = config.tag.clone();
         let mut auth_rx = auth_rx.clone();
+        let users = Arc::clone(&users);
         tokio::spawn(async move {
-            if wait_authenticated(&mut auth_rx).await.is_none() {
+            let Some(uuid) = wait_authenticated(&mut auth_rx).await else {
                 let _ = send.finish();
                 return;
-            }
+            };
+            let user = users.get(&uuid).and_then(|entry| entry.label.clone());
             let dest = match read_connect_command(&mut recv).await {
                 Ok(dest) => dest,
                 Err(e) => {
@@ -256,7 +280,7 @@ async fn serve_connection(
                 sniffed_domain: None,
                 source: None,
                 inbound_tag: tag.into(),
-                user: None,
+                user,
                 sniffed_protocol: None,
                 vision_flow: false,
             };
@@ -269,7 +293,7 @@ async fn serve_connection(
 
 async fn accept_authentication(
     conn: Connection,
-    users: Arc<HashMap<Uuid, String>>,
+    users: Arc<HashMap<Uuid, TuicAuthUser>>,
     auth_tx: watch::Sender<Option<Uuid>>,
     auth_timeout: Duration,
 ) -> Result<()> {
@@ -310,7 +334,7 @@ async fn wait_authenticated(auth_rx: &mut watch::Receiver<Option<Uuid>>) -> Opti
 
 async fn read_authenticate_command(
     conn: &Connection,
-    users: &HashMap<Uuid, String>,
+    users: &HashMap<Uuid, TuicAuthUser>,
     recv: &mut RecvStream,
 ) -> Result<Uuid> {
     let mut header = [0u8; 2];
@@ -321,10 +345,10 @@ async fn read_authenticate_command(
     let mut body = [0u8; 48];
     recv.read_exact(&mut body).await?;
     let uuid = Uuid::from_slice(&body[..16]).context("invalid TUIC UUID")?;
-    let Some(password) = users.get(&uuid) else {
+    let Some(user) = users.get(&uuid) else {
         anyhow::bail!("unknown TUIC UUID {uuid}");
     };
-    let expected = export_token(conn, uuid, password)
+    let expected = export_token(conn, uuid, &user.password)
         .map_err(|e| anyhow::anyhow!("export TUIC token: {e:?}"))?;
     if body[16..] != expected {
         anyhow::bail!("bad TUIC token");
@@ -687,10 +711,16 @@ struct UdpSession {
     last_used: Instant,
 }
 
-async fn serve_udp_datagrams(conn: Connection, mut auth_rx: watch::Receiver<Option<Uuid>>) {
-    if wait_authenticated(&mut auth_rx).await.is_none() {
+async fn serve_udp_datagrams(
+    conn: Connection,
+    mut auth_rx: watch::Receiver<Option<Uuid>>,
+    users: Arc<HashMap<Uuid, TuicAuthUser>>,
+    inbound_tag: Arc<str>,
+) {
+    let Some(uuid) = wait_authenticated(&mut auth_rx).await else {
         return;
-    }
+    };
+    let user = users.get(&uuid).and_then(|entry| entry.label.clone());
     let sessions: Arc<DashMap<u16, UdpSession>> = Arc::new(DashMap::new());
     let workers = Arc::new(Semaphore::new(MAX_UDP_WORKERS_PER_CONN));
     loop {
@@ -715,9 +745,11 @@ async fn serve_udp_datagrams(conn: Connection, mut auth_rx: watch::Receiver<Opti
         };
         let conn = conn.clone();
         let sessions = Arc::clone(&sessions);
+        let inbound_tag = Arc::clone(&inbound_tag);
+        let user = user.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            handle_udp_packet(conn, sessions, packet).await;
+            handle_udp_packet(conn, sessions, packet, inbound_tag, user).await;
         });
     }
 }
@@ -726,6 +758,8 @@ async fn handle_udp_packet(
     conn: Connection,
     sessions: Arc<DashMap<u16, UdpSession>>,
     packet: TuicUdpPacket,
+    inbound_tag: Arc<str>,
+    user: Option<Arc<str>>,
 ) {
     let dest = match resolve_address(&packet.addr).await {
         Ok(dest) => dest,
@@ -760,6 +794,12 @@ async fn handle_udp_packet(
         warn!("TUIC UDP send failed: {e}");
         return;
     }
+    runtime_stats::record_relay_traffic(
+        inbound_tag.as_ref(),
+        user.as_deref(),
+        packet.data.len() as u64,
+        0,
+    );
     let mut buf = vec![0u8; MAX_PACKET_SIZE];
     match timeout(UDP_REPLY_TIMEOUT, socket.recv_from(&mut buf)).await {
         Ok(Ok((n, src))) => {
@@ -773,6 +813,13 @@ async fn handle_udp_packet(
                 Ok(raw) => {
                     if let Err(e) = conn.send_datagram(raw) {
                         warn!("TUIC UDP reply send_datagram failed: {e}");
+                    } else {
+                        runtime_stats::record_relay_traffic(
+                            inbound_tag.as_ref(),
+                            user.as_deref(),
+                            0,
+                            n as u64,
+                        );
                     }
                 }
                 Err(e) => warn!("TUIC UDP reply encode failed: {e}"),

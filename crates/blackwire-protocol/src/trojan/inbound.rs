@@ -53,6 +53,18 @@ fn is_unspecified_associate_dest(dest: &Address) -> bool {
 }
 use super::udp::relay_trojan_udp;
 
+/// Accepted Trojan credential with an optional stats label.
+#[derive(Debug, Clone)]
+pub struct TrojanUser {
+    pub password: String,
+    pub label: Option<String>,
+}
+
+struct TrojanToken {
+    token: [u8; TOKEN_LEN],
+    user: Option<Arc<str>>,
+}
+
 /// A Trojan inbound handler.
 pub struct TrojanInbound {
     /// The inbound tag from config.
@@ -60,7 +72,7 @@ pub struct TrojanInbound {
 
     /// Pre-computed 56-char auth tokens for each configured password.
     /// We compare against these on every connection.
-    tokens: Vec<[u8; TOKEN_LEN]>,
+    tokens: Vec<TrojanToken>,
 
     /// DNS module for UDP relay domain resolution.
     dns: Option<Arc<DnsModule>>,
@@ -78,13 +90,33 @@ impl TrojanInbound {
         passwords: &[String],
         dns: Option<Arc<DnsModule>>,
     ) -> Arc<Self> {
-        let tokens = passwords
+        let users = passwords
             .iter()
-            .map(|p| {
+            .map(|password| TrojanUser {
+                password: password.clone(),
+                label: None,
+            })
+            .collect::<Vec<_>>();
+        Self::new_with_users(tag, &users, dns)
+    }
+
+    /// Create a new Trojan inbound handler with per-client stats labels.
+    pub fn new_with_users(
+        tag: impl Into<Arc<str>>,
+        users: &[TrojanUser],
+        dns: Option<Arc<DnsModule>>,
+    ) -> Arc<Self> {
+        let tokens = users
+            .iter()
+            .map(|user| {
+                let p = &user.password;
                 let hex = compute_token(p);
                 let mut arr = [0u8; TOKEN_LEN];
                 arr.copy_from_slice(hex.as_bytes());
-                arr
+                TrojanToken {
+                    token: arr,
+                    user: user.label.as_deref().map(Arc::from),
+                }
             })
             .collect();
 
@@ -98,10 +130,11 @@ impl TrojanInbound {
     /// Check whether the given raw token bytes match any configured password.
     ///
     /// Uses constant-time comparison to avoid timing-based side channels.
-    fn validate_token(&self, token: &[u8; TOKEN_LEN]) -> bool {
+    fn validate_token(&self, token: &[u8; TOKEN_LEN]) -> Option<Option<Arc<str>>> {
         self.tokens
             .iter()
-            .any(|expected| expected.ct_eq(token).into())
+            .find(|expected| expected.token.ct_eq(token).into())
+            .map(|expected| expected.user.clone())
     }
 }
 
@@ -136,10 +169,13 @@ impl InboundHandler for TrojanInbound {
         }
 
         // Validate the token in constant time.
-        if !self.validate_token(&request.token) {
-            warn!(source = %source, "Trojan auth failed — dropping connection");
-            return Err(ProxyError::AuthFailed);
-        }
+        let user = match self.validate_token(&request.token) {
+            Some(user) => user,
+            None => {
+                warn!(source = %source, "Trojan auth failed — dropping connection");
+                return Err(ProxyError::AuthFailed);
+            }
+        };
 
         debug!(
             source = %source,
@@ -148,10 +184,13 @@ impl InboundHandler for TrojanInbound {
         );
 
         if is_trojan_udp_associate(&request) {
-            return relay_trojan_udp(stream, self.dns.clone()).await;
+            return relay_trojan_udp(stream, self.dns.clone(), self.tag.clone(), user).await;
         }
 
-        let ctx = Context::new(self.tag.clone(), source);
+        let ctx = match user {
+            Some(user) => Context::new(self.tag.clone(), source).with_user(user),
+            None => Context::new(self.tag.clone(), source),
+        };
         dispatcher.dispatch(ctx, request.dest, stream).await
     }
 }
@@ -173,8 +212,8 @@ mod tests {
         let mut bad_arr = [0u8; TOKEN_LEN];
         bad_arr.copy_from_slice(bad.as_bytes());
 
-        assert!(handler.validate_token(&good_arr));
-        assert!(!handler.validate_token(&bad_arr));
+        assert!(handler.validate_token(&good_arr).is_some());
+        assert!(handler.validate_token(&bad_arr).is_none());
     }
 
     /// Multiple passwords: any valid one is accepted.
@@ -187,7 +226,7 @@ mod tests {
             let mut arr = [0u8; TOKEN_LEN];
             arr.copy_from_slice(token_str.as_bytes());
             assert!(
-                handler.validate_token(&arr),
+                handler.validate_token(&arr).is_some(),
                 "password '{pw}' should be valid"
             );
         }
@@ -195,6 +234,27 @@ mod tests {
         let bad_str = compute_token("pass3");
         let mut bad_arr = [0u8; TOKEN_LEN];
         bad_arr.copy_from_slice(bad_str.as_bytes());
-        assert!(!handler.validate_token(&bad_arr));
+        assert!(handler.validate_token(&bad_arr).is_none());
+    }
+
+    #[test]
+    fn token_validation_returns_user_label() {
+        let handler = TrojanInbound::new_with_users(
+            "test",
+            &[TrojanUser {
+                password: "correct-password".into(),
+                label: Some("trojan@example.local".into()),
+            }],
+            None,
+        );
+
+        let good = compute_token("correct-password");
+        let mut good_arr = [0u8; TOKEN_LEN];
+        good_arr.copy_from_slice(good.as_bytes());
+
+        assert_eq!(
+            handler.validate_token(&good_arr).flatten().as_deref(),
+            Some("trojan@example.local")
+        );
     }
 }

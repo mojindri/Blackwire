@@ -158,6 +158,7 @@ fn parse_users(settings: &serde_json::Value) -> Result<Vec<TuicUser>> {
                 uuid: Uuid::parse_str(uuid)
                     .with_context(|| format!("invalid TUIC uuid '{uuid}'"))?,
                 password: password.to_string(),
+                label: Some(tuic_user_label(settings, uuid)),
             }]),
             _ => Ok(vec![]),
         };
@@ -180,6 +181,7 @@ fn parse_users(settings: &serde_json::Value) -> Result<Vec<TuicUser>> {
                     uuid: Uuid::parse_str(uuid)
                         .with_context(|| format!("invalid TUIC uuid '{uuid}'"))?,
                     password: password.to_string(),
+                    label: Some(tuic_user_label(user, uuid)),
                 })
             })
             .collect();
@@ -196,12 +198,23 @@ fn parse_users(settings: &serde_json::Value) -> Result<Vec<TuicUser>> {
                     uuid: Uuid::parse_str(uuid)
                         .with_context(|| format!("invalid TUIC uuid '{uuid}'"))?,
                     password: password.to_string(),
+                    label: Some(uuid.clone()),
                 })
             })
             .collect();
     }
 
     anyhow::bail!("TUIC users must be an array or object")
+}
+
+fn tuic_user_label(settings: &serde_json::Value, uuid: &str) -> String {
+    settings
+        .get("email")
+        .or_else(|| settings.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| uuid.to_string())
 }
 
 fn parse_socket_config(
@@ -249,4 +262,37 @@ fn require_field<'a>(value: &'a str, name: &str) -> Result<&'a str> {
         anyhow::bail!("missing required field {name}");
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_tuic_array_users_keeps_email_label() {
+        let settings = json!({
+            "users": [{
+                "uuid": "11111111-1111-4111-8111-111111111111",
+                "password": "secret",
+                "email": "tuic@example.local"
+            }]
+        });
+
+        let users = parse_users(&settings).unwrap();
+        assert_eq!(users[0].label.as_deref(), Some("tuic@example.local"));
+    }
+
+    #[test]
+    fn parse_tuic_object_users_uses_uuid_label() {
+        let uuid = "11111111-1111-4111-8111-111111111111";
+        let settings = json!({
+            "users": {
+                "11111111-1111-4111-8111-111111111111": "secret"
+            }
+        });
+
+        let users = parse_users(&settings).unwrap();
+        assert_eq!(users[0].label.as_deref(), Some(uuid));
+    }
 }

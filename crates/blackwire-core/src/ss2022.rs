@@ -30,8 +30,43 @@ pub(crate) fn build_ss2022_inbound(
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("SS-2022 inbound '{}' missing 'password'", cfg.tag))?
         .to_string();
+    let user = ss2022_user_label(&cfg.settings, &password);
 
-    Ok(Ss2022Inbound::new(cfg.tag.as_str(), &password))
+    Ok(Ss2022Inbound::new_with_user(
+        cfg.tag.as_str(),
+        &password,
+        user,
+    ))
+}
+
+pub(crate) fn ss2022_user_label(settings: &serde_json::Value, password: &str) -> Option<String> {
+    let direct = settings
+        .get("email")
+        .or_else(|| settings.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if direct.is_some() {
+        return direct;
+    }
+
+    settings
+        .get("clients")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|clients| {
+            clients.iter().find_map(|client| {
+                let client_password = client.get("password").and_then(serde_json::Value::as_str)?;
+                if client_password != password {
+                    return None;
+                }
+                client
+                    .get("email")
+                    .or_else(|| client.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+        })
 }
 
 /// Build an SS-2022 outbound handler from config.
@@ -70,4 +105,39 @@ pub(crate) fn build_ss2022_outbound(
         .to_string();
 
     Ok(Ss2022Outbound::new(&cfg.tag, server, &password))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ss2022_user_label_prefers_direct_label() {
+        let settings = json!({
+            "password": "secret",
+            "email": "ss@example.local",
+            "clients": [{"password": "secret", "email": "client@example.local"}]
+        });
+
+        assert_eq!(
+            ss2022_user_label(&settings, "secret").as_deref(),
+            Some("ss@example.local")
+        );
+    }
+
+    #[test]
+    fn ss2022_user_label_matches_client_password() {
+        let settings = json!({
+            "clients": [
+                {"password": "other", "email": "other@example.local"},
+                {"password": "secret", "name": "ss-user"}
+            ]
+        });
+
+        assert_eq!(
+            ss2022_user_label(&settings, "secret").as_deref(),
+            Some("ss-user")
+        );
+    }
 }

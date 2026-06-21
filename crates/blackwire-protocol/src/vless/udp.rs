@@ -9,6 +9,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt as _};
 
 use blackwire_app::dns::DnsModule;
+use blackwire_app::runtime_stats;
 use blackwire_common::{Address, ProxyError};
 
 use super::codec::{decode_address_port, encode_address_port};
@@ -64,6 +65,8 @@ pub async fn write_udp_packet<W: AsyncWrite + Unpin>(
 pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
     mut client: S,
     dns: Option<Arc<DnsModule>>,
+    inbound_tag: Arc<str>,
+    user: Option<Arc<str>>,
 ) -> Result<(), ProxyError> {
     use tokio::net::UdpSocket;
 
@@ -106,9 +109,16 @@ pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
             .send_to(&payload_buf[..n], upstream)
             .await
             .map_err(|e| ProxyError::Transport(format!("VLESS UDP send: {e}")))?;
+        runtime_stats::record_relay_traffic(inbound_tag.as_ref(), user.as_deref(), n as u64, 0);
 
         match tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut recv_buf)).await {
             Ok(Ok(rn)) if rn > 0 => {
+                runtime_stats::record_relay_traffic(
+                    inbound_tag.as_ref(),
+                    user.as_deref(),
+                    0,
+                    rn as u64,
+                );
                 write_udp_packet(&mut client, &dest, &recv_buf[..rn], &mut frame_buf).await?;
             }
             _ => {}

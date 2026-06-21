@@ -172,7 +172,13 @@ impl InboundHandler for VlessInbound {
                         stream.flush().await?;
 
                         if req.command == Command::Udp {
-                            return relay_vless_udp(stream, self.dns.clone()).await;
+                            return relay_vless_udp(
+                                stream,
+                                self.dns.clone(),
+                                self.tag.clone(),
+                                Some(user.email.clone()),
+                            )
+                            .await;
                         }
 
                         let mut relay_stream = stream;

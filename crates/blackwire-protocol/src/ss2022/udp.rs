@@ -24,6 +24,7 @@ use tokio::net::UdpSocket;
 use tracing::{debug, warn};
 
 use blackwire_app::dns::DnsModule;
+use blackwire_app::runtime_stats;
 use blackwire_common::{decode_socks5_address, write_socks5_address, Address, ProxyError};
 
 const TYPE_CLIENT: u8 = 0x00;
@@ -321,16 +322,22 @@ pub fn encode_client_packet(
 /// On Linux the inbound socket uses `recvmmsg(2)` to receive up to
 /// `RECV_BATCH` packets in a single syscall, reducing per-packet syscall
 /// overhead at high UDP PPS.
-pub async fn relay_ss2022_udp(socket: Arc<UdpSocket>, psk: [u8; 32], dns: Option<Arc<DnsModule>>) {
+pub async fn relay_ss2022_udp(
+    socket: Arc<UdpSocket>,
+    psk: [u8; 32],
+    dns: Option<Arc<DnsModule>>,
+    inbound_tag: Arc<str>,
+    user: Option<Arc<str>>,
+) {
     let mut sessions: HashMap<u64, SessionEntry> = HashMap::new();
 
     #[cfg(target_os = "linux")]
     {
-        relay_ss2022_udp_batch(socket, psk, dns, &mut sessions).await;
+        relay_ss2022_udp_batch(socket, psk, dns, inbound_tag, user, &mut sessions).await;
     }
     #[cfg(not(target_os = "linux"))]
     {
-        relay_ss2022_udp_simple(socket, psk, dns, &mut sessions).await;
+        relay_ss2022_udp_simple(socket, psk, dns, inbound_tag, user, &mut sessions).await;
     }
 }
 
@@ -340,6 +347,8 @@ async fn relay_ss2022_udp_simple(
     socket: Arc<UdpSocket>,
     psk: [u8; 32],
     dns: Option<Arc<DnsModule>>,
+    inbound_tag: Arc<str>,
+    user: Option<Arc<str>>,
     sessions: &mut HashMap<u64, SessionEntry>,
 ) {
     let mut buf = vec![0u8; 65535];
@@ -358,6 +367,8 @@ async fn relay_ss2022_udp_simple(
             &buf[..n],
             client_addr,
             dns.as_deref(),
+            inbound_tag.as_ref(),
+            user.as_deref(),
         )
         .await;
     }
@@ -369,6 +380,8 @@ async fn relay_ss2022_udp_batch(
     socket: Arc<UdpSocket>,
     psk: [u8; 32],
     dns: Option<Arc<DnsModule>>,
+    inbound_tag: Arc<str>,
+    user: Option<Arc<str>>,
     sessions: &mut HashMap<u64, SessionEntry>,
 ) {
     use std::os::unix::io::AsRawFd;
@@ -456,6 +469,8 @@ async fn relay_ss2022_udp_batch(
                 &data[i][..*n],
                 *client_addr,
                 dns.as_deref(),
+                inbound_tag.as_ref(),
+                user.as_deref(),
             )
             .await;
         }
@@ -490,6 +505,8 @@ async fn process_ss2022_packet(
     buf: &[u8],
     client_addr: SocketAddr,
     dns: Option<&DnsModule>,
+    inbound_tag: &str,
+    user: Option<&str>,
 ) {
     let (client_session_id, _packet_id, dest, payload) = match decode_client_packet(buf, psk) {
         Ok(v) => v,
@@ -549,6 +566,8 @@ async fn process_ss2022_packet(
             session.client_session_id,
             session.session_key,
             Arc::clone(&client_addr_shared),
+            Arc::from(inbound_tag),
+            user.map(Arc::from),
         );
 
         sessions.insert(
@@ -572,6 +591,8 @@ async fn process_ss2022_packet(
 
     if let Err(e) = entry.upstream_sock.send_to(&payload, upstream).await {
         warn!(error = %e, "SS2022 UDP upstream send failed");
+    } else {
+        runtime_stats::record_relay_traffic(inbound_tag, user, payload.len() as u64, 0);
     }
 }
 
@@ -588,6 +609,8 @@ fn spawn_reply_task(
     client_session_id: u64,
     session_key: [u8; 32],
     client_addr: Arc<Mutex<SocketAddr>>,
+    inbound_tag: Arc<str>,
+    user: Option<Arc<str>>,
 ) {
     tokio::spawn(async move {
         // Pre-allocate all buffers once — zero heap churn per reply packet.
@@ -649,6 +672,13 @@ fn spawn_reply_task(
                 Ok(()) => {
                     if let Err(e) = client_sock.send_to(&pkt_out, addr).await {
                         warn!(error = %e, "SS2022 UDP reply send failed");
+                    } else {
+                        runtime_stats::record_relay_traffic(
+                            inbound_tag.as_ref(),
+                            user.as_deref(),
+                            0,
+                            rn as u64,
+                        );
                     }
                 }
                 Err(e) => {
