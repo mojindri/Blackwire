@@ -49,15 +49,26 @@ pub struct Ss2022Inbound {
     tag: Arc<str>,
     psk: [u8; 32],
     replay: SaltReplay,
+    user: Option<Arc<str>>,
 }
 
 impl Ss2022Inbound {
     /// Build a new SS-2022 inbound handler from tag and password.
     pub fn new(tag: impl Into<Arc<str>>, password: &str) -> Arc<Self> {
+        Self::new_with_user(tag, password, None)
+    }
+
+    /// Build a new SS-2022 inbound handler with an optional stats label.
+    pub fn new_with_user(
+        tag: impl Into<Arc<str>>,
+        password: &str,
+        user: Option<String>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
             psk: password_to_psk(password),
             replay: SaltReplay::new(),
+            user: user.as_deref().map(Arc::from),
         })
     }
 }
@@ -177,7 +188,10 @@ impl InboundHandler for Ss2022Inbound {
             None,
         );
 
-        let ctx = Context::new(self.tag.clone(), source);
+        let ctx = match self.user.clone() {
+            Some(user) => Context::new(self.tag.clone(), source).with_user(user),
+            None => Context::new(self.tag.clone(), source),
+        };
         dispatcher.dispatch(ctx, dest, Box::new(vm)).await
     }
 }

@@ -127,7 +127,8 @@ impl InboundHandler for Socks5Inbound {
                     .local_addr()
                     .map_err(|e| ProxyError::Transport(format!("SOCKS5 UDP local_addr: {e}")))?;
                 send_bind_reply(&mut stream, REP_SUCCESS, bind_addr).await?;
-                crate::socks5_udp::relay_socks5_udp(stream, udp, source.ip()).await
+                crate::socks5_udp::relay_socks5_udp(stream, udp, source.ip(), self.tag.clone())
+                    .await
             }
         }
     }

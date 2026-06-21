@@ -9,7 +9,7 @@ use anyhow::Result;
 
 use blackwire_app::dns::DnsModule;
 use blackwire_app::features::{InboundHandler, OutboundHandler};
-use blackwire_protocol::trojan::{TrojanInbound, TrojanOutbound, TrojanOutboundConfig};
+use blackwire_protocol::trojan::{TrojanInbound, TrojanOutbound, TrojanOutboundConfig, TrojanUser};
 
 use crate::net::socket_addr_from_address_port;
 use crate::outbound_transport::{uses_outbound_transport, TransportTrojanOutbound};
@@ -25,24 +25,31 @@ pub(crate) fn build_trojan_inbound(
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("Trojan inbound '{}' missing 'clients' array", cfg.tag))?;
 
-    let passwords: Vec<String> = clients
+    let users: Vec<TrojanUser> = clients
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            c["password"]
+            let password = c["password"]
                 .as_str()
                 .ok_or_else(|| {
                     anyhow::anyhow!("Trojan client #{} in '{}' missing 'password'", i, cfg.tag)
                 })
-                .map(|s| s.to_string())
+                .map(|s| s.to_string())?;
+            let label = c
+                .get("email")
+                .or_else(|| c.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            Ok(TrojanUser { password, label })
         })
         .collect::<Result<_>>()?;
 
-    if passwords.is_empty() {
+    if users.is_empty() {
         anyhow::bail!("Trojan inbound '{}' has no configured clients", cfg.tag);
     }
 
-    Ok(TrojanInbound::new(cfg.tag.as_str(), &passwords, dns))
+    Ok(TrojanInbound::new_with_users(cfg.tag.as_str(), &users, dns))
 }
 
 /// Build a Trojan outbound handler from config.

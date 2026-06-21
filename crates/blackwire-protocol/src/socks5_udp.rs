@@ -6,6 +6,9 @@
 use std::net::SocketAddr;
 
 use bytes::BytesMut;
+use std::sync::Arc;
+
+use blackwire_app::runtime_stats;
 use tokio::io::AsyncReadExt;
 use tokio::net::UdpSocket;
 
@@ -84,6 +87,7 @@ pub async fn relay_socks5_udp(
     mut control: BoxedStream,
     udp: UdpSocket,
     client_ip: std::net::IpAddr,
+    inbound_tag: Arc<str>,
 ) -> Result<(), ProxyError> {
     // Single upstream socket shared across all datagrams in this association.
     let upstream_sock = UdpSocket::bind("0.0.0.0:0")
@@ -119,6 +123,12 @@ pub async fn relay_socks5_udp(
                 if upstream_sock.send_to(payload, upstream).await.is_err() {
                     continue;
                 }
+                runtime_stats::record_relay_traffic(
+                    inbound_tag.as_ref(),
+                    None,
+                    payload.len() as u64,
+                    0,
+                );
                 if let Ok(Ok(m)) = tokio::time::timeout(
                     std::time::Duration::from_secs(5),
                     upstream_sock.recv(&mut reply_buf),
@@ -129,6 +139,12 @@ pub async fn relay_socks5_udp(
                         && encode_udp_datagram_into(&dest, &reply_buf[..m], &mut encode_buf)
                             .is_ok()
                     {
+                        runtime_stats::record_relay_traffic(
+                            inbound_tag.as_ref(),
+                            None,
+                            0,
+                            m as u64,
+                        );
                         let _ = udp.send_to(&encode_buf, peer).await;
                     }
                 }
