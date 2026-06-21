@@ -2,12 +2,12 @@ Origin: Blackwire
 Label: Blackwire
 Suite: stable
 Codename: stable
-Date: Sun, 21 Jun 2026 15:03:52 +0000
+Date: Sun, 21 Jun 2026 15:21:16 +0000
 Architectures: amd64 arm64
 Components: main
 Description: Blackwire apt repository
 SHA256:
- e07d029e34ffb462d21219274350b0ab0196f8d6426b0ef54c99db97e1693620              583 main/binary-amd64/Packages
- 3dbe19bfc84357cfab360d27733f8570de4f42a32448f03976b24ffde5be1c23              583 main/binary-arm64/Packages
- 5e73add59f327d6166065c8b31d1af5787cb9d2ce345f0555b102704963c06ab              400 main/binary-amd64/Packages.gz
- 98736e742c84c8076ea9bd059a8993c7a13e2d4fa214fecd219cc31a69c28ff9              400 main/binary-arm64/Packages.gz
+ 203134e2898c49eba759dceeadd4b938ce234b4a83c973b0a6d4aa0ee8f5de47              583 main/binary-amd64/Packages
+ 2cea23cf82e6deff2f3614bf28abcfec1823360e3d519d162b69c0ed14072a92              583 main/binary-arm64/Packages
+ 3828b66ae635edd663737dc30079c79198929aa8af9d7e62784afc7e52ec93aa              399 main/binary-amd64/Packages.gz
+ b371ee86aa6f071f87e4310fc1c7933c06f9b70bc399dbeae1ca5664caf003d1              399 main/binary-arm64/Packages.gz
