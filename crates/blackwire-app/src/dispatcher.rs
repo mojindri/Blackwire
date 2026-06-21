@@ -26,7 +26,7 @@
 //! streams, and splice fallbacks use the configured userspace relay engine.
 
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -59,6 +59,7 @@ const OUTBOUND_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// immediately, so this guard must be bounded to avoid blocking the relay.
 const POOLED_FIRST_WRITE_GUARD_TIMEOUT: Duration = Duration::from_millis(1);
 const POOLED_FIRST_WRITE_GUARD_BUF_SIZE: usize = 2048;
+const LIVE_TRAFFIC_FLUSH_BYTES: u64 = 64 * 1024;
 
 use std::collections::HashMap;
 
@@ -88,6 +89,65 @@ use crate::runtime_stats;
 struct RoutedOutboundConnectResult {
     connect: crate::features::OutboundConnectResult,
     outbound_tag: Arc<str>,
+}
+
+struct BufferedTrafficRecorder {
+    inbound_tag: Arc<str>,
+    user: Option<Arc<str>>,
+    pending_up: AtomicU64,
+    pending_down: AtomicU64,
+    saw_live_traffic: AtomicBool,
+}
+
+impl BufferedTrafficRecorder {
+    fn new(inbound_tag: Arc<str>, user: Option<Arc<str>>) -> Self {
+        Self {
+            inbound_tag,
+            user,
+            pending_up: AtomicU64::new(0),
+            pending_down: AtomicU64::new(0),
+            saw_live_traffic: AtomicBool::new(false),
+        }
+    }
+
+    fn record(&self, up: u64, down: u64) {
+        if up == 0 && down == 0 {
+            return;
+        }
+        self.saw_live_traffic.store(true, Ordering::Relaxed);
+
+        let pending_up = if up > 0 {
+            self.pending_up.fetch_add(up, Ordering::Relaxed) + up
+        } else {
+            self.pending_up.load(Ordering::Relaxed)
+        };
+        let pending_down = if down > 0 {
+            self.pending_down.fetch_add(down, Ordering::Relaxed) + down
+        } else {
+            self.pending_down.load(Ordering::Relaxed)
+        };
+
+        if pending_up.saturating_add(pending_down) >= LIVE_TRAFFIC_FLUSH_BYTES {
+            self.flush();
+        }
+    }
+
+    fn flush(&self) {
+        let up = self.pending_up.swap(0, Ordering::Relaxed);
+        let down = self.pending_down.swap(0, Ordering::Relaxed);
+        if up > 0 || down > 0 {
+            runtime_stats::record_relay_traffic(
+                self.inbound_tag.as_ref(),
+                self.user.as_deref(),
+                up,
+                down,
+            );
+        }
+    }
+
+    fn saw_live_traffic(&self) -> bool {
+        self.saw_live_traffic.load(Ordering::Relaxed)
+    }
 }
 
 /// The dispatcher connects inbounds to outbounds by consulting the router
@@ -495,16 +555,13 @@ impl Dispatcher for DefaultDispatcher {
         //   outbound → inbound (server sending data back to the client)
         //
         // It returns the total bytes sent in each direction when finished.
-        let live_traffic_recorded = Arc::new(AtomicBool::new(false));
-        let live_traffic_flag = Arc::clone(&live_traffic_recorded);
-        let inbound_tag = Arc::clone(&ctx.inbound_tag);
-        let user = ctx.user.as_ref().map(Arc::clone);
+        let buffered_traffic = Arc::new(BufferedTrafficRecorder::new(
+            Arc::clone(&ctx.inbound_tag),
+            ctx.user.as_ref().map(Arc::clone),
+        ));
+        let traffic_buffer = Arc::clone(&buffered_traffic);
         let traffic_recorder = RelayTrafficRecorder::new(move |up, down| {
-            if up == 0 && down == 0 {
-                return;
-            }
-            live_traffic_flag.store(true, Ordering::Relaxed);
-            runtime_stats::record_relay_traffic(inbound_tag.as_ref(), user.as_deref(), up, down);
+            traffic_buffer.record(up, down);
         });
         let prewritten_up = prewritten_up + prewritten_early_up;
 
@@ -566,7 +623,8 @@ impl Dispatcher for DefaultDispatcher {
         let (rx_bytes, tx_bytes) = result.unwrap_or((0, 0));
         conn.finish(rx_bytes, tx_bytes, close_reason);
         record_connection_closed(&ctx.inbound_tag, rx_bytes, tx_bytes, elapsed);
-        if live_traffic_recorded.load(Ordering::Relaxed) {
+        if buffered_traffic.saw_live_traffic() {
+            buffered_traffic.flush();
             if prewritten_up > 0 {
                 runtime_stats::record_relay_traffic(
                     &ctx.inbound_tag,
@@ -1039,6 +1097,53 @@ mod tests {
                 false,
             )
         }
+    }
+
+    fn unique_counter_name(prefix: &str) -> Arc<str> {
+        Arc::from(format!(
+            "{prefix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn buffered_traffic_recorder_flushes_only_at_threshold_or_close() {
+        let inbound = unique_counter_name("buffered-in");
+        let user = unique_counter_name("buffered-user");
+        let recorder = BufferedTrafficRecorder::new(Arc::clone(&inbound), Some(Arc::clone(&user)));
+
+        recorder.record(1024, 2048);
+        assert!(recorder.saw_live_traffic());
+        assert!(
+            runtime_stats::get(&format!("inbound>>>{}>>>traffic>>>uplink", inbound), false)
+                .is_none()
+        );
+
+        recorder.flush();
+        assert_eq!(
+            runtime_stats::get(&format!("inbound>>>{}>>>traffic>>>uplink", inbound), false),
+            Some(1024)
+        );
+        assert_eq!(
+            runtime_stats::get(&format!("user>>>{}>>>traffic>>>downlink", user), false),
+            Some(2048)
+        );
+    }
+
+    #[test]
+    fn buffered_traffic_recorder_auto_flushes_at_threshold() {
+        let inbound = unique_counter_name("buffered-threshold-in");
+        let recorder = BufferedTrafficRecorder::new(Arc::clone(&inbound), None);
+
+        recorder.record(LIVE_TRAFFIC_FLUSH_BYTES, 0);
+
+        assert_eq!(
+            runtime_stats::get(&format!("inbound>>>{}>>>traffic>>>uplink", inbound), false),
+            Some(LIVE_TRAFFIC_FLUSH_BYTES as i64)
+        );
     }
 
     /// Regression: when an outbound does NOT write the early payload itself

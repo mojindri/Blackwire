@@ -661,10 +661,25 @@ pub async fn bulk_users(
             match input.action.as_str() {
                 "enable" => db::touch_user_status(&conn, id, true, "active"),
                 "disable" => db::touch_user_status(&conn, id, false, "disabled manually"),
-                "delete" => conn.execute("DELETE FROM users WHERE id=?1", params![id]).map(|_| ()).map_err(Into::into),
+                "delete" => conn
+                    .execute("DELETE FROM users WHERE id=?1", params![id])
+                    .map(|_| ())
+                    .map_err(Into::into),
                 "resetUsage" => db::reset_user_usage(&conn, id),
-                "setLimit" => conn.execute("UPDATE users SET traffic_limit_bytes=?1, updated_at=?2 WHERE id=?3", params![input.traffic_limit_bytes, util::now(), id]).map(|_| ()).map_err(Into::into),
-                "extendExpiry" => conn.execute("UPDATE users SET expiry_at=?1, updated_at=?2 WHERE id=?3", params![input.expiry_at, util::now(), id]).map(|_| ()).map_err(Into::into),
+                "setLimit" => conn
+                    .execute(
+                        "UPDATE users SET traffic_limit_bytes=?1, updated_at=?2 WHERE id=?3",
+                        params![input.traffic_limit_bytes, util::now(), id],
+                    )
+                    .map(|_| ())
+                    .map_err(Into::into),
+                "extendExpiry" => conn
+                    .execute(
+                        "UPDATE users SET expiry_at=?1, updated_at=?2 WHERE id=?3",
+                        params![input.expiry_at, util::now(), id],
+                    )
+                    .map(|_| ())
+                    .map_err(Into::into),
                 _ => return Err(AppError::bad_request("unknown bulk action")),
             }
             .map_err(AppError::internal)?;
