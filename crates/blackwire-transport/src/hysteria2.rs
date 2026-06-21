@@ -60,6 +60,8 @@ pub struct Hysteria2ServerConfig {
     pub addr: SocketAddr,
     /// Shared password that clients must send during HTTP/3 auth.
     pub password: String,
+    /// Optional authenticated user label used for per-user runtime stats.
+    pub user: Option<String>,
     /// Max client → server rate in Mbps (server receive / `Hysteria-CC-RX` in auth response).
     pub up_mbps: u64,
     /// Max server → client rate in Mbps (used for Brutal on server→client path when enabled).
