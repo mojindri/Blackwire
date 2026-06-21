@@ -362,6 +362,8 @@ function buildSectionObject(state: AdvancedConfigEditorState, base: unknown): un
   }
   if (state.name === "api") {
     setOrDelete(root, "listen", state.apiListen.trim());
+    root.tag = "api";
+    root.services = ["HandlerService", "StatsService"];
     return root;
   }
   if (state.name === "fast") {

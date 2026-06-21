@@ -159,7 +159,11 @@ fn seed_default_sections(conn: &Connection) -> Result<()> {
         ),
         ("limits", 0, r#"{}"#),
         ("stats", 0, r#"{}"#),
-        ("api", 1, r#"{"listen":"127.0.0.1:62789"}"#),
+        (
+            "api",
+            1,
+            r#"{"listen":"127.0.0.1:62789","tag":"api","services":["HandlerService","StatsService"]}"#,
+        ),
         ("metricsAddr", 0, r#""127.0.0.1:9090""#),
         ("profile", 0, r#""compat""#),
         (
