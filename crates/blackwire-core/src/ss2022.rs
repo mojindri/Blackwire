@@ -3,13 +3,14 @@
 //! Reads SS-2022-specific settings from config JSON and builds the
 //! `Ss2022Inbound` / `Ss2022Outbound` handlers.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 
 use blackwire_app::features::{InboundHandler, OutboundHandler};
 use blackwire_protocol::ss2022::{inbound::Ss2022Inbound, outbound::Ss2022Outbound};
+
+use crate::net::socket_addr_from_address_port;
 
 /// Build an SS-2022 inbound handler from config.
 ///
@@ -57,9 +58,11 @@ pub(crate) fn build_ss2022_outbound(
     let port = settings["port"]
         .as_u64()
         .ok_or_else(|| anyhow::anyhow!("SS-2022 outbound '{}' missing 'port'", cfg.tag))?;
-    let server: SocketAddr = format!("{server_str}:{port}")
-        .parse()
-        .with_context(|| format!("invalid SS-2022 server address '{server_str}:{port}'"))?;
+    let server = socket_addr_from_address_port(
+        server_str,
+        port,
+        &format!("invalid SS-2022 server address for outbound '{}'", cfg.tag),
+    )?;
 
     let password = settings["password"]
         .as_str()

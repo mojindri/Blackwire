@@ -33,7 +33,6 @@ use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
@@ -63,6 +62,7 @@ use crate::http::build_http_inbound;
 use crate::hysteria2::{
     build_hysteria2_outbound, socket_config_from_quic, start_hysteria2_inbound,
 };
+use crate::net::listen_socket_addr;
 use crate::outbound_transport::uses_quic;
 use crate::tuic::{build_tuic_outbound, start_tuic_inbound};
 mod helpers;
@@ -500,9 +500,7 @@ impl Instance {
                 in_cfg.protocol.clone(),
                 &in_cfg.stream_settings,
             )?;
-            let addr: SocketAddr = format!("{}:{}", in_cfg.listen, in_cfg.port)
-                .parse()
-                .with_context(|| format!("invalid listen address for inbound '{}'", in_cfg.tag))?;
+            let addr = listen_socket_addr(in_cfg.listen, in_cfg.port);
 
             // Hysteria2 and TUIC run their own QUIC servers — they do not use TcpServerTransport.
             if in_cfg.protocol == Protocol::Hysteria2 {

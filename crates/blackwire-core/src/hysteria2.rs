@@ -20,6 +20,8 @@ use blackwire_transport::{
     Hysteria2Server, Hysteria2ServerConfig, QuicSocketConfig,
 };
 
+use crate::net::listen_socket_addr;
+
 /// Build and launch a Hysteria2 server inbound, returning a join handle for
 /// the server task.
 ///
@@ -99,14 +101,7 @@ fn parse_server_config(
     let key_pem = std::fs::read_to_string(key_path)
         .with_context(|| format!("reading Hysteria2 key '{key_path}'"))?;
 
-    let addr: SocketAddr = format!("{}:{}", cfg.listen, cfg.port)
-        .parse()
-        .with_context(|| {
-            format!(
-                "invalid Hysteria2 listen address '{}:{}'",
-                cfg.listen, cfg.port
-            )
-        })?;
+    let addr = listen_socket_addr(cfg.listen, cfg.port);
 
     let max_connections = cfg.limits.as_ref().and_then(|l| l.max_connections);
     let socket = parse_socket_config(s, quic);

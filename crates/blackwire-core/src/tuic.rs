@@ -1,6 +1,8 @@
 //! TUIC v5 glue used by the instance builder.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use blackwire_app::dispatcher::Dispatcher;
@@ -11,6 +13,7 @@ use blackwire_transport::{
 use uuid::Uuid;
 
 use crate::hysteria2::socket_config_from_quic;
+use crate::net::{listen_socket_addr, socket_addr_from_address_port};
 
 pub(crate) fn start_tuic_inbound(
     cfg: &InboundConfig,
@@ -54,9 +57,7 @@ fn parse_server_config(cfg: &InboundConfig, quic: Option<&QuicConfig>) -> Result
     let key_pem = std::fs::read_to_string(key_path)
         .with_context(|| format!("reading TUIC key '{key_path}'"))?;
 
-    let addr: SocketAddr = format!("{}:{}", cfg.listen, cfg.port)
-        .parse()
-        .with_context(|| format!("invalid TUIC listen address '{}:{}'", cfg.listen, cfg.port))?;
+    let addr = listen_socket_addr(cfg.listen, cfg.port);
     let users = parse_users(&cfg.settings)?;
     if users.is_empty() {
         anyhow::bail!("TUIC inbound '{}' requires users", cfg.tag);
@@ -97,9 +98,11 @@ fn parse_client_config(
             .or_else(|| s.get("server_port"))
             .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| anyhow::anyhow!("TUIC outbound '{}' missing 'port'", cfg.tag))?;
-        format!("{address}:{port}")
-            .parse::<SocketAddr>()
-            .with_context(|| format!("invalid TUIC server address '{address}:{port}'"))?
+        socket_addr_from_address_port(
+            address,
+            port,
+            &format!("invalid TUIC server address for outbound '{}'", cfg.tag),
+        )?
     };
     let uuid = s
         .get("uuid")

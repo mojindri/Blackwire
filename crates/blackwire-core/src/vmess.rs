@@ -3,7 +3,6 @@
 //! Reads VMess-specific settings from config JSON and builds the
 //! `VmessInbound` / `VmessOutbound` handlers.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
@@ -13,6 +12,7 @@ use blackwire_protocol::vmess::{
     VmessInbound, VmessOutbound, VmessOutboundConfig, VmessUserRegistry,
 };
 
+use crate::net::socket_addr_from_address_port;
 use crate::outbound_transport::{uses_outbound_transport, TransportVmessOutbound};
 
 /// Build a VMess inbound handler from config.
@@ -54,9 +54,11 @@ pub(crate) fn build_vmess_outbound(
     let port = settings["port"]
         .as_u64()
         .ok_or_else(|| anyhow::anyhow!("VMess outbound '{}' missing 'port'", cfg.tag))?;
-    let server: SocketAddr = format!("{server_str}:{port}")
-        .parse()
-        .with_context(|| format!("invalid VMess server address '{server_str}:{port}'"))?;
+    let server = socket_addr_from_address_port(
+        server_str,
+        port,
+        &format!("invalid VMess server address for outbound '{}'", cfg.tag),
+    )?;
 
     let uuid_str = settings["users"][0]["id"]
         .as_str()

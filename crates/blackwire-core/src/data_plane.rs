@@ -8,6 +8,8 @@ use blackwire_config::schema::{
     Protocol, ProtocolCost, SecurityType, StreamSettingsConfig,
 };
 
+use crate::net::listen_socket_addr;
+
 /// Compiled hot-path snapshot of all listeners, routes, and connection plans.
 #[derive(Debug, Clone)]
 pub struct DataPlane {
@@ -262,7 +264,7 @@ pub fn compile_data_plane(config: &Config) -> Arc<DataPlane> {
 fn listener_plan(inbound: &InboundConfig) -> ListenerPlan {
     ListenerPlan {
         tag: Arc::from(inbound.tag.as_str()),
-        listen: Arc::from(format!("{}:{}", inbound.listen, inbound.port)),
+        listen: Arc::from(listen_socket_addr(inbound.listen, inbound.port).to_string()),
         inbound: inbound_kind(&inbound.protocol),
         transport: transport_kind(inbound.stream_settings.as_ref()),
         limits: LimitPlan {
