@@ -161,3 +161,48 @@ async fn grpc_accept_shutdown_sends_ok_trailers() {
 
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn grpc_h2_small_write_is_sent_without_explicit_flush() {
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+
+    let (client_io, server_io) = tokio::io::duplex(256 * 1024);
+    let (wrote_tx, wrote_rx) = tokio::sync::oneshot::channel();
+
+    let server = tokio::spawn(async move {
+        let mut stream = grpc_accept(Box::new(server_io), "CompatService")
+            .await
+            .unwrap();
+        stream.write_all(b"ok").await.unwrap();
+        let _ = wrote_tx.send(());
+        std::future::pending::<()>().await;
+    });
+
+    let (mut client, conn) = h2::client::handshake(client_io).await.unwrap();
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+
+    let request = http::Request::builder()
+        .method(http::Method::POST)
+        .uri("http://blackwire.test/CompatService/Tun")
+        .header(http::header::CONTENT_TYPE, "application/grpc")
+        .header(http::header::TE, "trailers")
+        .body(())
+        .unwrap();
+    let (response, _send_stream) = client.send_request(request, false).unwrap();
+    let response = response.await.unwrap();
+    assert_eq!(response.status(), http::StatusCode::OK);
+
+    wrote_rx.await.unwrap();
+    let mut body = response.into_body();
+    let chunk = tokio::time::timeout(Duration::from_millis(200), body.data())
+        .await
+        .expect("small gRPC write should not wait for flush or shutdown")
+        .unwrap()
+        .unwrap();
+    assert!(!chunk.is_empty());
+
+    server.abort();
+}

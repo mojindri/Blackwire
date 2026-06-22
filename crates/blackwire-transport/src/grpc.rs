@@ -413,7 +413,7 @@ impl AsyncWrite for GrpcStream {
         // Coalesce small writes into larger Hunks to reduce h2/gRPC framing cost.
         let n = buf.len().min(MAX_MESSAGE_SIZE as usize);
         self.pending_plain.extend_from_slice(&buf[..n]);
-        self.encode_pending_plain_into_frames(false);
+        self.encode_pending_plain_into_frames(true);
         // Keep write-side progress without forcing a full flush on every call.
         let this = self.as_mut().get_mut();
         match &mut this.inner {
