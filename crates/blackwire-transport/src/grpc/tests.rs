@@ -206,3 +206,54 @@ async fn grpc_h2_small_write_is_sent_without_explicit_flush() {
 
     server.abort();
 }
+
+#[tokio::test]
+async fn grpc_serve_accepts_multiple_streams_on_one_h2_connection() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::io::AsyncWriteExt;
+
+    let (client_io, server_io) = tokio::io::duplex(256 * 1024);
+    let handled = Arc::new(AtomicUsize::new(0));
+    let handled_for_server = Arc::clone(&handled);
+
+    let server = tokio::spawn(async move {
+        grpc_serve(Box::new(server_io), "CompatService", move |mut stream| {
+            let handled = Arc::clone(&handled_for_server);
+            async move {
+                handled.fetch_add(1, Ordering::SeqCst);
+                stream.write_all(b"ok").await.unwrap();
+                stream.shutdown().await.unwrap();
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+    });
+
+    let (mut client, conn) = h2::client::handshake(client_io).await.unwrap();
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+
+    for _ in 0..2 {
+        let request = http::Request::builder()
+            .method(http::Method::POST)
+            .uri("http://blackwire.test/CompatService/Tun")
+            .header(http::header::CONTENT_TYPE, "application/grpc")
+            .header(http::header::TE, "trailers")
+            .body(())
+            .unwrap();
+        let (response, _send_stream) = client.send_request(request, true).unwrap();
+        let response = response.await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let mut body = response.into_body();
+        assert!(body.data().await.unwrap().unwrap().len() > 0);
+        let trailers = body.trailers().await.unwrap().unwrap();
+        assert_eq!(trailers.get("grpc-status").unwrap(), "0");
+    }
+
+    assert_eq!(handled.load(Ordering::SeqCst), 2);
+    drop(client);
+    server.abort();
+}

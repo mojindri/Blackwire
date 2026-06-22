@@ -57,7 +57,9 @@ pub mod v2rayquic;
 // ShadowTLS v3 transport
 pub mod shadowtls;
 
-pub use grpc::{decode_grpc_frame, encode_grpc_frame, grpc_accept, grpc_connect, GrpcStream};
+pub use grpc::{
+    decode_grpc_frame, encode_grpc_frame, grpc_accept, grpc_connect, grpc_serve, GrpcStream,
+};
 pub use httpupgrade::{accept_httpupgrade, dial_httpupgrade, httpupgrade_listen_path};
 pub use hysteria2::{
     DatagramLane, DatagramPolicy, DatagramPriorityMode, FecMode, FecPolicy, Hysteria2Client,

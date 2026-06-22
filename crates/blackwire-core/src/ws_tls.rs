@@ -23,7 +23,7 @@ use blackwire_app::features::{ConnectionHandler, InboundHandler};
 use blackwire_common::{with_handshake_timeout, BoxedStream, ProxyError};
 use blackwire_config::schema::{NetworkType, SecurityType, StreamSettingsConfig};
 use blackwire_transport::{
-    accept_httpupgrade, build_tls_acceptor, grpc_accept, httpupgrade_listen_path,
+    accept_httpupgrade, build_tls_acceptor, grpc_serve, httpupgrade_listen_path,
     normalize_splithttp_mode, shadowtls_accept, splithttp_accept, splithttp_listen_params,
     tls_accept_with_acceptor, ws_accept, SplitHttpAcceptResult,
 };
@@ -336,12 +336,14 @@ impl ConnectionHandler for GrpcConnectionHandler {
         stream: BoxedStream,
         source: SocketAddr,
     ) -> Result<(), ProxyError> {
-        let grpc_stream = with_handshake_timeout(
-            self.handshake_timeout,
-            grpc_accept(stream, &self.service_name),
-        )
-        .await?;
-        self.inner.handle_connection(grpc_stream, source).await
+        let service_name = self.service_name.clone();
+        let inner = Arc::clone(&self.inner);
+        let _ = self.handshake_timeout;
+        grpc_serve(stream, &service_name, move |grpc_stream| {
+            let inner = Arc::clone(&inner);
+            async move { inner.handle_connection(grpc_stream, source).await }
+        })
+        .await
     }
 }
 
