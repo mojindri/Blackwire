@@ -417,6 +417,7 @@ mod tests {
                 subscription_host: "127.0.0.1".into(),
                 enforcement_interval_seconds: 30,
                 adaptive_routing_enabled: false,
+                ..crate::models::Settings::default()
             },
         )
         .unwrap();

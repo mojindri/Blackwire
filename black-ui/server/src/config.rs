@@ -753,6 +753,7 @@ mod tests {
                     subscription_host: "127.0.0.1".into(),
                     enforcement_interval_seconds: 30,
                     adaptive_routing_enabled: true,
+                    ..Settings::default()
                 },
             )
             .unwrap();
@@ -791,6 +792,7 @@ mod tests {
             subscription_host: "203.0.113.10".into(),
             enforcement_interval_seconds: 30,
             adaptive_routing_enabled: false,
+            ..Settings::default()
         };
         let inbound = Inbound {
             id: 1,
@@ -860,6 +862,7 @@ mod tests {
             subscription_host: "203.0.113.10".into(),
             enforcement_interval_seconds: 30,
             adaptive_routing_enabled: false,
+            ..Settings::default()
         };
         let inbound = Inbound {
             id: 1,
@@ -921,6 +924,7 @@ mod tests {
             subscription_host: "203.0.113.10".into(),
             enforcement_interval_seconds: 30,
             adaptive_routing_enabled: false,
+            ..Settings::default()
         };
         let inbound = Inbound {
             id: 1,
