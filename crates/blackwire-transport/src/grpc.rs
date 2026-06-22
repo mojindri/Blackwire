@@ -496,8 +496,9 @@ impl AsyncWrite for GrpcStream {
             Poll::Ready(Ok(())) => {}
         }
         if let GrpcInner::H2 { send, .. } = &mut this.inner {
-            send.send_data(Bytes::new(), true)
-                .map_err(io::Error::other)?;
+            let mut trailers = http::HeaderMap::new();
+            trailers.insert("grpc-status", http::HeaderValue::from_static("0"));
+            send.send_trailers(trailers).map_err(io::Error::other)?;
         }
         Poll::Ready(Ok(()))
     }
