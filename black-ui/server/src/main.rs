@@ -2,6 +2,7 @@
 
 mod app;
 mod auth;
+mod autotune;
 mod capabilities;
 mod config;
 mod db;
@@ -28,7 +29,11 @@ async fn main() -> Result<()> {
     if let Err(e) = enforcement::run_startup_once(&state).await {
         warn!(error = %e, "startup quota/expiry enforcement failed");
     }
+    if let Err(e) = autotune::run_startup_once(&state).await {
+        warn!(error = %e, "startup adaptive tuning failed");
+    }
     enforcement::spawn(state.clone());
+    autotune::spawn(state.clone());
 
     let addr: SocketAddr = std::env::var("BLACK_UI_LISTEN")
         .unwrap_or_else(|_| "127.0.0.1:18080".into())
