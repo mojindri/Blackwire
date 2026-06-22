@@ -17,6 +17,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use self::header::HeaderType;
 use self::kcp::Kcp;
@@ -26,6 +27,28 @@ use self::stream::MkcpStream;
 const SERVER_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Maximum concurrent mKCP sessions per server socket (matches Xray mKCP defaults).
 const MAX_SERVER_SESSIONS: usize = 1024;
+
+/// Running mKCP server listener plus its accepted logical sessions.
+///
+/// Dropping this guard aborts the UDP listener task, so callers can safely
+/// rebuild or cancel an inbound without leaving the bound socket behind.
+pub struct MkcpSessionListener {
+    sessions: mpsc::Receiver<(MkcpStream, SocketAddr)>,
+    listener_task: JoinHandle<()>,
+}
+
+impl MkcpSessionListener {
+    /// Receive the next accepted mKCP stream.
+    pub async fn recv(&mut self) -> Option<(MkcpStream, SocketAddr)> {
+        self.sessions.recv().await
+    }
+}
+
+impl Drop for MkcpSessionListener {
+    fn drop(&mut self) {
+        self.listener_task.abort();
+    }
+}
 
 #[derive(Debug, Clone)]
 /// Client-side settings for one mKCP connection.
@@ -121,18 +144,19 @@ pub async fn mkcp_accept_once(cfg: &MkcpServerConfig) -> Result<(MkcpStream, Soc
 /// One UDP socket is shared by all peers. Each remote socket address gets its
 /// own KCP state machine, and the listener removes the session when its stream
 /// driver exits or idles out.
-pub async fn mkcp_accept_sessions(
-    cfg: &MkcpServerConfig,
-) -> Result<mpsc::Receiver<(MkcpStream, SocketAddr)>> {
+pub async fn mkcp_accept_sessions(cfg: &MkcpServerConfig) -> Result<MkcpSessionListener> {
     let socket = Arc::new(UdpSocket::bind(cfg.listen).await?);
     let (session_tx, session_rx) = mpsc::channel::<(MkcpStream, SocketAddr)>(128);
     let cfg = cfg.clone();
 
-    tokio::spawn(async move {
+    let listener_task = tokio::spawn(async move {
         run_server_listener(socket, cfg, session_tx).await;
     });
 
-    Ok(session_rx)
+    Ok(MkcpSessionListener {
+        sessions: session_rx,
+        listener_task,
+    })
 }
 
 async fn run_server_listener(
@@ -419,4 +443,52 @@ fn now_ms() -> u32 {
         .unwrap_or_default()
         .as_millis()
         & 0xFFFFFFFF) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    use tokio::time::{sleep, Duration};
+
+    use super::*;
+
+    async fn unused_udp_addr() -> SocketAddr {
+        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind ephemeral udp");
+        let addr = socket.local_addr().expect("local addr");
+        drop(socket);
+        addr
+    }
+
+    #[tokio::test]
+    async fn dropping_session_listener_releases_udp_socket() {
+        let listen = unused_udp_addr().await;
+        let cfg = MkcpServerConfig {
+            listen,
+            header: HeaderType::None,
+            interval_ms: 10,
+            rcv_wnd: 32,
+            snd_wnd: 32,
+            nodelay: true,
+        };
+
+        let listener = mkcp_accept_sessions(&cfg).await.expect("start listener");
+        assert!(
+            UdpSocket::bind(listen).await.is_err(),
+            "listener should hold the UDP port while alive"
+        );
+
+        drop(listener);
+
+        for _ in 0..50 {
+            if UdpSocket::bind(listen).await.is_ok() {
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+
+        panic!("mKCP UDP port was not released after dropping listener");
+    }
 }
