@@ -123,3 +123,41 @@ async fn grpc_stream_large_payload() {
     server.read_exact(&mut out).await.unwrap();
     assert_eq!(out, payload);
 }
+
+#[tokio::test]
+async fn grpc_accept_shutdown_sends_ok_trailers() {
+    use tokio::io::AsyncWriteExt;
+
+    let (client_io, server_io) = tokio::io::duplex(256 * 1024);
+
+    let server = tokio::spawn(async move {
+        let mut stream = grpc_accept(Box::new(server_io), "CompatService")
+            .await
+            .unwrap();
+        stream.write_all(b"pong").await.unwrap();
+        stream.shutdown().await.unwrap();
+    });
+
+    let (mut client, conn) = h2::client::handshake(client_io).await.unwrap();
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+
+    let request = http::Request::builder()
+        .method(http::Method::POST)
+        .uri("http://blackwire.test/CompatService/Tun")
+        .header(http::header::CONTENT_TYPE, "application/grpc")
+        .header(http::header::TE, "trailers")
+        .body(())
+        .unwrap();
+    let (response, _send_stream) = client.send_request(request, true).unwrap();
+    let response = response.await.unwrap();
+    assert_eq!(response.status(), http::StatusCode::OK);
+
+    let mut body = response.into_body();
+    assert!(body.data().await.unwrap().unwrap().len() > 0);
+    let trailers = body.trailers().await.unwrap().unwrap();
+    assert_eq!(trailers.get("grpc-status").unwrap(), "0");
+
+    server.await.unwrap();
+}
