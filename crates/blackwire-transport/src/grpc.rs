@@ -623,5 +623,69 @@ pub async fn grpc_accept(
     Ok(Box::new(GrpcStream::from_h2(send_stream, recv_body)))
 }
 
+/// Serve every gRPC Gun request stream carried by one HTTP/2 connection.
+///
+/// Some clients, including sing-box/Hiddify, reuse one h2 TCP connection for
+/// multiple gRPC tunnel streams. Each accepted request becomes its own
+/// `GrpcStream` and is handed to `handle` in an independent task.
+pub async fn grpc_serve<F, Fut>(
+    tcp_stream: BoxedStream,
+    service_name: &str,
+    handle: F,
+) -> Result<(), ProxyError>
+where
+    F: Fn(BoxedStream) -> Fut + Clone + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<(), ProxyError>> + Send + 'static,
+{
+    use h2::server;
+
+    let mut conn = server::Builder::new()
+        .initial_window_size(H2_INITIAL_WINDOW_SIZE)
+        .initial_connection_window_size(H2_INITIAL_WINDOW_SIZE)
+        .handshake(tcp_stream)
+        .await
+        .map_err(|e| ProxyError::Transport(format!("gRPC h2 server handshake failed: {e}")))?;
+
+    let expected_path = format!("/{service_name}/Tun");
+
+    while let Some(accepted) = conn.accept().await {
+        let (request, mut respond) =
+            accepted.map_err(|e| ProxyError::Transport(format!("gRPC accept error: {e}")))?;
+
+        let path = request.uri().path().to_string();
+        tracing::debug!(path = %path, expected = %expected_path, "gRPC: incoming request");
+        if path != expected_path {
+            let response = http::Response::builder()
+                .status(404)
+                .header(http::header::CONTENT_TYPE, "application/grpc")
+                .body(())
+                .map_err(|e| ProxyError::Protocol(format!("gRPC: invalid 404 response: {e}")))?;
+            let _ = respond.send_response(response, true);
+            continue;
+        }
+
+        let response = http::Response::builder()
+            .status(200)
+            .header(http::header::CONTENT_TYPE, "application/grpc")
+            .body(())
+            .map_err(|e| ProxyError::Protocol(format!("gRPC: invalid static response: {e}")))?;
+
+        let send_stream = respond
+            .send_response(response, false)
+            .map_err(|e| ProxyError::Transport(format!("gRPC send_response failed: {e}")))?;
+        let grpc_stream: BoxedStream =
+            Box::new(GrpcStream::from_h2(send_stream, request.into_body()));
+        let handle = handle.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle(grpc_stream).await {
+                tracing::debug!(%error, "gRPC stream handler finished with error");
+            }
+        });
+    }
+
+    let _ = std::future::poll_fn(|cx| conn.poll_closed(cx)).await;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;
