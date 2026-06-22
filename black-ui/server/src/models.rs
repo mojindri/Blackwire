@@ -13,6 +13,52 @@ pub struct Settings {
     pub enforcement_interval_seconds: u64,
     #[serde(default)]
     pub adaptive_routing_enabled: bool,
+    #[serde(default = "default_adaptive_tuning_mode")]
+    pub adaptive_tuning_mode: String,
+    #[serde(default = "default_adaptive_tuning_interval_seconds")]
+    pub adaptive_tuning_interval_seconds: u64,
+    #[serde(default = "default_adaptive_tuning_cooldown_seconds")]
+    pub adaptive_tuning_cooldown_seconds: u64,
+    #[serde(default = "default_adaptive_tuning_max_hysteria2_mbps")]
+    pub adaptive_tuning_max_hysteria2_mbps: u64,
+    #[serde(default)]
+    pub adaptive_tuning_state: Value,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            config_path: "black-ui/data/config.json".into(),
+            grpc_enabled: true,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "127.0.0.1".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+            adaptive_tuning_mode: default_adaptive_tuning_mode(),
+            adaptive_tuning_interval_seconds: default_adaptive_tuning_interval_seconds(),
+            adaptive_tuning_cooldown_seconds: default_adaptive_tuning_cooldown_seconds(),
+            adaptive_tuning_max_hysteria2_mbps: default_adaptive_tuning_max_hysteria2_mbps(),
+            adaptive_tuning_state: serde_json::json!({}),
+        }
+    }
+}
+
+fn default_adaptive_tuning_mode() -> String {
+    "recommend".into()
+}
+
+fn default_adaptive_tuning_interval_seconds() -> u64 {
+    600
+}
+
+fn default_adaptive_tuning_cooldown_seconds() -> u64 {
+    600
+}
+
+fn default_adaptive_tuning_max_hysteria2_mbps() -> u64 {
+    1000
 }
 
 #[derive(Debug, Serialize)]

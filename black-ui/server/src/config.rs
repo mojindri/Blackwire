@@ -78,7 +78,15 @@ pub fn build_value(state: &AppState) -> Result<Value> {
 
     let mut root = json!({
         "log": section_or_default(&sections, "log", json!({ "level": "info", "json": false }))?,
-        "api": section_or_default(&sections, "api", json!({ "listen": settings.grpc_address }))?,
+        "api": section_or_default(
+            &sections,
+            "api",
+            json!({
+                "listen": settings.grpc_address,
+                "tag": "api",
+                "services": ["HandlerService", "StatsService"],
+            }),
+        )?,
         "inbounds": inbound_json,
         "outbounds": outbound_json,
     });
@@ -474,6 +482,7 @@ fn append_transport_params(inbound: &Inbound, params: &mut Vec<String>) {
     }
     if let Some(service_name) = stream_value(inbound, "/grpcSettings/serviceName") {
         params.push(format!("serviceName={}", util::url_escape(&service_name)));
+        params.push("mode=gun".into());
     }
 }
 
@@ -745,6 +754,7 @@ mod tests {
                     subscription_host: "127.0.0.1".into(),
                     enforcement_interval_seconds: 30,
                     adaptive_routing_enabled: true,
+                    ..Settings::default()
                 },
             )
             .unwrap();
@@ -783,6 +793,7 @@ mod tests {
             subscription_host: "203.0.113.10".into(),
             enforcement_interval_seconds: 30,
             adaptive_routing_enabled: false,
+            ..Settings::default()
         };
         let inbound = Inbound {
             id: 1,
@@ -842,6 +853,71 @@ mod tests {
     }
 
     #[test]
+    fn vless_grpc_subscription_includes_gun_mode() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+            ..Settings::default()
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "manual-vless-grpc".into(),
+            listen: "0.0.0.0".into(),
+            port: 10445,
+            protocol: "vless".into(),
+            enabled: true,
+            transport: "grpc".into(),
+            settings: "{}".into(),
+            stream_settings: r#"{
+              "network": "grpc",
+              "security": "none",
+              "grpcSettings": {
+                "serviceName": "manual-vless-grpc"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "manual-vless-grpc@example.local".into(),
+            uuid: "57d975c8-d935-47ca-bb62-31c7efac938d".into(),
+            flow: String::new(),
+            credential: json!({}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = vless_link(&settings, &inbound, &user);
+        assert!(
+            link.starts_with("vless://57d975c8-d935-47ca-bb62-31c7efac938d@203.0.113.10:10445?")
+        );
+        assert!(link.contains("type=grpc"));
+        assert!(link.contains("serviceName=manual-vless-grpc"));
+        assert!(link.contains("mode=gun"));
+        assert!(link.contains("security=none"));
+        assert!(link.ends_with("#manual-vless-grpc%40example.local"));
+    }
+
+    #[test]
     fn hysteria2_subscription_includes_insecure_for_self_signed_cert() {
         let settings = Settings {
             config_path: "/tmp/config.json".into(),
@@ -852,6 +928,7 @@ mod tests {
             subscription_host: "203.0.113.10".into(),
             enforcement_interval_seconds: 30,
             adaptive_routing_enabled: false,
+            ..Settings::default()
         };
         let inbound = Inbound {
             id: 1,
@@ -913,6 +990,7 @@ mod tests {
             subscription_host: "203.0.113.10".into(),
             enforcement_interval_seconds: 30,
             adaptive_routing_enabled: false,
+            ..Settings::default()
         };
         let inbound = Inbound {
             id: 1,

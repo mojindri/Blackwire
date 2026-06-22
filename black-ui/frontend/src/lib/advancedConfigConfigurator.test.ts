@@ -208,7 +208,11 @@ describe("advancedConfigConfigurator", () => {
       tunDnsPort: "5300"
     };
 
-    expect(parseValue(buildSectionValue(apiState))).toEqual({ listen: "127.0.0.1:62790" });
+    expect(parseValue(buildSectionValue(apiState))).toEqual({
+      listen: "127.0.0.1:62790",
+      tag: "api",
+      services: ["HandlerService", "StatsService"]
+    });
     expect(parseValue(buildSectionValue(metricsState))).toBe("127.0.0.1:19090");
     expect(parseValue(buildSectionValue(tunState))).toEqual({
       name: "blackwire-tun",
