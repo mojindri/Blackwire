@@ -533,38 +533,42 @@ impl FreedomOutbound {
         })
     }
 
-    async fn resolve(&self, dest: &Address) -> Result<SocketAddr, ProxyError> {
+    async fn resolve_all(&self, dest: &Address) -> Result<Vec<SocketAddr>, ProxyError> {
         match dest {
-            Address::Ipv4(ip, port) => Ok(SocketAddr::new(IpAddr::V4(*ip), *port)),
-            Address::Ipv6(ip, port) => Ok(SocketAddr::new(IpAddr::V6(*ip), *port)),
+            Address::Ipv4(ip, port) => Ok(vec![SocketAddr::new(IpAddr::V4(*ip), *port)]),
+            Address::Ipv6(ip, port) => Ok(vec![SocketAddr::new(IpAddr::V6(*ip), *port)]),
             Address::Domain(name, port) => {
                 if let Some(dns) = &self.dns {
                     let ips = dns.resolve(name).await?;
-                    let ip = ips.into_iter().next().ok_or_else(|| {
-                        ProxyError::DnsResolutionFailed(format!("{name}: no records returned"))
-                    })?;
-                    return Ok(SocketAddr::new(ip, *port));
+                    let addrs = ips
+                        .into_iter()
+                        .map(|ip| SocketAddr::new(ip, *port))
+                        .collect::<Vec<_>>();
+                    if addrs.is_empty() {
+                        return Err(ProxyError::DnsResolutionFailed(format!(
+                            "{name}: no records returned"
+                        )));
+                    }
+                    return Ok(addrs);
                 }
 
-                tokio::net::lookup_host((name.as_str(), *port))
+                let addrs = tokio::net::lookup_host((name.as_str(), *port))
                     .await
                     .map_err(|e| ProxyError::DnsResolutionFailed(format!("{name}: {e}")))?
-                    .next()
-                    .ok_or_else(|| ProxyError::DnsResolutionFailed(name.clone()))
+                    .collect::<Vec<_>>();
+                if addrs.is_empty() {
+                    return Err(ProxyError::DnsResolutionFailed(name.clone()));
+                }
+                Ok(addrs)
             }
         }
     }
-}
 
-#[async_trait]
-impl OutboundHandler for FreedomOutbound {
-    fn tag(&self) -> &str {
-        &self.tag
-    }
-
-    async fn connect(&self, _ctx: &Context, dest: &Address) -> Result<BoxedStream, ProxyError> {
-        let addr = self.resolve(dest).await?;
-
+    async fn connect_resolved(
+        &self,
+        dest: &Address,
+        addr: SocketAddr,
+    ) -> Result<BoxedStream, ProxyError> {
         debug!(dest = %dest, resolved = %addr, "freedom: connecting");
 
         if let Some(pool) = &self.pool {
@@ -629,6 +633,29 @@ impl OutboundHandler for FreedomOutbound {
         // Cold path: dial a fresh connection (pool disabled or miss).
         let stream = tcp_connect(addr).await?;
         Ok(Box::new(stream))
+    }
+}
+
+#[async_trait]
+impl OutboundHandler for FreedomOutbound {
+    fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    async fn connect(&self, _ctx: &Context, dest: &Address) -> Result<BoxedStream, ProxyError> {
+        let addrs = self.resolve_all(dest).await?;
+        let mut last_err = None;
+
+        for addr in addrs {
+            match self.connect_resolved(dest, addr).await {
+                Ok(stream) => return Ok(stream),
+                Err(err) => last_err = Some(err),
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            ProxyError::Transport("TCP connect failed: address resolved to no endpoints".into())
+        }))
     }
 
     async fn connect_with_early_payload(

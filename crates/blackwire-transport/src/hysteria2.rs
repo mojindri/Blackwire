@@ -142,13 +142,13 @@ impl Hysteria2Server {
             .max_connections
             .unwrap_or(MAX_HYSTERIA2_CONNECTIONS);
         let conn_limiter = Arc::new(Semaphore::new(cap));
-        let mut tasks = Vec::with_capacity(endpoints.len());
+        let mut tasks = tokio::task::JoinSet::new();
 
         for endpoint in endpoints {
             let config = self.config.clone();
             let dispatcher = Arc::clone(&dispatcher);
             let conn_limiter = Arc::clone(&conn_limiter);
-            tasks.push(tokio::spawn(async move {
+            tasks.spawn(async move {
                 while let Some(incoming) = endpoint.accept().await {
                     let permit = match Arc::clone(&conn_limiter).try_acquire_owned() {
                         Ok(p) => p,
@@ -178,11 +178,15 @@ impl Hysteria2Server {
                         }
                     });
                 }
-        }));
+            });
         }
 
-        for task in tasks {
-            let _ = task.await;
+        while let Some(result) = tasks.join_next().await {
+            if let Err(e) = result {
+                if !e.is_cancelled() {
+                    warn!("Hysteria2 endpoint accept task failed: {e}");
+                }
+            }
         }
         Ok(())
     }
