@@ -137,13 +137,13 @@ impl TuicServer {
 
         let cap = self.config.max_connections.unwrap_or(MAX_CONNECTIONS);
         let limiter = Arc::new(Semaphore::new(cap));
-        let mut tasks = Vec::with_capacity(endpoints.len());
+        let mut tasks = tokio::task::JoinSet::new();
 
         for endpoint in endpoints {
             let config = self.config.clone();
             let dispatcher = Arc::clone(&dispatcher);
             let limiter = Arc::clone(&limiter);
-            tasks.push(tokio::spawn(async move {
+            tasks.spawn(async move {
                 while let Some(incoming) = endpoint.accept().await {
                     let permit = match Arc::clone(&limiter).try_acquire_owned() {
                         Ok(permit) => permit,
@@ -169,11 +169,15 @@ impl TuicServer {
                         }
                     });
                 }
-            }));
+            });
         }
 
-        for task in tasks {
-            let _ = task.await;
+        while let Some(result) = tasks.join_next().await {
+            if let Err(e) = result {
+                if !e.is_cancelled() {
+                    warn!("TUIC v5 endpoint accept task failed: {e}");
+                }
+            }
         }
         Ok(())
     }
