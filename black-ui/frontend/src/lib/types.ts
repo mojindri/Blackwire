@@ -9,6 +9,11 @@ export interface Settings {
   subscriptionHost: string;
   enforcementIntervalSeconds: number;
   adaptiveRoutingEnabled: boolean;
+  adaptiveTuningMode: "off" | "recommend" | "auto" | string;
+  adaptiveTuningIntervalSeconds: number;
+  adaptiveTuningCooldownSeconds: number;
+  adaptiveTuningMaxHysteria2Mbps: number;
+  adaptiveTuningState: Record<string, unknown>;
 }
 
 export interface Status {

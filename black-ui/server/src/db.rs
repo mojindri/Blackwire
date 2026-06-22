@@ -97,6 +97,11 @@ pub fn init(conn: &Connection, data_dir: &Path) -> Result<()> {
     set_default(conn, "subscriptionHost", "127.0.0.1")?;
     set_default(conn, "enforcementIntervalSeconds", "30")?;
     set_default(conn, "adaptiveRoutingEnabled", "false")?;
+    set_default(conn, "adaptiveTuningMode", "recommend")?;
+    set_default(conn, "adaptiveTuningIntervalSeconds", "600")?;
+    set_default(conn, "adaptiveTuningCooldownSeconds", "600")?;
+    set_default(conn, "adaptiveTuningMaxHysteria2Mbps", "1000")?;
+    set_default(conn, "adaptiveTuningState", "{}")?;
     seed_default_outbound(conn)?;
     seed_default_sections(conn)?;
     Ok(())
@@ -236,6 +241,26 @@ pub fn load_settings(conn: &Connection) -> Result<Settings> {
             .get("adaptiveRoutingEnabled")
             .map(|v| v == "true")
             .unwrap_or(false),
+        adaptive_tuning_mode: map
+            .get("adaptiveTuningMode")
+            .cloned()
+            .unwrap_or_else(|| "recommend".into()),
+        adaptive_tuning_interval_seconds: map
+            .get("adaptiveTuningIntervalSeconds")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(600),
+        adaptive_tuning_cooldown_seconds: map
+            .get("adaptiveTuningCooldownSeconds")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(600),
+        adaptive_tuning_max_hysteria2_mbps: map
+            .get("adaptiveTuningMaxHysteria2Mbps")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1000),
+        adaptive_tuning_state: map
+            .get("adaptiveTuningState")
+            .and_then(|v| serde_json::from_str(v).ok())
+            .unwrap_or_else(|| serde_json::json!({})),
     })
 }
 
@@ -255,6 +280,23 @@ pub fn save_settings(conn: &Connection, settings: &Settings) -> Result<()> {
             "adaptiveRoutingEnabled",
             settings.adaptive_routing_enabled.to_string(),
         ),
+        ("adaptiveTuningMode", settings.adaptive_tuning_mode.clone()),
+        (
+            "adaptiveTuningIntervalSeconds",
+            settings.adaptive_tuning_interval_seconds.to_string(),
+        ),
+        (
+            "adaptiveTuningCooldownSeconds",
+            settings.adaptive_tuning_cooldown_seconds.to_string(),
+        ),
+        (
+            "adaptiveTuningMaxHysteria2Mbps",
+            settings.adaptive_tuning_max_hysteria2_mbps.to_string(),
+        ),
+        (
+            "adaptiveTuningState",
+            serde_json::to_string(&settings.adaptive_tuning_state).unwrap_or_else(|_| "{}".into()),
+        ),
     ];
     for (key, value) in rows {
         conn.execute(
@@ -263,6 +305,15 @@ pub fn save_settings(conn: &Connection, settings: &Settings) -> Result<()> {
             params![key, value],
         )?;
     }
+    Ok(())
+}
+
+pub fn save_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
     Ok(())
 }
 

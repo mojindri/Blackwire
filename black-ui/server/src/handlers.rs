@@ -143,10 +143,13 @@ pub async fn get_settings(
 pub async fn update_settings(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(settings): Json<Settings>,
+    Json(mut settings): Json<Settings>,
 ) -> ApiResult<Settings> {
     let _ = auth::require(&headers, &state)?;
     let conn = state.lock_db()?;
+    settings.adaptive_tuning_state = db::load_settings(&conn)
+        .map_err(AppError::internal)?
+        .adaptive_tuning_state;
     db::save_settings(&conn, &settings).map_err(AppError::internal)?;
     Ok(Json(settings))
 }
