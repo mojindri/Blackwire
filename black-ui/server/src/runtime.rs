@@ -4,9 +4,9 @@ use anyhow::Result;
 use blackwire_api::{
     handler_proto::{
         handler_service_client::HandlerServiceClient, AddInboundRequest, AddOutboundRequest,
-        AddUserOperation, AlterInboundRequest, AlterOutboundRequest, InboundHandlerConfig,
-        ListInboundsRequest, ListOutboundsRequest, OutboundHandlerConfig, RemoveInboundRequest,
-        RemoveOutboundRequest, RemoveUserOperation, TypedMessage, User,
+        AddUserOperation, AlterInboundRequest, InboundHandlerConfig, ListInboundsRequest,
+        ListOutboundsRequest, OutboundHandlerConfig, RemoveInboundRequest, RemoveOutboundRequest,
+        RemoveUserOperation, TypedMessage, User,
     },
     proto::{stats_service_client::StatsServiceClient, GetUsersStatsRequest, QueryStatsRequest},
     vless_account_proto::Account,
@@ -83,9 +83,7 @@ pub async fn sync_config(state: &AppState, addr: &str) -> Result<()> {
             _ => continue,
         };
         if current_inbound_tags.contains(&tag) {
-            client
-                .remove_inbound(RemoveInboundRequest { tag: tag.clone() })
-                .await?;
+            continue;
         }
         client
             .add_inbound(AddInboundRequest {
@@ -135,6 +133,9 @@ pub async fn sync_config(state: &AppState, addr: &str) -> Result<()> {
             Some(t) if !t.is_empty() => t.to_string(),
             _ => continue,
         };
+        if current_outbound_tags.contains(&tag) {
+            continue;
+        }
         let outbound_config = OutboundHandlerConfig {
             tag: tag.clone(),
             sender_settings: None,
@@ -145,20 +146,11 @@ pub async fn sync_config(state: &AppState, addr: &str) -> Result<()> {
             expire: 0,
             comment: String::new(),
         };
-        if current_outbound_tags.contains(&tag) {
-            client
-                .alter_outbound(AlterOutboundRequest {
-                    tag,
-                    operation: outbound_config.proxy_settings,
-                })
-                .await?;
-        } else {
-            client
-                .add_outbound(AddOutboundRequest {
-                    outbound: Some(outbound_config),
-                })
-                .await?;
-        }
+        client
+            .add_outbound(AddOutboundRequest {
+                outbound: Some(outbound_config),
+            })
+            .await?;
     }
     Ok(())
 }
@@ -400,7 +392,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_config_skips_empty_vless_and_refreshes_existing_runtime_tags() {
+    async fn sync_config_skips_empty_vless_and_preserves_existing_runtime_tags() {
         let data_dir =
             std::env::temp_dir().join(format!("black-ui-runtime-test-{}", util::random_token(8)));
         std::fs::create_dir_all(&data_dir).unwrap();
@@ -461,11 +453,11 @@ mod tests {
 
         let operations = fake.operations.lock().unwrap().clone();
         assert!(operations.contains(&"remove-inbound:stale-inbound".into()));
-        assert!(operations.contains(&"remove-inbound:active-vless".into()));
-        assert!(operations.contains(&"add-inbound:active-vless".into()));
+        assert!(!operations.contains(&"remove-inbound:active-vless".into()));
+        assert!(!operations.contains(&"add-inbound:active-vless".into()));
         assert!(!operations.contains(&"add-inbound:empty-vless".into()));
         assert!(operations.contains(&"remove-outbound:stale-outbound".into()));
-        assert!(operations.contains(&"alter-outbound:freedom".into()));
+        assert!(!operations.contains(&"alter-outbound:freedom".into()));
         assert!(!operations.contains(&"add-outbound:freedom".into()));
     }
 
