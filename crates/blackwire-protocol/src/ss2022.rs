@@ -89,6 +89,7 @@ pub fn password_to_psk(password: &str) -> [u8; 32] {
     use base64::Engine as _;
     let engines = [
         base64::engine::general_purpose::STANDARD,
+        base64::engine::general_purpose::STANDARD_NO_PAD,
         base64::engine::general_purpose::URL_SAFE,
         base64::engine::general_purpose::URL_SAFE_NO_PAD,
     ];
