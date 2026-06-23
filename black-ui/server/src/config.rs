@@ -504,7 +504,13 @@ fn share_network(inbound: &Inbound) -> String {
     if inbound.transport == "reality" || security.as_deref() == Some("reality") {
         "tcp".into()
     } else {
-        stream_value(inbound, "/network").unwrap_or_else(|| inbound.transport.clone())
+        let network =
+            stream_value(inbound, "/network").unwrap_or_else(|| inbound.transport.clone());
+        if network == "splithttp" {
+            "xhttp".into()
+        } else {
+            network
+        }
     }
 }
 
@@ -1023,6 +1029,132 @@ mod tests {
         assert_eq!(payload["sni"], "www.microsoft.com");
         assert_eq!(payload["alpn"], "h3");
         assert_eq!(payload["allowInsecure"], "1");
+    }
+
+    #[test]
+    fn vless_splithttp_subscription_uses_xhttp_share_name() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+            ..Settings::default()
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "manual-vless-splithttp".into(),
+            listen: "::".into(),
+            port: 10546,
+            protocol: "vless".into(),
+            enabled: true,
+            transport: "splithttp".into(),
+            settings: "{}".into(),
+            stream_settings: r#"{
+              "network": "splithttp",
+              "security": "none",
+              "splithttpSettings": {
+                "mode": "stream-one",
+                "path": "/manual/vless/splithttp"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "manual-vless-splithttp@example.local".into(),
+            uuid: "57d975c8-d935-47ca-bb62-31c7efac938d".into(),
+            flow: String::new(),
+            credential: json!({}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = vless_link(&settings, &inbound, &user);
+        assert!(link.contains("type=xhttp"));
+        assert!(link.contains("path=/manual/vless/splithttp"));
+        assert!(link.contains("security=none"));
+    }
+
+    #[test]
+    fn vmess_splithttp_subscription_uses_xhttp_share_name() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+            ..Settings::default()
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "manual-vmess-splithttp".into(),
+            listen: "::".into(),
+            port: 10547,
+            protocol: "vmess".into(),
+            enabled: true,
+            transport: "splithttp".into(),
+            settings: "{}".into(),
+            stream_settings: r#"{
+              "network": "splithttp",
+              "security": "none",
+              "splithttpSettings": {
+                "mode": "stream-one",
+                "path": "/manual/vmess/splithttp"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "manual-vmess-splithttp@example.local".into(),
+            uuid: "efcbf11a-8fcc-4d05-a494-2d173a177e32".into(),
+            flow: String::new(),
+            credential: json!({}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = vmess_link(&settings, &inbound, &user);
+        let encoded = link.strip_prefix("vmess://").unwrap();
+        let decoded =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(payload["net"], "xhttp");
+        assert_eq!(payload["path"], "/manual/vmess/splithttp");
+        assert_eq!(payload["tls"], "");
     }
 
     #[test]
