@@ -22,13 +22,7 @@ use crate::quic::{
 const V2RAY_QUIC_ALPN: &[u8] = b"h3";
 
 fn v2ray_quic_server_alpns() -> Vec<Vec<u8>> {
-    vec![
-        b"h3".to_vec(),
-        b"h3-29".to_vec(),
-        b"h3-32".to_vec(),
-        b"h3-34".to_vec(),
-        b"hq-29".to_vec(),
-    ]
+    Vec::new()
 }
 
 /// Connected QUIC bidirectional stream kept alive by its endpoint/connection.
@@ -168,8 +162,9 @@ mod tests {
     #[test]
     fn v2ray_quic_server_accepts_common_h3_alpns() {
         let alpns = v2ray_quic_server_alpns();
-        assert!(alpns.contains(&b"h3".to_vec()));
-        assert!(alpns.contains(&b"h3-29".to_vec()));
-        assert!(alpns.contains(&b"hq-29".to_vec()));
+        assert!(
+            alpns.is_empty(),
+            "v2ray QUIC does not require ALPN after the QUIC handshake"
+        );
     }
 }
