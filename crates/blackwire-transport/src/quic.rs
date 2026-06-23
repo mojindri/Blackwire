@@ -29,6 +29,9 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::RootCertStore;
 use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 
+const DEFAULT_MAX_CONCURRENT_BIDI_STREAMS: u32 = 1024;
+const DEFAULT_MAX_CONCURRENT_UNI_STREAMS: u32 = 64;
+
 /// Tuning knobs applied when opening a QUIC UDP socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuicSocketConfig {
@@ -125,6 +128,7 @@ pub fn build_server_endpoint_with_alpn_and_socket(
         .try_into()
         .expect("constant 30s idle timeout fits in quinn IdleTimeout");
     transport.max_idle_timeout(Some(idle_timeout));
+    apply_default_stream_limits(&mut transport);
     transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
     transport.datagram_send_buffer_size(2 * 1024 * 1024);
     server_config.transport_config(Arc::new(transport));
@@ -204,6 +208,7 @@ pub fn build_hysteria2_server_endpoint_with_congestion_and_socket(
         .try_into()
         .expect("constant 30s idle timeout fits in quinn IdleTimeout");
     transport.max_idle_timeout(Some(idle_timeout));
+    apply_default_stream_limits(&mut transport);
     transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
     transport.datagram_send_buffer_size(2 * 1024 * 1024);
     if let Some(cfg) = congestion.as_ref() {
@@ -326,6 +331,7 @@ pub fn build_client_endpoint_with_alpn_and_socket(
 
     let mut client_config = ClientConfig::new(Arc::new(quic_client_config));
     let mut transport = TransportConfig::default();
+    apply_default_stream_limits(&mut transport);
     transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
     transport.datagram_send_buffer_size(2 * 1024 * 1024);
     client_config.transport_config(Arc::new(transport));
@@ -339,6 +345,12 @@ pub fn build_client_endpoint_with_alpn_and_socket(
     endpoint.set_default_client_config(client_config);
 
     Ok(endpoint)
+}
+
+fn apply_default_stream_limits(transport: &mut TransportConfig) {
+    transport
+        .max_concurrent_bidi_streams(DEFAULT_MAX_CONCURRENT_BIDI_STREAMS.into())
+        .max_concurrent_uni_streams(DEFAULT_MAX_CONCURRENT_UNI_STREAMS.into());
 }
 
 /// Generate a throwaway self-signed certificate and key for testing.
