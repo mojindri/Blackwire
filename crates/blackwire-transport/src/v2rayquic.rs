@@ -21,6 +21,16 @@ use crate::quic::{
 
 const V2RAY_QUIC_ALPN: &[u8] = b"h3";
 
+fn v2ray_quic_server_alpns() -> Vec<Vec<u8>> {
+    vec![
+        b"h3".to_vec(),
+        b"h3-29".to_vec(),
+        b"h3-32".to_vec(),
+        b"h3-34".to_vec(),
+        b"hq-29".to_vec(),
+    ]
+}
+
 /// Connected QUIC bidirectional stream kept alive by its endpoint/connection.
 pub struct QuicStream {
     _endpoint: Option<Endpoint>,
@@ -123,7 +133,7 @@ pub fn quic_server_endpoint(
     cert_pem: &str,
     key_pem: &str,
 ) -> anyhow::Result<Endpoint> {
-    build_server_endpoint_with_alpn(addr, cert_pem, key_pem, &[V2RAY_QUIC_ALPN.to_vec()])
+    build_server_endpoint_with_alpn(addr, cert_pem, key_pem, &v2ray_quic_server_alpns())
 }
 
 /// Build a server QUIC endpoint with explicit socket configuration for stream-based v2ray protocols.
@@ -137,7 +147,7 @@ pub fn quic_server_endpoint_with_socket_config(
         addr,
         cert_pem,
         key_pem,
-        &[V2RAY_QUIC_ALPN.to_vec()],
+        &v2ray_quic_server_alpns(),
         socket_config,
     )
 }
@@ -149,4 +159,17 @@ pub fn accepted_quic_stream(
     send: SendStream,
 ) -> BoxedStream {
     Box::new(QuicStream::new(None, connection, recv, send))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v2ray_quic_server_accepts_common_h3_alpns() {
+        let alpns = v2ray_quic_server_alpns();
+        assert!(alpns.contains(&b"h3".to_vec()));
+        assert!(alpns.contains(&b"h3-29".to_vec()));
+        assert!(alpns.contains(&b"hq-29".to_vec()));
+    }
 }
