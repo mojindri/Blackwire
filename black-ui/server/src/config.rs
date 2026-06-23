@@ -304,7 +304,13 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
         .or_else(|| stream_value(inbound, "/splithttpSettings/path"))
         .unwrap_or_default();
     let sni = stream_value(inbound, "/tlsSettings/serverName").unwrap_or_default();
-    let alpn = stream_value(inbound, "/tlsSettings/alpn").unwrap_or_default();
+    let alpn = stream_value(inbound, "/tlsSettings/alpn").unwrap_or_else(|| {
+        if network == "quic" && security == "tls" {
+            "h3".into()
+        } else {
+            String::new()
+        }
+    });
     let payload = json!({
         "v": "2",
         "ps": user.email,
@@ -946,6 +952,73 @@ mod tests {
         assert!(link.contains("mode=gun"));
         assert!(link.contains("security=none"));
         assert!(link.ends_with("#manual-vless-grpc%40example.local"));
+    }
+
+    #[test]
+    fn vmess_quic_tls_subscription_defaults_to_h3_alpn() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+            ..Settings::default()
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "manual-vmess-quic".into(),
+            listen: "::".into(),
+            port: 10549,
+            protocol: "vmess".into(),
+            enabled: true,
+            transport: "quic".into(),
+            settings: "{}".into(),
+            stream_settings: r#"{
+              "network": "quic",
+              "security": "tls",
+              "tlsSettings": {
+                "serverName": "www.microsoft.com",
+                "certificateFile": "/etc/blackwire/certs/hysteria2.crt",
+                "keyFile": "/etc/blackwire/certs/hysteria2.key"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "manual-vmess-quic@example.local".into(),
+            uuid: "f613e9d6-fcc2-4030-a57f-9523f8d1721d".into(),
+            flow: String::new(),
+            credential: json!({}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = vmess_link(&settings, &inbound, &user);
+        let encoded = link.strip_prefix("vmess://").unwrap();
+        let decoded =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(payload["net"], "quic");
+        assert_eq!(payload["tls"], "tls");
+        assert_eq!(payload["sni"], "www.microsoft.com");
+        assert_eq!(payload["alpn"], "h3");
     }
 
     #[test]
