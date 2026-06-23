@@ -385,9 +385,10 @@ fn shadowsocks_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) 
         .or_else(|| settings_value(&inbound.settings, "method"))
         .unwrap_or_else(|| "2022-blake3-aes-256-gcm".into());
     let password = credential_string(user, "password").unwrap_or_else(|| user.uuid.clone());
+    let password = shadowsocks_share_password(&method, &password);
     let userinfo = base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD_NO_PAD,
-        format!("{method}:{password}"),
+        format!("{method}:{}", password),
     );
     Ok(format!(
         "ss://{}@{}:{}#{}",
@@ -396,6 +397,33 @@ fn shadowsocks_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) 
         inbound.port,
         util::url_escape(&user.email)
     ))
+}
+
+fn shadowsocks_share_password(method: &str, password: &str) -> String {
+    if !method.starts_with("2022-blake3-") {
+        return password.to_string();
+    }
+    let psk = shadowsocks_2022_psk(password);
+    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, psk)
+}
+
+fn shadowsocks_2022_psk(password: &str) -> [u8; 32] {
+    let engines = [
+        base64::engine::general_purpose::STANDARD,
+        base64::engine::general_purpose::STANDARD_NO_PAD,
+        base64::engine::general_purpose::URL_SAFE,
+        base64::engine::general_purpose::URL_SAFE_NO_PAD,
+    ];
+    for engine in &engines {
+        if let Ok(bytes) = base64::Engine::decode(engine, password) {
+            if bytes.len() == 32 {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&bytes);
+                return key;
+            }
+        }
+    }
+    blake3::hash(password.as_bytes()).into()
 }
 
 fn hysteria2_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Result<String> {
@@ -1041,6 +1069,75 @@ mod tests {
         assert_eq!(
             link,
             "hysteria2://secret@203.0.113.10:443?sni=www.microsoft.com#hysteria2%40example.local"
+        );
+    }
+
+    #[test]
+    fn shadowsocks_2022_subscription_exports_padded_standard_base64_key() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+            ..Settings::default()
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "ss2022-in".into(),
+            listen: "::".into(),
+            port: 8388,
+            protocol: "shadowsocks".into(),
+            enabled: true,
+            transport: "tcp".into(),
+            settings: r#"{"method":"2022-blake3-aes-256-gcm"}"#.into(),
+            stream_settings: String::new(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "manual-shadowsocks-2022@example.local".into(),
+            uuid: "fallback-password".into(),
+            flow: String::new(),
+            credential: json!({
+                "password": "PtySNW17x+SKO1j3kMEQRV0j6/vbYH67zqCuEkkb3MA"
+            }),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = shadowsocks_link(&settings, &inbound, &user).unwrap();
+        let userinfo = link
+            .strip_prefix("ss://")
+            .and_then(|value| value.split('@').next())
+            .unwrap();
+        let decoded =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD_NO_PAD, userinfo)
+                .unwrap();
+        let decoded = String::from_utf8(decoded).unwrap();
+        let (method, password) = decoded.split_once(':').unwrap();
+        assert_eq!(method, "2022-blake3-aes-256-gcm");
+        assert_eq!(password, "PtySNW17x+SKO1j3kMEQRV0j6/vbYH67zqCuEkkb3MA=");
+        assert_eq!(
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, password)
+                .unwrap()
+                .len(),
+            32
         );
     }
 
