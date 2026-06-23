@@ -86,7 +86,7 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "httpupgrade",
                 "HTTPUpgrade",
                 "supported",
-                "HTTP upgrade path/header transport",
+                "HTTP upgrade path/header transport; VMess URLTest is flaky in Hiddify",
             ),
             item(
                 "splithttp",
@@ -212,5 +212,19 @@ mod tests {
 
         assert_eq!(tuic.status, "supported");
         assert!(tuic.notes.contains("native UDP"));
+    }
+
+    #[test]
+    fn httpupgrade_documents_hiddify_vmess_urltest_limit() {
+        let capabilities = blackwire_capabilities();
+        let httpupgrade = capabilities
+            .transports
+            .iter()
+            .find(|item| item.key == "httpupgrade")
+            .expect("HTTPUpgrade capability should be visible to Black UI");
+
+        assert_eq!(httpupgrade.status, "supported");
+        assert!(httpupgrade.notes.contains("VMess URLTest"));
+        assert!(httpupgrade.notes.contains("Hiddify"));
     }
 }
