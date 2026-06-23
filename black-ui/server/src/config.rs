@@ -311,7 +311,7 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
             String::new()
         }
     });
-    let payload = json!({
+    let mut payload = json!({
         "v": "2",
         "ps": user.email,
         "add": settings.subscription_host,
@@ -327,6 +327,9 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
         "sni": sni,
         "alpn": alpn,
     });
+    if security == "tls" && tls_share_requires_insecure(inbound) {
+        payload["allowInsecure"] = json!("1");
+    }
     let encoded = base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD,
         serde_json::to_string(&payload).unwrap_or_default(),
@@ -1019,6 +1022,7 @@ mod tests {
         assert_eq!(payload["tls"], "tls");
         assert_eq!(payload["sni"], "www.microsoft.com");
         assert_eq!(payload["alpn"], "h3");
+        assert_eq!(payload["allowInsecure"], "1");
     }
 
     #[test]
