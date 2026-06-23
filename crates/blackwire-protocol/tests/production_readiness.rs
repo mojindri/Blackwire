@@ -178,6 +178,18 @@ fn ss2022_subkey_uses_sip022_context_string() {
 }
 
 #[test]
+fn ss2022_password_accepts_unpadded_standard_base64_keys() {
+    let unpadded = "PtySNW17x+SKO1j3kMEQRV0j6/vbYH67zqCuEkkb3MA";
+    let padded = "PtySNW17x+SKO1j3kMEQRV0j6/vbYH67zqCuEkkb3MA=";
+
+    assert_eq!(
+        password_to_psk(unpadded),
+        password_to_psk(padded),
+        "SS-2022 stored unpadded standard base64 keys must match exported padded keys"
+    );
+}
+
+#[test]
 fn trojan_encoder_includes_command_byte_after_token_crlf() {
     let token = trojan_codec::compute_token("correct horse battery staple");
     let dest = Address::Domain("example.com".to_string(), 443);
