@@ -368,6 +368,7 @@ dependencies = [
  "base64",
  "blackwire-api",
  "blackwire-config",
+ "blake3",
  "chrono",
  "hex",
  "prost",
