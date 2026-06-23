@@ -403,7 +403,7 @@ fn hysteria2_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
         .or_else(|| credential_string(user, "password"))
         .unwrap_or_else(|| user.uuid.clone());
     let mut params = Vec::new();
-    if hysteria2_share_requires_insecure(inbound) {
+    if tls_share_requires_insecure(inbound) {
         params.push("insecure=1".to_string());
     }
     if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
@@ -424,7 +424,7 @@ fn hysteria2_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
     ))
 }
 
-fn hysteria2_share_requires_insecure(inbound: &Inbound) -> bool {
+fn tls_share_requires_insecure(inbound: &Inbound) -> bool {
     if stream_bool(inbound, "/tlsSettings/allowInsecure")
         || stream_bool(inbound, "/tlsSettings/insecure")
         || stream_bool(inbound, "/tlsSettings/skipCertVerify")
@@ -445,6 +445,9 @@ fn hysteria2_share_requires_insecure(inbound: &Inbound) -> bool {
 fn tuic_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Result<String> {
     let password = credential_string(user, "password").unwrap_or_else(|| user.uuid.clone());
     let mut params = vec![format!("uuid={}", util::url_escape(&user.uuid))];
+    if tls_share_requires_insecure(inbound) {
+        params.push("insecure=1".to_string());
+    }
     if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
         params.push(format!("sni={}", util::url_escape(&value)));
     }
@@ -1038,6 +1041,68 @@ mod tests {
         assert_eq!(
             link,
             "hysteria2://secret@203.0.113.10:443?sni=www.microsoft.com#hysteria2%40example.local"
+        );
+    }
+
+    #[test]
+    fn tuic_subscription_includes_insecure_for_self_signed_cert() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+            ..Settings::default()
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "tuic-in".into(),
+            listen: "::".into(),
+            port: 443,
+            protocol: "tuic".into(),
+            enabled: true,
+            transport: "quic".into(),
+            settings: "{}".into(),
+            stream_settings: r#"{
+              "network": "tcp",
+              "security": "tls",
+              "tlsSettings": {
+                "serverName": "www.microsoft.com",
+                "certificateFile": "/etc/blackwire/certs/tuic.crt"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "tuic@example.local".into(),
+            uuid: "ccdc43c9-5fd4-4d60-a363-17071e7a3f20".into(),
+            flow: String::new(),
+            credential: json!({"password": "secret"}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = tuic_link(&settings, &inbound, &user).unwrap();
+        assert_eq!(
+            link,
+            "tuic://ccdc43c9-5fd4-4d60-a363-17071e7a3f20:secret@203.0.113.10:443?uuid=ccdc43c9-5fd4-4d60-a363-17071e7a3f20&insecure=1&sni=www.microsoft.com#tuic%40example.local"
         );
     }
 }
