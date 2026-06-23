@@ -330,6 +330,9 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
     if security == "tls" && tls_share_requires_insecure(inbound) {
         payload["allowInsecure"] = json!("1");
     }
+    if network == "xhttp" {
+        payload["mode"] = json!(splithttp_share_mode(inbound));
+    }
     let encoded = base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD,
         serde_json::to_string(&payload).unwrap_or_default(),
@@ -530,6 +533,15 @@ fn append_transport_params(inbound: &Inbound, params: &mut Vec<String>) {
         params.push(format!("serviceName={}", util::url_escape(&service_name)));
         params.push("mode=gun".into());
     }
+    if share_network(inbound) == "xhttp" {
+        params.push(format!("mode={}", splithttp_share_mode(inbound)));
+    }
+}
+
+fn splithttp_share_mode(inbound: &Inbound) -> String {
+    stream_value(inbound, "/splithttpSettings/mode")
+        .filter(|mode| !mode.trim().is_empty())
+        .unwrap_or_else(|| "stream-one".into())
 }
 
 fn client_entry(protocol: &str, user: &ManagedUser) -> Value {
@@ -1089,6 +1101,7 @@ mod tests {
         let link = vless_link(&settings, &inbound, &user);
         assert!(link.contains("type=xhttp"));
         assert!(link.contains("path=/manual/vless/splithttp"));
+        assert!(link.contains("mode=stream-one"));
         assert!(link.contains("security=none"));
     }
 
@@ -1154,6 +1167,7 @@ mod tests {
         let payload: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
         assert_eq!(payload["net"], "xhttp");
         assert_eq!(payload["path"], "/manual/vmess/splithttp");
+        assert_eq!(payload["mode"], "stream-one");
         assert_eq!(payload["tls"], "");
     }
 
