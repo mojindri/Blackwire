@@ -182,8 +182,8 @@ the config. `START_SERVICE=1` is rejected unless a config is present and valid.
 Generated Linux VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.6/scripts/install.sh \
-  | VERSION=v0.1.0-rc.6 SETUP=reality PUBLIC_HOST=example.com bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.41/scripts/install.sh \
+  | VERSION=v0.1.0-rc.41 SETUP=reality PUBLIC_HOST=example.com bash
 ```
 
 Supported setup modes are `SETUP=domain`, `SETUP=reality`, `SETUP=direct`, and
@@ -195,8 +195,8 @@ firewall/log/start commands.
 Standard domain setup:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.6/scripts/install.sh \
-  | VERSION=v0.1.0-rc.6 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.41/scripts/install.sh \
+  | VERSION=v0.1.0-rc.41 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 For `SETUP=domain`, point the domain DNS record to the VPS first and open
@@ -215,8 +215,8 @@ internal compatibility escape hatch, but release docs should prefer `SETUP`.
 To install the Black UI companion panel with the Linux release assets:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.6/scripts/install.sh \
-  | VERSION=v0.1.0-rc.6 INSTALL_BLACK_UI=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.41/scripts/install.sh \
+  | VERSION=v0.1.0-rc.41 INSTALL_BLACK_UI=1 bash
 ```
 
 When combined with `SETUP=domain`, the installer reverse-proxies Black UI at
