@@ -367,14 +367,15 @@ KCP-style transport over UDP with its own framing/reliability behavior.
 
 ### Mental Model
 
-Useful for hostile or lossy links, but not a beginner-friendly first read.
+Legacy/internal transport path. Prefer QUIC, Hysteria2, TUIC, or TCP-based
+transports for new deployments.
 
 ### Repo Status
 
 The runtime has a UDP listener with per-peer KCP sessions, idle cleanup, and
-local VLESS-over-mKCP e2e coverage. In the external-client matrix this row is
-an intentional client SKIP (upstream client-model limits), so support is
-tracked as server-path supported with documented SKIP caveats.
+local VLESS-over-mKCP e2e coverage for old configs. mKCP is deprecated for the
+release surface: Black UI no longer offers it for new inbounds/outbounds, and
+external-client interop is not a release target.
 
 ## TUN
 

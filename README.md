@@ -22,7 +22,7 @@ instead of accepting Xray or sing-box config files as drop-in input.
 - Multi-protocol runtime: VLESS, VMess AEAD, Trojan, Shadowsocks 2022,
   Hysteria2, TUIC v5, SOCKS5, HTTP CONNECT, and selected tunnel/TUN paths.
 - Modern transports and security: TCP, WebSocket, gRPC, HTTPUpgrade, SplitHTTP,
-  mKCP, QUIC, TLS, REALITY, and ShadowTLS where documented as supported.
+  QUIC, TLS, REALITY, and ShadowTLS where documented as supported.
 - Routing and DNS: domain/IP/port/source/inbound rules, geosite/geoip matching,
   DNS resolver support, FakeIP, sniffing, and adaptive failover.
 - Local and server modes: run a local SOCKS/HTTP proxy, a VPS server, or a
@@ -51,8 +51,8 @@ are tracked in [Changelog](CHANGELOG.md).
 Linux release candidates can be installed from GitHub Releases for evaluation:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.42/scripts/install.sh \
-  | VERSION=v0.1.0-rc.42 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
+  | VERSION=v0.1.0-rc.43 bash
 ```
 
 By default the installer installs the binary and systemd unit, but does not
@@ -61,22 +61,22 @@ start the service until a valid config exists.
 Install and validate an existing config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.42/scripts/install.sh \
-  | VERSION=v0.1.0-rc.42 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
+  | VERSION=v0.1.0-rc.43 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
 ```
 
 Generate a VLESS REALITY VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.42/scripts/install.sh \
-  | VERSION=v0.1.0-rc.42 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
+  | VERSION=v0.1.0-rc.43 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
 ```
 
 Generate a domain + nginx + TLS setup:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.42/scripts/install.sh \
-  | VERSION=v0.1.0-rc.42 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
+  | VERSION=v0.1.0-rc.43 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 More install paths are in the [User Guide](docs/user-guide.md#install).
@@ -109,15 +109,15 @@ curl -I https://proxy.example.com/
 Install the companion panel with the release assets:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.42/scripts/install.sh \
-  | VERSION=v0.1.0-rc.42 INSTALL_BLACK_UI=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
+  | VERSION=v0.1.0-rc.43 INSTALL_BLACK_UI=1 bash
 ```
 
 With the domain setup, Black UI is reverse-proxied at `/panel/`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.42/scripts/install.sh \
-  | VERSION=v0.1.0-rc.42 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
+  | VERSION=v0.1.0-rc.43 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
 ```
 
 Keep Black UI bound to localhost unless it is behind hardened HTTPS access
