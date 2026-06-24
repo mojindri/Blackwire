@@ -274,6 +274,9 @@ pub fn vless_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
         if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
             params.push(format!("sni={}", util::url_escape(&value)));
         }
+        if tls_share_requires_insecure(inbound) {
+            params.push("allowInsecure=1".into());
+        }
         if let Some(value) = tls_share_alpn(inbound) {
             params.push(format!("alpn={}", util::url_escape(&value)));
         }
@@ -381,6 +384,9 @@ fn trojan_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Re
     if security == "tls" {
         if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
             params.push(format!("sni={}", util::url_escape(&value)));
+        }
+        if tls_share_requires_insecure(inbound) {
+            params.push("allowInsecure=1".into());
         }
         if let Some(value) = tls_share_alpn(inbound) {
             params.push(format!("alpn={}", util::url_escape(&value)));
@@ -1057,6 +1063,134 @@ mod tests {
         assert_eq!(payload["alpn"], "h3");
         assert_eq!(payload["scy"], "aes-128-gcm");
         assert_eq!(payload["allowInsecure"], "1");
+    }
+
+    #[test]
+    fn vless_quic_tls_subscription_includes_insecure_for_self_signed_cert() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+            ..Settings::default()
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "manual-vless-quic".into(),
+            listen: "::".into(),
+            port: 10449,
+            protocol: "vless".into(),
+            enabled: true,
+            transport: "quic".into(),
+            settings: r#"{"decryption":"none"}"#.into(),
+            stream_settings: r#"{
+              "network": "quic",
+              "security": "tls",
+              "tlsSettings": {
+                "serverName": "www.microsoft.com",
+                "certificateFile": "/etc/blackwire/certs/vless-quic.crt",
+                "keyFile": "/etc/blackwire/certs/vless-quic.key"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "manual-vless-quic@example.local".into(),
+            uuid: "64e29104-b88e-4514-b6a1-3c77a7707eef".into(),
+            flow: String::new(),
+            credential: json!({}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = vless_link(&settings, &inbound, &user);
+        assert!(link.contains("type=quic"));
+        assert!(link.contains("security=tls"));
+        assert!(link.contains("sni=www.microsoft.com"));
+        assert!(link.contains("allowInsecure=1"));
+        assert!(link.contains("alpn=h3"));
+    }
+
+    #[test]
+    fn trojan_quic_tls_subscription_includes_insecure_for_self_signed_cert() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+            ..Settings::default()
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "manual-trojan-quic".into(),
+            listen: "::".into(),
+            port: 10649,
+            protocol: "trojan".into(),
+            enabled: true,
+            transport: "quic".into(),
+            settings: "{}".into(),
+            stream_settings: r#"{
+              "network": "quic",
+              "security": "tls",
+              "tlsSettings": {
+                "serverName": "www.microsoft.com",
+                "certificateFile": "/etc/blackwire/certs/trojan-quic.crt",
+                "keyFile": "/etc/blackwire/certs/trojan-quic.key"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "manual-trojan-quic@example.local".into(),
+            uuid: "94b109af-4729-446a-a2c4-c2f25421ab5f".into(),
+            flow: String::new(),
+            credential: json!({"password": "secret"}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = trojan_link(&settings, &inbound, &user).unwrap();
+        assert!(link.contains("type=quic"));
+        assert!(link.contains("security=tls"));
+        assert!(link.contains("sni=www.microsoft.com"));
+        assert!(link.contains("allowInsecure=1"));
+        assert!(link.contains("alpn=h3"));
     }
 
     #[test]
