@@ -6,10 +6,31 @@ This project is pre-1.0. The support contract is owned by
 [docs/release.md](docs/release.md), and detailed feature evidence is owned by
 [docs/feature-matrix.md](docs/feature-matrix.md).
 
-## 0.1.0-rc.41 - 2026-06-24
+## 0.1.0-rc.42 - 2026-06-24
 
-Status: tag pushed; release assets are still publishing in GitHub Actions at
-the time this changelog entry was written.
+### Fixed
+
+- VLESS/VMess/Trojan QUIC inbounds now advertise `h3` ALPN during QUIC TLS
+  handshakes, matching sing-box/Hiddify-style clients and fixing
+  `peer doesn't support any known protocol` failures.
+- Generated VLESS and Trojan QUIC links now default TLS ALPN to `h3` when the
+  inbound does not explicitly set `tlsSettings.alpn`.
+- Generated VMess QUIC links now default `scy` to `aes-128-gcm` instead of
+  `auto`, avoiding clients that resolve `auto` to VMess `none` and then stall
+  after the VMess header is accepted.
+- Generated TUIC links now include `alpn=h3` alongside `insecure=1`/`sni` for
+  Blackwire self-signed TLS deployments.
+
+### Validation
+
+- `cargo test -p blackwire-transport v2ray_quic_server_accepts_common_h3_alpns -- --nocapture`
+- `cargo test -p integration-tests --test e2e_vless_quic -- --nocapture`
+- `cargo test -p integration-tests --test e2e_vmess -- --nocapture`
+- `cargo test -p black-ui-server subscription -- --nocapture`
+- Local patched-server probes with sing-box 1.13.13:
+  VLESS QUIC PASS, Trojan QUIC PASS, VMess QUIC PASS with `aes-128-gcm`.
+
+## 0.1.0-rc.41 - 2026-06-24
 
 ### Fixed
 
