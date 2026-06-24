@@ -228,7 +228,7 @@ pub async fn splithttp_accept(
     if let Some(expected) = expected_path {
         let got = path.split('?').next().unwrap_or(path);
         // Accept "*" (Xray 26.x xHTTP Xmux handshake path) in addition to the configured path.
-        if got != expected && got != "*" {
+        if !path_matches(got, expected) && got != "*" {
             return Err(ProxyError::Protocol(format!(
                 "SplitHTTP path mismatch: got '{got}', want '{expected}'"
             )));
@@ -316,9 +316,7 @@ pub async fn splithttp_accept_h2(
     debug!(method = %method, path = %path, "xHTTP h2 inbound request");
 
     if let Some(expected) = expected_path {
-        let got = path.trim_end_matches('/');
-        let want = expected.trim_end_matches('/');
-        if got != want {
+        if !path_matches(path, expected) {
             return Err(ProxyError::Protocol(format!(
                 "xHTTP h2 path mismatch: got '{path}', want '{expected}'"
             )));
@@ -619,6 +617,10 @@ pub async fn splithttp_accept_h2_packet_up(
             true,
         );
     }
+}
+
+fn path_matches(got: &str, expected: &str) -> bool {
+    got.trim_end_matches('/') == expected.trim_end_matches('/')
 }
 
 async fn write_stream_one_response(stream: &mut BoxedStream) -> Result<(), ProxyError> {
@@ -1148,6 +1150,82 @@ mod tests {
         let mut buf = [0u8; 8];
         let n = tunnel.read(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"hello");
+    }
+
+    #[tokio::test]
+    async fn stream_one_accepts_xhttp_trailing_slash_path() {
+        let (mut client, server) = tokio::io::duplex(8192);
+        let server = Box::new(server) as BoxedStream;
+        let accept_task = tokio::spawn(async move {
+            splithttp_accept(server, Some("/split"), None, SplitHttpMode::StreamOne, None).await
+        });
+
+        client
+            .write_all(
+                b"POST /split/ HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: chunked\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        client.write_all(b"5\r\nhello\r\n").await.unwrap();
+        client.flush().await.unwrap();
+
+        let mut raw = vec![0u8; 512];
+        let n = client.read(&mut raw).await.unwrap();
+        let resp = String::from_utf8_lossy(&raw[..n]);
+        assert!(resp.contains("200 OK"), "response: {resp}");
+
+        let SplitHttpAcceptResult::Tunnel(mut tunnel) =
+            accept_task.await.unwrap().expect("accept failed")
+        else {
+            panic!("expected stream-one tunnel");
+        };
+        let mut buf = [0u8; 8];
+        let n = tunnel.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"hello");
+    }
+
+    #[tokio::test]
+    async fn stream_one_accepts_h2c_post_with_trailing_slash() {
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let server = Box::new(server_io) as BoxedStream;
+        let accept_task = tokio::spawn(async move {
+            splithttp_accept(server, Some("/split"), None, SplitHttpMode::StreamOne, None).await
+        });
+
+        let (mut client, conn) = client::Builder::new().handshake(client_io).await.unwrap();
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+
+        let request = http::Request::builder()
+            .method(http::Method::POST)
+            .uri("https://example.test/split/")
+            .body(())
+            .unwrap();
+        let (response, mut send) = client.send_request(request, false).unwrap();
+        send.send_data(Bytes::from_static(b"hello"), false).unwrap();
+
+        let mut response = response.await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+
+        let SplitHttpAcceptResult::Tunnel(mut tunnel) =
+            accept_task.await.unwrap().expect("accept failed")
+        else {
+            panic!("expected stream-one tunnel");
+        };
+        let mut buf = [0u8; 8];
+        let n = tunnel.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"hello");
+
+        tunnel.write_all(b"world").await.unwrap();
+        tunnel.flush().await.unwrap();
+        let chunk = response
+            .body_mut()
+            .data()
+            .await
+            .expect("response chunk missing")
+            .expect("response chunk");
+        assert_eq!(&chunk[..], b"world");
     }
 
     #[tokio::test]
