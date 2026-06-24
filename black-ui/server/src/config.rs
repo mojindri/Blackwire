@@ -302,7 +302,9 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
     let path = stream_value(inbound, "/wsSettings/path")
         .or_else(|| stream_value(inbound, "/httpupgradeSettings/path"))
         .or_else(|| stream_value(inbound, "/splithttpSettings/path"))
+        .or_else(|| stream_value(inbound, "/grpcSettings/serviceName"))
         .unwrap_or_default();
+    let transport_type = if network == "grpc" { "gun" } else { "none" };
     let sni = stream_value(inbound, "/tlsSettings/serverName").unwrap_or_default();
     let alpn = stream_value(inbound, "/tlsSettings/alpn").unwrap_or_else(|| {
         if network == "quic" && security == "tls" {
@@ -320,7 +322,7 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
         "aid": "0",
         "scy": "auto",
         "net": network,
-        "type": "none",
+        "type": transport_type,
         "host": host,
         "path": path,
         "tls": if security == "tls" { "tls" } else { "" },
@@ -1041,6 +1043,71 @@ mod tests {
         assert_eq!(payload["sni"], "www.microsoft.com");
         assert_eq!(payload["alpn"], "h3");
         assert_eq!(payload["allowInsecure"], "1");
+    }
+
+    #[test]
+    fn vmess_grpc_subscription_uses_service_name_path_and_gun_type() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+            ..Settings::default()
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "manual-vmess-grpc".into(),
+            listen: "::".into(),
+            port: 10545,
+            protocol: "vmess".into(),
+            enabled: true,
+            transport: "grpc".into(),
+            settings: "{}".into(),
+            stream_settings: r#"{
+              "network": "grpc",
+              "security": "none",
+              "grpcSettings": {
+                "serviceName": "manual-vmess-grpc"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "manual-vmess-grpc@example.local".into(),
+            uuid: "bb621137-204c-49c6-a1e6-3774af2888d6".into(),
+            flow: String::new(),
+            credential: json!({}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = vmess_link(&settings, &inbound, &user);
+        let encoded = link.strip_prefix("vmess://").unwrap();
+        let decoded =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(payload["net"], "grpc");
+        assert_eq!(payload["type"], "gun");
+        assert_eq!(payload["path"], "manual-vmess-grpc");
+        assert_eq!(payload["tls"], "");
     }
 
     #[test]
