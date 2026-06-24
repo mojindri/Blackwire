@@ -94,6 +94,70 @@ fn vmess_client_config(
     ))
 }
 
+fn vmess_splithttp_server_config(vmess_port: u16) -> Arc<blackwire_config::schema::Config> {
+    parse_config(format!(
+        r#"{{
+            "inbounds": [{{
+                "tag": "vmess-splithttp-in",
+                "protocol": "vmess",
+                "listen": "127.0.0.1",
+                "port": {vmess_port},
+                "settings": {{
+                    "clients": [{{
+                        "id": "{TEST_UUID}",
+                        "email": "vmess-splithttp@example.test"
+                    }}]
+                }},
+                "streamSettings": {{
+                    "network": "splithttp",
+                    "splithttpSettings": {{
+                        "path": "/manual/vmess/splithttp"
+                    }}
+                }}
+            }}],
+            "outbounds": [{{
+                "tag": "freedom",
+                "protocol": "freedom"
+            }}],
+            "routing": {{ "rules": [{{ "outboundTag": "freedom" }}] }}
+        }}"#
+    ))
+}
+
+fn vmess_splithttp_client_config(
+    socks_port: u16,
+    vmess_server_port: u16,
+) -> Arc<blackwire_config::schema::Config> {
+    parse_config(format!(
+        r#"{{
+            "inbounds": [{{
+                "tag": "socks-in",
+                "protocol": "socks",
+                "listen": "127.0.0.1",
+                "port": {socks_port}
+            }}],
+            "outbounds": [{{
+                "tag": "vmess-splithttp-out",
+                "protocol": "vmess",
+                "settings": {{
+                    "address": "127.0.0.1",
+                    "port": {vmess_server_port},
+                    "users": [{{
+                        "id": "{TEST_UUID}"
+                    }}]
+                }},
+                "streamSettings": {{
+                    "network": "splithttp",
+                    "splithttpSettings": {{
+                        "path": "/manual/vmess/splithttp"
+                    }}
+                }}
+            }}],
+            "routing": {{ "rules": [{{ "outboundTag": "vmess-splithttp-out" }}] }}
+        }}"#
+    ))
+}
+
 async fn socks5_connect(socks_port: u16, dest: &str, dest_port: u16) -> tokio::net::TcpStream {
     let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", socks_port))
         .await
@@ -203,6 +267,34 @@ async fn vmess_large_payload_echo() {
     let mut stream = socks5_connect(socks_port, "127.0.0.1", echo_port).await;
     let payload = vec![0xABu8; 4096];
     stream.write_all(&payload).await.unwrap();
+
+    let mut got = vec![0u8; payload.len()];
+    stream.read_exact(&mut got).await.unwrap();
+    assert_eq!(got, payload);
+
+    echo_task.abort();
+}
+
+/// VMess over xHTTP/splitHTTP transfers body bytes after the VMess header.
+#[tokio::test]
+async fn vmess_splithttp_echo() {
+    let vmess_port = unused_local_port();
+    let socks_port = unused_local_port();
+    let (echo_port, echo_task) = spawn_echo_server().await;
+
+    let _server = blackwire_core::Instance::from_config(vmess_splithttp_server_config(vmess_port))
+        .await
+        .unwrap();
+    let _client = blackwire_core::Instance::from_config(vmess_splithttp_client_config(
+        socks_port, vmess_port,
+    ))
+    .await
+    .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    let mut stream = socks5_connect(socks_port, "127.0.0.1", echo_port).await;
+    let payload = b"vmess over splithttp echo";
+    stream.write_all(payload).await.unwrap();
 
     let mut got = vec![0u8; payload.len()];
     stream.read_exact(&mut got).await.unwrap();
