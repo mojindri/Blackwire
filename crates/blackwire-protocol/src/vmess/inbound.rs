@@ -21,7 +21,7 @@
 //! and only open dispatch traffic for verified requests.
 
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -34,7 +34,7 @@ use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::InboundHandler;
 use blackwire_app::runtime_stats;
-use blackwire_common::{BoxedStream, Network, PrependedStream, ProxyError};
+use blackwire_common::{BoxedStream, BufferPool, Network, PrependedStream, ProxyError};
 
 use super::auth::{cmd_key, validate_auth_id, MAX_TIME_DIFF_SECS};
 use super::codec::{
@@ -194,7 +194,7 @@ impl InboundHandler for VmessInbound {
             stream = Box::new(PrependedStream::new(stream, leftover));
         }
 
-        warn!(
+        debug!(
             source = %source,
             dest = %request.dest,
             security = ?request.security,
@@ -236,6 +236,11 @@ impl InboundHandler for VmessInbound {
     }
 }
 
+fn vmess_udp_buffer_pool() -> &'static Arc<BufferPool> {
+    static POOL: OnceLock<Arc<BufferPool>> = OnceLock::new();
+    POOL.get_or_init(BufferPool::new)
+}
+
 async fn relay_vmess_udp<S>(
     client: S,
     dest: blackwire_common::Address,
@@ -259,23 +264,28 @@ where
         .map_err(|e| ProxyError::Transport(format!("VMess UDP connect: {e}")))?;
 
     let (mut client_reader, mut client_writer) = tokio::io::split(client);
-    let mut payload = vec![0u8; 65507];
-    let mut response = vec![0u8; 65535];
+    let pool = vmess_udp_buffer_pool();
+    let mut payload = pool.acquire(65507);
+    payload.resize(65507, 0);
+    let mut response = pool.acquire(65535);
+    response.resize(65535, 0);
+    let mut flush_tick = tokio::time::interval(Duration::from_millis(1));
+    flush_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut flush_pending = false;
 
-    loop {
+    let result = loop {
         tokio::select! {
-            read = tokio::time::timeout(Duration::from_secs(30), client_reader.read(&mut payload)) => {
+            read = tokio::time::timeout(Duration::from_secs(30), client_reader.read(&mut payload[..])) => {
                 let n = match read {
-                    Ok(Ok(0)) => break,
+                    Ok(Ok(0)) => break Ok(()),
                     Ok(Ok(n)) => n,
-                    Ok(Err(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                    Ok(Err(e)) => return Err(ProxyError::Transport(e.to_string())),
-                    Err(_) => break,
+                    Ok(Err(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break Ok(()),
+                    Ok(Err(e)) => break Err(ProxyError::Transport(e.to_string())),
+                    Err(_) => break Ok(()),
                 };
-                socket
-                    .send(&payload[..n])
-                    .await
-                    .map_err(|e| ProxyError::Transport(format!("VMess UDP send: {e}")))?;
+                if let Err(e) = socket.send(&payload[..n]).await {
+                    break Err(ProxyError::Transport(format!("VMess UDP send: {e}")));
+                }
                 runtime_stats::record_relay_traffic(
                     ctx.inbound_tag.as_ref(),
                     ctx.user.as_deref(),
@@ -283,13 +293,18 @@ where
                     0,
                 );
             }
-            recv = socket.recv(&mut response) => {
-                let rn = recv.map_err(|e| ProxyError::Transport(e.to_string()))?;
+            recv = socket.recv(&mut response[..]) => {
+                let rn = match recv {
+                    Ok(n) => n,
+                    Err(e) => break Err(ProxyError::Transport(e.to_string())),
+                };
                 if rn == 0 {
                     continue;
                 }
-                client_writer.write_all(&response[..rn]).await?;
-                client_writer.flush().await?;
+                if let Err(e) = client_writer.write_all(&response[..rn]).await {
+                    break Err(ProxyError::Transport(e.to_string()));
+                }
+                flush_pending = true;
                 runtime_stats::record_relay_traffic(
                     ctx.inbound_tag.as_ref(),
                     ctx.user.as_deref(),
@@ -297,10 +312,26 @@ where
                     rn as u64,
                 );
             }
+            _ = flush_tick.tick(), if flush_pending => {
+                if let Err(e) = client_writer.flush().await {
+                    break Err(ProxyError::Transport(e.to_string()));
+                }
+                flush_pending = false;
+            }
+        }
+    };
+
+    if flush_pending {
+        if let Err(e) = client_writer.flush().await {
+            pool.release(payload);
+            pool.release(response);
+            return Err(ProxyError::Transport(e.to_string()));
         }
     }
+    pool.release(payload);
+    pool.release(response);
 
-    Ok(())
+    result
 }
 
 async fn resolve_udp_dest(dest: &blackwire_common::Address) -> Result<SocketAddr, ProxyError> {
