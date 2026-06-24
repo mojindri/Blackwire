@@ -25,6 +25,212 @@ the time this changelog entry was written.
 - `cargo test -p integration-tests --test e2e_vmess -- --nocapture`
 - GitHub release tag: `v0.1.0-rc.41`
 
+## 0.1.0-rc.40 - 2026-06-24
+
+### Fixed
+
+- Added initial VMess authenticated-length support for clients that emit
+  `authenticated_length: true`.
+
+## 0.1.0-rc.39 - 2026-06-24
+
+### Fixed
+
+- Fixed VMess UDP handling over xHTTP.
+
+## 0.1.0-rc.38 - 2026-06-24
+
+### Fixed
+
+- Fixed xHTTP/SplitHTTP interop paths.
+
+## 0.1.0-rc.37 - 2026-06-24
+
+### Fixed
+
+- Fixed VMess gRPC subscription export.
+
+## 0.1.0-rc.36 - 2026-06-24
+
+### Changed
+
+- Documented the Hiddify VMess HTTPUpgrade limitation.
+
+## 0.1.0-rc.35 - 2026-06-24
+
+### Fixed
+
+- Included xHTTP mode in generated subscription links.
+
+## 0.1.0-rc.34 - 2026-06-24
+
+### Fixed
+
+- Exported SplitHTTP subscription links as xHTTP.
+
+## 0.1.0-rc.33 - 2026-06-23
+
+### Fixed
+
+- Marked generated self-signed VMess TLS links as insecure.
+
+## 0.1.0-rc.32 - 2026-06-23
+
+### Fixed
+
+- Allowed VMess QUIC clients that do not advertise ALPN.
+
+## 0.1.0-rc.31 - 2026-06-23
+
+### Fixed
+
+- Accepted common VMess QUIC ALPN variants.
+
+## 0.1.0-rc.30 - 2026-06-23
+
+### Fixed
+
+- Added `h3` ALPN to VMess QUIC subscription links.
+
+## 0.1.0-rc.29 - 2026-06-23
+
+### Fixed
+
+- Accepted unpadded standard Shadowsocks-2022 keys.
+
+## 0.1.0-rc.28 - 2026-06-23
+
+### Fixed
+
+- Avoided unnecessary listener churn during Black UI live sync.
+
+## 0.1.0-rc.27 - 2026-06-23
+
+### Fixed
+
+- Fixed Shadowsocks-2022 subscription key encoding.
+
+## 0.1.0-rc.26 - 2026-06-23
+
+### Fixed
+
+- Fixed TUIC subscription generation and QUIC stream limits.
+
+## 0.1.0-rc.25 - 2026-06-22
+
+### Fixed
+
+- Allowed multiple gRPC streams per HTTP/2 connection.
+
+## 0.1.0-rc.24 - 2026-06-22
+
+### Fixed
+
+- Flushed small gRPC writes promptly.
+
+## 0.1.0-rc.23 - 2026-06-22
+
+### Fixed
+
+- Merged gRPC and protocol stats fixes.
+
+## 0.1.0-rc.22 - 2026-06-22
+
+### Fixed
+
+- Aborted mKCP listener tasks on drop.
+
+## 0.1.0-rc.21 - 2026-06-22
+
+### Fixed
+
+- Aborted QUIC listener tasks during shutdown.
+
+## 0.1.0-rc.20 - 2026-06-22
+
+### Fixed
+
+- Tried all resolved Freedom outbound addresses instead of stopping on the first
+  failed address.
+
+## 0.1.0-rc.19 - 2026-06-22
+
+### Added
+
+- Added adaptive Hysteria2 tuning.
+
+## 0.1.0-rc.18 - 2026-06-21
+
+### Changed
+
+- Batched live traffic counter updates.
+
+## 0.1.0-rc.17 - 2026-06-21
+
+### Fixed
+
+- Accounted TCP traffic during active relays.
+
+## 0.1.0-rc.16 - 2026-06-21
+
+### Fixed
+
+- Skipped empty managed client inbounds.
+
+## 0.1.0-rc.15 - 2026-06-21
+
+### Fixed
+
+- Allowed Black UI to persist managed config.
+
+## 0.1.0-rc.14 - 2026-06-21
+
+### Fixed
+
+- Cleared stale managed clients from generated config.
+
+## 0.1.0-rc.13 - 2026-06-21
+
+### Fixed
+
+- Reconciled quota config during enforcement.
+
+## 0.1.0-rc.12 - 2026-06-21
+
+### Fixed
+
+- Fixed quota accounting across runtime restarts.
+
+## 0.1.0-rc.11 - 2026-06-21
+
+### Fixed
+
+- Made the Hysteria2 insecure share flag conditional.
+
+## 0.1.0-rc.10 - 2026-06-21
+
+### Fixed
+
+- Fixed the Hysteria2 subscription TLS flag.
+
+## 0.1.0-rc.9 - 2026-06-21
+
+### Added
+
+- Covered UDP and user stats across protocols.
+
+## 0.1.0-rc.8 - 2026-06-21
+
+### Fixed
+
+- Fixed Hysteria2 stats attribution.
+
+## 0.1.0-rc.7 - 2026-06-21
+
+### Fixed
+
+- Fixed IPv6 socket address handling.
+
 ## 0.1.0-rc.6 - 2026-06-19
 
 ### Added
