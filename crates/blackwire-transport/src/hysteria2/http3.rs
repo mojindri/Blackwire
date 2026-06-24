@@ -254,15 +254,19 @@ async fn serve_udp_sessions(
 /// reply-buffer allocation from the hot path. Reply buffers are borrowed from a
 /// per-connection pool. The task exits on socket error, on a closed scheduler
 /// channel, or when the session is dropped and aborts it.
-async fn run_session_reader(
-    sock: Arc<UdpSocket>,
+struct UdpReaderContext {
     inbound_tag: Arc<str>,
     user: Option<Arc<str>>,
     session_id: u32,
+    datagram_policy: super::udp::DatagramPolicy,
+}
+
+async fn run_session_reader(
+    sock: Arc<UdpSocket>,
+    context: UdpReaderContext,
     fec_encoder: Arc<std::sync::Mutex<FecEncoder>>,
     reply_pool: Arc<BufferPool>,
     scheduled_tx: mpsc::Sender<ScheduledUdpDatagram>,
-    datagram_policy: super::udp::DatagramPolicy,
 ) {
     // Monotonic per-session packet id so the client's FEC dedup window can tell
     // replies apart. Wrapping is harmless given the small dedup window.
@@ -275,16 +279,16 @@ async fn run_session_reader(
                 let data = bytes::Bytes::copy_from_slice(&buf[..n]);
                 reply_pool.release(buf);
                 runtime_stats::record_relay_traffic(
-                    inbound_tag.as_ref(),
-                    user.as_deref(),
+                    context.inbound_tag.as_ref(),
+                    context.user.as_deref(),
                     0,
                     n as u64,
                 );
 
                 let dest = destination_from_socketaddr(src);
-                let tx_lane = datagram_policy.lane_for(&dest, data.len());
+                let tx_lane = context.datagram_policy.lane_for(&dest, data.len());
                 let response_dg = UdpDatagram {
-                    session_id,
+                    session_id: context.session_id,
                     packet_id,
                     frag_id: 0,
                     frag_num: 1,
@@ -303,7 +307,7 @@ async fn run_session_reader(
                 });
                 record_datagram_packet(tx_lane.class(), "tx");
                 let class = super::udp::packet_class_for(&dest, response_dg.data.len());
-                let flow = super::udp::flow_key_for(&dest, session_id);
+                let flow = super::udp::flow_key_for(&dest, context.session_id);
                 let mut packet = InnerFlowPacket::new(class, flow, encoded);
                 if let Some(parity) = parity {
                     packet.followups.push(parity);
@@ -421,13 +425,15 @@ async fn handle_udp_datagram(
                 let s = Arc::new(new_sock);
                 let reader = tokio::spawn(run_session_reader(
                     Arc::clone(&s),
-                    Arc::from(inbound_tag.clone()),
-                    user.as_deref().map(Arc::from),
-                    session_id,
+                    UdpReaderContext {
+                        inbound_tag: Arc::from(inbound_tag.clone()),
+                        user: user.as_deref().map(Arc::from),
+                        session_id,
+                        datagram_policy,
+                    },
                     Arc::clone(&fec_encoder),
                     Arc::clone(&reply_pool),
                     scheduled_tx.clone(),
-                    datagram_policy,
                 ));
                 sessions.insert(
                     session_id,

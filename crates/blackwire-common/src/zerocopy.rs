@@ -189,10 +189,13 @@ mod imp {
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpStream;
 
+    /// Reports that TCP zero-copy is unavailable on non-Linux targets.
     pub fn enable_tcp_zerocopy(_stream: &TcpStream) -> io::Result<bool> {
         Ok(false)
     }
 
+    /// Writes the full buffer with the normal async write path on non-Linux
+    /// targets.
     pub async fn write_all_maybe_zerocopy(
         stream: &mut TcpStream,
         buf: &[u8],
@@ -207,6 +210,8 @@ mod imp {
         })
     }
 
+    /// Returns a non-zero zero-copy threshold for API consistency on non-Linux
+    /// targets.
     pub fn normalized_min_bytes(min_bytes: usize) -> usize {
         min_bytes.max(1)
     }
