@@ -802,11 +802,11 @@ Shape:
 client -> UDP -> KCP reliability/framing -> proxy bytes
 ```
 
-Why use it:
+Status:
 
-- lossy networks
-- custom reliability behavior
-- compatibility with existing V2Ray mKCP clients
+- legacy/internal in Blackwire
+- retained for existing configs and local implementation tests
+- not recommended for new deployments or external-client sharing
 
 It is more advanced than TCP because packet loss, ordering, and retransmission
 are handled by the transport implementation.

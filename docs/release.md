@@ -20,7 +20,7 @@ Validated by CI, the e2e test suite, and the realistic lab mandatory matrix.
 - VLESS over TCP, REALITY, WebSocket, HTTPUpgrade, SplitHTTP (stream-one + packet-up)
 - Hysteria2 (QUIC + HTTP/3 auth, TCP+UDP relay)
 - V2Ray QUIC transport (`network: quic`) with matrix proof via sing-box and documented Xray legacy-client SKIP
-- ShadowTLS v3 and mKCP server transports (server paths supported; external-client rows intentionally SKIP due upstream client-model limits)
+- ShadowTLS v3 server transport
 - VMess AEAD over TCP and SplitHTTP/xHTTP stream-one
 - VMess over gRPC (Gun transport); END_STREAM propagation validated
 - Trojan over TLS/TCP
@@ -34,7 +34,7 @@ Validated by CI, the e2e test suite, and the realistic lab mandatory matrix.
 - Config hot-reload: routing rules, VLESS user UUIDs, GeoIP/geosite data
 - Structural config reload via automatic CLI instance rebuild with rollback
 - Native JSON config schema with fail-closed validation
-- Per-inbound / global `max_connections` limits (TCP, mKCP, QUIC, Hysteria2)
+- Per-inbound / global `max_connections` limits (TCP, QUIC, Hysteria2, and legacy mKCP configs)
 - Resource-risk smoke coverage in normal CI
 - External-client failure pcaps captured and uploaded by CI
 - TUN transparent proxy on Linux/macOS/Windows, covered by privileged CI smoke tests; Linux outbound sockets use `SO_MARK`; macOS utun runtime installs split default routes plus a PF anchor for TCP/DNS redirection and uses `tun.outboundInterface`/`tun.outbound_interface` for protected proxy egress; Windows Wintun device creation, split-route setup, packet-level TCP bridging to the local SOCKS listener, and protected outbound interface binding are wired (Windows full-device runtime requires `tun.outboundInterface`/`tun.outbound_interface`), and Windows can use `tun.wintunFile`/`tun.wintun_file` to point at a bundled `wintun.dll`; shared packet/NAT/session APIs and the runtime packet loop compile cross-platform; full-device runtime support is reported through an explicit platform support contract
@@ -118,14 +118,14 @@ For the current release candidate:
 
 ```sh
 git push origin HEAD
-git push origin v0.1.0-rc.42
+git push origin v0.1.0-rc.43
 ```
 
 If the release already exists but only has GitHub source archives, run the
 workflow manually for the tag:
 
 ```sh
-gh workflow run release-assets.yml -f tag=v0.1.0-rc.42
+gh workflow run release-assets.yml -f tag=v0.1.0-rc.43
 ```
 
 ## Container Image
@@ -153,8 +153,8 @@ Black UI companion panel setup are documented in [user-guide.md](user-guide.md).
 Prerelease install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.42/scripts/install.sh \
-  | VERSION=v0.1.0-rc.42 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
+  | VERSION=v0.1.0-rc.43 bash
 ```
 
 Stable install, after a stable release is marked latest:
@@ -171,8 +171,8 @@ that contains the archive and matching `.sha256` file.
 Config-aware install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.42/scripts/install.sh \
-  | VERSION=v0.1.0-rc.42 CONFIG_PATH=/path/to/config.json bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
+  | VERSION=v0.1.0-rc.43 CONFIG_PATH=/path/to/config.json bash
 ```
 
 `CONFIG_PATH` copies a local config into `/etc/blackwire/config.json`;
@@ -182,8 +182,8 @@ the config. `START_SERVICE=1` is rejected unless a config is present and valid.
 Generated Linux VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.42/scripts/install.sh \
-  | VERSION=v0.1.0-rc.42 SETUP=reality PUBLIC_HOST=example.com bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
+  | VERSION=v0.1.0-rc.43 SETUP=reality PUBLIC_HOST=example.com bash
 ```
 
 Supported setup modes are `SETUP=domain`, `SETUP=reality`, `SETUP=direct`, and
@@ -195,8 +195,8 @@ firewall/log/start commands.
 Standard domain setup:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.42/scripts/install.sh \
-  | VERSION=v0.1.0-rc.42 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
+  | VERSION=v0.1.0-rc.43 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 For `SETUP=domain`, point the domain DNS record to the VPS first and open
@@ -215,8 +215,8 @@ internal compatibility escape hatch, but release docs should prefer `SETUP`.
 To install the Black UI companion panel with the Linux release assets:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.42/scripts/install.sh \
-  | VERSION=v0.1.0-rc.42 INSTALL_BLACK_UI=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
+  | VERSION=v0.1.0-rc.43 INSTALL_BLACK_UI=1 bash
 ```
 
 When combined with `SETUP=domain`, the installer reverse-proxies Black UI at
@@ -314,4 +314,4 @@ A feature moves from Experimental/Partial to Supported **only** when all items b
 | TUN | Privileged Linux/macOS/Windows CI smoke tests, route setup/cleanup, UDP NAT, rollback-on-failure |
 | Structural hot-reload | Listener add/remove, port change, outbound add/remove, TLS material reload, rollback on failed reload |
 | ShadowTLS v3 | Documented exception: upstream clients SKIP this row; server path Supported with e2e PASS |
-| mKCP | Documented exception: upstream clients SKIP this row; server path Supported with e2e PASS |
+| mKCP | Deprecated legacy/internal path. Existing configs remain loadable, but Black UI no longer offers mKCP for new inbounds/outbounds and external-client interop is not a release target. |

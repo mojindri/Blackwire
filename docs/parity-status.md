@@ -40,7 +40,7 @@ See [roadmap.md](roadmap.md). Summary:
 | REALITY + Hysteria2 | `vless-reality` and `hysteria2` rows: Xray+sing-box **PASS** |
 | VLESS UDP command `0x02`, sniffing, DNS DoH/DoT | Lab rows per feature matrix |
 | HTTPUpgrade, QUIC, SplitHTTP **stream-one** (HTTP/2) | Transports + e2e + `vless-splithttp` Xray+sing-box **PASS** |
-| ShadowTLS v3 + mKCP server paths | blackwire e2e **PASS**; matrix client rows intentionally SKIP (upstream client-model limits) |
+| ShadowTLS v3 server path | blackwire e2e **PASS**; matrix client rows intentionally SKIP (upstream client-model limits) |
 | Vision and hot-reload | `vision.rs`, `reload.rs` |
 | Routing `IPIfNonMatch` / `IPOnDemand` | `router.rs`, `dispatcher.rs` |
 | Trojan TCP, VMess, SS2022 TCP/UDP, REALITY, WS, gRPC | Matrix rows + e2e |
@@ -53,7 +53,7 @@ See [roadmap.md](roadmap.md). Summary:
 | `vless-quic` | Yes | SKIP | PASS | Xray 26+ removed legacy QUIC transport |
 | `tuic` | Yes | SKIP | configured | sing-box supports TUIC outbound; Xray has no TUIC client row in this lab; run matrix for PASS evidence |
 | `vless-shadowtls` | Yes | SKIP | SKIP | Xray 26+ / sing-box model mismatch — server e2e |
-| `vless-mkcp` | Yes | SKIP | SKIP | sing-box no mKCP; Xray 26 finalmask |
+| `vless-mkcp` | Legacy/internal only | SKIP | SKIP | Deprecated release-surface path; sing-box has no mKCP and current Xray FinalMask-era clients are not a supported target |
 | `vless-splithttp-packet-up` | Yes | PASS | SKIP | Upstream [sing-box](https://github.com/SagerNet/sing-box) has no xHTTP `packet-up`; Xray proves row |
 
 `vless-splithttp` uses **stream-one** only (both clients). `vless-splithttp-packet-up` is a separate row: **Xray PASS** is the matrix gate; stock sing-box is **SKIP** by design (same pattern as `vless-mux`).

@@ -80,7 +80,12 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "supported",
                 "security=shadowtls, not a protocol",
             ),
-            item("kcp", "mKCP", "supported", "UDP KCP transport"),
+            item(
+                "kcp",
+                "mKCP",
+                "deprecated",
+                "Legacy/internal transport; external-client interop is not supported",
+            ),
             item("quic", "QUIC", "supported", "Legacy V2Ray QUIC transport"),
             item(
                 "httpupgrade",
@@ -226,5 +231,18 @@ mod tests {
         assert_eq!(httpupgrade.status, "supported");
         assert!(httpupgrade.notes.contains("VMess URLTest"));
         assert!(httpupgrade.notes.contains("Hiddify"));
+    }
+
+    #[test]
+    fn mkcp_is_reported_as_deprecated() {
+        let capabilities = blackwire_capabilities();
+        let mkcp = capabilities
+            .transports
+            .iter()
+            .find(|item| item.key == "kcp")
+            .expect("mKCP capability should remain visible for legacy configs");
+
+        assert_eq!(mkcp.status, "deprecated");
+        assert!(mkcp.notes.contains("Legacy/internal"));
     }
 }
