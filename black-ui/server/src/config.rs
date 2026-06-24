@@ -274,7 +274,7 @@ pub fn vless_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
         if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
             params.push(format!("sni={}", util::url_escape(&value)));
         }
-        if let Some(value) = stream_value(inbound, "/tlsSettings/alpn") {
+        if let Some(value) = tls_share_alpn(inbound) {
             params.push(format!("alpn={}", util::url_escape(&value)));
         }
     } else {
@@ -306,13 +306,12 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
         .unwrap_or_default();
     let transport_type = if network == "grpc" { "gun" } else { "none" };
     let sni = stream_value(inbound, "/tlsSettings/serverName").unwrap_or_default();
-    let alpn = stream_value(inbound, "/tlsSettings/alpn").unwrap_or_else(|| {
-        if network == "quic" && security == "tls" {
-            "h3".into()
-        } else {
-            String::new()
-        }
-    });
+    let alpn = tls_share_alpn(inbound).unwrap_or_default();
+    let vmess_security = if network == "quic" {
+        "aes-128-gcm"
+    } else {
+        "auto"
+    };
     let mut payload = json!({
         "v": "2",
         "ps": user.email,
@@ -320,7 +319,7 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
         "port": inbound.port.to_string(),
         "id": user.uuid,
         "aid": "0",
-        "scy": "auto",
+        "scy": vmess_security,
         "net": network,
         "type": transport_type,
         "host": host,
@@ -382,6 +381,9 @@ fn trojan_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Re
     if security == "tls" {
         if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
             params.push(format!("sni={}", util::url_escape(&value)));
+        }
+        if let Some(value) = tls_share_alpn(inbound) {
+            params.push(format!("alpn={}", util::url_escape(&value)));
         }
     }
     Ok(format!(
@@ -484,6 +486,14 @@ fn tls_share_requires_insecure(inbound: &Inbound) -> bool {
     cert_file.starts_with("/etc/blackwire/certs/")
 }
 
+fn tls_share_alpn(inbound: &Inbound) -> Option<String> {
+    stream_value(inbound, "/tlsSettings/alpn").or_else(|| {
+        ((share_network(inbound) == "quic" || inbound.protocol == "tuic")
+            && stream_security(inbound).as_deref() == Some("tls"))
+        .then(|| "h3".into())
+    })
+}
+
 fn tuic_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Result<String> {
     let password = credential_string(user, "password").unwrap_or_else(|| user.uuid.clone());
     let mut params = vec![format!("uuid={}", util::url_escape(&user.uuid))];
@@ -492,6 +502,9 @@ fn tuic_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Resu
     }
     if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
         params.push(format!("sni={}", util::url_escape(&value)));
+    }
+    if let Some(value) = tls_share_alpn(inbound) {
+        params.push(format!("alpn={}", util::url_escape(&value)));
     }
     Ok(format!(
         "tuic://{}:{}@{}:{}?{}#{}",
@@ -1042,6 +1055,7 @@ mod tests {
         assert_eq!(payload["tls"], "tls");
         assert_eq!(payload["sni"], "www.microsoft.com");
         assert_eq!(payload["alpn"], "h3");
+        assert_eq!(payload["scy"], "aes-128-gcm");
         assert_eq!(payload["allowInsecure"], "1");
     }
 
@@ -1489,7 +1503,7 @@ mod tests {
         let link = tuic_link(&settings, &inbound, &user).unwrap();
         assert_eq!(
             link,
-            "tuic://ccdc43c9-5fd4-4d60-a363-17071e7a3f20:secret@203.0.113.10:443?uuid=ccdc43c9-5fd4-4d60-a363-17071e7a3f20&insecure=1&sni=www.microsoft.com#tuic%40example.local"
+            "tuic://ccdc43c9-5fd4-4d60-a363-17071e7a3f20:secret@203.0.113.10:443?uuid=ccdc43c9-5fd4-4d60-a363-17071e7a3f20&insecure=1&sni=www.microsoft.com&alpn=h3#tuic%40example.local"
         );
     }
 }
