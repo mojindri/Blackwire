@@ -15,7 +15,7 @@ in [11-testing.md](11-testing.md) and [test-workflows.md](test-workflows.md).
 
 | Label | Release meaning |
 | ----- | --------------- |
-| **Supported** | Release-candidate supported for documented personal, lab, or controlled deployments; tested by CI, e2e suite, and realistic lab |
+| **Supported** | Supported for documented personal, lab, or controlled pre-1.0 deployments; tested by CI, e2e suite, and realistic lab |
 | **Partial** | Shipped but has a known gap; read the notes before relying on it |
 | **Experimental** | Implemented end-to-end; missing hostile-network, breadth, or soak coverage |
 | **Unsupported** | Not implemented or explicitly fail-closed |

@@ -8,11 +8,32 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.0 - 2026-06-25
+
+### Changed
+
+- Finalized the `0.1.0` release line after the RC validation cycle.
+- Release docs now point at stable `v0.1.0` install commands and describe final
+  release publishing instead of RC-only installation.
+
+### Fixed
+
+- VMess hot paths now avoid warning-level normal traffic logs, avoid per-chunk
+  authenticated-length allocations, use pooled UDP relay buffers, coalesce UDP
+  response flushes, and advance write buffers without splitting.
+
+## 0.1.0-rc.45 - 2026-06-25
+
 ### Fixed
 
 - Generated VMess TLS share links now include Hiddify/ray2sing-compatible
   lowercase insecure flags and a VMess body `security` cipher alongside `scy`,
   so copied self-signed VMess QUIC links preserve TLS trust and cipher settings.
+
+## 0.1.0-rc.44 - 2026-06-25
+
+### Fixed
+
 - Generated VLESS/Trojan TLS share links now include `allowInsecure=1` when
   Blackwire is using its self-signed certificate path, matching the VMess/TUIC
   self-signed behavior and avoiding client-side certificate verification

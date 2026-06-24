@@ -6,14 +6,14 @@ This is a pre-1.0 project. The project as a whole is **not yet production-ready*
 even though many individual protocol paths have strong test and interop evidence.
 The table below is the release support contract. Any area not listed as
 **Supported** carries an explicit caveat and should be treated as personal,
-lab, or controlled-deployment only. No release-candidate label is a production
+lab, or controlled-deployment only. No pre-1.0 release label is a production
 readiness guarantee.
 
 This file owns release support labels. Detailed feature evidence lives in
 [feature-matrix.md](feature-matrix.md), and gate commands live in
 [11-testing.md](11-testing.md) / [test-workflows.md](test-workflows.md).
 
-### Supported (release-candidate supported paths)
+### Supported (0.1.0 supported paths)
 
 Validated by CI, the e2e test suite, and the realistic lab mandatory matrix.
 
@@ -102,7 +102,7 @@ downloads are produced by `.github/workflows/release-assets.yml`.
 
 The workflow runs when a `v*` tag is pushed, or manually through
 `workflow_dispatch` with a tag input. Tags containing `-` are created as
-prereleases.
+prereleases; final tags such as `v0.1.0` are published as stable GitHub releases.
 
 Expected assets:
 
@@ -114,18 +114,18 @@ Expected assets:
 - `blackwire-windows-x86_64.zip`
 - one `.sha256` file for each archive
 
-For the current release candidate:
+For the current stable release:
 
 ```sh
 git push origin HEAD
-git push origin v0.1.0-rc.43
+git push origin v0.1.0
 ```
 
 If the release already exists but only has GitHub source archives, run the
 workflow manually for the tag:
 
 ```sh
-gh workflow run release-assets.yml -f tag=v0.1.0-rc.43
+gh workflow run release-assets.yml -f tag=v0.1.0
 ```
 
 ## Container Image
@@ -150,14 +150,14 @@ a systemd unit when systemd is available.
 Installed command usage, service control, uninstall, config edits, examples, and
 Black UI companion panel setup are documented in [user-guide.md](user-guide.md).
 
-Prerelease install:
+Stable install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
-  | VERSION=v0.1.0-rc.43 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
+  | VERSION=v0.1.0 bash
 ```
 
-Stable install, after a stable release is marked latest:
+Latest install, after a stable release is marked latest:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/main/scripts/install.sh | bash
@@ -171,8 +171,8 @@ that contains the archive and matching `.sha256` file.
 Config-aware install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
-  | VERSION=v0.1.0-rc.43 CONFIG_PATH=/path/to/config.json bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
+  | VERSION=v0.1.0 CONFIG_PATH=/path/to/config.json bash
 ```
 
 `CONFIG_PATH` copies a local config into `/etc/blackwire/config.json`;
@@ -182,8 +182,8 @@ the config. `START_SERVICE=1` is rejected unless a config is present and valid.
 Generated Linux VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
-  | VERSION=v0.1.0-rc.43 SETUP=reality PUBLIC_HOST=example.com bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
+  | VERSION=v0.1.0 SETUP=reality PUBLIC_HOST=example.com bash
 ```
 
 Supported setup modes are `SETUP=domain`, `SETUP=reality`, `SETUP=direct`, and
@@ -195,8 +195,8 @@ firewall/log/start commands.
 Standard domain setup:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
-  | VERSION=v0.1.0-rc.43 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
+  | VERSION=v0.1.0 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 For `SETUP=domain`, point the domain DNS record to the VPS first and open
@@ -215,8 +215,8 @@ internal compatibility escape hatch, but release docs should prefer `SETUP`.
 To install the Black UI companion panel with the Linux release assets:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
-  | VERSION=v0.1.0-rc.43 INSTALL_BLACK_UI=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
+  | VERSION=v0.1.0 INSTALL_BLACK_UI=1 bash
 ```
 
 When combined with `SETUP=domain`, the installer reverse-proxies Black UI at
@@ -246,14 +246,14 @@ sudo apt update
 sudo apt install blackwire
 ```
 
-This repository is unsigned for the release-candidate line. Add GPG signing
-before recommending it as a stable install path.
+This repository is currently unsigned. Add GPG signing before recommending it
+as a hardened production install path.
 
 ## Other Package Repositories
 
 RPM repo, Arch, Homebrew, Winget, and Chocolatey publishing are not automated
-yet. Keep those for a stable post-`v0.1.0` packaging pass after config paths,
-service behavior, and upgrade policy are settled.
+yet. Keep those for a post-`v0.1.0` packaging pass after config paths, service
+behavior, and upgrade policy are settled.
 
 ---
 
