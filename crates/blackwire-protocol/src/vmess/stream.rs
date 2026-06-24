@@ -297,7 +297,7 @@ impl VmessStream {
                 ));
             }
             self.read_size_counter = self.read_size_counter.wrapping_add(1);
-            return Ok(u16::from_be_bytes([buf[0], buf[1]]) as usize);
+            return Ok(u16::from_be_bytes([buf[0], buf[1]]) as usize + cipher.overhead());
         }
 
         let encoded = u16::from_be_bytes([bytes[0], bytes[1]]);
@@ -315,8 +315,20 @@ impl VmessStream {
                 "VMess: body chunk too large for u16 length",
             )
         })?;
-        let plain = size.to_be_bytes();
         if let Some(cipher) = &self.write_size_cipher {
+            let overhead = u16::try_from(cipher.overhead()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "VMess: authenticated length overhead too large",
+                )
+            })?;
+            let plain_size = size.checked_sub(overhead).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "VMess: authenticated body chunk too small",
+                )
+            })?;
+            let plain = plain_size.to_be_bytes();
             let nonce = chunk_nonce(self.write_size_counter, &self.write_size_iv);
             cipher.encrypt_append(&nonce, dst, &plain).map_err(|_| {
                 io::Error::new(
@@ -710,6 +722,51 @@ mod tests {
         server.flush().await.unwrap();
         let n = client.read(&mut got).await.unwrap();
         assert_eq!(&got[..n], b"answer");
+    }
+
+    #[test]
+    fn authenticated_length_encodes_plain_payload_plus_padding_size() {
+        let req_key = [0x11u8; 16];
+        let req_iv = [0x22u8; 16];
+        let resp_key = super::super::codec::response_body_key(&req_key);
+        let resp_iv = super::super::codec::response_body_iv(&req_iv);
+        let options = REQUEST_OPTION_AUTHENTICATED_LENGTH;
+        let (_client_half, server_half) = tokio::io::duplex(1024);
+        let mut stream = VmessStream::new_bidir_with_auth_len_base(
+            Box::new(server_half),
+            &req_key,
+            &req_iv,
+            &resp_key,
+            &resp_iv,
+            &req_key,
+            &req_iv,
+            Security::Aes128Gcm,
+            options,
+        );
+        let mut encoded = BytesMut::new();
+
+        stream.append_size(&mut encoded, TAG_LEN + 5).unwrap();
+
+        let auth_len_key = kdf(&req_key, &[b"auth_len"]);
+        let cipher = BodyCipher::new(Security::Aes128Gcm, &auth_len_key);
+        let mut raw = encoded.to_vec();
+        cipher
+            .decrypt_in_place(&chunk_nonce(0, &req_iv), &mut raw)
+            .unwrap();
+        assert_eq!(u16::from_be_bytes([raw[0], raw[1]]), 5);
+
+        let mut decoder = VmessStream::new_bidir_with_auth_len_base(
+            Box::new(tokio::io::duplex(1024).1),
+            &req_key,
+            &req_iv,
+            &resp_key,
+            &resp_iv,
+            &req_key,
+            &req_iv,
+            Security::Aes128Gcm,
+            options,
+        );
+        assert_eq!(decoder.decode_size(&encoded).unwrap(), TAG_LEN + 5);
     }
 
     #[test]
