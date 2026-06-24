@@ -24,7 +24,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
-use bytes::{BufMut, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use md5::{Digest as Md5Digest, Md5};
 use rand::RngExt;
 use shake::{
@@ -111,6 +111,14 @@ impl BodyCipher {
                 Ok(())
             }
             Self::None => Ok(()),
+        }
+    }
+
+    /// Decrypt ciphertext in place and return the plaintext length.
+    fn decrypt_combined(&self, nonce: &[u8; 12], buf: &mut [u8]) -> Result<usize, ()> {
+        match self {
+            Self::Aead(cipher) => cipher.open_combined(nonce, &[], buf).map_err(|_| ()),
+            Self::None => Ok(buf.len()),
         }
     }
 }
@@ -284,14 +292,23 @@ impl VmessStream {
     fn decode_size(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if let Some(cipher) = &self.read_size_cipher {
             let nonce = chunk_nonce(self.read_size_counter, &self.read_size_iv);
-            let mut buf = bytes.to_vec();
-            cipher.decrypt_in_place(&nonce, &mut buf).map_err(|_| {
-                io::Error::new(
+            let mut buf = [0u8; 2 + TAG_LEN];
+            if bytes.len() > buf.len() {
+                return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "VMess: authenticated length decryption failed",
-                )
-            })?;
-            if buf.len() != 2 {
+                    "VMess: authenticated length field too large",
+                ));
+            }
+            buf[..bytes.len()].copy_from_slice(bytes);
+            let plain_len = cipher
+                .decrypt_combined(&nonce, &mut buf[..bytes.len()])
+                .map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "VMess: authenticated length decryption failed",
+                    )
+                })?;
+            if plain_len != 2 {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "VMess: authenticated length plaintext has invalid size",
@@ -554,7 +571,7 @@ impl AsyncWrite for VmessStream {
                     )));
                 }
                 Poll::Ready(Ok(n)) => {
-                    let _ = this.write_buf.split_to(n);
+                    this.write_buf.advance(n);
                 }
             }
         }
@@ -580,7 +597,7 @@ impl AsyncWrite for VmessStream {
                     )));
                 }
                 Poll::Ready(Ok(n)) => {
-                    let _ = this.write_buf.split_to(n);
+                    this.write_buf.advance(n);
                 }
             }
         }
@@ -602,7 +619,7 @@ impl AsyncWrite for VmessStream {
                     )));
                 }
                 Poll::Ready(Ok(n)) => {
-                    let _ = this.write_buf.split_to(n);
+                    this.write_buf.advance(n);
                 }
             }
         }
