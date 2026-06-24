@@ -6,6 +6,15 @@ This project is pre-1.0. The support contract is owned by
 [docs/release.md](docs/release.md), and detailed feature evidence is owned by
 [docs/feature-matrix.md](docs/feature-matrix.md).
 
+## Unreleased
+
+### Fixed
+
+- Generated VLESS/Trojan TLS share links now include `allowInsecure=1` when
+  Blackwire is using its self-signed certificate path, matching the VMess/TUIC
+  self-signed behavior and avoiding client-side certificate verification
+  failures on copied QUIC links.
+
 ## 0.1.0-rc.43 - 2026-06-25
 
 ### Changed
