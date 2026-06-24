@@ -173,11 +173,20 @@ An older v2ray protocol with more built-in cryptographic framing/auth logic.
 - auth ID logic
 - command key derivation
 - encrypted/framed chunks
+- optional authenticated chunk lengths used by Xray/sing-box clients
 - more moving parts than VLESS
 
 ### Mental Model
 
 VMess is more stateful and more opinionated than VLESS.
+
+### Interop Note
+
+For AEAD VMess clients that enable authenticated body lengths, the encrypted
+length field stores plaintext payload length plus padding length. The AEAD tag
+length is transport overhead and is added by the reader/writer. If this is wrong,
+the header can still decode successfully while the first DNS/application payload
+fails with EOF.
 
 ### Beginner Warning
 

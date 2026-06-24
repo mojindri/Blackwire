@@ -21,7 +21,7 @@ Validated by CI, the e2e test suite, and the realistic lab mandatory matrix.
 - Hysteria2 (QUIC + HTTP/3 auth, TCP+UDP relay)
 - V2Ray QUIC transport (`network: quic`) with matrix proof via sing-box and documented Xray legacy-client SKIP
 - ShadowTLS v3 and mKCP server transports (server paths supported; external-client rows intentionally SKIP due upstream client-model limits)
-- VMess AEAD over TCP
+- VMess AEAD over TCP and SplitHTTP/xHTTP stream-one
 - VMess over gRPC (Gun transport); END_STREAM propagation validated
 - Trojan over TLS/TCP
 - Shadowsocks 2022 (TCP + UDP SIP022)
@@ -118,14 +118,14 @@ For the current release candidate:
 
 ```sh
 git push origin HEAD
-git push origin v0.1.0-rc.6
+git push origin v0.1.0-rc.41
 ```
 
 If the release already exists but only has GitHub source archives, run the
 workflow manually for the tag:
 
 ```sh
-gh workflow run release-assets.yml -f tag=v0.1.0-rc.6
+gh workflow run release-assets.yml -f tag=v0.1.0-rc.41
 ```
 
 ## Container Image
@@ -153,8 +153,8 @@ Black UI companion panel setup are documented in [user-guide.md](user-guide.md).
 Prerelease install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.6/scripts/install.sh \
-  | VERSION=v0.1.0-rc.6 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.41/scripts/install.sh \
+  | VERSION=v0.1.0-rc.41 bash
 ```
 
 Stable install, after a stable release is marked latest:
@@ -171,8 +171,8 @@ that contains the archive and matching `.sha256` file.
 Config-aware install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.6/scripts/install.sh \
-  | VERSION=v0.1.0-rc.6 CONFIG_PATH=/path/to/config.json bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.41/scripts/install.sh \
+  | VERSION=v0.1.0-rc.41 CONFIG_PATH=/path/to/config.json bash
 ```
 
 `CONFIG_PATH` copies a local config into `/etc/blackwire/config.json`;
