@@ -151,6 +151,7 @@ pub struct AfXdpBackend;
 
 #[cfg(not(target_os = "linux"))]
 impl AfXdpBackend {
+    /// Returns an error because AF_XDP is only implemented on Linux.
     pub fn open(_config: &TunAfXdpConfig) -> Result<Self> {
         anyhow::bail!("AF_XDP backend is only available on Linux")
     }

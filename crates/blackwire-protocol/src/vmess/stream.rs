@@ -209,6 +209,7 @@ impl VmessStream {
     /// VMess authenticated length always derives from the request body key/IV,
     /// even for response chunks. Server inbound callers pass the read key/IV;
     /// client outbound callers pass the write key/IV.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_bidir_with_auth_len_base(
         inner: BoxedStream,
         read_key: &[u8; 16],

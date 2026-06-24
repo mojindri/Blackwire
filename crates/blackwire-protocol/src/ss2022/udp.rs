@@ -498,6 +498,7 @@ fn sockaddr_to_socketaddr(storage: &libc::sockaddr_storage, _len: libc::socklen_
 }
 
 /// Process one decoded SS2022 client datagram: update/create session, forward to upstream.
+#[allow(clippy::too_many_arguments)]
 async fn process_ss2022_packet(
     socket: &Arc<UdpSocket>,
     psk: &[u8; 32],
@@ -601,6 +602,7 @@ async fn process_ss2022_packet(
 /// Loops over `recv_from` on the upstream socket. For each reply the source
 /// address is used as the SS2022 destination field (the address the client
 /// originally targeted). Exits after `UDP_SESSION_IDLE` seconds of silence.
+#[allow(clippy::too_many_arguments)]
 fn spawn_reply_task(
     upstream: Arc<UdpSocket>,
     client_sock: Arc<UdpSocket>,

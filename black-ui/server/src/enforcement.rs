@@ -102,7 +102,7 @@ async fn reconcile_config(
     let file_needs_write = std::fs::read_to_string(&settings.config_path)
         .ok()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .map_or(true, |current| current != desired);
+        .is_none_or(|current| current != desired);
 
     let mut sync_needed = force_live_sync;
     if file_needs_write {
