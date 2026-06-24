@@ -62,15 +62,19 @@ impl std::fmt::Debug for RelayTrafficRecorder {
 }
 
 impl RelayTrafficRecorder {
+    /// Creates a traffic recorder from a byte-count callback.
     pub fn new(record: impl Fn(u64, u64) + Send + Sync + 'static) -> Self {
         Self(Arc::new(record))
     }
 
+    /// Records uploaded and downloaded bytes for a completed relay write.
     pub fn record(&self, up: u64, down: u64) {
         (self.0)(up, down);
     }
 }
 
+/// Copies bytes in both directions using pooled buffers and optional
+/// per-write traffic accounting.
 pub async fn copy_bidirectional_pooled_with_recorder<A, B>(
     a: A,
     b: B,
@@ -316,6 +320,8 @@ where
     copy_bidirectional_v2_with_recorder(a, b, options, None).await
 }
 
+/// Copies bytes in both directions with the v2 relay loop and optional
+/// per-write traffic accounting.
 pub async fn copy_bidirectional_v2_with_recorder<A, B>(
     a: A,
     b: B,

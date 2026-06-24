@@ -155,7 +155,7 @@ async fn grpc_accept_shutdown_sends_ok_trailers() {
     assert_eq!(response.status(), http::StatusCode::OK);
 
     let mut body = response.into_body();
-    assert!(body.data().await.unwrap().unwrap().len() > 0);
+    assert!(!body.data().await.unwrap().unwrap().is_empty());
     let trailers = body.trailers().await.unwrap().unwrap();
     assert_eq!(trailers.get("grpc-status").unwrap(), "0");
 
@@ -248,7 +248,7 @@ async fn grpc_serve_accepts_multiple_streams_on_one_h2_connection() {
         let response = response.await.unwrap();
         assert_eq!(response.status(), http::StatusCode::OK);
         let mut body = response.into_body();
-        assert!(body.data().await.unwrap().unwrap().len() > 0);
+        assert!(!body.data().await.unwrap().unwrap().is_empty());
         let trailers = body.trailers().await.unwrap().unwrap();
         assert_eq!(trailers.get("grpc-status").unwrap(), "0");
     }

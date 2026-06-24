@@ -56,7 +56,9 @@ use super::udp::relay_trojan_udp;
 /// Accepted Trojan credential with an optional stats label.
 #[derive(Debug, Clone)]
 pub struct TrojanUser {
+    /// Plaintext Trojan password accepted by this inbound.
     pub password: String,
+    /// Optional user label used for traffic accounting.
     pub label: Option<String>,
 }
 
