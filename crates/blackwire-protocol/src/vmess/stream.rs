@@ -37,6 +37,7 @@ use blackwire_common::aead::{AeadAlgorithm, AeadKey, TAG_LEN};
 use blackwire_common::{BoxedStream, BufferPool};
 
 use super::codec::Security;
+use super::kdf::kdf;
 
 const MAX_CHUNK_SIZE: usize = 16 * 1024;
 const READ_CHUNK_SIZE: usize = 64 * 1024;
@@ -44,6 +45,8 @@ const READ_CHUNK_SIZE: usize = 64 * 1024;
 pub const REQUEST_OPTION_CHUNK_MASKING: u8 = 0x04;
 /// VMess request option bit that enables random global padding bytes per chunk.
 pub const REQUEST_OPTION_GLOBAL_PADDING: u8 = 0x08;
+/// VMess request option bit that AEAD-authenticates body chunk lengths.
+pub const REQUEST_OPTION_AUTHENTICATED_LENGTH: u8 = 0x10;
 
 fn vmess_buffer_pool() -> &'static Arc<BufferPool> {
     static POOL: OnceLock<Arc<BufferPool>> = OnceLock::new();
@@ -151,6 +154,9 @@ pub struct VmessStream {
     read_cipher: BodyCipher,
     read_iv: [u8; 16],
     read_counter: u16,
+    read_size_cipher: Option<BodyCipher>,
+    read_size_iv: [u8; 16],
+    read_size_counter: u16,
     read_size_mask: Option<SizeMask>,
     read_global_padding: bool,
     read_raw_buf: BytesMut,
@@ -166,6 +172,9 @@ pub struct VmessStream {
     write_cipher: BodyCipher,
     write_iv: [u8; 16],
     write_counter: u16,
+    write_size_cipher: Option<BodyCipher>,
+    write_size_iv: [u8; 16],
+    write_size_counter: u16,
     write_size_mask: Option<SizeMask>,
     write_global_padding: bool,
     write_buf: BytesMut,
@@ -190,12 +199,42 @@ impl VmessStream {
         security: Security,
         options: u8,
     ) -> Self {
+        Self::new_bidir_with_auth_len_base(
+            inner, read_key, read_iv, write_key, write_iv, read_key, read_iv, security, options,
+        )
+    }
+
+    /// Separate keys with an explicit authenticated-length base.
+    ///
+    /// VMess authenticated length always derives from the request body key/IV,
+    /// even for response chunks. Server inbound callers pass the read key/IV;
+    /// client outbound callers pass the write key/IV.
+    pub fn new_bidir_with_auth_len_base(
+        inner: BoxedStream,
+        read_key: &[u8; 16],
+        read_iv: &[u8; 16],
+        write_key: &[u8; 16],
+        write_iv: &[u8; 16],
+        auth_len_key_base: &[u8; 16],
+        auth_len_iv_base: &[u8; 16],
+        security: Security,
+        options: u8,
+    ) -> Self {
         let chunk_masking = options & REQUEST_OPTION_CHUNK_MASKING != 0;
+        let authenticated_length = options & REQUEST_OPTION_AUTHENTICATED_LENGTH != 0;
+        let auth_len_key = kdf(auth_len_key_base, &[b"auth_len"]);
+        let size_cipher = || {
+            (authenticated_length && security != Security::None)
+                .then(|| BodyCipher::new(security, &auth_len_key))
+        };
         Self {
             inner,
             read_cipher: BodyCipher::new(security, read_key),
             read_iv: *read_iv,
             read_counter: 0,
+            read_size_cipher: size_cipher(),
+            read_size_iv: *auth_len_iv_base,
+            read_size_counter: 0,
             read_size_mask: chunk_masking.then(|| SizeMask::new(read_iv)),
             read_global_padding: options & REQUEST_OPTION_GLOBAL_PADDING != 0,
             read_raw_buf: vmess_buffer_pool().acquire(MAX_CHUNK_SIZE + 256),
@@ -205,6 +244,9 @@ impl VmessStream {
             write_cipher: BodyCipher::new(security, write_key),
             write_iv: *write_iv,
             write_counter: 0,
+            write_size_cipher: size_cipher(),
+            write_size_iv: *auth_len_iv_base,
+            write_size_counter: 0,
             write_size_mask: chunk_masking.then(|| SizeMask::new(write_iv)),
             write_global_padding: options & REQUEST_OPTION_GLOBAL_PADDING != 0,
             write_buf: vmess_buffer_pool().acquire(MAX_CHUNK_SIZE + 256),
@@ -231,21 +273,67 @@ impl VmessStream {
             .unwrap_or(0)
     }
 
-    fn decode_size(&mut self, bytes: [u8; 2]) -> usize {
-        let encoded = u16::from_be_bytes(bytes);
+    fn size_field_len(&self) -> usize {
+        self.read_size_cipher
+            .as_ref()
+            .map(|cipher| 2 + cipher.overhead())
+            .unwrap_or(2)
+    }
+
+    fn decode_size(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if let Some(cipher) = &self.read_size_cipher {
+            let nonce = chunk_nonce(self.read_size_counter, &self.read_size_iv);
+            let mut buf = bytes.to_vec();
+            cipher.decrypt_in_place(&nonce, &mut buf).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "VMess: authenticated length decryption failed",
+                )
+            })?;
+            if buf.len() != 2 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "VMess: authenticated length plaintext has invalid size",
+                ));
+            }
+            self.read_size_counter = self.read_size_counter.wrapping_add(1);
+            return Ok(u16::from_be_bytes([buf[0], buf[1]]) as usize);
+        }
+
+        let encoded = u16::from_be_bytes([bytes[0], bytes[1]]);
         let decoded = match &mut self.read_size_mask {
             Some(mask) => encoded ^ mask.next(),
             None => encoded,
         };
-        decoded as usize
+        Ok(decoded as usize)
     }
 
-    fn encode_size(&mut self, size: usize) -> [u8; 2] {
-        let mut encoded = size as u16;
+    fn append_size(&mut self, dst: &mut BytesMut, size: usize) -> io::Result<()> {
+        let size = u16::try_from(size).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "VMess: body chunk too large for u16 length",
+            )
+        })?;
+        let plain = size.to_be_bytes();
+        if let Some(cipher) = &self.write_size_cipher {
+            let nonce = chunk_nonce(self.write_size_counter, &self.write_size_iv);
+            cipher.encrypt_append(&nonce, dst, &plain).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "VMess: authenticated length encrypt failed",
+                )
+            })?;
+            self.write_size_counter = self.write_size_counter.wrapping_add(1);
+            return Ok(());
+        }
+
+        let mut encoded = size;
         if let Some(mask) = &mut self.write_size_mask {
             encoded ^= mask.next();
         }
-        encoded.to_be_bytes()
+        dst.put_slice(&encoded.to_be_bytes());
+        Ok(())
     }
 
     /// Decrypt one full chunk from `src` into `decrypt_scratch`, resetting the read
@@ -259,12 +347,15 @@ impl VmessStream {
         let (size, padding_len) = if let Some(pending) = self.read_pending.take() {
             pending
         } else {
-            if src.len() < 2 {
+            let size_field_len = self.size_field_len();
+            if src.len() < size_field_len {
                 return None;
             }
-            let encoded_size = [src[0], src[1]];
             let padding_len = self.next_read_padding_len();
-            let size = self.decode_size(encoded_size);
+            let size = match self.decode_size(&src[..size_field_len]) {
+                Ok(size) => size,
+                Err(e) => return Some(Err(e)),
+            };
             (size, padding_len)
         };
 
@@ -277,7 +368,8 @@ impl VmessStream {
             )));
         }
 
-        let total = 2 + size;
+        let size_field_len = self.size_field_len();
+        let total = size_field_len + size;
         if src.len() < total {
             // Body has not arrived yet. Cache the decoded header so the mask is
             // not re-advanced on the next poll. Return None to wait for more data.
@@ -285,7 +377,7 @@ impl VmessStream {
             return None;
         }
 
-        let _ = src.split_to(2);
+        let _ = src.split_to(size_field_len);
         let data_ct = src.split_to(size - padding_len);
         if padding_len > 0 {
             let _ = src.split_to(padding_len);
@@ -316,9 +408,18 @@ impl VmessStream {
     fn append_encrypted_chunk(&mut self, dst: &mut BytesMut, data: &[u8]) -> io::Result<()> {
         let nonce_arr = chunk_nonce(self.write_counter, &self.write_iv);
         let padding_len = self.next_write_padding_len();
-        let size = self.encode_size(data.len() + self.write_cipher.overhead() + padding_len);
-        dst.reserve(size.len() + data.len() + self.write_cipher.overhead() + padding_len);
-        dst.put_slice(&size);
+        let size = data.len() + self.write_cipher.overhead() + padding_len;
+        dst.reserve(
+            2 + self
+                .write_size_cipher
+                .as_ref()
+                .map(|cipher| cipher.overhead())
+                .unwrap_or(0)
+                + data.len()
+                + self.write_cipher.overhead()
+                + padding_len,
+        );
+        self.append_size(dst, size)?;
         self.write_cipher
             .encrypt_append(&nonce_arr, dst, data)
             .map_err(|_| {
@@ -565,6 +666,50 @@ mod tests {
         server.read_exact(&mut out).await.unwrap();
         handle.await.unwrap();
         assert_eq!(out, payload);
+    }
+
+    #[tokio::test]
+    async fn authenticated_length_roundtrip_uses_request_key_for_both_directions() {
+        let req_key = [0x11u8; 16];
+        let req_iv = [0x22u8; 16];
+        let resp_key = super::super::codec::response_body_key(&req_key);
+        let resp_iv = super::super::codec::response_body_iv(&req_iv);
+        let options = REQUEST_OPTION_AUTHENTICATED_LENGTH;
+        let (client_half, server_half) = tokio::io::duplex(65536);
+
+        let mut client = VmessStream::new_bidir_with_auth_len_base(
+            Box::new(client_half),
+            &resp_key,
+            &resp_iv,
+            &req_key,
+            &req_iv,
+            &req_key,
+            &req_iv,
+            Security::Aes128Gcm,
+            options,
+        );
+        let mut server = VmessStream::new_bidir_with_auth_len_base(
+            Box::new(server_half),
+            &req_key,
+            &req_iv,
+            &resp_key,
+            &resp_iv,
+            &req_key,
+            &req_iv,
+            Security::Aes128Gcm,
+            options,
+        );
+
+        client.write_all(b"query").await.unwrap();
+        client.flush().await.unwrap();
+        let mut got = [0u8; 16];
+        let n = server.read(&mut got).await.unwrap();
+        assert_eq!(&got[..n], b"query");
+
+        server.write_all(b"answer").await.unwrap();
+        server.flush().await.unwrap();
+        let n = client.read(&mut got).await.unwrap();
+        assert_eq!(&got[..n], b"answer");
     }
 
     #[test]
