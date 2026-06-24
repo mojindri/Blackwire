@@ -13,9 +13,9 @@ instead of accepting Xray or sing-box config files as drop-in input.
 >
 > Blackwire is pre-1.0. Several protocol paths have strong tests and interop
 > evidence, but the project is not production-ready software. Do not present or
-> treat this repository as a stable production application. Use release
-> candidates only for personal, lab, or tightly controlled deployments, and
-> check the [release contract](docs/release.md) before relying on any path.
+> treat this repository as a stable production application. Use pre-1.0 releases
+> only for personal, lab, or tightly controlled deployments, and check the
+> [release contract](docs/release.md) before relying on any path.
 
 ## Features
 
@@ -38,7 +38,7 @@ instead of accepting Xray or sing-box config files as drop-in input.
 
 | Status | What it means |
 | --- | --- |
-| Supported | Release-candidate supported for documented personal, lab, or controlled deployments. |
+| Supported | Supported for documented personal, lab, or controlled pre-1.0 deployments. |
 | Experimental | Implemented, but missing soak, hostile-network, observability, or breadth proof. |
 | Unsupported | Not implemented, intentionally out of scope, or rejected by validation. |
 
@@ -48,11 +48,11 @@ are tracked in [Changelog](CHANGELOG.md).
 
 ## Quick Install
 
-Linux release candidates can be installed from GitHub Releases for evaluation:
+Linux release assets can be installed from GitHub Releases:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
-  | VERSION=v0.1.0-rc.43 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
+  | VERSION=v0.1.0 bash
 ```
 
 By default the installer installs the binary and systemd unit, but does not
@@ -61,22 +61,22 @@ start the service until a valid config exists.
 Install and validate an existing config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
-  | VERSION=v0.1.0-rc.43 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
+  | VERSION=v0.1.0 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
 ```
 
 Generate a VLESS REALITY VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
-  | VERSION=v0.1.0-rc.43 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
+  | VERSION=v0.1.0 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
 ```
 
 Generate a domain + nginx + TLS setup:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
-  | VERSION=v0.1.0-rc.43 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
+  | VERSION=v0.1.0 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 More install paths are in the [User Guide](docs/user-guide.md#install).
@@ -109,15 +109,15 @@ curl -I https://proxy.example.com/
 Install the companion panel with the release assets:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
-  | VERSION=v0.1.0-rc.43 INSTALL_BLACK_UI=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
+  | VERSION=v0.1.0 INSTALL_BLACK_UI=1 bash
 ```
 
 With the domain setup, Black UI is reverse-proxied at `/panel/`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0-rc.43/scripts/install.sh \
-  | VERSION=v0.1.0-rc.43 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
+  | VERSION=v0.1.0 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
 ```
 
 Keep Black UI bound to localhost unless it is behind hardened HTTPS access
