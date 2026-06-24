@@ -6,6 +6,25 @@ This project is pre-1.0. The support contract is owned by
 [docs/release.md](docs/release.md), and detailed feature evidence is owned by
 [docs/feature-matrix.md](docs/feature-matrix.md).
 
+## 0.1.0-rc.41 - 2026-06-24
+
+Status: tag pushed; release assets are still publishing in GitHub Actions at
+the time this changelog entry was written.
+
+### Fixed
+
+- VMess authenticated body length framing now matches Xray/sing-box semantics:
+  the authenticated length field carries plaintext payload plus padding length,
+  not the encrypted payload plus AEAD tag length. This fixes external clients
+  that set `authenticated_length: true` and previously connected, decoded the
+  VMess header, then failed with EOF before relaying DNS or application bytes.
+
+### Validation
+
+- `cargo test -p blackwire-protocol vmess::stream::tests -- --nocapture`
+- `cargo test -p integration-tests --test e2e_vmess -- --nocapture`
+- GitHub release tag: `v0.1.0-rc.41`
+
 ## 0.1.0-rc.6 - 2026-06-19
 
 ### Added
