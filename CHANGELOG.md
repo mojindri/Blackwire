@@ -10,6 +10,9 @@ This project is pre-1.0. The support contract is owned by
 
 ### Fixed
 
+- Generated VMess TLS share links now include Hiddify/ray2sing-compatible
+  lowercase insecure flags and a VMess body `security` cipher alongside `scy`,
+  so copied self-signed VMess QUIC links preserve TLS trust and cipher settings.
 - Generated VLESS/Trojan TLS share links now include `allowInsecure=1` when
   Blackwire is using its self-signed certificate path, matching the VMess/TUIC
   self-signed behavior and avoiding client-side certificate verification

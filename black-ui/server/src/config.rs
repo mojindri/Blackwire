@@ -323,6 +323,7 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
         "id": user.uuid,
         "aid": "0",
         "scy": vmess_security,
+        "security": vmess_security,
         "net": network,
         "type": transport_type,
         "host": host,
@@ -333,6 +334,8 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
     });
     if security == "tls" && tls_share_requires_insecure(inbound) {
         payload["allowInsecure"] = json!("1");
+        payload["allowinsecure"] = json!("1");
+        payload["insecure"] = json!("1");
     }
     if network == "xhttp" {
         payload["mode"] = json!(splithttp_share_mode(inbound));
@@ -1062,7 +1065,10 @@ mod tests {
         assert_eq!(payload["sni"], "www.microsoft.com");
         assert_eq!(payload["alpn"], "h3");
         assert_eq!(payload["scy"], "aes-128-gcm");
+        assert_eq!(payload["security"], "aes-128-gcm");
         assert_eq!(payload["allowInsecure"], "1");
+        assert_eq!(payload["allowinsecure"], "1");
+        assert_eq!(payload["insecure"], "1");
     }
 
     #[test]
