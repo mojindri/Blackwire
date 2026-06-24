@@ -129,8 +129,21 @@ pub struct VmessRequest {
     pub options: u8,
     /// Requested body security algorithm.
     pub security: Security,
+    /// VMess command from the request header.
+    pub command: VmessCommand,
     /// Destination parsed from the VMess request header.
     pub dest: Address,
+}
+
+/// VMess request command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VmessCommand {
+    /// TCP stream connect.
+    Tcp,
+    /// UDP packet association.
+    Udp,
+    /// Mux.Cool.
+    Mux,
 }
 
 /// Tuple returned by `encode_header` with all wire pieces and body secrets.
@@ -452,7 +465,16 @@ fn decode_plaintext(data: &[u8]) -> Result<VmessRequest, ProxyError> {
     let pad_sec = data[35];
     let pad_len = (pad_sec >> 4) as usize;
     let security = Security::try_from(pad_sec & 0x0F)?;
-    let cmd = data[37];
+    let command = match data[37] {
+        CMD_TCP => VmessCommand::Tcp,
+        CMD_UDP => VmessCommand::Udp,
+        CMD_MUX => VmessCommand::Mux,
+        other => {
+            return Err(ProxyError::Protocol(format!(
+                "VMess: unknown command {other:#x}"
+            )));
+        }
+    };
 
     let mut pos = 38;
 
@@ -462,8 +484,8 @@ fn decode_plaintext(data: &[u8]) -> Result<VmessRequest, ProxyError> {
     let port = u16::from_be_bytes([data[pos], data[pos + 1]]);
     pos += 2;
 
-    let dest = match cmd {
-        CMD_TCP | CMD_UDP => {
+    let dest = match command {
+        VmessCommand::Tcp | VmessCommand::Udp => {
             if pos >= data.len() {
                 return Err(ProxyError::Protocol("VMess: truncated at atyp".into()));
             }
@@ -471,7 +493,7 @@ fn decode_plaintext(data: &[u8]) -> Result<VmessRequest, ProxyError> {
             pos += 1;
             read_vmess_address(data, &mut pos, atyp, port)?
         }
-        CMD_MUX => {
+        VmessCommand::Mux => {
             if pos >= data.len() {
                 return Err(ProxyError::Protocol("VMess: truncated at atyp".into()));
             }
@@ -479,11 +501,6 @@ fn decode_plaintext(data: &[u8]) -> Result<VmessRequest, ProxyError> {
             pos += 1;
             let _ = read_vmess_address(data, &mut pos, atyp, port)?;
             Address::Domain(MUX_DOMAIN.to_string(), port)
-        }
-        other => {
-            return Err(ProxyError::Protocol(format!(
-                "VMess: unknown command {other:#x}"
-            )));
         }
     };
 
@@ -506,6 +523,7 @@ fn decode_plaintext(data: &[u8]) -> Result<VmessRequest, ProxyError> {
         v,
         options,
         security,
+        command,
         dest,
     })
 }
@@ -628,6 +646,24 @@ mod tests {
             .unwrap();
             assert_eq!(req.dest, dest);
         });
+    }
+
+    #[test]
+    fn decode_header_preserves_udp_command() {
+        let iv = [0x11u8; 16];
+        let key = [0x22u8; 16];
+        let dest = Address::Ipv4("8.8.8.8".parse().unwrap(), 53);
+        let mut plaintext =
+            build_request_plaintext(&iv, &key, 0x33, 0, Security::Aes128Gcm, &dest).unwrap();
+
+        plaintext[37] = CMD_UDP;
+        let checksum_pos = plaintext.len() - 4;
+        let checksum = fnv32a(&plaintext[..checksum_pos]);
+        plaintext[checksum_pos..].copy_from_slice(&checksum.to_be_bytes());
+
+        let req = decode_plaintext(&plaintext).unwrap();
+        assert_eq!(req.command, VmessCommand::Udp);
+        assert_eq!(req.dest, dest);
     }
 
     #[test]
