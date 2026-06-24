@@ -1,12 +1,12 @@
 Package: blackwire
-Version: 0.1.0-rc.36
+Version: 0.1.0-rc.37
 Architecture: amd64
 Maintainer: Blackwire maintainers <noreply@example.invalid>
-Filename: pool/main/blackwire_0.1.0-rc.36_amd64.deb
+Filename: pool/main/blackwire_0.1.0-rc.37_amd64.deb
 Size: 6125040
-MD5sum: 6021a9a75c66b8177c28923c37d7d84b
-SHA1: 2468e46def51975e34dd18e311cf8cae2a46e301
-SHA256: d538a6d90897d96d30b930c5437088fcdbd8a5a30fbb3dd45d74a38deab6d5c5
+MD5sum: 235dde8f3df2b19d0c6e5a86f4bde9af
+SHA1: 5fecb37d696923db64967315a0b5654fb4e925d8
+SHA256: ec36a5c2030f3a29c1bdb869979a178fa4339338b4acc0f1d5766f89c1164268
 Section: net
 Priority: optional
 Description: Rust-native proxy runtime for server and local proxy paths
