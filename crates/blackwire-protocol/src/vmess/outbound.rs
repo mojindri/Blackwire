@@ -133,10 +133,12 @@ pub async fn connect_vmess_on_stream(
     }
 
     // Wrap in VMess body framing.
-    let wrapped: BoxedStream = Box::new(VmessStream::new_bidir(
+    let wrapped: BoxedStream = Box::new(VmessStream::new_bidir_with_auth_len_base(
         stream,
         &resp_key,
         &resp_iv,
+        &key,
+        &iv,
         &key,
         &iv,
         Security::Aes128Gcm,
