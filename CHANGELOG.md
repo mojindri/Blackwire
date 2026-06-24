@@ -6,6 +6,22 @@ This project is pre-1.0. The support contract is owned by
 [docs/release.md](docs/release.md), and detailed feature evidence is owned by
 [docs/feature-matrix.md](docs/feature-matrix.md).
 
+## 0.1.0-rc.43 - 2026-06-25
+
+### Changed
+
+- Deprecated mKCP from the release surface. Existing configs remain loadable,
+  but Black UI no longer offers mKCP for new inbound/outbound transport
+  selection.
+- Release docs and feature evidence now classify mKCP as a legacy/internal path
+  rather than a supported external-client target.
+
+### Validation
+
+- Live VPS mKCP probes with Xray `26.6.22` and `26.1.23` timed out for VLESS,
+  VMess, and Trojan mKCP; current Xray FinalMask-era clients are not treated as
+  a supported mKCP target.
+
 ## 0.1.0-rc.42 - 2026-06-24
 
 ### Fixed

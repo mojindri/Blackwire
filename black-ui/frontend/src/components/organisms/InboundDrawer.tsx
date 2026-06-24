@@ -75,14 +75,13 @@ export function InboundDrawer({
   const transportOptions = useMemo(
     () =>
       capabilities?.transports.filter((item) =>
-        ["tcp", "ws", "grpc", "httpupgrade", "splithttp", "kcp", "quic"].includes(item.key)
+        ["tcp", "ws", "grpc", "httpupgrade", "splithttp", "quic"].includes(item.key)
       ) ?? [
         { key: "tcp", label: "TCP", status: "supported", notes: "" },
         { key: "ws", label: "WebSocket", status: "supported", notes: "" },
         { key: "grpc", label: "gRPC", status: "supported", notes: "" },
         { key: "httpupgrade", label: "HTTPUpgrade", status: "supported", notes: "" },
         { key: "splithttp", label: "SplitHTTP", status: "supported", notes: "" },
-        { key: "kcp", label: "mKCP", status: "supported", notes: "" },
         { key: "quic", label: "QUIC", status: "supported", notes: "" }
       ],
     [capabilities]

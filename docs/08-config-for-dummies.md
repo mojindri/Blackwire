@@ -374,7 +374,7 @@ Examples:
 - `ws`
 - `grpc`
 - `quic`
-- `kcp`
+- `kcp` (deprecated legacy/internal path)
 
 This chooses the transport style.
 
