@@ -917,6 +917,13 @@ mod tests {
     }
 
     #[test]
+    fn xhttp_network_alias_deserialises_as_splithttp() {
+        let json = r#"{"network": "xhttp"}"#;
+        let s: StreamSettingsConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(s.network, NetworkType::SplitHttp);
+    }
+
+    #[test]
     fn splithttp_xhttp_extras_deserialise() {
         let json = r#"{
             "network": "splithttp",

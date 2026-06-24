@@ -47,7 +47,7 @@ pub enum NetworkType {
     /// KCP ARQ over UDP.
     Kcp,
     /// SplitHTTP (XHTTP).
-    #[serde(rename = "splithttp")]
+    #[serde(rename = "splithttp", alias = "xhttp")]
     SplitHttp,
 }
 
