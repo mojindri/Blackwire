@@ -20,23 +20,26 @@
 //! Doing auth and header checks first lets the server reject bad clients early
 //! and only open dispatch traffic for verified requests.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UdpSocket;
 use tracing::{debug, warn};
 
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::InboundHandler;
+use blackwire_app::runtime_stats;
 use blackwire_common::{BoxedStream, Network, PrependedStream, ProxyError};
 
 use super::auth::{cmd_key, validate_auth_id, MAX_TIME_DIFF_SECS};
 use super::codec::{
     decode_header, decrypt_length_field, response_body_iv, response_body_key, send_response_header,
-    Security,
+    Security, VmessCommand,
 };
 use super::stream::VmessStream;
 
@@ -191,7 +194,13 @@ impl InboundHandler for VmessInbound {
             stream = Box::new(PrependedStream::new(stream, leftover));
         }
 
-        warn!(source = %source, dest = %request.dest, security = ?request.security, "VMess header decoded");
+        warn!(
+            source = %source,
+            dest = %request.dest,
+            security = ?request.security,
+            command = ?request.command,
+            "VMess header decoded"
+        );
 
         // 7. Derive response keys.
         let resp_key = response_body_key(&request.key);
@@ -215,6 +224,11 @@ impl InboundHandler for VmessInbound {
             }
         };
 
+        if request.command == VmessCommand::Udp {
+            let ctx = Context::new(self.tag.clone(), source).with_user(user.email);
+            return relay_vmess_udp(vmess_stream, request.dest, ctx).await;
+        }
+
         let vmess_stream: BoxedStream = Box::new(vmess_stream);
 
         let ctx = Context::new(self.tag.clone(), source).with_user(user.email);
@@ -222,9 +236,92 @@ impl InboundHandler for VmessInbound {
     }
 }
 
+async fn relay_vmess_udp<S>(
+    client: S,
+    dest: blackwire_common::Address,
+    ctx: Context,
+) -> Result<(), ProxyError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let upstream = resolve_udp_dest(&dest).await?;
+    let bind_addr = if upstream.is_ipv6() {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
+    };
+    let socket = UdpSocket::bind(bind_addr)
+        .await
+        .map_err(|e| ProxyError::Transport(format!("VMess UDP bind failed: {e}")))?;
+    socket
+        .connect(upstream)
+        .await
+        .map_err(|e| ProxyError::Transport(format!("VMess UDP connect: {e}")))?;
+
+    let (mut client_reader, mut client_writer) = tokio::io::split(client);
+    let mut payload = vec![0u8; 65507];
+    let mut response = vec![0u8; 65535];
+
+    loop {
+        tokio::select! {
+            read = tokio::time::timeout(Duration::from_secs(30), client_reader.read(&mut payload)) => {
+                let n = match read {
+                    Ok(Ok(0)) => break,
+                    Ok(Ok(n)) => n,
+                    Ok(Err(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    Ok(Err(e)) => return Err(ProxyError::Transport(e.to_string())),
+                    Err(_) => break,
+                };
+                socket
+                    .send(&payload[..n])
+                    .await
+                    .map_err(|e| ProxyError::Transport(format!("VMess UDP send: {e}")))?;
+                runtime_stats::record_relay_traffic(
+                    ctx.inbound_tag.as_ref(),
+                    ctx.user.as_deref(),
+                    n as u64,
+                    0,
+                );
+            }
+            recv = socket.recv(&mut response) => {
+                let rn = recv.map_err(|e| ProxyError::Transport(e.to_string()))?;
+                if rn == 0 {
+                    continue;
+                }
+                client_writer.write_all(&response[..rn]).await?;
+                client_writer.flush().await?;
+                runtime_stats::record_relay_traffic(
+                    ctx.inbound_tag.as_ref(),
+                    ctx.user.as_deref(),
+                    0,
+                    rn as u64,
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn resolve_udp_dest(dest: &blackwire_common::Address) -> Result<SocketAddr, ProxyError> {
+    match dest {
+        blackwire_common::Address::Ipv4(ip, port) => Ok(SocketAddr::new(IpAddr::V4(*ip), *port)),
+        blackwire_common::Address::Ipv6(ip, port) => Ok(SocketAddr::new(IpAddr::V6(*ip), *port)),
+        blackwire_common::Address::Domain(name, port) => {
+            let mut addrs = tokio::net::lookup_host((name.as_str(), *port))
+                .await
+                .map_err(|e| ProxyError::DnsResolutionFailed(format!("{name}: {e}")))?;
+            addrs
+                .next()
+                .ok_or_else(|| ProxyError::DnsResolutionFailed(name.clone()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn make_registry() -> Arc<VmessUserRegistry> {
         let reg = VmessUserRegistry::new();
@@ -251,5 +348,68 @@ mod tests {
     fn reject_unknown_auth_id() {
         let reg = make_registry();
         assert!(reg.find_by_auth(&[0u8; 16]).is_none());
+    }
+
+    #[tokio::test]
+    async fn relay_udp_packet_over_vmess_stream() {
+        let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let udp_addr = udp.local_addr().unwrap();
+        let echo = tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+            let (n, peer) = udp.recv_from(&mut buf).await.unwrap();
+            udp.send_to(&buf[..n], peer).await.unwrap();
+        });
+
+        let req_key = [0x11u8; 16];
+        let req_iv = [0x22u8; 16];
+        let resp_key = response_body_key(&req_key);
+        let resp_iv = response_body_iv(&req_iv);
+        let (client_half, server_half) = tokio::io::duplex(65536);
+
+        let server = VmessStream::new_bidir(
+            Box::new(server_half),
+            &req_key,
+            &req_iv,
+            &resp_key,
+            &resp_iv,
+            Security::Aes128Gcm,
+            0,
+        );
+        let ctx = Context::new(
+            Arc::<str>::from("vmess-test"),
+            "127.0.0.1:12345".parse().unwrap(),
+        );
+        let upstream_ip = match udp_addr.ip() {
+            IpAddr::V4(ip) => ip,
+            IpAddr::V6(_) => unreachable!("test binds IPv4"),
+        };
+        let relay = tokio::spawn(relay_vmess_udp(
+            server,
+            blackwire_common::Address::Ipv4(upstream_ip, udp_addr.port()),
+            ctx,
+        ));
+
+        let mut client = VmessStream::new_bidir(
+            Box::new(client_half),
+            &resp_key,
+            &resp_iv,
+            &req_key,
+            &req_iv,
+            Security::Aes128Gcm,
+            0,
+        );
+        client.write_all(b"dns-packet").await.unwrap();
+        client.flush().await.unwrap();
+
+        let mut got = [0u8; 32];
+        let n = tokio::time::timeout(Duration::from_secs(2), client.read(&mut got))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&got[..n], b"dns-packet");
+
+        drop(client);
+        relay.await.unwrap().unwrap();
+        echo.await.unwrap();
     }
 }
