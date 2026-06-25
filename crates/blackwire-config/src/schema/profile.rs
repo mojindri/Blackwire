@@ -198,7 +198,7 @@ pub struct FastConfig {
     pub splice: FastSplicePolicy,
 
     /// Userspace relay engine used when splice is unavailable or disabled.
-    #[serde(default)]
+    #[serde(default = "FastConfig::default_relay")]
     pub relay: FastRelayConfig,
 
     /// Linux-only extreme-path options. Non-Linux builds accept these settings
@@ -211,6 +211,15 @@ impl FastConfig {
     fn default_strict_production() -> bool {
         true
     }
+
+    pub fn default_relay() -> FastRelayConfig {
+        FastRelayConfig {
+            engine: FastRelayEngine::V2,
+            flush: FastRelayFlushPolicy::Adaptive,
+            initial_buffer: FastRelayConfig::default_initial_buffer(),
+            max_buffer: FastRelayConfig::default_max_buffer(),
+        }
+    }
 }
 
 impl Default for FastConfig {
@@ -219,7 +228,7 @@ impl Default for FastConfig {
             strict_production: true,
             pool: FastPoolPolicy::default(),
             splice: FastSplicePolicy::default(),
-            relay: FastRelayConfig::default(),
+            relay: Self::default_relay(),
             linux: FastLinuxConfig::default(),
         }
     }
@@ -1392,6 +1401,17 @@ mod tests {
         let m: serde_json::Value = serde_json::from_str(json).unwrap();
         let mode: ProfileMode = serde_json::from_value(m["profile"].clone()).unwrap();
         assert_eq!(mode, ProfileMode::Fast);
+    }
+
+    #[test]
+    fn fast_config_defaults_to_relay_v2_adaptive() {
+        let fast = FastConfig::default();
+        assert_eq!(fast.relay.engine, FastRelayEngine::V2);
+        assert_eq!(fast.relay.flush, FastRelayFlushPolicy::Adaptive);
+
+        let decoded: FastConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(decoded.relay.engine, FastRelayEngine::V2);
+        assert_eq!(decoded.relay.flush, FastRelayFlushPolicy::Adaptive);
     }
 
     #[test]

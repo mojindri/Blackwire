@@ -10,6 +10,7 @@ use blackwire_config::schema::{InboundConfig, OutboundConfig, QuicConfig};
 use blackwire_transport::{
     QuicSocketConfig, TuicClientConfig, TuicOutboundHandler, TuicServer, TuicServerConfig, TuicUser,
 };
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::hysteria2::socket_config_from_quic;
@@ -18,9 +19,11 @@ use crate::net::{listen_socket_addr, socket_addr_from_address_port};
 pub(crate) fn start_tuic_inbound(
     cfg: &InboundConfig,
     quic: Option<&QuicConfig>,
+    default_max_connections: Option<usize>,
+    shared_limiter: Option<Arc<Semaphore>>,
     dispatcher: Arc<dyn Dispatcher>,
 ) -> Result<tokio::task::JoinHandle<()>> {
-    let server_config = parse_server_config(cfg, quic)?;
+    let server_config = parse_server_config(cfg, quic, default_max_connections, shared_limiter)?;
     let tag = cfg.tag.clone();
 
     let handle = tokio::spawn(async move {
@@ -41,7 +44,12 @@ pub(crate) fn build_tuic_outbound(
     Ok(TuicOutboundHandler::new(client_config, cfg.tag.clone()))
 }
 
-fn parse_server_config(cfg: &InboundConfig, quic: Option<&QuicConfig>) -> Result<TuicServerConfig> {
+fn parse_server_config(
+    cfg: &InboundConfig,
+    quic: Option<&QuicConfig>,
+    default_max_connections: Option<usize>,
+    shared_limiter: Option<Arc<Semaphore>>,
+) -> Result<TuicServerConfig> {
     let stream = cfg
         .stream_settings
         .as_ref()
@@ -70,7 +78,12 @@ fn parse_server_config(cfg: &InboundConfig, quic: Option<&QuicConfig>) -> Result
         cert_pem,
         key_pem,
         server_name: Some(tls.server_name.clone()).filter(|s| !s.is_empty()),
-        max_connections: cfg.limits.as_ref().and_then(|l| l.max_connections),
+        max_connections: cfg
+            .limits
+            .as_ref()
+            .and_then(|l| l.max_connections)
+            .or(default_max_connections),
+        shared_limiter,
         auth_timeout: parse_duration_ms(&cfg.settings, "authTimeoutMs", 3_000),
         socket: parse_socket_config(&cfg.settings, quic),
         enable_udp: network_allows_udp(&cfg.settings),

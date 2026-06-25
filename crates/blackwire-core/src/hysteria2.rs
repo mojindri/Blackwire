@@ -19,6 +19,7 @@ use blackwire_transport::{
     CongestionConfig, CongestionMode, Hysteria2ClientConfig, Hysteria2OutboundHandler,
     Hysteria2Server, Hysteria2ServerConfig, QuicSocketConfig,
 };
+use tokio::sync::Semaphore;
 
 use crate::net::listen_socket_addr;
 
@@ -32,9 +33,18 @@ pub(crate) fn start_hysteria2_inbound(
     quic: Option<&QuicConfig>,
     datagram: Option<&DatagramConfig>,
     fec: Option<&FecConfig>,
+    default_max_connections: Option<usize>,
+    shared_limiter: Option<Arc<Semaphore>>,
     dispatcher: Arc<dyn Dispatcher>,
 ) -> Result<tokio::task::JoinHandle<()>> {
-    let server_config = parse_server_config(cfg, quic, datagram, fec)?;
+    let server_config = parse_server_config(
+        cfg,
+        quic,
+        datagram,
+        fec,
+        default_max_connections,
+        shared_limiter,
+    )?;
     let tag = cfg.tag.clone();
 
     let handle = tokio::spawn(async move {
@@ -69,6 +79,8 @@ fn parse_server_config(
     quic: Option<&QuicConfig>,
     datagram: Option<&DatagramConfig>,
     fec: Option<&FecConfig>,
+    default_max_connections: Option<usize>,
+    shared_limiter: Option<Arc<Semaphore>>,
 ) -> Result<Hysteria2ServerConfig> {
     let s = &cfg.settings;
 
@@ -104,7 +116,11 @@ fn parse_server_config(
 
     let addr = listen_socket_addr(cfg.listen, cfg.port);
 
-    let max_connections = cfg.limits.as_ref().and_then(|l| l.max_connections);
+    let max_connections = cfg
+        .limits
+        .as_ref()
+        .and_then(|l| l.max_connections)
+        .or(default_max_connections);
     let socket = parse_socket_config(s, quic);
     let datagram_enabled = datagram_enabled(s, datagram);
     let fec = parse_fec_policy(s, fec);
@@ -120,6 +136,7 @@ fn parse_server_config(
         cert_pem,
         key_pem,
         max_connections,
+        shared_limiter,
         congestion,
         socket,
         datagram_enabled,

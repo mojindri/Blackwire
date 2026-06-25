@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use socket2::SockRef;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, error, info, warn};
 
 use blackwire_app::features::ConnectionHandler;
@@ -76,12 +76,22 @@ pub struct TcpServerTransport {
     /// Stored for future use (SO_MARK on accepted streams, TFO).
     #[allow(dead_code)]
     config: TcpConfig,
+    shared_limiter: Option<Arc<Semaphore>>,
 }
 
 impl TcpServerTransport {
     /// Create a new TCP server transport with the given config.
     pub fn new(config: TcpConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            shared_limiter: None,
+        }
+    }
+
+    /// Attach a process-wide connection limiter shared by multiple listeners.
+    pub fn with_shared_limiter(mut self, limiter: Option<Arc<Semaphore>>) -> Self {
+        self.shared_limiter = limiter;
+        self
     }
 
     /// Bind a `TcpListener` on `addr`, applying socket options (including TCP Fast Open)
@@ -146,7 +156,9 @@ impl TcpServerTransport {
         handler: Arc<dyn ConnectionHandler>,
     ) -> Result<(), ProxyError> {
         let listener = self.bind(addr)?;
-        self.serve_listener(listener, handler).await
+        let limiter = self.connection_limiter();
+        self.serve_listener_with_limiter(listener, handler, limiter)
+            .await
     }
 
     /// Bind `shard_count` SO_REUSEPORT listeners on `addr` and spawn one accept
@@ -170,14 +182,19 @@ impl TcpServerTransport {
     ) -> Result<Vec<tokio::task::JoinHandle<()>>, ProxyError> {
         let count = shard_count.max(1);
         let mut handles = Vec::with_capacity(count);
+        let limiter = self.connection_limiter();
 
         for i in 0..count {
             let listener = self.bind(addr)?;
             let handler = Arc::clone(&handler);
             let transport = Arc::clone(&self);
+            let limiter = limiter.as_ref().map(Arc::clone);
             let h = tokio::spawn(async move {
                 debug!(addr = %addr, shard = i, shards = count, "TCP accept shard started");
-                if let Err(e) = transport.serve_listener(listener, handler).await {
+                if let Err(e) = transport
+                    .serve_listener_with_limiter(listener, handler, limiter)
+                    .await
+                {
                     error!(addr = %addr, shard = i, error = %e, "TCP accept shard failed");
                 }
             });
@@ -197,14 +214,33 @@ impl TcpServerTransport {
         listener: TcpListener,
         handler: Arc<dyn ConnectionHandler>,
     ) -> Result<(), ProxyError> {
-        let addr = listener.local_addr()?;
-        info!(addr = %addr, max_connections = ?self.config.max_connections, "TCP listener started");
+        let limiter = self.connection_limiter();
+        self.serve_listener_with_limiter(listener, handler, limiter)
+            .await
+    }
 
-        let limiter = self
-            .config
+    fn connection_limiter(&self) -> Option<Arc<Semaphore>> {
+        self.config
             .max_connections
-            .map(|n| Arc::new(Semaphore::new(n)));
+            .map(|n| Arc::new(Semaphore::new(n)))
+    }
+
+    async fn serve_listener_with_limiter(
+        &self,
+        listener: TcpListener,
+        handler: Arc<dyn ConnectionHandler>,
+        limiter: Option<Arc<Semaphore>>,
+    ) -> Result<(), ProxyError> {
+        let addr = listener.local_addr()?;
+        info!(
+            addr = %addr,
+            max_connections = ?self.config.max_connections,
+            shared_limiter = self.shared_limiter.is_some(),
+            "TCP listener started"
+        );
+
         let max_connections = self.config.max_connections;
+        let shared_limiter = self.shared_limiter.as_ref().map(Arc::clone);
 
         loop {
             let (stream, peer_addr) = match listener.accept().await {
@@ -220,7 +256,22 @@ impl TcpServerTransport {
                 }
             };
 
-            let permit = if let Some(limiter) = &limiter {
+            let shared_permit = if let Some(shared_limiter) = &shared_limiter {
+                match Arc::clone(shared_limiter).try_acquire_owned() {
+                    Ok(permit) => Some(permit),
+                    Err(_) => {
+                        warn!(
+                            peer = %peer_addr,
+                            "global TCP connection limit reached; dropping accepted TCP connection"
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+
+            let listener_permit = if let Some(limiter) = &limiter {
                 match Arc::clone(limiter).try_acquire_owned() {
                     Ok(permit) => Some(permit),
                     Err(_) => {
@@ -235,13 +286,15 @@ impl TcpServerTransport {
             } else {
                 None
             };
+            let permits: (Option<OwnedSemaphorePermit>, Option<OwnedSemaphorePermit>) =
+                (shared_permit, listener_permit);
 
             debug!(peer = %peer_addr, "TCP connection accepted");
 
             // Spawn a new task for this connection so the accept loop is not blocked.
             let handler = Arc::clone(&handler);
             tokio::spawn(async move {
-                let _permit = permit;
+                let _permits = permits;
                 // Apply socket options in the connection task to keep the
                 // accept loop focused on accept/admission under load.
                 if let Err(e) = Self::apply_socket_opts(&stream) {
