@@ -15,6 +15,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_HTTP_TIMEOUT: "120"
+  CARGO_NET_RETRY: "10"
 
 jobs:
   prepare-release:
@@ -104,6 +106,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch cargo dependencies
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if cargo fetch --locked; then
+              exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          cargo fetch --locked
 
       - name: Build release binary
         run: cargo build --release --locked --bin blackwire
