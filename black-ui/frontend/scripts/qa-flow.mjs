@@ -74,7 +74,7 @@ async function main() {
   await addInbound(page, "qa-main", "26320");
   await addUser(page, "qa@example.com", "qa-main :26320");
   await page.getByRole("button", { name: "qa@example.com", exact: true }).click();
-  await page.locator(".drawer").getByRole("button", { name: "Copy subscription URL", exact: true }).click();
+  await page.locator(".drawer").getByRole("button", { name: "Copy subscription content", exact: true }).click();
   await page.getByText("Copied", { exact: true }).waitFor();
   await page.locator(".drawer").getByRole("button", { name: "Rotate UUID", exact: true }).click();
   await page.locator(".drawer").getByRole("button", { name: "Rotate token", exact: true }).click();
