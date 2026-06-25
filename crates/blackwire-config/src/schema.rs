@@ -137,13 +137,11 @@ pub struct Config {
 /// Runtime safety limits.
 ///
 /// These are intentionally conservative knobs for production hardening.
-/// `max_connections` is currently applied per TCP listener unless a more
-/// specific inbound limit is set. Global cross-listener accounting can be
-/// added later without changing the config shape.
+/// `max_connections` is a process-wide cap shared by TCP and QUIC inbound
+/// accept loops that support admission limiting.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LimitsConfig {
     /// Maximum concurrent connections for the whole process (optional).
-    /// Applied per TCP listener unless overridden by per-inbound limits.
     #[serde(
         default,
         rename = "maxConnections",

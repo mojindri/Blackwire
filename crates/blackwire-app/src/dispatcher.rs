@@ -222,7 +222,8 @@ fn splice_policy_for_profile(profile: ProfileMode, fast: Option<&FastConfig>) ->
 
 fn relay_policy_for_profile(profile: ProfileMode, fast: Option<&FastConfig>) -> FastRelayConfig {
     if profile == ProfileMode::Fast {
-        fast.map(|f| f.relay).unwrap_or_default()
+        fast.map(|f| f.relay)
+            .unwrap_or_else(|| FastConfig::default().relay)
     } else {
         FastRelayConfig::default()
     }
@@ -1366,6 +1367,13 @@ mod tests {
             relay_policy_for_profile(ProfileMode::Fast, Some(&fast)),
             fast.relay
         );
+    }
+
+    #[test]
+    fn fast_profile_defaults_to_relay_v2_adaptive() {
+        let relay = relay_policy_for_profile(ProfileMode::Fast, None);
+        assert_eq!(relay.engine, FastRelayEngine::V2);
+        assert_eq!(relay.flush, FastRelayFlushPolicy::Adaptive);
     }
 
     #[test]
