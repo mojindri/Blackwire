@@ -1,6 +1,8 @@
 import type { Settings } from "./types";
+import { copyText } from "./clipboard";
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+type CopyResult = { ok: boolean; message: string };
 
 export function subscriptionUrl(settings: Settings | null, token: string): string {
   if (!settings || !token) return "";
@@ -11,19 +13,24 @@ export async function fetchSubscriptionContent(url: string): Promise<{ ok: boole
   if (!url) return { ok: false, content: "", message: "Nothing to copy" };
 
   try {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await fetch(url.endsWith("/raw") ? url : `${url}/raw`, { cache: "no-store" });
     if (!response.ok) {
       return { ok: false, content: "", message: `Subscription returned ${response.status}` };
     }
-
     const content = await response.text();
     if (!content.trim()) {
       return { ok: false, content: "", message: "Subscription is empty" };
     }
+
     return { ok: true, content, message: "Copied" };
   } catch {
     return { ok: false, content: "", message: "Subscription fetch failed" };
   }
+}
+
+export async function copySubscriptionContent(url: string): Promise<CopyResult> {
+  const subscription = await fetchSubscriptionContent(url);
+  return subscription.ok ? copyText(subscription.content) : subscription;
 }
 
 function subscriptionBaseUrl(settings: Settings): string {

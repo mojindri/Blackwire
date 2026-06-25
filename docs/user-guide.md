@@ -21,8 +21,8 @@ Linux release assets currently support:
 Basic install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.4/scripts/install.sh \
-  | VERSION=v0.1.4 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.5/scripts/install.sh \
+  | VERSION=v0.1.5 bash
 ```
 
 The service is not started by default. Blackwire needs a valid config before it
@@ -31,22 +31,22 @@ can run.
 Install with an existing config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.4/scripts/install.sh \
-  | VERSION=v0.1.4 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.5/scripts/install.sh \
+  | VERSION=v0.1.5 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
 ```
 
 Generate a VLESS REALITY VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.4/scripts/install.sh \
-  | VERSION=v0.1.4 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.5/scripts/install.sh \
+  | VERSION=v0.1.5 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
 ```
 
 Generate a domain + nginx + TLS setup:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.4/scripts/install.sh \
-  | VERSION=v0.1.4 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.5/scripts/install.sh \
+  | VERSION=v0.1.5 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 For domain setup, point DNS at the VPS first and open `tcp/80` and `tcp/443` in
@@ -70,15 +70,15 @@ testing. Do not expose it directly to the public internet.
 Install the panel:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.4/scripts/install.sh \
-  | VERSION=v0.1.4 INSTALL_BLACK_UI=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.5/scripts/install.sh \
+  | VERSION=v0.1.5 INSTALL_BLACK_UI=1 bash
 ```
 
 Install Blackwire with domain setup and Black UI:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.4/scripts/install.sh \
-  | VERSION=v0.1.4 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.5/scripts/install.sh \
+  | VERSION=v0.1.5 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
 ```
 
 Defaults:
@@ -142,21 +142,21 @@ sudo journalctl -u nginx -n 100 --no-pager
 Upgrade:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.4/scripts/install.sh \
-  | VERSION=v0.1.4 ACTION=upgrade bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.5/scripts/install.sh \
+  | VERSION=v0.1.5 ACTION=upgrade bash
 ```
 
 Uninstall but keep config and state:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.4/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.5/scripts/install.sh \
   | ACTION=uninstall bash
 ```
 
 Remove config and state too:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.4/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.5/scripts/install.sh \
   | ACTION=uninstall REMOVE_CONFIG=1 bash
 ```
 
@@ -278,8 +278,8 @@ Users cannot connect:
 If GitHub downloads fail, try IPv4:
 
 ```sh
-curl -4 -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.4/scripts/install.sh \
-  | VERSION=v0.1.4 bash
+curl -4 -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.5/scripts/install.sh \
+  | VERSION=v0.1.5 bash
 ```
 
 ## Advanced

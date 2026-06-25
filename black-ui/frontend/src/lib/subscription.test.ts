@@ -18,7 +18,7 @@ describe("fetchSubscriptionContent", () => {
       content: "vless://example",
       message: "Copied"
     });
-    expect(fetchMock).toHaveBeenCalledWith("http://panel/sub/token", { cache: "no-store" });
+    expect(fetchMock).toHaveBeenCalledWith("http://panel/sub/token/raw", { cache: "no-store" });
   });
 
   it("rejects empty subscription bodies", async () => {

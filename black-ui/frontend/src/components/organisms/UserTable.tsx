@@ -1,9 +1,8 @@
 import { Copy, Plus, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import type { Inbound, ManagedUser, Settings } from "../../lib/types";
-import { copyText } from "../../lib/clipboard";
 import { formatBytes, formatDate } from "../../lib/format";
-import { fetchSubscriptionContent, subscriptionUrl } from "../../lib/subscription";
+import { copySubscriptionContent, subscriptionUrl } from "../../lib/subscription";
 import { Badge } from "../atoms/Badge";
 import { Button } from "../atoms/Button";
 import { IconButton } from "../atoms/IconButton";
@@ -53,8 +52,7 @@ export function UserTable({
   const inboundById = new Map(inbounds.map((inbound) => [inbound.id, inbound]));
   const allSelected = users.length > 0 && users.every((user) => selectedIds.has(user.id));
   const copySubscription = async (value: string) => {
-    const subscription = await fetchSubscriptionContent(value);
-    const result = subscription.ok ? await copyText(subscription.content) : subscription;
+    const result = await copySubscriptionContent(value);
     setCopyFeedback(result.message);
     window.setTimeout(() => setCopyFeedback(""), 2200);
   };
@@ -124,7 +122,7 @@ export function UserTable({
                   <td>{formatBytes(user.downloadBytes)}</td>
                   <td>
                     <div className="inline-icons">
-                      <IconButton label="Copy subscription content" onClick={() => copySubscription(subUrl)}>
+                      <IconButton label="Copy subscription content" onClick={() => copySubscription(subUrl)} disabled={!subUrl}>
                         <Copy size={16} />
                       </IconButton>
                       <IconButton label="Reset usage" onClick={() => onReset(user)}>
