@@ -4,6 +4,7 @@ import type { CapabilityMap, Inbound, InboundInput } from "../../lib/types";
 import {
   buildInboundInput,
   createInboundEditorState,
+  inboundCompatibilityNotice,
   inboundSummary,
   replaceSlice,
   syncAfterStructuredChange,
@@ -97,6 +98,7 @@ export function InboundDrawer({
   );
 
   const currentSummary = editing ? inboundSummary(editing) : { network: state.network, security: state.security, detail: "" };
+  const compatibilityNotice = inboundCompatibilityNotice(state);
   const jsonErrors = [state.settings, state.streamSettings, state.sniffing, state.limits].filter((slice) => slice.error);
   const validationIssues = validateInboundState(state);
   const canDelete = !busy && inboundsCount > 1;
@@ -177,7 +179,7 @@ export function InboundDrawer({
                 <Select value={state.protocol} onChange={(e) => updateStructured({ protocol: e.target.value })}>
                   {protocolOptions.map((item) => (
                     <option key={item.key} value={item.key} disabled={item.status === "unsupported"} title={item.notes}>
-                      {item.status === "supported" ? item.label : `${item.label} (${item.status})`}
+                      {capabilityLabel(item)}
                     </option>
                   ))}
                 </Select>
@@ -235,8 +237,8 @@ export function InboundDrawer({
               <Field label="Network">
                 <Select value={state.network} onChange={(e) => updateStructured({ network: e.target.value })}>
                   {transportOptions.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
+                    <option key={item.key} value={item.key} disabled={item.status === "unsupported"} title={item.notes}>
+                      {capabilityLabel(item)}
                     </option>
                   ))}
                 </Select>
@@ -452,6 +454,9 @@ export function InboundDrawer({
             <span>{validationIssues[0].message}</span>
           </div>
         ) : null}
+        {compatibilityNotice ? (
+          <CompatibilityNotice tone={compatibilityNotice.tone} message={compatibilityNotice.message} />
+        ) : null}
 
         {editing && inboundsCount <= 1 ? <p className="field-hint">Create another inbound before deleting this one.</p> : null}
       </div>
@@ -477,6 +482,19 @@ export function InboundDrawer({
         </Button>
       </div>
     </aside>
+  );
+}
+
+function capabilityLabel(item: { label: string; status: string }) {
+  return item.status === "supported" ? item.label : `${item.label} (${item.status})`;
+}
+
+function CompatibilityNotice({ tone, message }: { tone: "info" | "warning"; message: string }) {
+  return (
+    <div className={`compatibility-notice compatibility-notice-${tone}`}>
+      <AlertCircle size={15} />
+      <span>{message}</span>
+    </div>
   );
 }
 

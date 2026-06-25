@@ -402,14 +402,28 @@ async fn resolve_udp_dest(dest: &Address) -> Result<SocketAddr, ProxyError> {
         Address::Ipv4(ip, port) => Ok(SocketAddr::from((*ip, *port))),
         Address::Ipv6(ip, port) => Ok(SocketAddr::from((*ip, *port))),
         Address::Domain(name, port) => {
-            let mut addrs = tokio::net::lookup_host((name.as_str(), *port))
+            let addrs = tokio::net::lookup_host((name.as_str(), *port))
                 .await
                 .map_err(|e| ProxyError::DnsResolutionFailed(format!("{name}: {e}")))?;
-            addrs
-                .next()
-                .ok_or_else(|| ProxyError::DnsResolutionFailed(name.clone()))
+            prefer_ipv4(addrs).ok_or_else(|| ProxyError::DnsResolutionFailed(name.clone()))
         }
     }
+}
+
+fn prefer_ipv4<I>(addrs: I) -> Option<SocketAddr>
+where
+    I: IntoIterator<Item = SocketAddr>,
+{
+    let mut first = None;
+    for addr in addrs {
+        if first.is_none() {
+            first = Some(addr);
+        }
+        if addr.is_ipv4() {
+            return Some(addr);
+        }
+    }
+    first
 }
 
 /// Demux Mux.Cool sub-streams on an authenticated VLESS connection.

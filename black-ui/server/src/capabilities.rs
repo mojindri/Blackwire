@@ -49,13 +49,13 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "hysteria2",
                 "Hysteria2",
                 "supported",
-                "QUIC/HTTP3 TCP stream proxy and UDP",
+                "QUIC/HTTP3 TCP stream proxy and UDP; client and network tuning can affect throughput",
             ),
             item(
                 "tuic",
                 "TUIC v5",
-                "supported",
-                "QUIC v5 TCP proxy and native UDP relay",
+                "experimental",
+                "QUIC v5 TCP proxy and native UDP relay; fragmented UDP is client-sensitive",
             ),
         ],
         transports: vec![
@@ -86,7 +86,12 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "deprecated",
                 "Legacy/internal transport; external-client interop is not supported",
             ),
-            item("quic", "QUIC", "supported", "Legacy V2Ray QUIC transport"),
+            item(
+                "quic",
+                "QUIC",
+                "experimental",
+                "Legacy V2Ray QUIC transport; external-client support varies",
+            ),
             item(
                 "httpupgrade",
                 "HTTPUpgrade",
@@ -207,7 +212,7 @@ mod tests {
     use super::blackwire_capabilities;
 
     #[test]
-    fn tuic_v5_is_reported_as_supported() {
+    fn tuic_v5_is_reported_as_experimental() {
         let capabilities = blackwire_capabilities();
         let tuic = capabilities
             .protocols
@@ -215,8 +220,21 @@ mod tests {
             .find(|item| item.key == "tuic")
             .expect("TUIC v5 capability should be visible to Black UI");
 
-        assert_eq!(tuic.status, "supported");
-        assert!(tuic.notes.contains("native UDP"));
+        assert_eq!(tuic.status, "experimental");
+        assert!(tuic.notes.contains("fragmented UDP"));
+    }
+
+    #[test]
+    fn quic_transport_is_visible_but_experimental() {
+        let capabilities = blackwire_capabilities();
+        let quic = capabilities
+            .transports
+            .iter()
+            .find(|item| item.key == "quic")
+            .expect("QUIC transport should remain visible to Black UI");
+
+        assert_eq!(quic.status, "experimental");
+        assert!(quic.notes.contains("external-client"));
     }
 
     #[test]

@@ -776,6 +776,34 @@ tr.row-selected {
   font-weight: 700;
 }
 
+.compatibility-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.compatibility-notice svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.compatibility-notice-warning {
+  border-color: #f1d18a;
+  background: #fff8e6;
+  color: #7a4d00;
+}
+
+.compatibility-notice-info {
+  border-color: #b7e2df;
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+
 .inline-error {
   display: flex;
   align-items: center;
