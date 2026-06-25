@@ -8,6 +8,13 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+### Fixed
+
+- Black UI no longer offers `quic` as an inbound sniffing `destOverride`
+  option. Runtime sniffing currently supports `http`, `tls`, and `fakedns`;
+  copied client links remain unchanged because sniffing is server-side inbound
+  configuration.
+
 ## 0.1.2 - 2026-06-25
 
 ### Fixed

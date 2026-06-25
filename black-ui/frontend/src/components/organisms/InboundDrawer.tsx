@@ -19,7 +19,7 @@ import { Field } from "../molecules/Field";
 
 type TabKey = "basic" | "protocol" | "transport" | "security" | "sniffing" | "advanced";
 
-const sniffingOptions = ["http", "tls", "quic", "fakedns"];
+const sniffingOptions = ["http", "tls", "fakedns"];
 const tabOrder: Array<{ key: TabKey; label: string }> = [
   { key: "basic", label: "Basic" },
   { key: "protocol", label: "Protocol" },
