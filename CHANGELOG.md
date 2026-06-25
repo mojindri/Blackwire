@@ -8,6 +8,18 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.5 - 2026-06-25
+
+### Fixed
+
+- Black UI subscription copy actions now fetch the current raw subscription
+  endpoint (`/sub/{token}/raw`) before writing clipboard content, so copied
+  content is the actual client link payload instead of the base64 subscription
+  wrapper.
+- Centralized Black UI subscription content copy behavior across the users table
+  and user drawer, and disabled the table copy action when no subscription URL is
+  available.
+
 ## 0.1.4 - 2026-06-25
 
 ### Changed
