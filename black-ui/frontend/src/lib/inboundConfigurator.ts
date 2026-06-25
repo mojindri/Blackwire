@@ -59,6 +59,11 @@ export interface InboundValidationIssue {
   message: string;
 }
 
+export interface InboundCompatibilityNotice {
+  tone: "info" | "warning";
+  message: string;
+}
+
 const DEFAULT_PROTOCOL = "vless";
 const DEFAULT_NETWORK = "tcp";
 const DEFAULT_SECURITY = "none";
@@ -323,6 +328,49 @@ export function inboundSummary(inbound: Inbound): { network: string; security: s
   const grpcServiceName = stringValue(objectValue(streamSettings.grpcSettings)?.serviceName);
   const detail = wsPath ? wsPath : grpcServiceName ? grpcServiceName : "";
   return { network, security, detail };
+}
+
+export function inboundCompatibilityNotice(
+  input: Pick<InboundEditorState, "protocol" | "network" | "security"> | Inbound
+): InboundCompatibilityNotice | null {
+  const protocol = input.protocol;
+  const network =
+    "network" in input
+      ? input.network
+      : inboundSummary(input).network;
+  const security =
+    "security" in input
+      ? input.security
+      : inboundSummary(input).security;
+
+  if (protocol === "tuic") {
+    return {
+      tone: "warning",
+      message:
+        "TUIC remains available, but fragmented UDP and some client routing modes are client-sensitive. Test it outside global/TUN mode before using it as the main profile."
+    };
+  }
+  if (network === "quic") {
+    const prefix = protocol === "vmess" ? "VMess over QUIC" : "QUIC transport";
+    return {
+      tone: "warning",
+      message: `${prefix} remains available, but external-client support varies and UDP route issues can break global/TUN traffic. Prefer TCP, WebSocket, gRPC, or SplitHTTP for the main profile.`
+    };
+  }
+  if (protocol === "hysteria2") {
+    return {
+      tone: "info",
+      message:
+        "Hysteria2 is available, but throughput depends heavily on UDP path, CPU, and bandwidth tuning. Validate with a dedicated speed test before switching system-wide."
+    };
+  }
+  if (security === "reality" && network !== "tcp") {
+    return {
+      tone: "warning",
+      message: "REALITY should stay on TCP-compatible transports for generated links and common clients."
+    };
+  }
+  return null;
 }
 
 export function validateInboundState(state: InboundEditorState): InboundValidationIssue[] {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildInboundInput,
   createInboundEditorState,
+  inboundCompatibilityNotice,
   replaceSlice,
   syncAfterStructuredChange,
   validateInboundState
@@ -153,6 +154,13 @@ describe("inboundConfigurator", () => {
 
     expect(validIssues).toEqual([]);
     expect(invalidIssues.map((issue) => issue.field)).toEqual(["listen", "port", "security"]);
+  });
+
+  it("surfaces non-blocking compatibility notices for client-sensitive inbounds", () => {
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "tuic" })?.tone).toBe("warning");
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "vmess", network: "quic" })?.message).toContain("VMess over QUIC");
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "hysteria2" })?.tone).toBe("info");
+    expect(inboundCompatibilityNotice(createInboundEditorState())).toBeNull();
   });
 
   it("round-trips reality-specific fields into Blackwire-compatible stream settings", () => {

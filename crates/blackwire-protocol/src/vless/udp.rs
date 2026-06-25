@@ -149,19 +149,49 @@ async fn resolve_udp_dest(
         Address::Ipv6(ip, port) => Ok(std::net::SocketAddr::new(IpAddr::V6(*ip), *port)),
         Address::Domain(name, port) => {
             if let Some(dns) = dns {
-                let ip = dns.resolve(name).await?.into_iter().next().ok_or_else(|| {
+                let ip = prefer_ipv4_ip(dns.resolve(name).await?).ok_or_else(|| {
                     ProxyError::DnsResolutionFailed(format!("{name}: no records"))
                 })?;
                 return Ok(std::net::SocketAddr::new(ip, *port));
             }
-            let mut addrs = tokio::net::lookup_host((name.as_str(), *port))
+            let addrs = tokio::net::lookup_host((name.as_str(), *port))
                 .await
                 .map_err(|e| ProxyError::DnsResolutionFailed(format!("{name}: {e}")))?;
-            addrs
-                .next()
-                .ok_or_else(|| ProxyError::DnsResolutionFailed(name.clone()))
+            prefer_ipv4(addrs).ok_or_else(|| ProxyError::DnsResolutionFailed(name.clone()))
         }
     }
+}
+
+fn prefer_ipv4<I>(addrs: I) -> Option<SocketAddr>
+where
+    I: IntoIterator<Item = SocketAddr>,
+{
+    let mut first = None;
+    for addr in addrs {
+        if first.is_none() {
+            first = Some(addr);
+        }
+        if addr.is_ipv4() {
+            return Some(addr);
+        }
+    }
+    first
+}
+
+fn prefer_ipv4_ip<I>(ips: I) -> Option<IpAddr>
+where
+    I: IntoIterator<Item = IpAddr>,
+{
+    let mut first = None;
+    for ip in ips {
+        if first.is_none() {
+            first = Some(ip);
+        }
+        if ip.is_ipv4() {
+            return Some(ip);
+        }
+    }
+    first
 }
 
 pub(crate) async fn bind_udp_socket_for(

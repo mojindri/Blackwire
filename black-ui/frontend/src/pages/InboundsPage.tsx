@@ -4,7 +4,7 @@ import { Button } from "../components/atoms/Button";
 import { Badge } from "../components/atoms/Badge";
 import { InboundDrawer } from "../components/organisms/InboundDrawer";
 import { SearchBar } from "../components/molecules/SearchBar";
-import { inboundSummary } from "../lib/inboundConfigurator";
+import { inboundCompatibilityNotice, inboundSummary } from "../lib/inboundConfigurator";
 import type { CapabilityMap, Inbound, InboundInput } from "../lib/types";
 
 export function InboundsPage({
@@ -72,6 +72,7 @@ export function InboundsPage({
             <tbody>
               {filtered.map((inbound) => {
                 const summary = inboundSummary(inbound);
+                const notice = inboundCompatibilityNotice(inbound);
                 return (
                   <tr key={inbound.id}>
                     <td>
@@ -84,8 +85,9 @@ export function InboundsPage({
                     <td>{inbound.protocol}</td>
                     <td>{summary.network}</td>
                     <td>
-                      <div className="table-chips">
+                      <div className="table-chips" title={notice?.message ?? undefined}>
                         <Badge tone={summary.security === "none" ? "gray" : "cyan"}>{summary.security}</Badge>
+                        {notice ? <Badge tone={notice.tone === "warning" ? "amber" : "cyan"}>{notice.tone === "warning" ? "client-sensitive" : "tune"}</Badge> : null}
                       </div>
                     </td>
                     <td>
