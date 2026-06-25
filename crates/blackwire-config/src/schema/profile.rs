@@ -212,6 +212,7 @@ impl FastConfig {
         true
     }
 
+    /// Return the default userspace relay policy for fast profile configs.
     pub fn default_relay() -> FastRelayConfig {
         FastRelayConfig {
             engine: FastRelayEngine::V2,
