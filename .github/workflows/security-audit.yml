@@ -5,6 +5,11 @@ on:
   schedule:
     - cron: "30 2 * * 1"
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_HTTP_TIMEOUT: "120"
+  CARGO_NET_RETRY: "10"
+
 jobs:
   audit:
     name: Dependency audit
