@@ -844,9 +844,21 @@ fn json_text(value: Option<&Value>) -> String {
 }
 
 async fn apply_all(state: &AppState, try_live: bool) -> ApiResult<ApplyResult> {
-    config::write(state).map_err(|e| AppError::bad_request(e.to_string()))?;
+    let config_written = config::write_if_generated_inbounds(state)
+        .map_err(|e| AppError::bad_request(e.to_string()))?;
     let settings = current_settings(state)?;
     let firewall_note = firewall_note(state, &settings);
+    if !config_written {
+        return Ok(Json(ApplyResult {
+            config_valid: false,
+            config_written: false,
+            live_applied: false,
+            message: apply_message(
+                "saved in panel; generated config has no active inbounds yet",
+                firewall_note,
+            ),
+        }));
+    }
     if !try_live || !settings.grpc_enabled {
         return Ok(Json(ApplyResult {
             config_valid: true,

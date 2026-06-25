@@ -162,6 +162,28 @@ pub fn write(state: &AppState) -> Result<()> {
     };
     let value = build_value(state)?;
     validate_value(&value)?;
+    write_value(&settings, &value)
+}
+
+pub fn write_if_generated_inbounds(state: &AppState) -> Result<bool> {
+    let settings = {
+        let conn = state.lock_db()?;
+        db::load_settings(&conn)?
+    };
+    let value = build_value(state)?;
+    if value
+        .get("inbounds")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        return Ok(false);
+    }
+    validate_value(&value)?;
+    write_value(&settings, &value)?;
+    Ok(true)
+}
+
+fn write_value(settings: &Settings, value: &Value) -> Result<()> {
     if let Some(parent) = Path::new(&settings.config_path).parent() {
         std::fs::create_dir_all(parent)?;
     }
