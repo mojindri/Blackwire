@@ -1,9 +1,8 @@
 import { AlertCircle, Copy, KeyRound, RotateCcw, Save, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Inbound, ManagedUser, Settings, UserInput } from "../../lib/types";
-import { copyText } from "../../lib/clipboard";
 import { formatBytes } from "../../lib/format";
-import { fetchSubscriptionContent, subscriptionUrl } from "../../lib/subscription";
+import { copySubscriptionContent, subscriptionUrl } from "../../lib/subscription";
 import {
   activeUserProtocol,
   buildUserInput,
@@ -80,8 +79,7 @@ export function UserDrawer({
   };
 
   const copySubscription = async () => {
-    const subscription = await fetchSubscriptionContent(subUrl);
-    const result = subscription.ok ? await copyText(subscription.content) : subscription;
+    const result = await copySubscriptionContent(subUrl);
     setCopyFeedback(result.ok ? "Copied" : result.message);
     window.setTimeout(() => setCopyFeedback(""), 2600);
   };
