@@ -2,7 +2,7 @@
 //!
 //! Each datagram on the stream: `u16_be(addr_len) | address(port+atyp+host) | payload`.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -71,7 +71,10 @@ pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
 ) -> Result<(), ProxyError> {
     use tokio::net::UdpSocket;
 
-    let socket = UdpSocket::bind("0.0.0.0:0")
+    let socket_v4 = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| ProxyError::Transport(format!("VLESS UDP bind failed: {e}")))?;
+    let socket_v6 = UdpSocket::bind("[::]:0")
         .await
         .map_err(|e| ProxyError::Transport(format!("VLESS UDP bind failed: {e}")))?;
 
@@ -107,6 +110,11 @@ pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
 
         let upstream = resolve_udp_dest(&dest, dns.as_deref()).await?;
         wait_for_user_write_budget(user.as_deref(), UserBandwidthDirection::Upload, n).await;
+        let socket = if upstream.is_ipv6() {
+            &socket_v6
+        } else {
+            &socket_v4
+        };
         socket
             .send_to(&payload_buf[..n], upstream)
             .await
@@ -154,4 +162,17 @@ async fn resolve_udp_dest(
                 .ok_or_else(|| ProxyError::DnsResolutionFailed(name.clone()))
         }
     }
+}
+
+pub(crate) async fn bind_udp_socket_for(
+    upstream: SocketAddr,
+) -> Result<tokio::net::UdpSocket, ProxyError> {
+    let bind_addr = if upstream.is_ipv6() {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
+    };
+    tokio::net::UdpSocket::bind(bind_addr)
+        .await
+        .map_err(|e| ProxyError::Transport(format!("UDP bind failed: {e}")))
 }

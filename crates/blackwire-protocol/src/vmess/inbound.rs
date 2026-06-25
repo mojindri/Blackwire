@@ -44,6 +44,7 @@ use super::codec::{
     Security, VmessCommand,
 };
 use super::stream::VmessStream;
+use crate::vless::mux::relay_mux_cool;
 
 // ── User registry ─────────────────────────────────────────────────────────────
 
@@ -271,8 +272,12 @@ impl InboundHandler for VmessInbound {
         }
 
         let vmess_stream: BoxedStream = Box::new(vmess_stream);
-
         let ctx = Context::new(self.tag.clone(), source).with_user(user.email);
+        if request.command == VmessCommand::Mux {
+            debug!(source = %source, "VMess Mux.Cool — demux sub-connections");
+            return relay_mux_cool(vmess_stream, ctx, dispatcher).await;
+        }
+
         dispatcher.dispatch(ctx, request.dest, vmess_stream).await
     }
 }
@@ -291,12 +296,7 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let upstream = resolve_udp_dest(&dest).await?;
-    let bind_addr = if upstream.is_ipv6() {
-        "[::]:0"
-    } else {
-        "0.0.0.0:0"
-    };
-    let socket = UdpSocket::bind(bind_addr)
+    let socket = bind_udp_socket_for(upstream)
         .await
         .map_err(|e| ProxyError::Transport(format!("VMess UDP bind failed: {e}")))?;
     socket
@@ -385,6 +385,15 @@ where
     pool.release(response);
 
     result
+}
+
+async fn bind_udp_socket_for(upstream: std::net::SocketAddr) -> std::io::Result<UdpSocket> {
+    let bind_addr = if upstream.is_ipv6() {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
+    };
+    UdpSocket::bind(bind_addr).await
 }
 
 async fn resolve_udp_dest(dest: &blackwire_common::Address) -> Result<SocketAddr, ProxyError> {
