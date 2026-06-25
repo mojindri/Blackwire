@@ -75,20 +75,24 @@ struct TuicAuthUser {
     label: Option<Arc<str>>,
 }
 
+/// Reloadable TUIC v5 user credential store.
 #[derive(Debug, Default)]
 pub struct TuicAuthStore {
     users: ArcSwap<Vec<TuicUser>>,
 }
 
 impl TuicAuthStore {
+    /// Creates an empty shared TUIC authentication store.
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
+    /// Atomically replaces the accepted TUIC users.
     pub fn replace_users(&self, users: Vec<TuicUser>) {
         self.users.store(Arc::new(users));
     }
 
+    /// Returns the current TUIC user snapshot.
     pub fn snapshot(&self) -> Arc<Vec<TuicUser>> {
         self.users.load_full()
     }

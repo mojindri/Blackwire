@@ -53,27 +53,34 @@ use crate::quic::{
 
 pub use udp::{DatagramLane, DatagramPolicy, DatagramPriorityMode, FecMode, FecPolicy};
 
+/// Current Hysteria2 authentication material shared by the listener.
 #[derive(Debug, Clone)]
 pub struct Hysteria2AuthState {
+    /// Shared password accepted by the Hysteria2 inbound.
     pub password: String,
+    /// Optional user label used for per-user traffic statistics and limits.
     pub user: Option<String>,
 }
 
+/// Reloadable Hysteria2 authentication store.
 #[derive(Debug, Default)]
 pub struct Hysteria2AuthStore {
     state: ArcSwap<Option<Hysteria2AuthState>>,
 }
 
 impl Hysteria2AuthStore {
+    /// Creates an empty shared authentication store.
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
+    /// Atomically replaces the accepted password and optional user label.
     pub fn replace(&self, password: String, user: Option<String>) {
         self.state
             .store(Arc::new(Some(Hysteria2AuthState { password, user })));
     }
 
+    /// Returns the current authentication state, if configured.
     pub fn load(&self) -> Option<Arc<Hysteria2AuthState>> {
         let state = self.state.load();
         state.as_ref().as_ref().map(|inner| Arc::new(inner.clone()))
