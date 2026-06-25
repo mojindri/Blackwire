@@ -8,8 +8,24 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.3 - 2026-06-25
+
+### Changed
+
+- Fast profile relay defaults now use relay v2 with adaptive flushing, reducing
+  syscall pressure under concurrent streams while preserving low-latency
+  behavior.
+- Black UI user copy actions now copy fetched subscription content instead of
+  the `/sub/{token}` URL.
+
 ### Fixed
 
+- VLESS mux no longer shares one locked upstream object across read and write
+  directions, avoiding write stalls behind pending reads and reducing per-frame
+  allocation churn.
+- Process-wide connection limits are now shared across TCP listener shards and
+  QUIC-family inbounds, including Hysteria2 and TUIC, so `limits.maxConnections`
+  behaves consistently.
 - Black UI no longer offers `quic` as an inbound sniffing `destOverride`
   option. Runtime sniffing currently supports `http`, `tls`, and `fakedns`;
   copied client links remain unchanged because sniffing is server-side inbound
