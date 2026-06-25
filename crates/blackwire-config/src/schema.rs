@@ -159,6 +159,15 @@ pub struct LimitsConfig {
     )]
     pub max_connections_per_inbound: Option<usize>,
 
+    /// Maximum concurrent authenticated connections per user across all inbounds.
+    #[serde(
+        default,
+        rename = "maxConnectionsPerUser",
+        alias = "max_connections_per_user",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_connections_per_user: Option<usize>,
+
     /// Wall-clock limit for inbound **handshake only** (REALITY/TLS/VLESS header).
     /// Does not cut off an established relay. Omitted = no limit.
     #[serde(

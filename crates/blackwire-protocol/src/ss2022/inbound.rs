@@ -27,6 +27,7 @@ use aes_gcm::{
 };
 use async_trait::async_trait;
 use bytes::BytesMut;
+use parking_lot::RwLock;
 use rand::RngExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, warn};
@@ -34,6 +35,7 @@ use tracing::{debug, warn};
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::InboundHandler;
+use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_common::{BoxedStream, Network, PrependedStream, ProxyError};
 
 use super::{
@@ -44,18 +46,47 @@ use super::{
 const MAX_TIME_DIFF: u64 = 30;
 const TYPE_TCP: u8 = 0x00;
 const TYPE_SERVER: u8 = 0x01;
+
+#[derive(Debug, Clone)]
+pub struct Ss2022AuthState {
+    pub psk: [u8; 32],
+    pub user: Option<Arc<str>>,
+}
+
+#[derive(Default)]
+pub struct Ss2022AuthStore {
+    state: RwLock<Option<Ss2022AuthState>>,
+}
+
+impl Ss2022AuthStore {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    pub fn replace_password(&self, password: &str, user: Option<impl Into<Arc<str>>>) {
+        *self.state.write() = Some(Ss2022AuthState {
+            psk: password_to_psk(password),
+            user: user.map(Into::into),
+        });
+    }
+
+    pub fn load(&self) -> Option<Ss2022AuthState> {
+        self.state.read().clone()
+    }
+}
+
 /// SS-2022 inbound handler that accepts encrypted TCP sessions.
 pub struct Ss2022Inbound {
     tag: Arc<str>,
-    psk: [u8; 32],
+    auth: Arc<Ss2022AuthStore>,
     replay: SaltReplay,
-    user: Option<Arc<str>>,
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
 }
 
 impl Ss2022Inbound {
     /// Build a new SS-2022 inbound handler from tag and password.
     pub fn new(tag: impl Into<Arc<str>>, password: &str) -> Arc<Self> {
-        Self::new_with_user(tag, password, None)
+        Self::new_with_user(tag, password, None, None)
     }
 
     /// Build a new SS-2022 inbound handler with an optional stats label.
@@ -63,12 +94,23 @@ impl Ss2022Inbound {
         tag: impl Into<Arc<str>>,
         password: &str,
         user: Option<String>,
+        user_limiter: Option<Arc<UserConnectionLimiter>>,
+    ) -> Arc<Self> {
+        let auth = Ss2022AuthStore::new();
+        auth.replace_password(password, user);
+        Self::new_with_auth_store(tag, auth, user_limiter)
+    }
+
+    pub fn new_with_auth_store(
+        tag: impl Into<Arc<str>>,
+        auth: Arc<Ss2022AuthStore>,
+        user_limiter: Option<Arc<UserConnectionLimiter>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
-            psk: password_to_psk(password),
+            auth,
             replay: SaltReplay::new(),
-            user: user.as_deref().map(Arc::from),
+            user_limiter,
         })
     }
 }
@@ -88,6 +130,10 @@ impl InboundHandler for Ss2022Inbound {
         source: SocketAddr,
         dispatcher: Arc<dyn Dispatcher>,
     ) -> Result<(), ProxyError> {
+        let auth = self
+            .auth
+            .load()
+            .ok_or_else(|| ProxyError::Protocol("SS-2022 auth store is empty".into()))?;
         // Buffer the header reads. SS-2022 request header: salt(32) + fixed_ct(27) +
         // var_ct(variable). A 128-byte BufReader covers salt + fixed_ct in one syscall
         // and often the variable header too. Leftover bytes are recovered via PrependedStream.
@@ -100,7 +146,7 @@ impl InboundHandler for Ss2022Inbound {
             return Err(ProxyError::AuthFailed);
         }
 
-        let req_subkey = derive_subkey(&self.psk, &req_salt);
+        let req_subkey = derive_subkey(&auth.psk, &req_salt);
         let req_cipher = Aes256Gcm::new(GenericArray::from_slice(&req_subkey));
 
         // SIP022 request fixed header: type(1) | timestamp(8 BE) | length(2 BE)
@@ -140,10 +186,28 @@ impl InboundHandler for Ss2022Inbound {
         let (dest, initial_payload) = parse_variable_header(&variable)?;
         debug!(source = %source, dest = %dest, "SS-2022 inbound authenticated");
 
+        let _user_permit = if let (Some(limiter), Some(user)) = (&self.user_limiter, &auth.user) {
+            match limiter.try_acquire(Some(user)) {
+                Some(permit) => Some(permit),
+                None => {
+                    warn!(
+                        source = %source,
+                        inbound = %self.tag,
+                        user = %user,
+                        max = limiter.max_connections_per_user(),
+                        "per-user connection limit reached; dropping SS-2022 connection"
+                    );
+                    return Ok(());
+                }
+            }
+        } else {
+            None
+        };
+
         let mut resp_salt = [0u8; 32];
         rand::rng().fill(&mut resp_salt[..]);
         stream.write_all(&resp_salt).await?;
-        let resp_subkey = derive_subkey(&self.psk, &resp_salt);
+        let resp_subkey = derive_subkey(&auth.psk, &resp_salt);
 
         // Send response fixed header eagerly (initial_payload_len=0) so the
         // client can finish its handshake before the echo data arrives.
@@ -188,7 +252,7 @@ impl InboundHandler for Ss2022Inbound {
             None,
         );
 
-        let ctx = match self.user.clone() {
+        let ctx = match auth.user.clone() {
             Some(user) => Context::new(self.tag.clone(), source).with_user(user),
             None => Context::new(self.tag.clone(), source),
         };

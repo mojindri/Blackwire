@@ -6,8 +6,10 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
+use dashmap::DashMap;
 
 use blackwire_app::features::{InboundHandler, OutboundHandler};
+use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_protocol::vmess::{
     VmessInbound, VmessOutbound, VmessOutboundConfig, VmessUserRegistry,
 };
@@ -18,9 +20,23 @@ use crate::outbound_transport::{uses_outbound_transport, TransportVmessOutbound}
 /// Build a VMess inbound handler from config.
 pub(crate) fn build_vmess_inbound(
     cfg: &blackwire_config::schema::InboundConfig,
+    registries: &Arc<DashMap<String, Arc<VmessUserRegistry>>>,
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
 ) -> Result<Arc<dyn InboundHandler>> {
-    let registry = VmessUserRegistry::new();
+    #[allow(clippy::unwrap_or_default)]
+    let registry = registries
+        .entry(cfg.tag.clone())
+        .or_insert_with(VmessUserRegistry::new)
+        .clone();
+    populate_vmess_registry(&registry, cfg)?;
+    Ok(VmessInbound::new(cfg.tag.as_str(), registry, user_limiter))
+}
 
+pub(crate) fn populate_vmess_registry(
+    registry: &VmessUserRegistry,
+    cfg: &blackwire_config::schema::InboundConfig,
+) -> Result<()> {
+    registry.clear();
     let clients = cfg.settings["clients"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("VMess inbound '{}' missing 'clients' array", cfg.tag))?;
@@ -38,8 +54,7 @@ pub(crate) fn build_vmess_inbound(
         let email = client["email"].as_str().unwrap_or("").to_string();
         registry.add_user(uuid, email);
     }
-
-    Ok(VmessInbound::new(cfg.tag.as_str(), registry))
+    Ok(())
 }
 
 /// Build a VMess outbound handler from config.

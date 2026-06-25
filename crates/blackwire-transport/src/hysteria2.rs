@@ -23,9 +23,11 @@ use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::OutboundHandler;
+use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_common::{Address, BoxedStream, ProxyError, ReunionStream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
@@ -51,6 +53,33 @@ use crate::quic::{
 
 pub use udp::{DatagramLane, DatagramPolicy, DatagramPriorityMode, FecMode, FecPolicy};
 
+#[derive(Debug, Clone)]
+pub struct Hysteria2AuthState {
+    pub password: String,
+    pub user: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct Hysteria2AuthStore {
+    state: ArcSwap<Option<Hysteria2AuthState>>,
+}
+
+impl Hysteria2AuthStore {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    pub fn replace(&self, password: String, user: Option<String>) {
+        self.state
+            .store(Arc::new(Some(Hysteria2AuthState { password, user })));
+    }
+
+    pub fn load(&self) -> Option<Arc<Hysteria2AuthState>> {
+        let state = self.state.load();
+        state.as_ref().as_ref().map(|inner| Arc::new(inner.clone()))
+    }
+}
+
 /// Configuration for a Hysteria2 inbound server.
 #[derive(Debug, Clone)]
 pub struct Hysteria2ServerConfig {
@@ -58,10 +87,8 @@ pub struct Hysteria2ServerConfig {
     pub tag: String,
     /// Socket address to listen on (for example `0.0.0.0:443`).
     pub addr: SocketAddr,
-    /// Shared password that clients must send during HTTP/3 auth.
-    pub password: String,
-    /// Optional authenticated user label used for per-user runtime stats.
-    pub user: Option<String>,
+    /// Shared auth store refreshed in place on config reload.
+    pub auth: Arc<Hysteria2AuthStore>,
     /// Max client → server rate in Mbps (server receive / `Hysteria-CC-RX` in auth response).
     pub up_mbps: u64,
     /// Max server → client rate in Mbps (used for Brutal on server→client path when enabled).
@@ -74,6 +101,8 @@ pub struct Hysteria2ServerConfig {
     pub max_connections: Option<usize>,
     /// Optional process-wide connection limiter shared across inbound servers.
     pub shared_limiter: Option<Arc<Semaphore>>,
+    /// Optional authenticated per-user QUIC session limiter.
+    pub user_limiter: Option<Arc<UserConnectionLimiter>>,
     /// QUIC congestion policy for server-to-client response traffic.
     pub congestion: CongestionConfig,
     /// UDP socket tuning and server endpoint sharding policy.

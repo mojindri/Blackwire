@@ -85,6 +85,7 @@ use crate::metrics::{
 };
 use crate::router::{normalize_routing_domain_strategy, Router, RoutingDomainStrategy};
 use crate::runtime_stats;
+use crate::user_bandwidth::{shape_stream_writes_for_user, wait_for_user_write_budget};
 
 struct RoutedOutboundConnectResult {
     connect: crate::features::OutboundConnectResult,
@@ -535,9 +536,20 @@ impl Dispatcher for DefaultDispatcher {
             }
             _ => outbound.connect.stream,
         };
+        let upload_user = ctx.user.as_ref().map(Arc::clone);
         let (inbound_stream, outbound_stream, prewritten_up) = self
             .guard_pooled_first_write(&ctx, &dest, inbound_stream, outbound_stream)
             .await?;
+        let inbound_stream = shape_stream_writes_for_user(
+            inbound_stream,
+            ctx.user.as_ref(),
+            crate::UserBandwidthDirection::Download,
+        );
+        let outbound_stream = shape_stream_writes_for_user(
+            outbound_stream,
+            ctx.user.as_ref(),
+            crate::UserBandwidthDirection::Upload,
+        );
 
         relay_log!(self.profile, dest = %dest, inbound = %ctx.inbound_tag, "relay started");
         let protocol = ctx
@@ -574,6 +586,14 @@ impl Dispatcher for DefaultDispatcher {
             traffic_buffer.record(up, down);
         });
         let prewritten_up = prewritten_up + prewritten_early_up;
+        if prewritten_up > 0 {
+            wait_for_user_write_budget(
+                upload_user.as_deref(),
+                crate::UserBandwidthDirection::Upload,
+                prewritten_up as usize,
+            )
+            .await;
+        }
 
         let relay = crate::relay::relay_bidirectional_with_policies_and_recorder(
             inbound_stream,
