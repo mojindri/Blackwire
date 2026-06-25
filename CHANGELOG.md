@@ -8,6 +8,30 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.4 - 2026-06-25
+
+### Changed
+
+- Per-user connection caps are wired into startup and hot-reload paths, so
+  `limits.maxConnectionsPerUser` updates can be applied without rebuilding the
+  whole instance when the limiter is already active.
+- Runtime user bandwidth policies and managed auth stores for VLESS, VMess,
+  Trojan, Shadowsocks 2022, Hysteria2, and TUIC are refreshed more consistently
+  during Black UI config synchronization.
+- Black UI panel mutations now refresh state even when a save partially
+  succeeds but live apply/config generation cannot complete yet, so newly saved
+  rows remain visible for follow-up edits.
+- Black UI save/apply responses now treat the intermediate "no active generated
+  inbounds yet" panel state as a non-400 pending state instead of surfacing a
+  browser console error during first inbound/user setup.
+
+### Fixed
+
+- Restored the Black UI browser/API QA flow after the subscription copy action
+  was intentionally renamed to `Copy subscription content`.
+- Fixed workspace CI coverage for integration tests and strict rustdoc after
+  reloadable auth-store API changes.
+
 ## 0.1.3 - 2026-06-25
 
 ### Changed
