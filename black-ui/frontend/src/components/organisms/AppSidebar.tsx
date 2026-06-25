@@ -1,4 +1,5 @@
 import { Cable, FileJson, Gauge, Route, ServerCog, Settings, SlidersHorizontal, Users, Waypoints } from "lucide-react";
+import packageInfo from "../../../package.json";
 import type { PageKey } from "../../lib/types";
 
 const items: Array<{ key: PageKey; label: string; icon: typeof Gauge }> = [
@@ -17,7 +18,10 @@ export function AppSidebar({ page, onPage }: { page: PageKey; onPage: (page: Pag
     <aside className="sidebar">
       <div className="brand">
         <Cable size={24} />
-        <span>Blackwire</span>
+        <div className="brand-text">
+          <span>Blackwire</span>
+          <small>v{packageInfo.version}</small>
+        </div>
       </div>
       <nav>
         {items.map((item) => {

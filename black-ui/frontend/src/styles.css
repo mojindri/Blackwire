@@ -71,6 +71,18 @@ button {
   color: #00a7b2;
 }
 
+.brand-text {
+  display: grid;
+  gap: 2px;
+  line-height: 1.05;
+}
+
+.brand-text small {
+  color: #8ea0b5;
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .sidebar nav {
   display: grid;
   gap: 8px;
