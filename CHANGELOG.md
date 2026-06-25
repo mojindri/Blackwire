@@ -8,6 +8,26 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.7 - 2026-06-26
+
+### Changed
+
+- Client compatibility warnings were added for QUIC/TUIC/Hysteria2 in the Black UI
+  inbound editor to make unsupported or sensitive combinations visible before you save
+  or test links.
+- Subscription generation and copy now keeps compatibility labels for `experimental`
+  and `client-sensitive` transport/protocol options, while continuing to preserve
+  link content integrity.
+
+### Fixed
+
+- TUIC/VMess/VLESS UDP relay families now use destination-family-aware socket
+  handling, so IPv6/IPv4 mixing is less likely to trigger OS family mismatch and
+  connection failures under UDP-heavy conditions.
+- V2Ray/Sing-box interoperability paths now prefer IPv4 on mixed DNS answers for
+  UDP relay resolution in vless/udp and vless/mux, reducing resolution ambiguity
+  for edge cases.
+
 ## 0.1.6 - 2026-06-26
 
 ### Fixed
