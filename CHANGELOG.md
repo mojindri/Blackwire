@@ -8,6 +8,15 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.1 - 2026-06-25
+
+### Fixed
+
+- Inbound sniffing now analyzes protocol early payload before applying
+  `destOverride`, so VLESS/VMess/Trojan clients that pass the first HTTP/TLS
+  bytes through dispatcher early payload can still override IP destinations
+  from sniffed Host/SNI metadata.
+
 ## 0.1.0 - 2026-06-25
 
 ### Changed
