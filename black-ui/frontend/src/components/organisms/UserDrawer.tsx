@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Inbound, ManagedUser, Settings, UserInput } from "../../lib/types";
 import { copyText } from "../../lib/clipboard";
 import { formatBytes } from "../../lib/format";
-import { subscriptionUrl } from "../../lib/subscription";
+import { fetchSubscriptionContent, subscriptionUrl } from "../../lib/subscription";
 import {
   activeUserProtocol,
   buildUserInput,
@@ -80,8 +80,9 @@ export function UserDrawer({
   };
 
   const copySubscription = async () => {
-    const result = await copyText(subUrl);
-    setCopyFeedback(result.ok ? "Copied" : "Copy failed. Select the URL and copy manually.");
+    const subscription = await fetchSubscriptionContent(subUrl);
+    const result = subscription.ok ? await copyText(subscription.content) : subscription;
+    setCopyFeedback(result.ok ? "Copied" : result.message);
     window.setTimeout(() => setCopyFeedback(""), 2600);
   };
 
@@ -287,7 +288,7 @@ export function UserDrawer({
               </div>
               <div className="copy-row">
                 <Input value={subUrl} readOnly />
-                <IconButton label="Copy subscription URL" onClick={copySubscription} disabled={!subUrl}>
+                <IconButton label="Copy subscription content" onClick={copySubscription} disabled={!subUrl}>
                   <Copy size={16} />
                 </IconButton>
               </div>
