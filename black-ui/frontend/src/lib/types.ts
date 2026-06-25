@@ -135,7 +135,7 @@ export interface TrafficSnapshot {
 export interface CapabilityItem {
   key: string;
   label: string;
-  status: "supported" | "experimental" | "unsupported";
+  status: "supported" | "experimental" | "deprecated" | "unsupported";
   notes: string;
 }
 

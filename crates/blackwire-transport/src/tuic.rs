@@ -743,8 +743,10 @@ struct UdpSession {
     last_used: Instant,
 }
 
+type UdpSessionKey = (u16, bool);
+
 async fn serve_udp_datagrams(conn: Connection, user: Option<Arc<str>>, inbound_tag: Arc<str>) {
-    let sessions: Arc<DashMap<u16, UdpSession>> = Arc::new(DashMap::new());
+    let sessions: Arc<DashMap<UdpSessionKey, UdpSession>> = Arc::new(DashMap::new());
     let workers = Arc::new(Semaphore::new(MAX_UDP_WORKERS_PER_CONN));
     loop {
         let raw = match conn.read_datagram().await {
@@ -779,7 +781,7 @@ async fn serve_udp_datagrams(conn: Connection, user: Option<Arc<str>>, inbound_t
 
 async fn handle_udp_packet(
     conn: Connection,
-    sessions: Arc<DashMap<u16, UdpSession>>,
+    sessions: Arc<DashMap<UdpSessionKey, UdpSession>>,
     packet: TuicUdpPacket,
     inbound_tag: Arc<str>,
     user: Option<Arc<str>>,
@@ -791,15 +793,21 @@ async fn handle_udp_packet(
             return;
         }
     };
-    let socket = if let Some(mut session) = sessions.get_mut(&packet.assoc_id) {
+    let session_key = (packet.assoc_id, dest.is_ipv6());
+    let socket = if let Some(mut session) = sessions.get_mut(&session_key) {
         session.last_used = Instant::now();
         Arc::clone(&session.socket)
     } else {
-        match UdpSocket::bind("0.0.0.0:0").await {
+        let bind_addr = if dest.is_ipv6() {
+            "[::]:0"
+        } else {
+            "0.0.0.0:0"
+        };
+        match UdpSocket::bind(bind_addr).await {
             Ok(socket) => {
                 let socket = Arc::new(socket);
                 sessions.insert(
-                    packet.assoc_id,
+                    session_key,
                     UdpSession {
                         socket: Arc::clone(&socket),
                         last_used: Instant::now(),
@@ -869,12 +877,29 @@ async fn resolve_address(addr: &Address) -> Result<SocketAddr, ProxyError> {
     match addr {
         Address::Ipv4(ip, port) => Ok(SocketAddr::new(IpAddr::V4(*ip), *port)),
         Address::Ipv6(ip, port) => Ok(SocketAddr::new(IpAddr::V6(*ip), *port)),
-        Address::Domain(host, port) => tokio::net::lookup_host((host.as_str(), *port))
-            .await
-            .map_err(|e| ProxyError::Transport(e.to_string()))?
-            .next()
-            .ok_or_else(|| ProxyError::DnsResolutionFailed(host.clone())),
+        Address::Domain(host, port) => {
+            let addrs = tokio::net::lookup_host((host.as_str(), *port))
+                .await
+                .map_err(|e| ProxyError::Transport(e.to_string()))?;
+            prefer_ipv4(addrs).ok_or_else(|| ProxyError::DnsResolutionFailed(host.clone()))
+        }
     }
+}
+
+fn prefer_ipv4<I>(addrs: I) -> Option<SocketAddr>
+where
+    I: IntoIterator<Item = SocketAddr>,
+{
+    let mut first = None;
+    for addr in addrs {
+        if first.is_none() {
+            first = Some(addr);
+        }
+        if addr.is_ipv4() {
+            return Some(addr);
+        }
+    }
+    first
 }
 
 /// A client-side TUIC v5 native UDP session.
@@ -975,5 +1000,14 @@ mod tests {
         assert_eq!(decoded.pkt_id, 9);
         assert_eq!(decoded.addr, Address::Domain("example.com".into(), 443));
         assert_eq!(&decoded.data[..], b"hello");
+    }
+
+    #[test]
+    fn udp_domain_resolution_prefers_ipv4_when_available() {
+        let v6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 53);
+        let v4 = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53);
+
+        assert_eq!(prefer_ipv4([v6, v4]), Some(v4));
+        assert_eq!(prefer_ipv4([v6]), Some(v6));
     }
 }
