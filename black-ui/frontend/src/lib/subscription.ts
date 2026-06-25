@@ -7,6 +7,25 @@ export function subscriptionUrl(settings: Settings | null, token: string): strin
   return `${subscriptionBaseUrl(settings)}/sub/${token}`;
 }
 
+export async function fetchSubscriptionContent(url: string): Promise<{ ok: boolean; content: string; message: string }> {
+  if (!url) return { ok: false, content: "", message: "Nothing to copy" };
+
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) {
+      return { ok: false, content: "", message: `Subscription returned ${response.status}` };
+    }
+
+    const content = await response.text();
+    if (!content.trim()) {
+      return { ok: false, content: "", message: "Subscription is empty" };
+    }
+    return { ok: true, content, message: "Copied" };
+  } catch {
+    return { ok: false, content: "", message: "Subscription fetch failed" };
+  }
+}
+
 function subscriptionBaseUrl(settings: Settings): string {
   const configured = settings.publicBaseUrl.trim();
   if (!configured) return currentOrigin();
