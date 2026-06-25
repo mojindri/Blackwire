@@ -47,22 +47,28 @@ const MAX_TIME_DIFF: u64 = 30;
 const TYPE_TCP: u8 = 0x00;
 const TYPE_SERVER: u8 = 0x01;
 
+/// Current Shadowsocks 2022 authentication material.
 #[derive(Debug, Clone)]
 pub struct Ss2022AuthState {
+    /// Pre-shared key derived from the configured password.
     pub psk: [u8; 32],
+    /// Optional user label used for per-user traffic statistics and limits.
     pub user: Option<Arc<str>>,
 }
 
+/// Reloadable Shadowsocks 2022 authentication store.
 #[derive(Default)]
 pub struct Ss2022AuthStore {
     state: RwLock<Option<Ss2022AuthState>>,
 }
 
 impl Ss2022AuthStore {
+    /// Creates an empty shared authentication store.
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
+    /// Atomically replaces the accepted password and optional user label.
     pub fn replace_password(&self, password: &str, user: Option<impl Into<Arc<str>>>) {
         *self.state.write() = Some(Ss2022AuthState {
             psk: password_to_psk(password),
@@ -70,6 +76,7 @@ impl Ss2022AuthStore {
         });
     }
 
+    /// Returns the current authentication state, if configured.
     pub fn load(&self) -> Option<Ss2022AuthState> {
         self.state.read().clone()
     }
@@ -101,6 +108,7 @@ impl Ss2022Inbound {
         Self::new_with_auth_store(tag, auth, user_limiter)
     }
 
+    /// Build a new SS-2022 inbound handler from a shared reloadable auth store.
     pub fn new_with_auth_store(
         tag: impl Into<Arc<str>>,
         auth: Arc<Ss2022AuthStore>,

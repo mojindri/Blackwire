@@ -69,16 +69,19 @@ struct TrojanToken {
     user: Option<Arc<str>>,
 }
 
+/// Reloadable Trojan token store.
 #[derive(Default)]
 pub struct TrojanAuthStore {
     tokens: RwLock<Vec<TrojanToken>>,
 }
 
 impl TrojanAuthStore {
+    /// Creates an empty shared token store.
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
+    /// Atomically replaces all accepted Trojan users.
     pub fn replace_users(&self, users: &[TrojanUser]) {
         let tokens = users
             .iter()
@@ -95,6 +98,7 @@ impl TrojanAuthStore {
         *self.tokens.write() = tokens;
     }
 
+    /// Validates a Trojan token and returns its optional user label.
     pub fn validate_token(&self, token: &[u8; TOKEN_LEN]) -> Option<Option<Arc<str>>> {
         self.tokens
             .read()
@@ -103,10 +107,12 @@ impl TrojanAuthStore {
             .map(|expected| expected.user.clone())
     }
 
+    /// Returns the number of accepted Trojan users.
     pub fn len(&self) -> usize {
         self.tokens.read().len()
     }
 
+    /// Returns true when no Trojan users are configured.
     pub fn is_empty(&self) -> bool {
         self.tokens.read().is_empty()
     }

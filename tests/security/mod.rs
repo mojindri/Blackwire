@@ -56,6 +56,7 @@ async fn bad_vless_auth_never_dispatches_outbound() {
         None,
         Some(Duration::from_secs(1)),
         None,
+        None,
     );
     let dispatcher = Arc::new(CountingDispatcher {
         calls: AtomicUsize::new(0),
