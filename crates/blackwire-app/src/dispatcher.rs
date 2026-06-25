@@ -468,8 +468,17 @@ impl Dispatcher for DefaultDispatcher {
         let sniff_cfg = self.sniffing.load().get(&*ctx.inbound_tag).cloned();
         if let Some(cfg) = sniff_cfg {
             if cfg.enabled {
-                let (stream, mut sniff) = crate::sniff::sniff_stream(inbound_stream, &cfg).await?;
-                inbound_stream = stream;
+                let mut sniff = match early_payload.as_deref() {
+                    Some(payload) if !payload.is_empty() && !cfg.metadata_only => {
+                        crate::sniff::analyze_peek(payload, &cfg)
+                    }
+                    _ => {
+                        let (stream, sniff) =
+                            crate::sniff::sniff_stream(inbound_stream, &cfg).await?;
+                        inbound_stream = stream;
+                        sniff
+                    }
+                };
                 // FakeDNS sniffing: metadata-only (no byte peek) — check if dest is a fake IP.
                 if sniff.domain.is_none() && cfg.dest_override.iter().any(|p| p == "fakedns") {
                     if let Some(dns) = &self.dns {
@@ -1083,7 +1092,7 @@ mod tests {
     use crate::router::{Route, RoutingContext};
     use blackwire_config::schema::{
         FastLinuxConfig, FastPoolPolicy, FastRelayConfig, FastRelayEngine, FastRelayFlushPolicy,
-        FastSplicePolicy, VisionConfig, VisionDirectCopyPolicy,
+        FastSplicePolicy, SniffingConfig, VisionConfig, VisionDirectCopyPolicy,
     };
 
     struct StaticRouter;
@@ -1143,6 +1152,80 @@ mod tests {
         assert_eq!(
             runtime_stats::get(&format!("inbound>>>{}>>>traffic>>>uplink", inbound), false),
             Some(LIVE_TRAFFIC_FLUSH_BYTES as i64)
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_sniffs_early_payload_before_dest_override() {
+        use std::sync::Mutex as StdMutex;
+
+        struct CaptureDestOutbound {
+            captured: Arc<StdMutex<Option<Address>>>,
+        }
+
+        #[async_trait]
+        impl OutboundHandler for CaptureDestOutbound {
+            fn tag(&self) -> &str {
+                "unused"
+            }
+
+            async fn connect(
+                &self,
+                _ctx: &Context,
+                dest: &Address,
+            ) -> Result<BoxedStream, ProxyError> {
+                *self.captured.lock().unwrap() = Some(dest.clone());
+                Err(ProxyError::Transport("stop after capture".into()))
+            }
+
+            async fn connect_with_early_payload(
+                &self,
+                _ctx: &Context,
+                dest: &Address,
+                _early_payload: Option<&[u8]>,
+            ) -> Result<crate::features::OutboundConnectResult, ProxyError> {
+                *self.captured.lock().unwrap() = Some(dest.clone());
+                Err(ProxyError::Transport("stop after capture".into()))
+            }
+        }
+
+        let captured = Arc::new(StdMutex::new(None));
+        let mut outbounds: HashMap<String, Arc<dyn OutboundHandler>> = HashMap::new();
+        outbounds.insert(
+            "unused".to_string(),
+            Arc::new(CaptureDestOutbound {
+                captured: Arc::clone(&captured),
+            }),
+        );
+
+        let mut sniffing = HashMap::new();
+        sniffing.insert(
+            "test-in".to_string(),
+            Arc::new(SniffingConfig {
+                enabled: true,
+                dest_override: vec!["http".into()],
+                ..Default::default()
+            }),
+        );
+        let dispatcher = DefaultDispatcher::new_with_sniffing(
+            Arc::new(StaticRouter),
+            outbounds,
+            Arc::new(ArcSwap::from_pointee(sniffing)),
+        );
+
+        let (_inbound_peer, inbound_for_relay) = tokio::io::duplex(1024);
+        let ctx = Context::new("test-in", "127.0.0.1:1080".parse().unwrap());
+        let dest = Address::Ipv4("8.8.8.8".parse().unwrap(), 80);
+        let early = b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n".to_vec();
+
+        let result = dispatcher
+            .dispatch_with_early_payload(ctx, dest, Box::new(inbound_for_relay), Some(early))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            captured.lock().unwrap().as_ref(),
+            Some(&Address::Domain("example.com".into(), 80))
         );
     }
 
