@@ -34,6 +34,7 @@ use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::dns::DnsModule;
 use blackwire_app::features::InboundHandler;
+use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_common::{
     copy_bidirectional_with_idle, tcp_connect, with_handshake_timeout, BoxedStream, Network,
     PrependedStream, ProxyError, CONNECTION_IDLE_TIMEOUT,
@@ -62,6 +63,8 @@ pub struct VlessInbound {
     /// DNS module for UDP relay domain resolution. When present, UDP DNS
     /// queries route through the configured resolver instead of the OS resolver.
     dns: Option<Arc<DnsModule>>,
+    /// Optional authenticated per-user connection limiter.
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
 }
 
 impl VlessInbound {
@@ -78,6 +81,7 @@ impl VlessInbound {
         fallback: Option<SocketAddr>,
         handshake_timeout: Option<Duration>,
         dns: Option<Arc<DnsModule>>,
+        user_limiter: Option<Arc<UserConnectionLimiter>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
@@ -85,6 +89,7 @@ impl VlessInbound {
             fallback,
             handshake_timeout,
             dns,
+            user_limiter,
         })
     }
 }
@@ -165,6 +170,24 @@ impl InboundHandler for VlessInbound {
                             flow = %req.flow,
                             "VLESS authenticated"
                         );
+
+                        let _user_permit = if let Some(limiter) = &self.user_limiter {
+                            match limiter.try_acquire(Some(&user.email)) {
+                                Some(permit) => Some(permit),
+                                None => {
+                                    warn!(
+                                        source = %source,
+                                        inbound = %self.tag,
+                                        user = %user.email,
+                                        max = limiter.max_connections_per_user(),
+                                        "per-user connection limit reached; dropping VLESS connection"
+                                    );
+                                    return Ok(());
+                                }
+                            }
+                        } else {
+                            None
+                        };
 
                         // Send the VLESS response header to the client.
                         let resp = encode_response();

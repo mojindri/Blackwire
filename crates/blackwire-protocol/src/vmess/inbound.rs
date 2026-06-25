@@ -34,6 +34,8 @@ use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::InboundHandler;
 use blackwire_app::runtime_stats;
+use blackwire_app::user_limits::UserConnectionLimiter;
+use blackwire_app::{wait_for_user_write_budget, UserBandwidthDirection};
 use blackwire_common::{BoxedStream, BufferPool, Network, PrependedStream, ProxyError};
 
 use super::auth::{cmd_key, validate_auth_id, MAX_TIME_DIFF_SECS};
@@ -93,6 +95,21 @@ impl VmessUserRegistry {
         }
         None
     }
+
+    /// Remove every registered user.
+    pub fn clear(&self) {
+        self.users.clear();
+    }
+
+    /// Return the number of registered users.
+    pub fn len(&self) -> usize {
+        self.users.len()
+    }
+
+    /// Return whether the registry has no registered users.
+    pub fn is_empty(&self) -> bool {
+        self.users.is_empty()
+    }
 }
 
 impl Default for VmessUserRegistry {
@@ -109,14 +126,20 @@ impl Default for VmessUserRegistry {
 pub struct VmessInbound {
     tag: Arc<str>,
     registry: Arc<VmessUserRegistry>,
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
 }
 
 impl VmessInbound {
     /// Build a VMess inbound handler with a tag and user registry.
-    pub fn new(tag: impl Into<Arc<str>>, registry: Arc<VmessUserRegistry>) -> Arc<Self> {
+    pub fn new(
+        tag: impl Into<Arc<str>>,
+        registry: Arc<VmessUserRegistry>,
+        user_limiter: Option<Arc<UserConnectionLimiter>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
             registry,
+            user_limiter,
         })
     }
 }
@@ -206,6 +229,24 @@ impl InboundHandler for VmessInbound {
         let resp_key = response_body_key(&request.key);
         let resp_iv = response_body_iv(&request.iv);
 
+        let _user_permit = if let Some(limiter) = &self.user_limiter {
+            match limiter.try_acquire(Some(&user.email)) {
+                Some(permit) => Some(permit),
+                None => {
+                    warn!(
+                        source = %source,
+                        inbound = %self.tag,
+                        user = %user.email,
+                        max = limiter.max_connections_per_user(),
+                        "per-user connection limit reached; dropping VMess connection"
+                    );
+                    return Ok(());
+                }
+            }
+        } else {
+            None
+        };
+
         // 8. Send response header and flush so the client unblocks immediately.
         send_response_header(&mut stream, request.v, &resp_key, &resp_iv).await?;
         stream.flush().await?;
@@ -283,6 +324,12 @@ where
                     Ok(Err(e)) => break Err(ProxyError::Transport(e.to_string())),
                     Err(_) => break Ok(()),
                 };
+                wait_for_user_write_budget(
+                    ctx.user.as_deref(),
+                    UserBandwidthDirection::Upload,
+                    n,
+                )
+                .await;
                 if let Err(e) = socket.send(&payload[..n]).await {
                     break Err(ProxyError::Transport(format!("VMess UDP send: {e}")));
                 }
@@ -301,6 +348,12 @@ where
                 if rn == 0 {
                     continue;
                 }
+                wait_for_user_write_budget(
+                    ctx.user.as_deref(),
+                    UserBandwidthDirection::Download,
+                    rn,
+                )
+                .await;
                 if let Err(e) = client_writer.write_all(&response[..rn]).await {
                     break Err(ProxyError::Transport(e.to_string()));
                 }

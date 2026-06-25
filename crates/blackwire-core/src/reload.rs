@@ -1,4 +1,5 @@
-//! Hot-reload helpers — update routing and VLESS users without restarting listeners.
+//! Hot-reload helpers — update routing, inbound auth state, per-user limits, and bandwidth policy
+//! without restarting listeners.
 //!
 //! # What gets hot-reloaded?
 //!
@@ -7,7 +8,9 @@
 //!
 //!   - **Routing rules** — which outbound each destination uses
 //!   - **GeoIP / geosite matchers** — country and domain lists
-//!   - **VLESS user lists** — UUIDs allowed on each VLESS inbound
+//!   - **Inbound auth state** — VLESS, VMess, Trojan, SS-2022, Hysteria2, and TUIC user material
+//!   - **Per-user connection cap** — `limits.maxConnectionsPerUser`
+//!   - **Per-user bandwidth policy** — `upMbps` / `downMbps` fields on client entries
 //!
 //! # What does NOT hot-reload (yet)?
 //!
@@ -24,7 +27,7 @@
 //! 2. If valid, it stores the new config and pings subscribers via `subscribe()`.
 //! 3. `blackwire run` listens on that channel and calls `ReloadState::apply()`.
 //! 4. `apply()` atomically swaps the router (`LiveRouter::swap`) and refreshes
-//!    each VLESS registry in place. Connections already in flight keep using
+//!    each supported inbound auth store in place. Connections already in flight keep using
 //!    the router snapshot they picked up at dispatch time; new connections see
 //!    the updated rules and UUID lists immediately.
 
@@ -42,10 +45,20 @@ use tracing::info;
 
 use blackwire_app::geo::{GeoIpMatcher, GeoSiteMatcher};
 use blackwire_app::router::LiveRouter;
+use blackwire_app::user_limits::UserConnectionLimiter;
+use blackwire_app::{set_user_bandwidth_policies, set_user_bandwidth_policy};
 use blackwire_config::schema::{Config, Protocol};
+use blackwire_protocol::ss2022::inbound::Ss2022AuthStore;
+use blackwire_protocol::trojan::inbound::TrojanAuthStore;
 use blackwire_protocol::vless::VlessUserRegistry;
+use blackwire_protocol::vmess::VmessUserRegistry;
+use blackwire_transport::{Hysteria2AuthStore, TuicAuthStore};
 
-use crate::instance::{build_rules, build_sniffing_map, load_geo_data, populate_vless_registry};
+use crate::instance::{
+    build_rules, build_sniffing_map, build_user_bandwidth_policies, load_geo_data,
+    populate_ss2022_auth_store, populate_trojan_auth_store, populate_vless_registry,
+    populate_vmess_registry,
+};
 
 /// Cached geo data: skip rebuilding matchers when the file hasn't changed.
 #[derive(Default)]
@@ -73,10 +86,22 @@ pub struct ReloadState {
     pub router: Arc<LiveRouter>,
     /// One VLESS user registry per inbound tag (key = inbound `tag`).
     pub vless_registries: Arc<DashMap<String, Arc<VlessUserRegistry>>>,
+    /// One VMess user registry per inbound tag (key = inbound `tag`).
+    pub vmess_registries: Arc<DashMap<String, Arc<VmessUserRegistry>>>,
+    /// One Trojan auth store per inbound tag.
+    pub trojan_auth_stores: Arc<DashMap<String, Arc<TrojanAuthStore>>>,
+    /// One SS-2022 auth store per inbound tag.
+    pub ss2022_auth_stores: Arc<DashMap<String, Arc<Ss2022AuthStore>>>,
+    /// One Hysteria2 auth store per inbound tag.
+    pub hysteria2_auth_stores: Arc<DashMap<String, Arc<Hysteria2AuthStore>>>,
+    /// One TUIC auth store per inbound tag.
+    pub tuic_auth_stores: Arc<DashMap<String, Arc<TuicAuthStore>>>,
     /// Per-inbound sniffing map (hot-swapped on reload via lock-free ArcSwap).
     pub sniffing: Arc<
         ArcSwap<std::collections::HashMap<String, Arc<blackwire_config::schema::SniffingConfig>>>,
     >,
+    /// Shared per-user connection limiter updated in place on reload.
+    pub user_connection_limiter: Arc<UserConnectionLimiter>,
     /// Inbound tags from the active config (HandlerService ListInbounds).
     pub inbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
     /// Outbound tags from the active config (HandlerService ListOutbounds).
@@ -87,9 +112,15 @@ pub struct ReloadState {
 
 impl ReloadState {
     /// Create a new `ReloadState` with the given router, registries and sniffing map.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         router: Arc<LiveRouter>,
         vless_registries: Arc<DashMap<String, Arc<VlessUserRegistry>>>,
+        vmess_registries: Arc<DashMap<String, Arc<VmessUserRegistry>>>,
+        trojan_auth_stores: Arc<DashMap<String, Arc<TrojanAuthStore>>>,
+        ss2022_auth_stores: Arc<DashMap<String, Arc<Ss2022AuthStore>>>,
+        hysteria2_auth_stores: Arc<DashMap<String, Arc<Hysteria2AuthStore>>>,
+        tuic_auth_stores: Arc<DashMap<String, Arc<TuicAuthStore>>>,
         sniffing: Arc<
             ArcSwap<
                 std::collections::HashMap<String, Arc<blackwire_config::schema::SniffingConfig>>,
@@ -97,21 +128,28 @@ impl ReloadState {
         >,
         inbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
         outbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
+        user_connection_limiter: Arc<UserConnectionLimiter>,
     ) -> Self {
         Self {
             router,
             vless_registries,
+            vmess_registries,
+            trojan_auth_stores,
+            ss2022_auth_stores,
+            hysteria2_auth_stores,
+            tuic_auth_stores,
             sniffing,
             inbound_tags,
             outbound_tags,
+            user_connection_limiter,
             geo_cache: Arc::new(Mutex::new(GeoCache::default())),
         }
     }
 
-    /// Apply routing rules and VLESS client lists from a freshly validated config.
+    /// Apply routing rules and reloadable inbound auth state from a freshly validated config.
     ///
     /// Inbound listeners and outbound handlers are not recreated here — only data
-    /// consulted per connection (router + UUID registry) is refreshed.
+    /// consulted per connection (router + auth stores + user limit/bandwidth state) is refreshed.
     pub fn apply(&self, config: &Config) -> Result<()> {
         let outbound_tags = collect_outbound_tags(config);
         let default_tag = config
@@ -151,13 +189,71 @@ impl ReloadState {
             *tags = next;
         }
 
+        set_user_bandwidth_policies(build_user_bandwidth_policies(&config.inbounds));
+        info!("per-user bandwidth policy hot-swapped");
+        self.user_connection_limiter.set_max_connections_per_user(
+            config.limits.max_connections_per_user.unwrap_or(usize::MAX),
+        );
+        info!(
+            max = self.user_connection_limiter.max_connections_per_user(),
+            "per-user connection cap hot-swapped"
+        );
+
         for in_cfg in &config.inbounds {
-            if in_cfg.protocol != Protocol::Vless {
-                continue;
-            }
-            if let Some(registry) = self.vless_registries.get(&in_cfg.tag) {
-                populate_vless_registry(&registry, in_cfg)?;
-                info!(tag = %in_cfg.tag, users = registry.len(), "VLESS user registry refreshed");
+            match in_cfg.protocol {
+                Protocol::Vless => {
+                    if let Some(registry) = self.vless_registries.get(&in_cfg.tag) {
+                        populate_vless_registry(&registry, in_cfg)?;
+                        info!(
+                            tag = %in_cfg.tag,
+                            users = registry.len(),
+                            "VLESS user registry refreshed"
+                        );
+                    }
+                }
+                Protocol::Vmess => {
+                    if let Some(registry) = self.vmess_registries.get(&in_cfg.tag) {
+                        populate_vmess_registry(&registry, in_cfg)?;
+                        info!(
+                            tag = %in_cfg.tag,
+                            users = registry.len(),
+                            "VMess user registry refreshed"
+                        );
+                    }
+                }
+                Protocol::Trojan => {
+                    if let Some(auth) = self.trojan_auth_stores.get(&in_cfg.tag) {
+                        populate_trojan_auth_store(&auth, in_cfg)?;
+                        info!(
+                            tag = %in_cfg.tag,
+                            users = auth.len(),
+                            "Trojan auth store refreshed"
+                        );
+                    }
+                }
+                Protocol::Shadowsocks => {
+                    if let Some(auth) = self.ss2022_auth_stores.get(&in_cfg.tag) {
+                        populate_ss2022_auth_store(&auth, in_cfg)?;
+                        info!(tag = %in_cfg.tag, "SS-2022 auth store refreshed");
+                    }
+                }
+                Protocol::Hysteria2 => {
+                    if let Some(auth) = self.hysteria2_auth_stores.get(&in_cfg.tag) {
+                        let settings = &in_cfg.settings;
+                        let password = settings["auth"].as_str().unwrap_or_default().to_string();
+                        let user = crate::hysteria2::hysteria2_user_label(settings, &password);
+                        auth.replace(password, user);
+                        info!(tag = %in_cfg.tag, "Hysteria2 auth store refreshed");
+                    }
+                }
+                Protocol::Tuic => {
+                    if let Some(auth) = self.tuic_auth_stores.get(&in_cfg.tag) {
+                        let users = crate::tuic::parse_users(&in_cfg.settings)?;
+                        auth.replace_users(users);
+                        info!(tag = %in_cfg.tag, "TUIC auth store refreshed");
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -221,6 +317,7 @@ impl blackwire_api::management::InboundManagement for ReloadState {
             uuid,
             flow: flow.to_string(),
         });
+        set_user_bandwidth_policy(Arc::<str>::from(email), None);
         Ok(())
     }
 
@@ -229,6 +326,7 @@ impl blackwire_api::management::InboundManagement for ReloadState {
             .vless_registry(inbound_tag)
             .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))?;
         if registry.remove_user_by_email(email) {
+            set_user_bandwidth_policy(Arc::<str>::from(email), None);
             Ok(())
         } else {
             Err(format!(
@@ -351,7 +449,7 @@ pub fn inbound_listener_changes(old: &Config, new: &Config) -> Vec<String> {
 
 /// Returns `true` when a validated config change requires rebuilding the running instance.
 ///
-/// Routing, DNS, sniffing, and VLESS user lists are hot-swappable via [`ReloadState::apply`].
+/// Routing, DNS, sniffing, and supported inbound auth lists are hot-swappable via [`ReloadState::apply`].
 /// Structural changes such as listeners, transport wrappers, and outbound definitions
 /// need a fresh `Instance` because the handler graph is built at startup.
 pub fn requires_instance_restart(old: &Config, new: &Config) -> bool {
@@ -365,6 +463,10 @@ pub fn requires_instance_restart(old: &Config, new: &Config) -> bool {
         || old.datagram != new.datagram
         || old.fec != new.fec
     {
+        return true;
+    }
+
+    if normalized_limits_value(&old.limits) != normalized_limits_value(&new.limits) {
         return true;
     }
 
@@ -402,21 +504,85 @@ pub fn requires_instance_restart(old: &Config, new: &Config) -> bool {
     false
 }
 
+fn normalized_limits_value(limits: &blackwire_config::schema::LimitsConfig) -> Value {
+    let mut value = serde_json::to_value(limits).unwrap_or(Value::Null);
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("maxConnectionsPerUser");
+        obj.remove("max_connections_per_user");
+    }
+    value
+}
+
 fn normalized_inbound_value(inbound: &blackwire_config::schema::InboundConfig) -> Value {
     let mut value = serde_json::to_value(inbound).unwrap_or(Value::Null);
     let Some(obj) = value.as_object_mut() else {
         return value;
     };
 
-    // Sniffing is hot-swapped separately and VLESS users are refreshed in-place.
+    // Sniffing is hot-swapped separately and supported inbound auth material is
+    // refreshed in place.
     obj.remove("sniffing");
-    if inbound.protocol == Protocol::Vless {
-        if let Some(settings) = obj.get_mut("settings").and_then(|v| v.as_object_mut()) {
-            settings.remove("clients");
+    if let Some(settings) = obj.get_mut("settings").and_then(|v| v.as_object_mut()) {
+        match inbound.protocol {
+            Protocol::Vless | Protocol::Vmess | Protocol::Trojan => {
+                settings.remove("clients");
+            }
+            Protocol::Shadowsocks => {
+                settings.remove("password");
+                settings.remove("email");
+                settings.remove("name");
+                settings.remove("clients");
+            }
+            Protocol::Hysteria2 => {
+                settings.remove("auth");
+                settings.remove("password");
+                settings.remove("clients");
+            }
+            Protocol::Tuic => {
+                settings.remove("users");
+                settings.remove("uuid");
+                settings.remove("id");
+                settings.remove("password");
+                settings.remove("email");
+                settings.remove("name");
+            }
+            _ => {}
+        }
+        if inbound.protocol != Protocol::Vless
+            && inbound.protocol != Protocol::Vmess
+            && inbound.protocol != Protocol::Trojan
+        {
+            strip_client_bandwidth_fields(settings.get_mut("clients"));
+            strip_client_bandwidth_fields(settings.get_mut("users"));
+        } else {
+            strip_client_bandwidth_fields(settings.get_mut("clients"));
         }
     }
 
     value
+}
+
+fn strip_client_bandwidth_fields(value: Option<&mut Value>) {
+    let Some(Value::Array(entries)) = value else {
+        return;
+    };
+    for entry in entries {
+        let Some(obj) = entry.as_object_mut() else {
+            continue;
+        };
+        for key in [
+            "upMbps",
+            "up_mbps",
+            "uploadMbps",
+            "upload_mbps",
+            "downMbps",
+            "down_mbps",
+            "downloadMbps",
+            "download_mbps",
+        ] {
+            obj.remove(key);
+        }
+    }
 }
 
 /// Collect every outbound tag referenced in the config so routing rules can be validated.

@@ -12,7 +12,7 @@
 //! 1. Load config → build `Instance`
 //! 2. Call `instance.start()` → spawns Tokio tasks for each inbound listener
 //! 3. The instance runs until `instance.stop()` is called or a fatal error occurs
-//! 4. On config reload → `ReloadState::apply()` swaps router + VLESS users
+//! 4. On config reload → `ReloadState::apply()` swaps router + reloadable inbound auth state
 
 pub mod data_plane;
 mod http;
@@ -34,5 +34,5 @@ pub use data_plane::{
     UserTable,
 };
 pub use instance::Instance;
-/// Hot-reload handles: swap routing rules and VLESS users without restarting listeners.
+/// Hot-reload handles: swap routing rules and reloadable inbound auth state without restarting listeners.
 pub use reload::{inbound_listener_changes, requires_instance_restart, ReloadState};

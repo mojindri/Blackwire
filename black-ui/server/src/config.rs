@@ -702,6 +702,28 @@ mod tests {
         }
     }
 
+    fn assert_link_omits_mux_params(link: &str) {
+        assert!(
+            !link.contains("mux="),
+            "share link unexpectedly enables mux: {link}"
+        );
+        assert!(
+            !link.contains("xmux="),
+            "share link unexpectedly enables xmux: {link}"
+        );
+    }
+
+    fn assert_vmess_payload_omits_mux(payload: &serde_json::Value) {
+        assert!(
+            payload.get("mux").is_none(),
+            "vmess share payload unexpectedly enables mux: {payload}"
+        );
+        assert!(
+            payload.get("xmux").is_none(),
+            "vmess share payload unexpectedly enables xmux: {payload}"
+        );
+    }
+
     #[test]
     fn generated_minimal_config_validates() {
         let state = test_state();
@@ -932,6 +954,7 @@ mod tests {
         assert!(link.contains("fp=chrome"));
         assert!(link.contains("spx=%2F"));
         assert!(link.ends_with("#Mollah"));
+        assert_link_omits_mux_params(&link);
     }
 
     #[test]
@@ -997,6 +1020,7 @@ mod tests {
         assert!(link.contains("mode=gun"));
         assert!(link.contains("security=none"));
         assert!(link.ends_with("#manual-vless-grpc%40example.local"));
+        assert_link_omits_mux_params(&link);
     }
 
     #[test]
@@ -1069,6 +1093,7 @@ mod tests {
         assert_eq!(payload["allowInsecure"], "1");
         assert_eq!(payload["allowinsecure"], "1");
         assert_eq!(payload["insecure"], "1");
+        assert_vmess_payload_omits_mux(&payload);
     }
 
     #[test]
@@ -1133,6 +1158,7 @@ mod tests {
         assert!(link.contains("sni=www.microsoft.com"));
         assert!(link.contains("allowInsecure=1"));
         assert!(link.contains("alpn=h3"));
+        assert_link_omits_mux_params(&link);
     }
 
     #[test]
@@ -1197,6 +1223,7 @@ mod tests {
         assert!(link.contains("sni=www.microsoft.com"));
         assert!(link.contains("allowInsecure=1"));
         assert!(link.contains("alpn=h3"));
+        assert_link_omits_mux_params(&link);
     }
 
     #[test]
@@ -1262,6 +1289,7 @@ mod tests {
         assert_eq!(payload["type"], "gun");
         assert_eq!(payload["path"], "manual-vmess-grpc");
         assert_eq!(payload["tls"], "");
+        assert_vmess_payload_omits_mux(&payload);
     }
 
     #[test]
@@ -1324,6 +1352,7 @@ mod tests {
         assert!(link.contains("path=/manual/vless/splithttp"));
         assert!(link.contains("mode=stream-one"));
         assert!(link.contains("security=none"));
+        assert_link_omits_mux_params(&link);
     }
 
     #[test]
@@ -1390,6 +1419,7 @@ mod tests {
         assert_eq!(payload["path"], "/manual/vmess/splithttp");
         assert_eq!(payload["mode"], "stream-one");
         assert_eq!(payload["tls"], "");
+        assert_vmess_payload_omits_mux(&payload);
     }
 
     #[test]
@@ -1452,6 +1482,7 @@ mod tests {
             link,
             "hysteria2://secret@203.0.113.10:443?insecure=1&sni=www.microsoft.com#hysteria2%40example.local"
         );
+        assert_link_omits_mux_params(&link);
     }
 
     #[test]
@@ -1514,6 +1545,7 @@ mod tests {
             link,
             "hysteria2://secret@203.0.113.10:443?sni=www.microsoft.com#hysteria2%40example.local"
         );
+        assert_link_omits_mux_params(&link);
     }
 
     #[test]
@@ -1645,5 +1677,6 @@ mod tests {
             link,
             "tuic://ccdc43c9-5fd4-4d60-a363-17071e7a3f20:secret@203.0.113.10:443?uuid=ccdc43c9-5fd4-4d60-a363-17071e7a3f20&insecure=1&sni=www.microsoft.com&alpn=h3#tuic%40example.local"
         );
+        assert_link_omits_mux_params(&link);
     }
 }

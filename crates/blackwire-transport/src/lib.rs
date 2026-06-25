@@ -62,9 +62,9 @@ pub use grpc::{
 };
 pub use httpupgrade::{accept_httpupgrade, dial_httpupgrade, httpupgrade_listen_path};
 pub use hysteria2::{
-    DatagramLane, DatagramPolicy, DatagramPriorityMode, FecMode, FecPolicy, Hysteria2Client,
-    Hysteria2ClientConfig, Hysteria2OutboundHandler, Hysteria2Server, Hysteria2ServerConfig,
-    Hysteria2UdpSession, UdpDestination,
+    DatagramLane, DatagramPolicy, DatagramPriorityMode, FecMode, FecPolicy, Hysteria2AuthStore,
+    Hysteria2Client, Hysteria2ClientConfig, Hysteria2OutboundHandler, Hysteria2Server,
+    Hysteria2ServerConfig, Hysteria2UdpSession, UdpDestination,
 };
 pub use innerflow::{InnerFlowKey, InnerFlowPacket, InnerFlowScheduler, PacketClass};
 pub use mkcp::{
@@ -99,8 +99,8 @@ pub use tls::{
     tls_accept_with_acceptor, tls_connect, tls_connect_with_config,
 };
 pub use tuic::{
-    TuicClient, TuicClientConfig, TuicOutboundHandler, TuicServer, TuicServerConfig, TuicUdpPacket,
-    TuicUdpSession, TuicUser,
+    TuicAuthStore, TuicClient, TuicClientConfig, TuicOutboundHandler, TuicServer, TuicServerConfig,
+    TuicUdpPacket, TuicUdpSession, TuicUser,
 };
 pub use tun::{
     build_tcp_packet, build_tcp_rst, create_tun, current_tun_support, ensure_tun_runtime_supported,

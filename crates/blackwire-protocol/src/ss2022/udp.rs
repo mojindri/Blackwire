@@ -25,7 +25,10 @@ use tracing::{debug, warn};
 
 use blackwire_app::dns::DnsModule;
 use blackwire_app::runtime_stats;
+use blackwire_app::{wait_for_user_write_budget, UserBandwidthDirection};
 use blackwire_common::{decode_socks5_address, write_socks5_address, Address, ProxyError};
+
+use super::inbound::Ss2022AuthStore;
 
 const TYPE_CLIENT: u8 = 0x00;
 const TYPE_SERVER: u8 = 0x01;
@@ -324,20 +327,19 @@ pub fn encode_client_packet(
 /// overhead at high UDP PPS.
 pub async fn relay_ss2022_udp(
     socket: Arc<UdpSocket>,
-    psk: [u8; 32],
+    auth: Arc<Ss2022AuthStore>,
     dns: Option<Arc<DnsModule>>,
     inbound_tag: Arc<str>,
-    user: Option<Arc<str>>,
 ) {
     let mut sessions: HashMap<u64, SessionEntry> = HashMap::new();
 
     #[cfg(target_os = "linux")]
     {
-        relay_ss2022_udp_batch(socket, psk, dns, inbound_tag, user, &mut sessions).await;
+        relay_ss2022_udp_batch(socket, auth, dns, inbound_tag, &mut sessions).await;
     }
     #[cfg(not(target_os = "linux"))]
     {
-        relay_ss2022_udp_simple(socket, psk, dns, inbound_tag, user, &mut sessions).await;
+        relay_ss2022_udp_simple(socket, auth, dns, inbound_tag, &mut sessions).await;
     }
 }
 
@@ -345,10 +347,9 @@ pub async fn relay_ss2022_udp(
 #[cfg(not(target_os = "linux"))]
 async fn relay_ss2022_udp_simple(
     socket: Arc<UdpSocket>,
-    psk: [u8; 32],
+    auth: Arc<Ss2022AuthStore>,
     dns: Option<Arc<DnsModule>>,
     inbound_tag: Arc<str>,
-    user: Option<Arc<str>>,
     sessions: &mut HashMap<u64, SessionEntry>,
 ) {
     let mut buf = vec![0u8; 65535];
@@ -362,13 +363,12 @@ async fn relay_ss2022_udp_simple(
         };
         process_ss2022_packet(
             &socket,
-            &psk,
+            &auth,
             sessions,
             &buf[..n],
             client_addr,
             dns.as_deref(),
             inbound_tag.as_ref(),
-            user.as_deref(),
         )
         .await;
     }
@@ -378,10 +378,9 @@ async fn relay_ss2022_udp_simple(
 #[cfg(target_os = "linux")]
 async fn relay_ss2022_udp_batch(
     socket: Arc<UdpSocket>,
-    psk: [u8; 32],
+    auth: Arc<Ss2022AuthStore>,
     dns: Option<Arc<DnsModule>>,
     inbound_tag: Arc<str>,
-    user: Option<Arc<str>>,
     sessions: &mut HashMap<u64, SessionEntry>,
 ) {
     use std::os::unix::io::AsRawFd;
@@ -464,13 +463,12 @@ async fn relay_ss2022_udp_batch(
             }
             process_ss2022_packet(
                 &socket,
-                &psk,
+                &auth,
                 sessions,
                 &data[i][..*n],
                 *client_addr,
                 dns.as_deref(),
                 inbound_tag.as_ref(),
-                user.as_deref(),
             )
             .await;
         }
@@ -501,21 +499,26 @@ fn sockaddr_to_socketaddr(storage: &libc::sockaddr_storage, _len: libc::socklen_
 #[allow(clippy::too_many_arguments)]
 async fn process_ss2022_packet(
     socket: &Arc<UdpSocket>,
-    psk: &[u8; 32],
+    auth: &Arc<Ss2022AuthStore>,
     sessions: &mut HashMap<u64, SessionEntry>,
     buf: &[u8],
     client_addr: SocketAddr,
     dns: Option<&DnsModule>,
     inbound_tag: &str,
-    user: Option<&str>,
 ) {
-    let (client_session_id, _packet_id, dest, payload) = match decode_client_packet(buf, psk) {
-        Ok(v) => v,
-        Err(e) => {
-            debug!(source = %client_addr, error = %e, "SS2022 UDP decode failed");
-            return;
-        }
+    let Some(auth_state) = auth.load() else {
+        warn!("SS2022 UDP auth store is empty");
+        return;
     };
+    let user = auth_state.user.as_deref();
+    let (client_session_id, _packet_id, dest, payload) =
+        match decode_client_packet(buf, &auth_state.psk) {
+            Ok(v) => v,
+            Err(e) => {
+                debug!(source = %client_addr, error = %e, "SS2022 UDP decode failed");
+                return;
+            }
+        };
 
     debug!(
         source = %client_addr,
@@ -557,12 +560,12 @@ async fn process_ss2022_packet(
             }
         };
         let client_addr_shared = Arc::new(Mutex::new(client_addr));
-        let session = ServerUdpSession::new(psk, client_session_id);
+        let session = ServerUdpSession::new(&auth_state.psk, client_session_id);
 
         spawn_reply_task(
             Arc::clone(&upstream_sock),
             Arc::clone(socket),
-            *psk,
+            auth_state.psk,
             session.server_session_id,
             session.client_session_id,
             session.session_key,
@@ -590,6 +593,7 @@ async fn process_ss2022_packet(
         }
     };
 
+    wait_for_user_write_budget(user, UserBandwidthDirection::Upload, payload.len()).await;
     if let Err(e) = entry.upstream_sock.send_to(&payload, upstream).await {
         warn!(error = %e, "SS2022 UDP upstream send failed");
     } else {
@@ -672,6 +676,12 @@ fn spawn_reply_task(
                 &mut pkt_out,
             ) {
                 Ok(()) => {
+                    wait_for_user_write_budget(
+                        user.as_deref(),
+                        UserBandwidthDirection::Download,
+                        rn,
+                    )
+                    .await;
                     if let Err(e) = client_sock.send_to(&pkt_out, addr).await {
                         warn!(error = %e, "SS2022 UDP reply send failed");
                     } else {

@@ -25,7 +25,7 @@
 //!
 //! When the config file changes, `ConfigManager` validates the new JSON and
 //! notifies subscribers. `ReloadState::apply()` (in `reload.rs`) then swaps
-//! routing rules and VLESS user lists **without** restarting TCP listeners.
+//! routing rules and supported inbound auth state **without** restarting TCP listeners.
 //! Outbound handlers and listen ports are still fixed at startup.
 
 use anyhow::{Context as _, Result};
@@ -44,6 +44,8 @@ use blackwire_app::dispatcher::{DefaultDispatcher, Dispatcher};
 use blackwire_app::features::{ConnectionHandler, InboundHandler, OutboundHandler};
 use blackwire_app::health::HealthChecker;
 use blackwire_app::router::LiveRouter;
+use blackwire_app::set_user_bandwidth_policies;
+use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_app::{Balancer, ADAPTIVE_SPLICE_LONG_STREAM_AFTER, ADAPTIVE_SPLICE_MIN_BYTES};
 use blackwire_common::{
     clear_outbound_bypass_mark, clear_outbound_interface_index, set_outbound_bypass_mark,
@@ -68,8 +70,12 @@ use crate::outbound_transport::uses_quic;
 use crate::tuic::{build_tuic_outbound, start_tuic_inbound};
 mod helpers;
 
+pub(crate) use crate::ss2022::populate_ss2022_auth_store;
+pub(crate) use crate::trojan::populate_trojan_auth_store;
+pub(crate) use crate::vmess::populate_vmess_registry;
 pub(crate) use helpers::{
-    build_rules, build_sniffing_map, load_geo_data, parse_uuid, populate_vless_registry,
+    build_rules, build_sniffing_map, build_user_bandwidth_policies, load_geo_data, parse_uuid,
+    populate_vless_registry,
 };
 
 use crate::reality::{build_reality_server, uses_reality, RealityConnectionHandler};
@@ -458,19 +464,28 @@ impl Instance {
             .and_then(|r| r.domain_strategy.clone());
         let router = LiveRouter::new(rules, default_tag, geoip, geosite, domain_strategy.clone());
         let sniffing_shared = Arc::new(ArcSwap::from_pointee(build_sniffing_map(&config.inbounds)));
-        // Shared with the config watcher: router swap + VLESS registry refresh on reload.
+        // Shared with the config watcher: router swap + inbound auth refresh on reload.
         let inbound_tags: Arc<std::sync::RwLock<Vec<String>>> = Arc::new(std::sync::RwLock::new(
             config.inbounds.iter().map(|i| i.tag.clone()).collect(),
         ));
         let outbound_tags: Arc<std::sync::RwLock<Vec<String>>> = Arc::new(std::sync::RwLock::new(
             config.outbounds.iter().map(|o| o.tag.clone()).collect(),
         ));
+        let user_connection_limiter = Arc::new(UserConnectionLimiter::new(
+            config.limits.max_connections_per_user.unwrap_or(usize::MAX),
+        ));
         let reload = ReloadState::new(
             Arc::clone(&router),
+            Arc::new(DashMap::new()),
+            Arc::new(DashMap::new()),
+            Arc::new(DashMap::new()),
+            Arc::new(DashMap::new()),
+            Arc::new(DashMap::new()),
             Arc::new(DashMap::new()),
             Arc::clone(&sniffing_shared),
             Arc::clone(&inbound_tags),
             Arc::clone(&outbound_tags),
+            Arc::clone(&user_connection_limiter),
         );
         let vless_registries = Arc::clone(&reload.vless_registries);
         let connection_plan_labels: HashMap<String, Arc<str>> = data_plane
@@ -519,6 +534,7 @@ impl Instance {
             .limits
             .max_connections
             .map(|n| Arc::new(Semaphore::new(n)));
+        set_user_bandwidth_policies(build_user_bandwidth_policies(&config.inbounds));
         for in_cfg in &config.inbounds {
             reject_unfinished_transport_settings(
                 "inbound",
@@ -534,11 +550,13 @@ impl Instance {
                 let dispatcher_for_h2 = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
                 let task = start_hysteria2_inbound(
                     in_cfg,
+                    &reload.hysteria2_auth_stores,
                     config.quic.as_ref(),
                     config.datagram.as_ref(),
                     config.fec.as_ref(),
                     config.limits.max_connections_per_inbound,
                     global_connection_limiter.as_ref().map(Arc::clone),
+                    Some(Arc::clone(&user_connection_limiter)),
                     dispatcher_for_h2,
                 )
                 .with_context(|| format!("starting Hysteria2 inbound '{}'", in_cfg.tag))?;
@@ -550,9 +568,11 @@ impl Instance {
                 let dispatcher_for_tuic = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
                 let task = start_tuic_inbound(
                     in_cfg,
+                    &reload.tuic_auth_stores,
                     config.quic.as_ref(),
                     config.limits.max_connections_per_inbound,
                     global_connection_limiter.as_ref().map(Arc::clone),
+                    Some(Arc::clone(&user_connection_limiter)),
                     dispatcher_for_tuic,
                 )
                 .with_context(|| format!("starting TUIC inbound '{}'", in_cfg.tag))?;
@@ -568,19 +588,12 @@ impl Instance {
                     .and_then(|v| v.as_str())
                     .unwrap_or("tcp");
                 if net == "udp" || net == "tcp,udp" || net == "udp,tcp" {
-                    let password = in_cfg
-                        .settings
-                        .get("password")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "SS-2022 UDP inbound '{}' missing 'password'",
-                                in_cfg.tag
-                            )
-                        })?
-                        .to_string();
-                    let psk = blackwire_protocol::ss2022::password_to_psk(&password);
-                    let ss2022_user = crate::ss2022::ss2022_user_label(&in_cfg.settings, &password);
+                    let auth = reload
+                        .ss2022_auth_stores
+                        .entry(in_cfg.tag.clone())
+                        .or_default()
+                        .clone();
+                    crate::ss2022::populate_ss2022_auth_store(&auth, in_cfg)?;
                     let socket = TokioUdpSocket::bind(addr).await.with_context(|| {
                         format!("binding SS-2022 UDP inbound '{}' on {}", in_cfg.tag, addr)
                     })?;
@@ -588,14 +601,12 @@ impl Instance {
                     info!(tag = %in_cfg.tag, addr = %addr, "starting SS-2022 UDP inbound");
                     let dns_for_udp = dns.clone();
                     let udp_tag = std::sync::Arc::<str>::from(in_cfg.tag.clone());
-                    let udp_user = ss2022_user.as_deref().map(std::sync::Arc::<str>::from);
                     let task = tokio::spawn(async move {
                         blackwire_protocol::ss2022::udp::relay_ss2022_udp(
                             socket,
-                            psk,
+                            auth,
                             dns_for_udp,
                             udp_tag,
-                            udp_user,
                         )
                         .await;
                     });
@@ -610,18 +621,35 @@ impl Instance {
 
             let handler: Arc<dyn InboundHandler> = match in_cfg.protocol {
                 Protocol::Socks => Socks5Inbound::new(in_cfg.tag.as_str()),
-                Protocol::Vless => {
-                    build_vless_inbound(in_cfg, &vless_registries, handshake_timeout, dns.clone())
-                        .with_context(|| format!("building VLESS inbound '{}'", in_cfg.tag))?
-                }
-                Protocol::Trojan => build_trojan_inbound(in_cfg, dns.clone())
-                    .with_context(|| format!("building Trojan inbound '{}'", in_cfg.tag))?,
-                Protocol::Vmess => build_vmess_inbound(in_cfg)
-                    .with_context(|| format!("building VMess inbound '{}'", in_cfg.tag))?,
+                Protocol::Vless => build_vless_inbound(
+                    in_cfg,
+                    &vless_registries,
+                    handshake_timeout,
+                    dns.clone(),
+                    Some(Arc::clone(&user_connection_limiter)),
+                )
+                .with_context(|| format!("building VLESS inbound '{}'", in_cfg.tag))?,
+                Protocol::Trojan => build_trojan_inbound(
+                    in_cfg,
+                    &reload.trojan_auth_stores,
+                    dns.clone(),
+                    Some(Arc::clone(&user_connection_limiter)),
+                )
+                .with_context(|| format!("building Trojan inbound '{}'", in_cfg.tag))?,
+                Protocol::Vmess => build_vmess_inbound(
+                    in_cfg,
+                    &reload.vmess_registries,
+                    Some(Arc::clone(&user_connection_limiter)),
+                )
+                .with_context(|| format!("building VMess inbound '{}'", in_cfg.tag))?,
                 Protocol::Http => build_http_inbound(in_cfg, handshake_timeout)
                     .with_context(|| format!("building HTTP CONNECT inbound '{}'", in_cfg.tag))?,
-                Protocol::Shadowsocks => build_ss2022_inbound(in_cfg)
-                    .with_context(|| format!("building SS-2022 inbound '{}'", in_cfg.tag))?,
+                Protocol::Shadowsocks => build_ss2022_inbound(
+                    in_cfg,
+                    &reload.ss2022_auth_stores,
+                    Some(Arc::clone(&user_connection_limiter)),
+                )
+                .with_context(|| format!("building SS-2022 inbound '{}'", in_cfg.tag))?,
                 ref p => {
                     anyhow::bail!("inbound protocol {:?} not yet implemented", p)
                 }

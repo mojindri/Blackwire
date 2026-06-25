@@ -6,10 +6,14 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use dashmap::DashMap;
 
 use blackwire_app::dns::DnsModule;
 use blackwire_app::features::{InboundHandler, OutboundHandler};
-use blackwire_protocol::trojan::{TrojanInbound, TrojanOutbound, TrojanOutboundConfig, TrojanUser};
+use blackwire_app::user_limits::UserConnectionLimiter;
+use blackwire_protocol::trojan::{
+    inbound::TrojanAuthStore, TrojanInbound, TrojanOutbound, TrojanOutboundConfig, TrojanUser,
+};
 
 use crate::net::socket_addr_from_address_port;
 use crate::outbound_transport::{uses_outbound_transport, TransportTrojanOutbound};
@@ -17,10 +21,29 @@ use crate::outbound_transport::{uses_outbound_transport, TransportTrojanOutbound
 /// Build a Trojan inbound handler from config.
 pub(crate) fn build_trojan_inbound(
     cfg: &blackwire_config::schema::InboundConfig,
+    auth_stores: &Arc<DashMap<String, Arc<TrojanAuthStore>>>,
     dns: Option<Arc<DnsModule>>,
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
 ) -> Result<Arc<dyn InboundHandler>> {
-    // Collect passwords from config JSON.
-    // Expected shape: { "clients": [{ "password": "..." }, ...] }
+    #[allow(clippy::unwrap_or_default)]
+    let auth = auth_stores
+        .entry(cfg.tag.clone())
+        .or_insert_with(TrojanAuthStore::new)
+        .clone();
+    populate_trojan_auth_store(&auth, cfg)?;
+
+    Ok(TrojanInbound::new_with_auth_store(
+        cfg.tag.as_str(),
+        auth,
+        dns,
+        user_limiter,
+    ))
+}
+
+pub(crate) fn populate_trojan_auth_store(
+    auth: &TrojanAuthStore,
+    cfg: &blackwire_config::schema::InboundConfig,
+) -> Result<()> {
     let clients = cfg.settings["clients"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("Trojan inbound '{}' missing 'clients' array", cfg.tag))?;
@@ -49,7 +72,8 @@ pub(crate) fn build_trojan_inbound(
         anyhow::bail!("Trojan inbound '{}' has no configured clients", cfg.tag);
     }
 
-    Ok(TrojanInbound::new_with_users(cfg.tag.as_str(), &users, dns))
+    auth.replace_users(&users);
+    Ok(())
 }
 
 /// Build a Trojan outbound handler from config.

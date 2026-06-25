@@ -12,6 +12,8 @@ use blackwire_app::features::{ConnectionHandler, InboundHandler, OutboundHandler
 use blackwire_app::geo::loader::{load_geoip, load_geosite};
 use blackwire_app::health::{HealthStates, OutboundState};
 use blackwire_app::router::{CompiledRule, DomainMatcher, IpMatcher};
+use blackwire_app::user_bandwidth::UserBandwidthLimit;
+use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_common::{BoxedStream, ProxyError};
 use blackwire_config::schema::{NetworkType, Protocol, SecurityType, StreamSettingsConfig};
 use blackwire_protocol::vless::{
@@ -23,6 +25,152 @@ use dashmap::DashMap;
 use crate::net::socket_addr_from_address_port;
 use crate::outbound_transport::{uses_outbound_transport, TransportVlessOutbound};
 use crate::reality::{build_reality_client, uses_reality, RealityVlessOutbound};
+
+fn parse_user_bandwidth_mbps(value: Option<&serde_json::Value>) -> Option<u64> {
+    value
+        .and_then(serde_json::Value::as_u64)
+        .filter(|v| *v > 0)
+        .map(|mbps| mbps.saturating_mul(1_000_000 / 8))
+}
+
+fn parse_user_bandwidth_limit(settings: &serde_json::Value) -> Option<UserBandwidthLimit> {
+    let upload_bps = parse_user_bandwidth_mbps(
+        settings
+            .get("upMbps")
+            .or_else(|| settings.get("up_mbps"))
+            .or_else(|| settings.get("uploadMbps"))
+            .or_else(|| settings.get("upload_mbps")),
+    );
+    let download_bps = parse_user_bandwidth_mbps(
+        settings
+            .get("downMbps")
+            .or_else(|| settings.get("down_mbps"))
+            .or_else(|| settings.get("downloadMbps"))
+            .or_else(|| settings.get("download_mbps")),
+    );
+    if upload_bps.is_none() && download_bps.is_none() {
+        return None;
+    }
+    Some(UserBandwidthLimit {
+        upload_bps,
+        download_bps,
+    })
+}
+
+fn merge_user_bandwidth_limit(existing: &mut UserBandwidthLimit, next: UserBandwidthLimit) {
+    existing.upload_bps = match (existing.upload_bps, next.upload_bps) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (None, Some(b)) => Some(b),
+        (Some(a), None) => Some(a),
+        (None, None) => None,
+    };
+    existing.download_bps = match (existing.download_bps, next.download_bps) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (None, Some(b)) => Some(b),
+        (Some(a), None) => Some(a),
+        (None, None) => None,
+    };
+}
+
+fn merge_user_bandwidth_entry(
+    policies: &mut HashMap<Arc<str>, UserBandwidthLimit>,
+    user: Option<&str>,
+    limit: Option<UserBandwidthLimit>,
+) {
+    let (Some(user), Some(limit)) = (user.filter(|value| !value.is_empty()), limit) else {
+        return;
+    };
+    policies
+        .entry(Arc::from(user))
+        .and_modify(|existing| merge_user_bandwidth_limit(existing, limit))
+        .or_insert(limit);
+}
+
+/// Build the startup per-user bandwidth policy table from inbound client settings.
+pub(crate) fn build_user_bandwidth_policies(
+    inbounds: &[blackwire_config::schema::InboundConfig],
+) -> HashMap<Arc<str>, UserBandwidthLimit> {
+    let mut policies = HashMap::new();
+
+    for inbound in inbounds {
+        match inbound.protocol {
+            Protocol::Vless | Protocol::Vmess | Protocol::Trojan | Protocol::Hysteria2 => {
+                if let Some(clients) = inbound.settings.get("clients").and_then(|v| v.as_array()) {
+                    for client in clients {
+                        let user = client
+                            .get("email")
+                            .or_else(|| client.get("name"))
+                            .and_then(serde_json::Value::as_str);
+                        merge_user_bandwidth_entry(
+                            &mut policies,
+                            user,
+                            parse_user_bandwidth_limit(client),
+                        );
+                    }
+                }
+            }
+            Protocol::Shadowsocks => {
+                if let Some(clients) = inbound.settings.get("clients").and_then(|v| v.as_array()) {
+                    for client in clients {
+                        let user = client
+                            .get("email")
+                            .or_else(|| client.get("name"))
+                            .and_then(serde_json::Value::as_str);
+                        merge_user_bandwidth_entry(
+                            &mut policies,
+                            user,
+                            parse_user_bandwidth_limit(client),
+                        );
+                    }
+                } else {
+                    let user = inbound
+                        .settings
+                        .get("email")
+                        .or_else(|| inbound.settings.get("name"))
+                        .and_then(serde_json::Value::as_str);
+                    merge_user_bandwidth_entry(
+                        &mut policies,
+                        user,
+                        parse_user_bandwidth_limit(&inbound.settings),
+                    );
+                }
+            }
+            Protocol::Tuic => {
+                if let Some(users) = inbound.settings.get("users").and_then(|v| v.as_array()) {
+                    for user in users {
+                        let label = user
+                            .get("email")
+                            .or_else(|| user.get("name"))
+                            .or_else(|| user.get("uuid"))
+                            .or_else(|| user.get("id"))
+                            .and_then(serde_json::Value::as_str);
+                        merge_user_bandwidth_entry(
+                            &mut policies,
+                            label,
+                            parse_user_bandwidth_limit(user),
+                        );
+                    }
+                } else {
+                    let user = inbound
+                        .settings
+                        .get("email")
+                        .or_else(|| inbound.settings.get("name"))
+                        .or_else(|| inbound.settings.get("uuid"))
+                        .or_else(|| inbound.settings.get("id"))
+                        .and_then(serde_json::Value::as_str);
+                    merge_user_bandwidth_entry(
+                        &mut policies,
+                        user,
+                        parse_user_bandwidth_limit(&inbound.settings),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    policies
+}
 
 pub(crate) fn select_balancer_outbounds(
     cfg: &blackwire_config::schema::BalancerConfig,
@@ -256,6 +404,7 @@ pub(crate) fn build_vless_inbound(
     registries: &Arc<DashMap<String, Arc<VlessUserRegistry>>>,
     handshake_timeout: Option<Duration>,
     dns: Option<Arc<DnsModule>>,
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
 ) -> Result<Arc<dyn InboundHandler>> {
     #[allow(clippy::unwrap_or_default)]
     let registry = registries
@@ -274,6 +423,7 @@ pub(crate) fn build_vless_inbound(
         fallback,
         handshake_timeout,
         dns,
+        user_limiter,
     ))
 }
 

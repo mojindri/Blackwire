@@ -10,6 +10,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt as _};
 
 use blackwire_app::dns::DnsModule;
 use blackwire_app::runtime_stats;
+use blackwire_app::{wait_for_user_write_budget, UserBandwidthDirection};
 use blackwire_common::{Address, ProxyError};
 
 use super::codec::{decode_address_port, encode_address_port};
@@ -105,6 +106,7 @@ pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
         }
 
         let upstream = resolve_udp_dest(&dest, dns.as_deref()).await?;
+        wait_for_user_write_budget(user.as_deref(), UserBandwidthDirection::Upload, n).await;
         socket
             .send_to(&payload_buf[..n], upstream)
             .await
@@ -113,6 +115,8 @@ pub async fn relay_vless_udp<S: AsyncRead + AsyncWrite + Unpin>(
 
         match tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut recv_buf)).await {
             Ok(Ok(rn)) if rn > 0 => {
+                wait_for_user_write_budget(user.as_deref(), UserBandwidthDirection::Download, rn)
+                    .await;
                 runtime_stats::record_relay_traffic(
                     inbound_tag.as_ref(),
                     user.as_deref(),

@@ -14,6 +14,7 @@ use tokio::net::UdpSocket;
 
 use blackwire_app::dns::DnsModule;
 use blackwire_app::runtime_stats;
+use blackwire_app::{wait_for_user_write_budget, UserBandwidthDirection};
 use blackwire_common::{Address, BoxedStream, ProxyError};
 
 use super::codec::{encode_udp_datagram_into, parse_udp_datagram};
@@ -75,6 +76,12 @@ pub async fn relay_trojan_udp(
                         continue;
                     }
                     let upstream = resolve_udp_dest(&dest, dns.as_deref()).await?;
+                    wait_for_user_write_budget(
+                        user.as_deref(),
+                        UserBandwidthDirection::Upload,
+                        payload.len(),
+                    )
+                    .await;
                     runtime_stats::record_relay_traffic(
                         inbound_tag.as_ref(),
                         user.as_deref(),
@@ -84,6 +91,12 @@ pub async fn relay_trojan_udp(
                     if let Some(rn) =
                         exchange_udp_datagram(&udp, upstream, payload, &mut reply_buf).await?
                     {
+                        wait_for_user_write_budget(
+                            user.as_deref(),
+                            UserBandwidthDirection::Download,
+                            rn,
+                        )
+                        .await;
                         runtime_stats::record_relay_traffic(
                             inbound_tag.as_ref(),
                             user.as_deref(),
