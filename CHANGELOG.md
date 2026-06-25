@@ -17,6 +17,8 @@ This project is pre-1.0. The support contract is owned by
   behavior.
 - Black UI user copy actions now copy fetched subscription content instead of
   the `/sub/{token}` URL.
+- Black UI now displays the release version below the Blackwire title in the
+  sidebar.
 
 ### Fixed
 
