@@ -137,13 +137,14 @@ pub struct VmessRequest {
 
 /// VMess request command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum VmessCommand {
     /// TCP stream connect.
-    Tcp,
+    Tcp = CMD_TCP,
     /// UDP packet association.
-    Udp,
+    Udp = CMD_UDP,
     /// Mux.Cool.
-    Mux,
+    Mux = CMD_MUX,
 }
 
 /// Tuple returned by `encode_header` with all wire pieces and body secrets.
@@ -178,6 +179,20 @@ pub fn encode_header(
     dest: &Address,
     security: Security,
 ) -> Result<EncodedHeader, ProxyError> {
+    encode_header_with_command(cmd_key, auth_id, VmessCommand::Tcp, dest, security)
+}
+
+/// Encode a VMess AEAD request header with an explicit command.
+///
+/// Normal outbound connections use [`VmessCommand::Tcp`]. Tests and mux-capable
+/// clients use [`VmessCommand::Mux`] to exercise VMess Mux.Cool/XUDP framing.
+pub fn encode_header_with_command(
+    cmd_key: &[u8; 16],
+    auth_id: &[u8; 16],
+    command: VmessCommand,
+    dest: &Address,
+    security: Security,
+) -> Result<EncodedHeader, ProxyError> {
     let mut rng = rand::rng();
 
     let mut iv = [0u8; 16];
@@ -191,7 +206,7 @@ pub fn encode_header(
     let v_byte = v[0];
 
     let pad_len: u8 = (rng.next_u32() % 16) as u8;
-    let plaintext = build_request_plaintext(&iv, &key, v_byte, pad_len, security, dest)?;
+    let plaintext = build_request_plaintext(&iv, &key, v_byte, pad_len, security, command, dest)?;
 
     // Encrypt header with connection_nonce in KDF.
     let hdr_key: [u8; 16] = kdf(cmd_key, &[PATH_HDR_KEY, auth_id, &connection_nonce]);
@@ -401,6 +416,7 @@ fn build_request_plaintext(
     v: u8,
     pad_len: u8,
     security: Security,
+    command: VmessCommand,
     dest: &Address,
 ) -> Result<BytesMut, ProxyError> {
     let mut buf = BytesMut::new();
@@ -411,7 +427,7 @@ fn build_request_plaintext(
     buf.put_u8(0x01); // options: ChunkStream
     buf.put_u8((pad_len << 4) | (security as u8));
     buf.put_u8(0x00); // reserved
-    buf.put_u8(0x01); // command: TCP
+    buf.put_u8(command as u8);
 
     match dest {
         Address::Ipv4(ip, port) => {
@@ -495,12 +511,15 @@ fn decode_plaintext(data: &[u8]) -> Result<VmessRequest, ProxyError> {
         }
         VmessCommand::Mux => {
             if pos >= data.len() {
-                return Err(ProxyError::Protocol("VMess: truncated at atyp".into()));
+                Address::Domain(MUX_DOMAIN.to_string(), port)
+            } else {
+                let atyp = data[pos];
+                pos += 1;
+                if atyp != 0 {
+                    let _ = read_vmess_address(data, &mut pos, atyp, port)?;
+                }
+                Address::Domain(MUX_DOMAIN.to_string(), port)
             }
-            let atyp = data[pos];
-            pos += 1;
-            let _ = read_vmess_address(data, &mut pos, atyp, port)?;
-            Address::Domain(MUX_DOMAIN.to_string(), port)
         }
     };
 
@@ -653,8 +672,16 @@ mod tests {
         let iv = [0x11u8; 16];
         let key = [0x22u8; 16];
         let dest = Address::Ipv4("8.8.8.8".parse().unwrap(), 53);
-        let mut plaintext =
-            build_request_plaintext(&iv, &key, 0x33, 0, Security::Aes128Gcm, &dest).unwrap();
+        let mut plaintext = build_request_plaintext(
+            &iv,
+            &key,
+            0x33,
+            0,
+            Security::Aes128Gcm,
+            VmessCommand::Tcp,
+            &dest,
+        )
+        .unwrap();
 
         plaintext[37] = CMD_UDP;
         let checksum_pos = plaintext.len() - 4;
@@ -664,6 +691,29 @@ mod tests {
         let req = decode_plaintext(&plaintext).unwrap();
         assert_eq!(req.command, VmessCommand::Udp);
         assert_eq!(req.dest, dest);
+    }
+
+    #[test]
+    fn decode_mux_header_accepts_empty_address_type() {
+        let iv = [0x11u8; 16];
+        let key = [0x22u8; 16];
+        let mut plaintext = BytesMut::new();
+        plaintext.put_u8(0x01);
+        plaintext.put_slice(&iv);
+        plaintext.put_slice(&key);
+        plaintext.put_u8(0x33);
+        plaintext.put_u8(0x01);
+        plaintext.put_u8(Security::Aes128Gcm as u8);
+        plaintext.put_u8(0x00);
+        plaintext.put_u8(CMD_MUX);
+        plaintext.put_u16(0);
+        plaintext.put_u8(0);
+        let checksum = fnv32a(plaintext.as_ref());
+        plaintext.put_u32(checksum);
+
+        let req = decode_plaintext(&plaintext).unwrap();
+        assert_eq!(req.command, VmessCommand::Mux);
+        assert_eq!(req.dest, Address::Domain(MUX_DOMAIN.to_string(), 0));
     }
 
     #[test]
