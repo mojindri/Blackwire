@@ -5,7 +5,7 @@
 //! - `GET /healthz` → 200 OK with body `"ok"`
 //! - `GET /readyz`  → 200 OK when the instance is ready
 //! - `GET /metrics` → Prometheus text format
-//! - `GET /version` → JSON `{"version":"0.1.0"}`
+//! - `GET /version` → JSON `{"version":"<crate version>"}`
 //!
 //! # Selected metrics
 //!
@@ -617,7 +617,7 @@ async fn metrics_handler(State(state): State<MetricsState>) -> impl IntoResponse
 }
 
 async fn version_handler() -> impl IntoResponse {
-    Json(serde_json::json!({"version": "0.1.0"}))
+    Json(serde_json::json!({"version": env!("CARGO_PKG_VERSION")}))
 }
 
 // ── Metrics helpers ───────────────────────────────────────────────────────────

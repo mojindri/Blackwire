@@ -13,7 +13,7 @@ This file owns release support labels. Detailed feature evidence lives in
 [feature-matrix.md](feature-matrix.md), and gate commands live in
 [11-testing.md](11-testing.md) / [test-workflows.md](test-workflows.md).
 
-### Supported (0.1.0 supported paths)
+### Supported (current stable supported paths)
 
 Validated by CI, the e2e test suite, and the realistic lab mandatory matrix.
 
@@ -103,7 +103,7 @@ downloads are produced by `.github/workflows/release-assets.yml`.
 
 The workflow runs when a `v*` tag is pushed, or manually through
 `workflow_dispatch` with a tag input. Tags containing `-` are created as
-prereleases; final tags such as `v0.1.0` are published as stable GitHub releases.
+prereleases; final tags such as `v0.1.3` are published as stable GitHub releases.
 
 Expected assets:
 
@@ -119,14 +119,14 @@ For the current stable release:
 
 ```sh
 git push origin HEAD
-git push origin v0.1.0
+git push origin v0.1.3
 ```
 
 If the release already exists but only has GitHub source archives, run the
 workflow manually for the tag:
 
 ```sh
-gh workflow run release-assets.yml -f tag=v0.1.0
+gh workflow run release-assets.yml -f tag=v0.1.3
 ```
 
 ## Container Image
@@ -154,8 +154,8 @@ Black UI companion panel setup are documented in [user-guide.md](user-guide.md).
 Stable install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
-  | VERSION=v0.1.0 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.3/scripts/install.sh \
+  | VERSION=v0.1.3 bash
 ```
 
 Latest install, after a stable release is marked latest:
@@ -172,8 +172,8 @@ that contains the archive and matching `.sha256` file.
 Config-aware install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
-  | VERSION=v0.1.0 CONFIG_PATH=/path/to/config.json bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.3/scripts/install.sh \
+  | VERSION=v0.1.3 CONFIG_PATH=/path/to/config.json bash
 ```
 
 `CONFIG_PATH` copies a local config into `/etc/blackwire/config.json`;
@@ -183,8 +183,8 @@ the config. `START_SERVICE=1` is rejected unless a config is present and valid.
 Generated Linux VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
-  | VERSION=v0.1.0 SETUP=reality PUBLIC_HOST=example.com bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.3/scripts/install.sh \
+  | VERSION=v0.1.3 SETUP=reality PUBLIC_HOST=example.com bash
 ```
 
 Supported setup modes are `SETUP=domain`, `SETUP=reality`, `SETUP=direct`, and
@@ -196,8 +196,8 @@ firewall/log/start commands.
 Standard domain setup:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
-  | VERSION=v0.1.0 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.3/scripts/install.sh \
+  | VERSION=v0.1.3 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 For `SETUP=domain`, point the domain DNS record to the VPS first and open
@@ -216,8 +216,8 @@ internal compatibility escape hatch, but release docs should prefer `SETUP`.
 To install the Black UI companion panel with the Linux release assets:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.0/scripts/install.sh \
-  | VERSION=v0.1.0 INSTALL_BLACK_UI=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.3/scripts/install.sh \
+  | VERSION=v0.1.3 INSTALL_BLACK_UI=1 bash
 ```
 
 When combined with `SETUP=domain`, the installer reverse-proxies Black UI at
@@ -253,7 +253,7 @@ as a hardened production install path.
 ## Other Package Repositories
 
 RPM repo, Arch, Homebrew, Winget, and Chocolatey publishing are not automated
-yet. Keep those for a post-`v0.1.0` packaging pass after config paths, service
+yet. Keep those for a later packaging pass after config paths, service
 behavior, and upgrade policy are settled.
 
 ---
