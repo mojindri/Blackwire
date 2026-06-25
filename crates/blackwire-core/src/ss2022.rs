@@ -6,9 +6,14 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use dashmap::DashMap;
 
 use blackwire_app::features::{InboundHandler, OutboundHandler};
-use blackwire_protocol::ss2022::{inbound::Ss2022Inbound, outbound::Ss2022Outbound};
+use blackwire_app::user_limits::UserConnectionLimiter;
+use blackwire_protocol::ss2022::{
+    inbound::{Ss2022AuthStore, Ss2022Inbound},
+    outbound::Ss2022Outbound,
+};
 
 use crate::net::socket_addr_from_address_port;
 
@@ -25,18 +30,33 @@ use crate::net::socket_addr_from_address_port;
 /// ```
 pub(crate) fn build_ss2022_inbound(
     cfg: &blackwire_config::schema::InboundConfig,
+    auth_stores: &Arc<DashMap<String, Arc<Ss2022AuthStore>>>,
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
 ) -> Result<Arc<dyn InboundHandler>> {
+    #[allow(clippy::unwrap_or_default)]
+    let auth = auth_stores
+        .entry(cfg.tag.clone())
+        .or_insert_with(Ss2022AuthStore::new)
+        .clone();
+    populate_ss2022_auth_store(&auth, cfg)?;
+    Ok(Ss2022Inbound::new_with_auth_store(
+        cfg.tag.as_str(),
+        auth,
+        user_limiter,
+    ))
+}
+
+pub(crate) fn populate_ss2022_auth_store(
+    auth: &Ss2022AuthStore,
+    cfg: &blackwire_config::schema::InboundConfig,
+) -> Result<()> {
     let password = cfg.settings["password"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("SS-2022 inbound '{}' missing 'password'", cfg.tag))?
         .to_string();
     let user = ss2022_user_label(&cfg.settings, &password);
-
-    Ok(Ss2022Inbound::new_with_user(
-        cfg.tag.as_str(),
-        &password,
-        user,
-    ))
+    auth.replace_password(&password, user);
+    Ok(())
 }
 
 pub(crate) fn ss2022_user_label(settings: &serde_json::Value, password: &str) -> Option<String> {

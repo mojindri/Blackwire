@@ -9,15 +9,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use dashmap::DashMap;
 
 use blackwire_app::dispatcher::Dispatcher;
+use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_config::schema::{
     DatagramConfig, DatagramPolicy as ConfigDatagramPolicy, FecConfig, FecMode as ConfigFecMode,
     InboundConfig, OutboundConfig, QuicConfig,
 };
 use blackwire_transport::{
-    CongestionConfig, CongestionMode, Hysteria2ClientConfig, Hysteria2OutboundHandler,
-    Hysteria2Server, Hysteria2ServerConfig, QuicSocketConfig,
+    CongestionConfig, CongestionMode, Hysteria2AuthStore, Hysteria2ClientConfig,
+    Hysteria2OutboundHandler, Hysteria2Server, Hysteria2ServerConfig, QuicSocketConfig,
 };
 use tokio::sync::Semaphore;
 
@@ -28,22 +30,27 @@ use crate::net::listen_socket_addr;
 ///
 /// The server runs on a QUIC UDP socket (not TCP), so it does not go through
 /// the normal `TcpServerTransport` path. Instead, it spawns its own task here.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn start_hysteria2_inbound(
     cfg: &InboundConfig,
+    auth_stores: &Arc<DashMap<String, Arc<Hysteria2AuthStore>>>,
     quic: Option<&QuicConfig>,
     datagram: Option<&DatagramConfig>,
     fec: Option<&FecConfig>,
     default_max_connections: Option<usize>,
     shared_limiter: Option<Arc<Semaphore>>,
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
     dispatcher: Arc<dyn Dispatcher>,
 ) -> Result<tokio::task::JoinHandle<()>> {
     let server_config = parse_server_config(
         cfg,
+        auth_stores,
         quic,
         datagram,
         fec,
         default_max_connections,
         shared_limiter,
+        user_limiter,
     )?;
     let tag = cfg.tag.clone();
 
@@ -74,18 +81,27 @@ pub(crate) fn build_hysteria2_outbound(
 // ── Config parsing ────────────────────────────────────────────────────────────
 
 /// Parse Hysteria2 server settings from inbound config.
+#[allow(clippy::too_many_arguments)]
 fn parse_server_config(
     cfg: &InboundConfig,
+    auth_stores: &Arc<DashMap<String, Arc<Hysteria2AuthStore>>>,
     quic: Option<&QuicConfig>,
     datagram: Option<&DatagramConfig>,
     fec: Option<&FecConfig>,
     default_max_connections: Option<usize>,
     shared_limiter: Option<Arc<Semaphore>>,
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
 ) -> Result<Hysteria2ServerConfig> {
     let s = &cfg.settings;
 
     let password = s["auth"].as_str().unwrap_or_default().to_string();
     let user = hysteria2_user_label(s, &password);
+    #[allow(clippy::unwrap_or_default)]
+    let auth = auth_stores
+        .entry(cfg.tag.clone())
+        .or_insert_with(Hysteria2AuthStore::new)
+        .clone();
+    auth.replace(password.clone(), user);
 
     let up_mbps = s["upMbps"].as_u64().unwrap_or(100);
     let down_mbps = s["downMbps"].as_u64().unwrap_or(100);
@@ -129,14 +145,14 @@ fn parse_server_config(
     Ok(Hysteria2ServerConfig {
         tag: cfg.tag.clone(),
         addr,
-        password,
-        user,
+        auth,
         up_mbps,
         down_mbps,
         cert_pem,
         key_pem,
         max_connections,
         shared_limiter,
+        user_limiter,
         congestion,
         socket,
         datagram_enabled,
@@ -145,7 +161,7 @@ fn parse_server_config(
     })
 }
 
-fn hysteria2_user_label(settings: &serde_json::Value, password: &str) -> Option<String> {
+pub(crate) fn hysteria2_user_label(settings: &serde_json::Value, password: &str) -> Option<String> {
     let clients = settings.get("clients")?.as_array()?;
     clients.iter().find_map(|client| {
         let auth = client

@@ -374,6 +374,21 @@ struct XudpUdpSession {
     reader_task: tokio::task::JoinHandle<()>,
 }
 
+fn abort_xudp_session(session: Arc<XudpUdpSession>) {
+    session.reader_task.abort();
+}
+
+async fn clear_xudp_sessions(
+    xudp_sessions: &DashMap<[u8; 8], Arc<XudpUdpSession>>,
+    active_xudp: &tokio::sync::Mutex<Option<[u8; 8]>>,
+) {
+    for entry in xudp_sessions.iter() {
+        abort_xudp_session(Arc::clone(entry.value()));
+    }
+    xudp_sessions.clear();
+    *active_xudp.lock().await = None;
+}
+
 fn socket_addr_to_address(peer: SocketAddr) -> Address {
     match peer {
         SocketAddr::V4(v4) => Address::Ipv4(*v4.ip(), v4.port()),
@@ -432,9 +447,11 @@ pub async fn relay_mux_cool(
                         global_id = %hex::encode(global_id),
                         "mux: new XUDP flow"
                     );
-                    if let Some((_, old)) = xudp_sessions.remove(&global_id) {
-                        old.reader_task.abort();
-                    }
+                    // XUDP Keep frames do not carry a GlobalID, so a mux connection
+                    // cannot safely sustain multiple concurrent XUDP flows without
+                    // risking misrouting session-0 datagrams. Keep one active flow
+                    // per mux connection and replace any previous XUDP state here.
+                    clear_xudp_sessions(&xudp_sessions, &active_xudp).await;
                     let socket = Arc::new(
                         UdpSocket::bind("0.0.0.0:0")
                             .await
@@ -565,7 +582,11 @@ pub async fn relay_mux_cool(
                                             )?;
                                         }
                                     }
+                                } else {
+                                    debug!("mux: XUDP Keep for missing active flow");
                                 }
+                            } else {
+                                debug!("mux: XUDP Keep with no active flow");
                             }
                             continue;
                         }
@@ -632,12 +653,7 @@ pub async fn relay_mux_cool(
                     session.reader_task.abort();
                 }
                 if meta.session_id == XUDP_SESSION_ID {
-                    let gid = active_xudp.lock().await.take();
-                    if let Some(gid) = gid {
-                        if let Some((_, session)) = xudp_sessions.remove(&gid) {
-                            session.reader_task.abort();
-                        }
-                    }
+                    clear_xudp_sessions(&xudp_sessions, &active_xudp).await;
                 }
             }
             SessionStatus::KeepAlive => {

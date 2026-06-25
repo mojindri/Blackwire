@@ -6,10 +6,13 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use blackwire_app::dispatcher::Dispatcher;
+use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_config::schema::{InboundConfig, OutboundConfig, QuicConfig};
 use blackwire_transport::{
-    QuicSocketConfig, TuicClientConfig, TuicOutboundHandler, TuicServer, TuicServerConfig, TuicUser,
+    QuicSocketConfig, TuicAuthStore, TuicClientConfig, TuicOutboundHandler, TuicServer,
+    TuicServerConfig, TuicUser,
 };
+use dashmap::DashMap;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
@@ -18,12 +21,21 @@ use crate::net::{listen_socket_addr, socket_addr_from_address_port};
 
 pub(crate) fn start_tuic_inbound(
     cfg: &InboundConfig,
+    auth_stores: &Arc<DashMap<String, Arc<TuicAuthStore>>>,
     quic: Option<&QuicConfig>,
     default_max_connections: Option<usize>,
     shared_limiter: Option<Arc<Semaphore>>,
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
     dispatcher: Arc<dyn Dispatcher>,
 ) -> Result<tokio::task::JoinHandle<()>> {
-    let server_config = parse_server_config(cfg, quic, default_max_connections, shared_limiter)?;
+    let server_config = parse_server_config(
+        cfg,
+        auth_stores,
+        quic,
+        default_max_connections,
+        shared_limiter,
+        user_limiter,
+    )?;
     let tag = cfg.tag.clone();
 
     let handle = tokio::spawn(async move {
@@ -46,9 +58,11 @@ pub(crate) fn build_tuic_outbound(
 
 fn parse_server_config(
     cfg: &InboundConfig,
+    auth_stores: &Arc<DashMap<String, Arc<TuicAuthStore>>>,
     quic: Option<&QuicConfig>,
     default_max_connections: Option<usize>,
     shared_limiter: Option<Arc<Semaphore>>,
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
 ) -> Result<TuicServerConfig> {
     let stream = cfg
         .stream_settings
@@ -70,11 +84,17 @@ fn parse_server_config(
     if users.is_empty() {
         anyhow::bail!("TUIC inbound '{}' requires users", cfg.tag);
     }
+    #[allow(clippy::unwrap_or_default)]
+    let auth = auth_stores
+        .entry(cfg.tag.clone())
+        .or_insert_with(TuicAuthStore::new)
+        .clone();
+    auth.replace_users(users);
 
     Ok(TuicServerConfig {
         tag: cfg.tag.clone(),
         addr,
-        users,
+        auth,
         cert_pem,
         key_pem,
         server_name: Some(tls.server_name.clone()).filter(|s| !s.is_empty()),
@@ -84,6 +104,7 @@ fn parse_server_config(
             .and_then(|l| l.max_connections)
             .or(default_max_connections),
         shared_limiter,
+        user_limiter,
         auth_timeout: parse_duration_ms(&cfg.settings, "authTimeoutMs", 3_000),
         socket: parse_socket_config(&cfg.settings, quic),
         enable_udp: network_allows_udp(&cfg.settings),
@@ -159,7 +180,7 @@ fn parse_client_config(
     })
 }
 
-fn parse_users(settings: &serde_json::Value) -> Result<Vec<TuicUser>> {
+pub(crate) fn parse_users(settings: &serde_json::Value) -> Result<Vec<TuicUser>> {
     let Some(users) = settings.get("users") else {
         let uuid = settings
             .get("uuid")

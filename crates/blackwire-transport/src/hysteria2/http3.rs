@@ -8,6 +8,7 @@ use anyhow::{bail, Context as _, Result};
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::runtime_stats;
+use blackwire_app::{wait_for_user_write_budget, UserBandwidthDirection};
 use blackwire_common::{BoxedStream, BufferPool, ReunionStream};
 use dashmap::DashMap;
 use h3_quinn::Connection as H3QuinnConnection;
@@ -78,6 +79,10 @@ pub async fn serve_connection(
     dispatcher: Arc<dyn Dispatcher>,
 ) -> Result<()> {
     let server_rx_bps = config.up_mbps.saturating_mul(1_000_000 / 8);
+    let auth = config
+        .auth
+        .load()
+        .ok_or_else(|| anyhow::anyhow!("Hysteria2 auth store is empty"))?;
 
     let mut h3_conn = h3::server::Connection::new(H3QuinnConnection::new(conn.clone()))
         .await
@@ -93,7 +98,7 @@ pub async fn serve_connection(
 
     timeout(
         H3_AUTH_HANDLE_TIMEOUT,
-        handle_h3_auth_request(resolver, &config.password, server_rx_bps, true),
+        handle_h3_auth_request(resolver, &auth.password, server_rx_bps, true),
     )
     .await
     .context("handle HTTP/3 auth timed out")??;
@@ -108,7 +113,21 @@ pub async fn serve_connection(
     });
 
     let inbound_tag = config.tag.clone();
-    let user = config.user.clone();
+    let user = auth.user.clone();
+    let _user_permit = if let (Some(limiter), Some(user)) = (&config.user_limiter, &user) {
+        let user: Arc<str> = user.clone().into();
+        match limiter.try_acquire(Some(&user)) {
+            Some(permit) => Some(permit),
+            None => {
+                bail!(
+                    "per-user Hysteria2 connection limit reached for '{user}' (max {})",
+                    limiter.max_connections_per_user()
+                );
+            }
+        }
+    } else {
+        None
+    };
 
     // Spawn the UDP datagram relay concurrently with the TCP stream accept loop.
     let udp_conn = conn.clone();
@@ -278,6 +297,12 @@ async fn run_session_reader(
             Ok((n, src)) => {
                 let data = bytes::Bytes::copy_from_slice(&buf[..n]);
                 reply_pool.release(buf);
+                wait_for_user_write_budget(
+                    context.user.as_deref(),
+                    UserBandwidthDirection::Download,
+                    n,
+                )
+                .await;
                 runtime_stats::record_relay_traffic(
                     context.inbound_tag.as_ref(),
                     context.user.as_deref(),
@@ -452,6 +477,12 @@ async fn handle_udp_datagram(
         }
     };
 
+    wait_for_user_write_budget(
+        user.as_deref(),
+        UserBandwidthDirection::Upload,
+        payload.len(),
+    )
+    .await;
     if let Err(e) = sock.send_to(payload.as_ref(), dest_addr).await {
         warn!("Hysteria2 UDP send to {dest_addr}: {e}");
     } else {
@@ -482,6 +513,12 @@ async fn priority_retry_roundtrip(
     permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let _permit = permit;
+    wait_for_user_write_budget(
+        user.as_deref(),
+        UserBandwidthDirection::Upload,
+        payload.len(),
+    )
+    .await;
     if let Err(e) = sock.send_to(payload.as_ref(), dest_addr).await {
         warn!("Hysteria2 UDP send to {dest_addr}: {e}");
         return;
@@ -495,11 +532,26 @@ async fn priority_retry_roundtrip(
 
     let retry_payload = payload.clone();
     let retry_sock = Arc::clone(&sock);
+    let retry_user = user.clone();
+    let retry_inbound_tag = Arc::clone(&inbound_tag);
     let delay = std::time::Duration::from_millis(datagram_policy.fast_dns_retry_delay_ms.max(1));
     tokio::spawn(async move {
         sleep(delay).await;
+        wait_for_user_write_budget(
+            retry_user.as_deref(),
+            UserBandwidthDirection::Upload,
+            retry_payload.len(),
+        )
+        .await;
         if let Err(e) = retry_sock.send_to(retry_payload.as_ref(), dest_addr).await {
             warn!("Hysteria2 UDP fast-retry send failed: {e}");
+        } else {
+            runtime_stats::record_relay_traffic(
+                retry_inbound_tag.as_ref(),
+                retry_user.as_deref(),
+                retry_payload.len() as u64,
+                0,
+            );
         }
     });
 
@@ -519,6 +571,7 @@ async fn priority_retry_roundtrip(
         Ok(Ok((n, _src))) => {
             let data = bytes::Bytes::copy_from_slice(&buf[..n]);
             reply_pool.release(buf);
+            wait_for_user_write_budget(user.as_deref(), UserBandwidthDirection::Download, n).await;
             runtime_stats::record_relay_traffic(inbound_tag.as_ref(), user.as_deref(), 0, n as u64);
             let response_dg = UdpDatagram {
                 session_id,

@@ -29,7 +29,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use socket2::SockRef;
+use socket2::{SockRef, TcpKeepalive};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, error, info, warn};
@@ -41,6 +41,19 @@ use blackwire_common::{BoxedStream, ProxyError, TCP_CONNECT_TIMEOUT};
 const TCP_FASTOPEN: libc::c_int = 23;
 #[cfg(target_os = "linux")]
 const TCP_FASTOPEN_CONNECT: libc::c_int = 30;
+const TCP_KEEPALIVE_IDLE: Duration = Duration::from_secs(60);
+const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+#[cfg(any(
+    target_os = "android",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "fuchsia",
+    target_os = "illumos",
+    target_os = "linux",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+const TCP_KEEPALIVE_RETRIES: u32 = 4;
 
 /// Configuration for the TCP transport.
 #[derive(Debug, Clone, Default)]
@@ -318,6 +331,8 @@ impl TcpServerTransport {
         // Without this, the OS buffers small writes and sends them together.
         // For proxy traffic this adds latency — we want each write sent immediately.
         sock.set_tcp_nodelay(true)?;
+        sock.set_keepalive(true)?;
+        let _ = sock.set_tcp_keepalive(&tcp_keepalive_config());
 
         Ok(())
     }
@@ -392,8 +407,42 @@ impl TcpClientTransport {
             Ok(Err(e)) => return Err(ProxyError::Io(e)),
             Err(_) => return Err(ProxyError::Timeout),
         };
+        TcpServerTransport::apply_socket_opts(&stream).map_err(ProxyError::Io)?;
 
         debug!(addr = %addr, "TCP outbound connected");
         Ok(Box::new(stream))
     }
+}
+
+fn tcp_keepalive_config() -> TcpKeepalive {
+    let keepalive = TcpKeepalive::new().with_time(TCP_KEEPALIVE_IDLE);
+    #[cfg(any(
+        target_os = "android",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "fuchsia",
+        target_os = "illumos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "tvos",
+        target_os = "visionos",
+        target_os = "watchos",
+        target_os = "windows"
+    ))]
+    let keepalive = keepalive.with_interval(TCP_KEEPALIVE_INTERVAL);
+    #[cfg(any(
+        target_os = "android",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "fuchsia",
+        target_os = "illumos",
+        target_os = "linux",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    let keepalive = keepalive.with_retries(TCP_KEEPALIVE_RETRIES);
+    keepalive
 }

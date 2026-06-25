@@ -15,8 +15,10 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
+use arc_swap::ArcSwap;
 use blackwire_app::{
     context::Context, dispatcher::Dispatcher, features::OutboundHandler, runtime_stats,
+    user_limits::UserConnectionLimiter, wait_for_user_write_budget, UserBandwidthDirection,
 };
 use blackwire_common::{Address, BoxedStream, ProxyError, ReunionStream};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -24,7 +26,7 @@ use dashmap::DashMap;
 use quinn::{Connection, Endpoint, RecvStream, SendStream};
 use tokio::{
     net::UdpSocket,
-    sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore},
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore},
     time::timeout,
 };
 use tracing::{info, warn};
@@ -73,6 +75,25 @@ struct TuicAuthUser {
     label: Option<Arc<str>>,
 }
 
+#[derive(Debug, Default)]
+pub struct TuicAuthStore {
+    users: ArcSwap<Vec<TuicUser>>,
+}
+
+impl TuicAuthStore {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    pub fn replace_users(&self, users: Vec<TuicUser>) {
+        self.users.store(Arc::new(users));
+    }
+
+    pub fn snapshot(&self) -> Arc<Vec<TuicUser>> {
+        self.users.load_full()
+    }
+}
+
 /// Configuration for a TUIC v5 inbound server.
 #[derive(Debug, Clone)]
 pub struct TuicServerConfig {
@@ -80,8 +101,8 @@ pub struct TuicServerConfig {
     pub tag: String,
     /// UDP socket address the QUIC listener binds to.
     pub addr: SocketAddr,
-    /// Accepted TUIC users for authenticate commands.
-    pub users: Vec<TuicUser>,
+    /// Accepted TUIC users refreshed in place on config reload.
+    pub auth: Arc<TuicAuthStore>,
     /// PEM-encoded TLS certificate chain served by the QUIC endpoint.
     pub cert_pem: String,
     /// PEM-encoded private key for [`TuicServerConfig::cert_pem`].
@@ -92,6 +113,8 @@ pub struct TuicServerConfig {
     pub max_connections: Option<usize>,
     /// Optional process-wide limiter shared with other inbound listeners.
     pub shared_limiter: Option<Arc<Semaphore>>,
+    /// Optional authenticated per-user QUIC session limiter.
+    pub user_limiter: Option<Arc<UserConnectionLimiter>>,
     /// Maximum time to wait for the initial TUIC authenticate command.
     pub auth_timeout: Duration,
     /// QUIC socket fan-out and reuse settings.
@@ -243,9 +266,9 @@ async fn serve_connection(
     config: TuicServerConfig,
     dispatcher: Arc<dyn Dispatcher>,
 ) -> Result<()> {
+    let auth_users = config.auth.snapshot();
     let users = Arc::new(
-        config
-            .users
+        auth_users
             .iter()
             .map(|u| {
                 (
@@ -258,39 +281,35 @@ async fn serve_connection(
             })
             .collect::<HashMap<_, _>>(),
     );
-    let (auth_tx, auth_rx) = watch::channel::<Option<Uuid>>(None);
-
-    let auth_conn = conn.clone();
-    let auth_users = Arc::clone(&users);
-    let auth_timeout = config.auth_timeout;
-    tokio::spawn(async move {
-        if let Err(e) = accept_authentication(auth_conn, auth_users, auth_tx, auth_timeout).await {
-            warn!("TUIC v5 authentication failed: {e}");
+    let uuid = accept_authentication(conn.clone(), Arc::clone(&users), config.auth_timeout).await?;
+    let user = users.get(&uuid).and_then(|entry| entry.label.clone());
+    let _user_permit = if let (Some(limiter), Some(user)) = (&config.user_limiter, &user) {
+        match limiter.try_acquire(Some(user)) {
+            Some(permit) => Some(permit),
+            None => {
+                anyhow::bail!(
+                    "per-user TUIC connection limit reached for '{user}' (max {})",
+                    limiter.max_connections_per_user()
+                );
+            }
         }
-    });
+    } else {
+        None
+    };
 
     if config.enable_udp {
         let udp_conn = conn.clone();
-        let udp_auth = auth_rx.clone();
-        let udp_users = Arc::clone(&users);
         let udp_tag = Arc::<str>::from(config.tag.clone());
-        tokio::spawn(
-            async move { serve_udp_datagrams(udp_conn, udp_auth, udp_users, udp_tag).await },
-        );
+        let udp_user = user.clone();
+        tokio::spawn(async move { serve_udp_datagrams(udp_conn, udp_user, udp_tag).await });
     }
 
     loop {
         let (mut send, mut recv) = conn.accept_bi().await.context("accept TUIC stream")?;
         let dispatcher = Arc::clone(&dispatcher);
         let tag = config.tag.clone();
-        let mut auth_rx = auth_rx.clone();
-        let users = Arc::clone(&users);
+        let user = user.clone();
         tokio::spawn(async move {
-            let Some(uuid) = wait_authenticated(&mut auth_rx).await else {
-                let _ = send.finish();
-                return;
-            };
-            let user = users.get(&uuid).and_then(|entry| entry.label.clone());
             let dest = match read_connect_command(&mut recv).await {
                 Ok(dest) => dest,
                 Err(e) => {
@@ -318,9 +337,8 @@ async fn serve_connection(
 async fn accept_authentication(
     conn: Connection,
     users: Arc<HashMap<Uuid, TuicAuthUser>>,
-    auth_tx: watch::Sender<Option<Uuid>>,
     auth_timeout: Duration,
-) -> Result<()> {
+) -> Result<Uuid> {
     let started = Instant::now();
     loop {
         let remaining = auth_timeout
@@ -334,24 +352,10 @@ async fn accept_authentication(
             .context("accept TUIC authentication stream timed out")?
             .context("accept TUIC authentication stream")?;
         match read_authenticate_command(&conn, &users, &mut stream).await {
-            Ok(uuid) => {
-                let _ = auth_tx.send(Some(uuid));
-                return Ok(());
-            }
+            Ok(uuid) => return Ok(uuid),
             Err(e) => {
                 warn!("ignoring non-auth TUIC v5 unidirectional stream: {e}");
             }
-        }
-    }
-}
-
-async fn wait_authenticated(auth_rx: &mut watch::Receiver<Option<Uuid>>) -> Option<Uuid> {
-    loop {
-        if let Some(uuid) = *auth_rx.borrow() {
-            return Some(uuid);
-        }
-        if auth_rx.changed().await.is_err() {
-            return None;
         }
     }
 }
@@ -735,16 +739,7 @@ struct UdpSession {
     last_used: Instant,
 }
 
-async fn serve_udp_datagrams(
-    conn: Connection,
-    mut auth_rx: watch::Receiver<Option<Uuid>>,
-    users: Arc<HashMap<Uuid, TuicAuthUser>>,
-    inbound_tag: Arc<str>,
-) {
-    let Some(uuid) = wait_authenticated(&mut auth_rx).await else {
-        return;
-    };
-    let user = users.get(&uuid).and_then(|entry| entry.label.clone());
+async fn serve_udp_datagrams(conn: Connection, user: Option<Arc<str>>, inbound_tag: Arc<str>) {
     let sessions: Arc<DashMap<u16, UdpSession>> = Arc::new(DashMap::new());
     let workers = Arc::new(Semaphore::new(MAX_UDP_WORKERS_PER_CONN));
     loop {
@@ -814,6 +809,12 @@ async fn handle_udp_packet(
             }
         }
     };
+    wait_for_user_write_budget(
+        user.as_deref(),
+        UserBandwidthDirection::Upload,
+        packet.data.len(),
+    )
+    .await;
     if let Err(e) = socket.send_to(&packet.data, dest).await {
         warn!("TUIC UDP send failed: {e}");
         return;
@@ -835,6 +836,12 @@ async fn handle_udp_packet(
             };
             match encode_udp_packet(&reply) {
                 Ok(raw) => {
+                    wait_for_user_write_budget(
+                        user.as_deref(),
+                        UserBandwidthDirection::Download,
+                        n,
+                    )
+                    .await;
                     if let Err(e) = conn.send_datagram(raw) {
                         warn!("TUIC UDP reply send_datagram failed: {e}");
                     } else {

@@ -23,6 +23,8 @@ mod relay;
 pub mod router;
 pub mod runtime_stats;
 pub mod sniff;
+pub mod user_bandwidth;
+pub mod user_limits;
 
 pub use balancer::Balancer;
 pub use context::Context;
@@ -33,3 +35,8 @@ pub use relay::{ADAPTIVE_SPLICE_LONG_STREAM_AFTER, ADAPTIVE_SPLICE_MIN_BYTES};
 pub use router::{
     normalize_routing_domain_strategy, Route, Router, RoutingContext, RoutingDomainStrategy,
 };
+pub use user_bandwidth::{
+    set_user_bandwidth_policies, set_user_bandwidth_policy, shape_stream_writes_for_user,
+    wait_for_user_write_budget, UserBandwidthDirection, UserBandwidthLimit,
+};
+pub use user_limits::{UserConnectionLimiter, UserConnectionPermit};

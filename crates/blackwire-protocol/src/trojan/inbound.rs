@@ -23,6 +23,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use parking_lot::RwLock;
 use subtle::ConstantTimeEq;
 use tracing::{debug, warn};
 
@@ -30,6 +31,7 @@ use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::dns::DnsModule;
 use blackwire_app::features::InboundHandler;
+use blackwire_app::user_limits::UserConnectionLimiter;
 use tokio::io::BufReader;
 
 use blackwire_common::{Address, BoxedStream, Network, PrependedStream, ProxyError};
@@ -67,17 +69,60 @@ struct TrojanToken {
     user: Option<Arc<str>>,
 }
 
+#[derive(Default)]
+pub struct TrojanAuthStore {
+    tokens: RwLock<Vec<TrojanToken>>,
+}
+
+impl TrojanAuthStore {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    pub fn replace_users(&self, users: &[TrojanUser]) {
+        let tokens = users
+            .iter()
+            .map(|user| {
+                let hex = compute_token(&user.password);
+                let mut arr = [0u8; TOKEN_LEN];
+                arr.copy_from_slice(hex.as_bytes());
+                TrojanToken {
+                    token: arr,
+                    user: user.label.as_deref().map(Arc::from),
+                }
+            })
+            .collect();
+        *self.tokens.write() = tokens;
+    }
+
+    pub fn validate_token(&self, token: &[u8; TOKEN_LEN]) -> Option<Option<Arc<str>>> {
+        self.tokens
+            .read()
+            .iter()
+            .find(|expected| expected.token.ct_eq(token).into())
+            .map(|expected| expected.user.clone())
+    }
+
+    pub fn len(&self) -> usize {
+        self.tokens.read().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tokens.read().is_empty()
+    }
+}
+
 /// A Trojan inbound handler.
 pub struct TrojanInbound {
     /// The inbound tag from config.
     tag: Arc<str>,
-
-    /// Pre-computed 56-char auth tokens for each configured password.
-    /// We compare against these on every connection.
-    tokens: Vec<TrojanToken>,
+    /// Shared auth token store refreshed in place on config reload.
+    auth: Arc<TrojanAuthStore>,
 
     /// DNS module for UDP relay domain resolution.
     dns: Option<Arc<DnsModule>>,
+    /// Optional authenticated per-user connection limiter.
+    user_limiter: Option<Arc<UserConnectionLimiter>>,
 }
 
 impl TrojanInbound {
@@ -99,7 +144,7 @@ impl TrojanInbound {
                 label: None,
             })
             .collect::<Vec<_>>();
-        Self::new_with_users(tag, &users, dns)
+        Self::new_with_users(tag, &users, dns, None)
     }
 
     /// Create a new Trojan inbound handler with per-client stats labels.
@@ -107,36 +152,26 @@ impl TrojanInbound {
         tag: impl Into<Arc<str>>,
         users: &[TrojanUser],
         dns: Option<Arc<DnsModule>>,
+        user_limiter: Option<Arc<UserConnectionLimiter>>,
     ) -> Arc<Self> {
-        let tokens = users
-            .iter()
-            .map(|user| {
-                let p = &user.password;
-                let hex = compute_token(p);
-                let mut arr = [0u8; TOKEN_LEN];
-                arr.copy_from_slice(hex.as_bytes());
-                TrojanToken {
-                    token: arr,
-                    user: user.label.as_deref().map(Arc::from),
-                }
-            })
-            .collect();
-
-        Arc::new(Self {
-            tag: tag.into(),
-            tokens,
-            dns,
-        })
+        let auth = TrojanAuthStore::new();
+        auth.replace_users(users);
+        Self::new_with_auth_store(tag, auth, dns, user_limiter)
     }
 
-    /// Check whether the given raw token bytes match any configured password.
-    ///
-    /// Uses constant-time comparison to avoid timing-based side channels.
-    fn validate_token(&self, token: &[u8; TOKEN_LEN]) -> Option<Option<Arc<str>>> {
-        self.tokens
-            .iter()
-            .find(|expected| expected.token.ct_eq(token).into())
-            .map(|expected| expected.user.clone())
+    /// Create a new Trojan inbound handler backed by a shared auth store.
+    pub fn new_with_auth_store(
+        tag: impl Into<Arc<str>>,
+        auth: Arc<TrojanAuthStore>,
+        dns: Option<Arc<DnsModule>>,
+        user_limiter: Option<Arc<UserConnectionLimiter>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            tag: tag.into(),
+            auth,
+            dns,
+            user_limiter,
+        })
     }
 }
 
@@ -171,7 +206,7 @@ impl InboundHandler for TrojanInbound {
         }
 
         // Validate the token in constant time.
-        let user = match self.validate_token(&request.token) {
+        let user = match self.auth.validate_token(&request.token) {
             Some(user) => user,
             None => {
                 warn!(source = %source, "Trojan auth failed — dropping connection");
@@ -184,6 +219,27 @@ impl InboundHandler for TrojanInbound {
             dest = %request.dest,
             "Trojan authenticated"
         );
+
+        let _user_permit = if let Some(limiter) = &self.user_limiter {
+            match user.as_ref() {
+                Some(user) => match limiter.try_acquire(Some(user)) {
+                    Some(permit) => Some(permit),
+                    None => {
+                        warn!(
+                            source = %source,
+                            inbound = %self.tag,
+                            user = %user,
+                            max = limiter.max_connections_per_user(),
+                            "per-user connection limit reached; dropping Trojan connection"
+                        );
+                        return Ok(());
+                    }
+                },
+                None => None,
+            }
+        } else {
+            None
+        };
 
         if is_trojan_udp_associate(&request) {
             return relay_trojan_udp(stream, self.dns.clone(), self.tag.clone(), user).await;
@@ -214,8 +270,8 @@ mod tests {
         let mut bad_arr = [0u8; TOKEN_LEN];
         bad_arr.copy_from_slice(bad.as_bytes());
 
-        assert!(handler.validate_token(&good_arr).is_some());
-        assert!(handler.validate_token(&bad_arr).is_none());
+        assert!(handler.auth.validate_token(&good_arr).is_some());
+        assert!(handler.auth.validate_token(&bad_arr).is_none());
     }
 
     /// Multiple passwords: any valid one is accepted.
@@ -228,7 +284,7 @@ mod tests {
             let mut arr = [0u8; TOKEN_LEN];
             arr.copy_from_slice(token_str.as_bytes());
             assert!(
-                handler.validate_token(&arr).is_some(),
+                handler.auth.validate_token(&arr).is_some(),
                 "password '{pw}' should be valid"
             );
         }
@@ -236,7 +292,7 @@ mod tests {
         let bad_str = compute_token("pass3");
         let mut bad_arr = [0u8; TOKEN_LEN];
         bad_arr.copy_from_slice(bad_str.as_bytes());
-        assert!(handler.validate_token(&bad_arr).is_none());
+        assert!(handler.auth.validate_token(&bad_arr).is_none());
     }
 
     #[test]
@@ -248,6 +304,7 @@ mod tests {
                 label: Some("trojan@example.local".into()),
             }],
             None,
+            None,
         );
 
         let good = compute_token("correct-password");
@@ -255,7 +312,7 @@ mod tests {
         good_arr.copy_from_slice(good.as_bytes());
 
         assert_eq!(
-            handler.validate_token(&good_arr).flatten().as_deref(),
+            handler.auth.validate_token(&good_arr).flatten().as_deref(),
             Some("trojan@example.local")
         );
     }
