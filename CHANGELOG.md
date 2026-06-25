@@ -8,6 +8,17 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.6 - 2026-06-26
+
+### Fixed
+
+- VLESS UDP and mux/XUDP relays now bind UDP sockets using the resolved
+  upstream address family, avoiding `Address family not supported` failures
+  when clients send IPv6 UDP destinations through VLESS/REALITY mux paths.
+- VMess inbound now handles Mux.Cool and XUDP frames after authentication, so
+  VMess QUIC links imported by Hiddify/sing-box with XUDP packet encoding can
+  relay TCP mux substreams and UDP packets instead of failing with `unknown ATYP`.
+
 ## 0.1.5 - 2026-06-25
 
 ### Fixed

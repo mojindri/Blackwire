@@ -11,8 +11,19 @@
 
 use std::sync::Arc;
 
+use blackwire_common::{Address, BoxedStream};
+use blackwire_protocol::vless::mux::{
+    encode_frame, encode_new_metadata, encode_new_metadata_xudp, parse_frame, SessionStatus,
+    MUX_DOMAIN, OPT_DATA, XUDP_SESSION_ID,
+};
+use blackwire_protocol::vmess::auth::{cmd_key, generate_auth_id};
+use blackwire_protocol::vmess::codec::{
+    encode_header_with_command, read_response_header, response_body_iv, response_body_key,
+    Security, VmessCommand,
+};
+use blackwire_protocol::vmess::stream::VmessStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 const TEST_UUID: &str = "b831381d-6324-4d53-ad4f-8cda48b30811";
 
@@ -39,6 +50,28 @@ async fn spawn_echo_server() -> (u16, tokio::task::JoinHandle<()>) {
                 break;
             }
             stream.write_all(&buf[..n]).await.unwrap();
+        }
+    });
+    (port, task)
+}
+
+async fn spawn_udp_echo_server() -> (u16, tokio::task::JoinHandle<()>) {
+    let sock = UdpSocket::bind(("127.0.0.1", 0))
+        .await
+        .expect("udp echo bind failed");
+    let port = sock.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        loop {
+            let Ok((n, peer)) = sock.recv_from(&mut buf).await else {
+                break;
+            };
+            if n == 0 {
+                continue;
+            }
+            if sock.send_to(&buf[..n], peer).await.is_err() {
+                break;
+            }
         }
     });
     (port, task)
@@ -209,6 +242,121 @@ async fn socks5_connect_with_coalesced_payload(
     stream
 }
 
+async fn connect_vmess_mux(vmess_port: u16) -> BoxedStream {
+    let uuid = *uuid::Uuid::parse_str(TEST_UUID).unwrap().as_bytes();
+    let cmd_key = cmd_key(&uuid);
+    let auth_id = generate_auth_id(&cmd_key);
+    let dest = Address::Domain(MUX_DOMAIN.into(), 0);
+    let (iv, key, v, connection_nonce, encrypted_len, header_ct) = encode_header_with_command(
+        &cmd_key,
+        &auth_id,
+        VmessCommand::Mux,
+        &dest,
+        Security::Aes128Gcm,
+    )
+    .expect("encode VMess mux header");
+
+    let mut stream: BoxedStream = Box::new(
+        TcpStream::connect(("127.0.0.1", vmess_port))
+            .await
+            .expect("vmess connect failed"),
+    );
+    stream.write_all(&auth_id).await.unwrap();
+    stream.write_all(&encrypted_len).await.unwrap();
+    stream.write_all(&connection_nonce).await.unwrap();
+    stream.write_all(&header_ct).await.unwrap();
+    stream.flush().await.unwrap();
+
+    let resp_key = response_body_key(&key);
+    let resp_iv = response_body_iv(&iv);
+    read_response_header(&mut stream, v, &resp_key, &resp_iv)
+        .await
+        .expect("VMess response header");
+
+    Box::new(VmessStream::new_bidir_with_auth_len_base(
+        stream,
+        &resp_key,
+        &resp_iv,
+        &key,
+        &iv,
+        &key,
+        &iv,
+        Security::Aes128Gcm,
+        0,
+    ))
+}
+
+async fn read_mux_reply<S: AsyncReadExt + Unpin>(
+    stream: &mut S,
+    timeout: std::time::Duration,
+) -> Vec<u8> {
+    let mut acc = Vec::new();
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let mut chunk = [0u8; 4096];
+        match tokio::time::timeout(remaining, stream.read(&mut chunk)).await {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => acc.extend_from_slice(&chunk[..n]),
+            _ => break,
+        }
+        while !acc.is_empty() {
+            match parse_frame(&acc) {
+                Ok((meta, payload, consumed)) => {
+                    acc.drain(..consumed);
+                    if meta.status == SessionStatus::Keep {
+                        if let Some(p) = payload {
+                            return p;
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
+    acc
+}
+
+async fn read_mux_xudp_reply<S: AsyncReadExt + Unpin>(
+    stream: &mut S,
+    timeout: std::time::Duration,
+) -> Vec<u8> {
+    let mut acc = Vec::new();
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let mut chunk = [0u8; 4096];
+        match tokio::time::timeout(remaining, stream.read(&mut chunk)).await {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => acc.extend_from_slice(&chunk[..n]),
+            _ => break,
+        }
+        while !acc.is_empty() {
+            match parse_frame(&acc) {
+                Ok((meta, payload, consumed)) => {
+                    acc.drain(..consumed);
+                    if meta.session_id == XUDP_SESSION_ID
+                        && meta.status == SessionStatus::Keep
+                        && meta.target.is_some()
+                    {
+                        if let Some(p) = payload {
+                            return p;
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
+    acc
+}
+
 // ── End-to-end tests ──────────────────────────────────────────────────────────
 
 /// VMess outbound connects to VMess inbound and data echoes.
@@ -328,6 +476,61 @@ async fn vmess_coalesced_first_payload_echo() {
     assert_eq!(got, payload);
 
     echo_task.abort();
+}
+
+/// VMess command Mux demuxes a TCP substream and relays it through Freedom.
+#[tokio::test]
+async fn vmess_mux_cool_demuxes_tcp_subconnection() {
+    let vmess_port = unused_local_port();
+    let (echo_port, echo_task) = spawn_echo_server().await;
+    let _server = blackwire_core::Instance::from_config(vmess_server_config(vmess_port))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let mut stream = connect_vmess_mux(vmess_port).await;
+    let dest = Address::Domain("127.0.0.1".to_string(), echo_port);
+    let payload = b"VMESS-MUX-ECHO\n";
+    let meta = encode_new_metadata(1, &dest, OPT_DATA).expect("mux meta");
+    let frame = encode_frame(&meta, Some(payload)).expect("mux frame");
+    stream.write_all(&frame).await.unwrap();
+
+    let echoed = read_mux_reply(&mut stream, std::time::Duration::from_secs(3)).await;
+    assert_eq!(
+        echoed.as_slice(),
+        payload,
+        "VMess mux substream did not echo through freedom outbound"
+    );
+
+    echo_task.abort();
+}
+
+/// VMess command Mux handles XUDP session-zero UDP packets.
+#[tokio::test]
+async fn vmess_mux_xudp_echoes_udp_packet() {
+    let vmess_port = unused_local_port();
+    let (udp_echo_port, udp_echo_task) = spawn_udp_echo_server().await;
+    let _server = blackwire_core::Instance::from_config(vmess_server_config(vmess_port))
+        .await
+        .unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let mut stream = connect_vmess_mux(vmess_port).await;
+    let dest = Address::Domain("127.0.0.1".to_string(), udp_echo_port);
+    let payload = b"VMESS-XUDP-ECHO\n";
+    let global_id = [0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38];
+    let meta = encode_new_metadata_xudp(&dest, &global_id, OPT_DATA).expect("xudp meta");
+    let frame = encode_frame(&meta, Some(payload)).expect("xudp frame");
+    stream.write_all(&frame).await.unwrap();
+
+    let echoed = read_mux_xudp_reply(&mut stream, std::time::Duration::from_secs(3)).await;
+    assert_eq!(
+        echoed.as_slice(),
+        payload,
+        "VMess XUDP packet did not echo through freedom outbound"
+    );
+
+    udp_echo_task.abort();
 }
 
 /// Auth with an unrecognized UUID is rejected.

@@ -22,6 +22,7 @@ use blackwire_app::dispatcher::Dispatcher;
 use blackwire_common::{Address, BoxedStream, ProxyError};
 
 use super::codec::{decode_address_port_with_len, encode_address_port, Command};
+use super::udp::bind_udp_socket_for;
 
 /// Mux session id used by XUDP (Xray always sends `0` for XUDP frames).
 pub const XUDP_SESSION_ID: u16 = 0;
@@ -452,14 +453,10 @@ pub async fn relay_mux_cool(
                     // risking misrouting session-0 datagrams. Keep one active flow
                     // per mux connection and replace any previous XUDP state here.
                     clear_xudp_sessions(&xudp_sessions, &active_xudp).await;
-                    let socket = Arc::new(
-                        UdpSocket::bind("0.0.0.0:0")
-                            .await
-                            .map_err(|e| ProxyError::Transport(format!("xudp bind: {e}")))?,
-                    );
+                    let upstream = resolve_udp_dest(dest).await?;
+                    let socket = Arc::new(bind_udp_socket_for(upstream).await?);
                     if let Some(ref data) = payload {
                         if !data.is_empty() {
-                            let upstream = resolve_udp_dest(dest).await?;
                             socket.send_to(data, upstream).await.map_err(|e| {
                                 ProxyError::Transport(format!("xudp UDP send: {e}"))
                             })?;
@@ -530,11 +527,8 @@ pub async fn relay_mux_cool(
                             %dest,
                             "mux: new UDP sub-connection"
                         );
-                        let socket =
-                            Arc::new(UdpSocket::bind("0.0.0.0:0").await.map_err(|e| {
-                                ProxyError::Transport(format!("mux UDP bind: {e}"))
-                            })?);
                         let upstream = resolve_udp_dest(&dest).await?;
+                        let socket = Arc::new(bind_udp_socket_for(upstream).await?);
                         socket
                             .connect(upstream)
                             .await
