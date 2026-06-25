@@ -174,21 +174,19 @@ fn tls_sni(data: &[u8]) -> Option<String> {
     // After this we're at the start of the ClientHello fields.
     pos += 4;
 
-    // Skip: legacy_version (2 bytes) + Random (32 bytes) + session_id_length_byte (1 byte).
+    // Skip: legacy_version (2 bytes) + Random (32 bytes).
     // The "Random" is 32 truly random bytes used for key derivation — not human-readable.
-    // The session_id_length tells us how many bytes follow for the session ID, but we
-    // skip the length byte here and handle the actual session ID bytes just below.
-    pos += 2 + 32 + 1;
+    pos += 2 + 32;
 
-    if pos + 2 > data.len() {
+    if pos >= data.len() {
         return None;
     }
 
-    // Read the session ID field (2-byte length prefix + data).
+    // Read the session ID field (1-byte length prefix + data).
     // The session ID is an opaque blob used for TLS session resumption.
     // We skip it entirely — it contains no routing-relevant information.
-    let sess_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-    pos += 2 + sess_len;
+    let sess_len = data[pos] as usize;
+    pos += 1 + sess_len;
 
     if pos + 2 > data.len() {
         return None;
@@ -303,6 +301,62 @@ mod tests {
     use super::*;
     use crate::dns::{DnsModule, DnsModuleConfig};
     use blackwire_config::schema::SniffingConfig;
+
+    fn push_u16(buf: &mut Vec<u8>, value: usize) {
+        buf.extend_from_slice(&(value as u16).to_be_bytes());
+    }
+
+    fn client_hello_with_session_id_sni(host: &str) -> Vec<u8> {
+        let mut sni = Vec::new();
+        push_u16(&mut sni, host.len() + 3);
+        sni.push(0);
+        push_u16(&mut sni, host.len());
+        sni.extend_from_slice(host.as_bytes());
+
+        let mut extensions = Vec::new();
+        push_u16(&mut extensions, 0);
+        push_u16(&mut extensions, sni.len());
+        extensions.extend_from_slice(&sni);
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&[0x03, 0x03]);
+        body.extend_from_slice(&[0x11; 32]);
+        body.push(32);
+        body.extend_from_slice(&[0x22; 32]);
+        push_u16(&mut body, 2);
+        body.extend_from_slice(&[0x13, 0x01]);
+        body.push(1);
+        body.push(0);
+        push_u16(&mut body, extensions.len());
+        body.extend_from_slice(&extensions);
+
+        let mut handshake = Vec::new();
+        handshake.push(0x01);
+        handshake.extend_from_slice(&[
+            ((body.len() >> 16) & 0xff) as u8,
+            ((body.len() >> 8) & 0xff) as u8,
+            (body.len() & 0xff) as u8,
+        ]);
+        handshake.extend_from_slice(&body);
+
+        let mut record = Vec::new();
+        record.extend_from_slice(&[0x16, 0x03, 0x01]);
+        push_u16(&mut record, handshake.len());
+        record.extend_from_slice(&handshake);
+        record
+    }
+
+    #[test]
+    fn analyze_peek_extracts_tls_sni_with_session_id() {
+        let config = SniffingConfig {
+            enabled: true,
+            dest_override: vec!["tls".into()],
+            ..Default::default()
+        };
+        let result = analyze_peek(&client_hello_with_session_id_sni("example.com"), &config);
+        assert_eq!(result.protocol.as_deref(), Some("tls"));
+        assert_eq!(result.domain.as_deref(), Some("example.com"));
+    }
 
     #[tokio::test]
     async fn sniff_fakedns_returns_domain_for_fake_ip() {
