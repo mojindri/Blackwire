@@ -8,6 +8,14 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.2 - 2026-06-25
+
+### Fixed
+
+- TLS SNI sniffing now parses non-empty ClientHello session IDs correctly, so
+  `destOverride: ["tls"]` can override IP destinations from SNI in modern TLS
+  clients.
+
 ## 0.1.1 - 2026-06-25
 
 ### Fixed
