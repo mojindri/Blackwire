@@ -24,7 +24,7 @@ use dashmap::DashMap;
 use quinn::{Connection, Endpoint, RecvStream, SendStream};
 use tokio::{
     net::UdpSocket,
-    sync::{watch, Mutex, Semaphore},
+    sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore},
     time::timeout,
 };
 use tracing::{info, warn};
@@ -90,6 +90,8 @@ pub struct TuicServerConfig {
     pub server_name: Option<String>,
     /// Optional maximum number of concurrent QUIC connections.
     pub max_connections: Option<usize>,
+    /// Optional process-wide limiter shared with other inbound listeners.
+    pub shared_limiter: Option<Arc<Semaphore>>,
     /// Maximum time to wait for the initial TUIC authenticate command.
     pub auth_timeout: Duration,
     /// QUIC socket fan-out and reuse settings.
@@ -137,14 +139,30 @@ impl TuicServer {
 
         let cap = self.config.max_connections.unwrap_or(MAX_CONNECTIONS);
         let limiter = Arc::new(Semaphore::new(cap));
+        let shared_limiter = self.config.shared_limiter.as_ref().map(Arc::clone);
         let mut tasks = tokio::task::JoinSet::new();
 
         for endpoint in endpoints {
             let config = self.config.clone();
             let dispatcher = Arc::clone(&dispatcher);
             let limiter = Arc::clone(&limiter);
+            let shared_limiter = shared_limiter.as_ref().map(Arc::clone);
             tasks.spawn(async move {
                 while let Some(incoming) = endpoint.accept().await {
+                    let shared_permit = if let Some(shared_limiter) = &shared_limiter {
+                        match Arc::clone(shared_limiter).try_acquire_owned() {
+                            Ok(permit) => Some(permit),
+                            Err(_) => {
+                                warn!(
+                                    "global connection limit reached; dropping incoming TUIC v5 QUIC connection"
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
                     let permit = match Arc::clone(&limiter).try_acquire_owned() {
                         Ok(permit) => permit,
                         Err(_) => {
@@ -152,6 +170,8 @@ impl TuicServer {
                             continue;
                         }
                     };
+                    let permits: (Option<OwnedSemaphorePermit>, OwnedSemaphorePermit) =
+                        (shared_permit, permit);
 
                     let conn = match incoming.await {
                         Ok(conn) => conn,
@@ -163,7 +183,7 @@ impl TuicServer {
                     let config = config.clone();
                     let dispatcher = Arc::clone(&dispatcher);
                     tokio::spawn(async move {
-                        let _permit = permit;
+                        let _permits = permits;
                         if let Err(e) = serve_connection(conn, config, dispatcher).await {
                             warn!("TUIC v5 connection closed: {e}");
                         }

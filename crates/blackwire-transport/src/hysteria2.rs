@@ -28,7 +28,7 @@ use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::OutboundHandler;
 use blackwire_common::{Address, BoxedStream, ProxyError, ReunionStream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{timeout, Instant, Sleep};
 use tracing::{info, warn};
 
@@ -72,6 +72,8 @@ pub struct Hysteria2ServerConfig {
     pub key_pem: String,
     /// Maximum concurrent QUIC connections. Falls back to `MAX_HYSTERIA2_CONNECTIONS`.
     pub max_connections: Option<usize>,
+    /// Optional process-wide connection limiter shared across inbound servers.
+    pub shared_limiter: Option<Arc<Semaphore>>,
     /// QUIC congestion policy for server-to-client response traffic.
     pub congestion: CongestionConfig,
     /// UDP socket tuning and server endpoint sharding policy.
@@ -142,24 +144,42 @@ impl Hysteria2Server {
             .max_connections
             .unwrap_or(MAX_HYSTERIA2_CONNECTIONS);
         let conn_limiter = Arc::new(Semaphore::new(cap));
+        let shared_limiter = self.config.shared_limiter.as_ref().map(Arc::clone);
         let mut tasks = tokio::task::JoinSet::new();
 
         for endpoint in endpoints {
             let config = self.config.clone();
             let dispatcher = Arc::clone(&dispatcher);
             let conn_limiter = Arc::clone(&conn_limiter);
+            let shared_limiter = shared_limiter.as_ref().map(Arc::clone);
             tasks.spawn(async move {
                 while let Some(incoming) = endpoint.accept().await {
-                    let permit = match Arc::clone(&conn_limiter).try_acquire_owned() {
+                    let shared_permit = if let Some(shared_limiter) = &shared_limiter {
+                        match Arc::clone(shared_limiter).try_acquire_owned() {
+                            Ok(permit) => Some(permit),
+                            Err(_) => {
+                                warn!(
+                                    "global connection limit reached; dropping incoming Hysteria2 QUIC connection"
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    let conn_permit = match Arc::clone(&conn_limiter).try_acquire_owned() {
                         Ok(p) => p,
                         Err(_) => {
                             warn!(
-                                max = MAX_HYSTERIA2_CONNECTIONS,
+                                max = cap,
                                 "Hysteria2 connection limit reached; dropping incoming QUIC connection"
                             );
                             continue;
                         }
                     };
+                    let permits: (Option<OwnedSemaphorePermit>, OwnedSemaphorePermit) =
+                        (shared_permit, conn_permit);
 
                     let conn = match incoming.await {
                         Ok(c) => c,
@@ -172,7 +192,7 @@ impl Hysteria2Server {
                     let config = config.clone();
                     let dispatcher = Arc::clone(&dispatcher);
                     tokio::spawn(async move {
-                        let _permit = permit;
+                        let _permits = permits;
                         if let Err(e) = http3::serve_connection(conn, config, dispatcher).await {
                             warn!("Hysteria2 connection closed: {e}");
                         }

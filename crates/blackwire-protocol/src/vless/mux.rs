@@ -342,14 +342,24 @@ async fn write_mux_frame<W: AsyncWriteExt + Unpin>(
     metadata: &[u8],
     payload: Option<&[u8]>,
 ) -> Result<(), ProxyError> {
-    let frame = encode_frame(metadata, payload)?;
-    writer.write_all(&frame).await?;
+    if metadata.len() > MAX_META_LEN {
+        return Err(ProxyError::Protocol("mux: metadata too long".into()));
+    }
+    writer.write_u16(metadata.len() as u16).await?;
+    writer.write_all(metadata).await?;
+    if let Some(data) = payload {
+        if data.len() > MAX_DATA_LEN {
+            return Err(ProxyError::Protocol("mux: payload too long".into()));
+        }
+        writer.write_u16(data.len() as u16).await?;
+        writer.write_all(data).await?;
+    }
     writer.flush().await?;
     Ok(())
 }
 
 struct MuxSession {
-    upstream: Arc<tokio::sync::Mutex<BoxedStream>>,
+    upstream_writer: Arc<tokio::sync::Mutex<tokio::io::WriteHalf<BoxedStream>>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
 
@@ -482,17 +492,17 @@ pub async fn relay_mux_cool(
                                 upstream.write_all(data).await?;
                             }
                         }
-                        let upstream = Arc::new(tokio::sync::Mutex::new(upstream));
+                        let (upstream_reader, upstream_writer) = tokio::io::split(upstream);
+                        let upstream_writer = Arc::new(tokio::sync::Mutex::new(upstream_writer));
                         let writer = Arc::clone(&mux_writer);
                         let sid = meta.session_id;
-                        let upstream_reader = Arc::clone(&upstream);
                         let reader_task = tokio::spawn(async move {
                             mux_upstream_to_client(writer, sid, upstream_reader).await;
                         });
                         sessions.insert(
                             meta.session_id,
                             Arc::new(MuxSession {
-                                upstream,
+                                upstream_writer,
                                 reader_task,
                             }),
                         );
@@ -581,7 +591,7 @@ pub async fn relay_mux_cool(
                 if let Some(session) = sessions.get(&meta.session_id) {
                     if let Some(ref data) = payload {
                         if !data.is_empty() {
-                            let mut up = session.upstream.lock().await;
+                            let mut up = session.upstream_writer.lock().await;
                             up.write_all(data).await?;
                         }
                     }
@@ -606,7 +616,7 @@ pub async fn relay_mux_cool(
                 if let Some(ref data) = payload {
                     if !data.is_empty() {
                         if let Some(session) = sessions.get(&meta.session_id) {
-                            let mut up = session.upstream.lock().await;
+                            let mut up = session.upstream_writer.lock().await;
                             let _ = up.write_all(data).await;
                         } else if let Some(session) = udp_sessions.get(&meta.session_id) {
                             let _ = session.socket.send(data).await;
@@ -615,7 +625,7 @@ pub async fn relay_mux_cool(
                 }
                 if let Some((_, session)) = sessions.remove(&meta.session_id) {
                     session.reader_task.abort();
-                    let mut up = session.upstream.lock().await;
+                    let mut up = session.upstream_writer.lock().await;
                     let _ = up.shutdown().await;
                 }
                 if let Some((_, session)) = udp_sessions.remove(&meta.session_id) {
@@ -707,16 +717,13 @@ async fn mux_udp_to_client(
 async fn mux_upstream_to_client(
     mux_writer: Arc<tokio::sync::Mutex<tokio::io::WriteHalf<BoxedStream>>>,
     session_id: u16,
-    upstream: Arc<tokio::sync::Mutex<BoxedStream>>,
+    mut upstream: tokio::io::ReadHalf<BoxedStream>,
 ) {
     let mut buf = vec![0u8; 16 * 1024];
     loop {
-        let n = {
-            let mut up = upstream.lock().await;
-            match up.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => n,
-            }
+        let n = match upstream.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
         };
         let meta = encode_keep_metadata(session_id, OPT_DATA);
         let mut guard = mux_writer.lock().await;
@@ -793,6 +800,24 @@ mod tests {
         port
     }
 
+    async fn spawn_capture_server(bytes: usize) -> (u16, tokio::sync::oneshot::Receiver<Vec<u8>>) {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buf = vec![0u8; bytes];
+            if stream.read_exact(&mut buf).await.is_ok() {
+                let _ = tx.send(buf);
+            }
+        });
+        (port, rx)
+    }
+
     #[tokio::test]
     async fn relay_mux_echoes_over_freedom_path() {
         let echo_port = spawn_echo().await;
@@ -820,6 +845,36 @@ mod tests {
         let (parsed, data, _) = parse_frame(&raw[..n]).expect("parse mux reply");
         assert_eq!(parsed.status, SessionStatus::Keep);
         assert_eq!(data.as_deref(), Some(payload.as_ref()));
+    }
+
+    #[tokio::test]
+    async fn relay_mux_keep_write_is_not_blocked_by_pending_upstream_read() {
+        let payload = b"PING";
+        let (capture_port, captured) = spawn_capture_server(payload.len()).await;
+        let (client_io, server_io) = tokio::io::duplex(65536);
+        let server = Box::new(server_io) as BoxedStream;
+        let mut client = client_io;
+
+        let ctx = Context::new("mux-test", "127.0.0.1:1".parse().unwrap());
+        let dispatcher = Arc::new(EchoDispatcher);
+        tokio::spawn(async move {
+            relay_mux_cool(server, ctx, dispatcher).await.unwrap();
+        });
+
+        let dest = Address::Ipv4(Ipv4Addr::LOCALHOST, capture_port);
+        let new_meta = encode_new_metadata(7, &dest, 0).unwrap();
+        let new_frame = encode_frame(&new_meta, None).unwrap();
+        client.write_all(&new_frame).await.unwrap();
+
+        let keep_meta = encode_keep_metadata(7, OPT_DATA);
+        let keep_frame = encode_frame(&keep_meta, Some(payload)).unwrap();
+        client.write_all(&keep_frame).await.unwrap();
+
+        let received = tokio::time::timeout(std::time::Duration::from_millis(500), captured)
+            .await
+            .expect("upstream write was blocked by mux reader")
+            .expect("capture task dropped");
+        assert_eq!(received, payload);
     }
 
     #[test]

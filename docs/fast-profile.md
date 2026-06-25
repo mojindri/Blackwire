@@ -43,6 +43,11 @@ The CLI flag wins over the config field. This allows using an existing config wi
 | `strictProduction` | `true` | Rejects `security = none`. Set to `false` only for local benchmarking labs. |
 | `pool` | `disabled` | Freedom preconnect pool policy. Keep disabled unless a targeted VPS gate proves pooling helps the workload. |
 | `splice` | `adaptive` | Raw TCP relay splice policy for eligible streams. |
+| `relay.engine` | `v2` | Userspace relay engine used when splice is unavailable, such as wrapped transports. |
+| `relay.flush` | `adaptive` | Relay v2 flush policy; coalesces burst flushes while preserving interactive writes. |
+
+Fast Profile keeps compatibility defaults out of the hot path. Compatibility
+Mode still uses the legacy userspace relay unless configured otherwise.
 
 ### Freedom pool tuning (optional)
 

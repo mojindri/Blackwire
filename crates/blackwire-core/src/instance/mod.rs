@@ -33,9 +33,10 @@ use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
@@ -86,6 +87,27 @@ fn as_usize(value: Option<&serde_json::Value>) -> Option<usize> {
     value
         .and_then(serde_json::Value::as_u64)
         .map(|v| v as usize)
+}
+
+fn try_acquire_global_permit(
+    limiter: Option<&Arc<Semaphore>>,
+    addr: SocketAddr,
+    transport: &'static str,
+) -> Option<Option<OwnedSemaphorePermit>> {
+    let Some(limiter) = limiter else {
+        return Some(None);
+    };
+    match Arc::clone(limiter).try_acquire_owned() {
+        Ok(permit) => Some(Some(permit)),
+        Err(_) => {
+            warn!(
+                addr = %addr,
+                transport,
+                "global connection limit reached; dropping inbound connection"
+            );
+            None
+        }
+    }
 }
 
 fn as_u64(value: Option<&serde_json::Value>) -> Option<u64> {
@@ -493,6 +515,10 @@ impl Instance {
         }
 
         // ── Step 4 & 5: Build inbounds and start listeners ───────────────────
+        let global_connection_limiter = config
+            .limits
+            .max_connections
+            .map(|n| Arc::new(Semaphore::new(n)));
         for in_cfg in &config.inbounds {
             reject_unfinished_transport_settings(
                 "inbound",
@@ -511,6 +537,8 @@ impl Instance {
                     config.quic.as_ref(),
                     config.datagram.as_ref(),
                     config.fec.as_ref(),
+                    config.limits.max_connections_per_inbound,
+                    global_connection_limiter.as_ref().map(Arc::clone),
                     dispatcher_for_h2,
                 )
                 .with_context(|| format!("starting Hysteria2 inbound '{}'", in_cfg.tag))?;
@@ -520,8 +548,14 @@ impl Instance {
             if in_cfg.protocol == Protocol::Tuic {
                 info!(tag = %in_cfg.tag, addr = %addr, "starting TUIC v5 inbound listener");
                 let dispatcher_for_tuic = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
-                let task = start_tuic_inbound(in_cfg, config.quic.as_ref(), dispatcher_for_tuic)
-                    .with_context(|| format!("starting TUIC inbound '{}'", in_cfg.tag))?;
+                let task = start_tuic_inbound(
+                    in_cfg,
+                    config.quic.as_ref(),
+                    config.limits.max_connections_per_inbound,
+                    global_connection_limiter.as_ref().map(Arc::clone),
+                    dispatcher_for_tuic,
+                )
+                .with_context(|| format!("starting TUIC inbound '{}'", in_cfg.tag))?;
                 tasks.push(task);
                 continue;
             }
@@ -609,19 +643,26 @@ impl Instance {
                     .as_ref()
                     .and_then(|l| l.max_connections)
                     .or(config.limits.max_connections_per_inbound)
-                    .or(config.limits.max_connections)
                     .map(|n| Arc::new(Semaphore::new(n)));
+                let mkcp_global_limiter = global_connection_limiter.as_ref().map(Arc::clone);
 
                 let task = tokio::spawn(async move {
                     match mkcp_accept_sessions(&cfg).await {
                         Ok(mut sessions) => {
                             while let Some((stream, peer)) = sessions.recv().await {
                                 let conn_handler = Arc::clone(&conn_handler);
+                                let Some(global_permit) = try_acquire_global_permit(
+                                    mkcp_global_limiter.as_ref(),
+                                    addr,
+                                    "mkcp",
+                                ) else {
+                                    continue;
+                                };
                                 if let Some(sem) = &mkcp_sem {
                                     match Arc::clone(sem).try_acquire_owned() {
                                         Ok(permit) => {
                                             tokio::spawn(async move {
-                                                let _permit = permit;
+                                                let _permits = (global_permit, Some(permit));
                                                 if let Err(e) = conn_handler
                                                     .handle_connection(Box::new(stream), peer)
                                                     .await
@@ -636,6 +677,8 @@ impl Instance {
                                     }
                                 } else {
                                     tokio::spawn(async move {
+                                        let _permits =
+                                            (global_permit, None::<OwnedSemaphorePermit>);
                                         if let Err(e) = conn_handler
                                             .handle_connection(Box::new(stream), peer)
                                             .await
@@ -696,13 +739,18 @@ impl Instance {
                     .as_ref()
                     .and_then(|l| l.max_connections)
                     .or(config.limits.max_connections_per_inbound)
-                    .or(config.limits.max_connections)
                     .map(|n| Arc::new(Semaphore::new(n)));
+                let quic_global_limiter = global_connection_limiter.as_ref().map(Arc::clone);
 
                 let task = tokio::spawn(async move {
                     while let Some(connecting) = endpoint.accept().await {
                         let conn_handler = Arc::clone(&conn_handler);
-                        let permit = if let Some(sem) = &quic_sem {
+                        let Some(global_permit) =
+                            try_acquire_global_permit(quic_global_limiter.as_ref(), addr, "quic")
+                        else {
+                            continue;
+                        };
+                        let local_permit = if let Some(sem) = &quic_sem {
                             match Arc::clone(sem).try_acquire_owned() {
                                 Ok(p) => Some(p),
                                 Err(_) => {
@@ -714,7 +762,7 @@ impl Instance {
                             None
                         };
                         tokio::spawn(async move {
-                            let _permit = permit;
+                            let _permits = (global_permit, local_permit);
                             let connection = match connecting.await {
                                 Ok(connection) => connection,
                                 Err(e) => {
@@ -812,14 +860,15 @@ impl Instance {
                     .limits
                     .as_ref()
                     .and_then(|limits| limits.max_connections)
-                    .or(config.limits.max_connections_per_inbound)
-                    .or(config.limits.max_connections),
+                    .or(config.limits.max_connections_per_inbound),
                 tcp_fast_open: true,
                 ..Default::default()
             };
 
-            let transport =
-                std::sync::Arc::new(blackwire_transport::TcpServerTransport::new(tcp_config));
+            let transport = std::sync::Arc::new(
+                blackwire_transport::TcpServerTransport::new(tcp_config)
+                    .with_shared_limiter(global_connection_limiter.as_ref().map(Arc::clone)),
+            );
             // One accept-loop shard per logical CPU; the kernel distributes
             // incoming SYNs across them via SO_REUSEPORT.
             let shards = std::thread::available_parallelism()
