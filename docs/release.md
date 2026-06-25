@@ -59,6 +59,7 @@ at config validation (before any traffic is handled) or return an error at runti
 - Handler API structural endpoint RPCs use native blackwire endpoint JSON in `proxy_settings`; Xray core endpoint protobuf decoding is not implemented
 - VMess legacy non-AEAD / alterId — only AEAD is implemented
 - DNS, dokodemo, tun as inbound `protocol` values — not in the `Protocol` enum; deserialization fails
+- QUIC payload sniffing through `destOverride` — sniffing currently supports HTTP Host, TLS SNI, and FakeDNS metadata only
 - Byte-identical browser TLS fingerprinting — functional interop ≠ identical ClientHello bytes
 - OpenWrt, Android, iOS — not built or tested
 - Standalone client app (TUN/system proxy UI)

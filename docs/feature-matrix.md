@@ -144,6 +144,7 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 | `domain_strategy` (routing)           | **Supported** | Xray `AsIs` / `IPIfNonMatch` / `IPOnDemand` in `dispatcher` + `router` (see [routing docs](https://xtls.github.io/en/config/routing.html)) |
 | Sniffing HTTP + TLS (`destOverride`, `routeOnly`, `metadataOnly`) | **Supported** | `blackwire-app/sniff.rs`; HTTP Host + TLS SNI detection; lab row `vless-sniff` green in Docker matrix |
 | Sniffing FakeDNS                      | **Supported**    | `sniff_fakedns` wired in dispatcher; `"fakedns"` in `destOverride` reverses fake IP → domain, sets `sniffed_protocol = "fakedns"`; `apply_dest_override` handles `"fakedns"`; 4 unit tests PASS (`sniff::tests`) |
+| Sniffing QUIC payloads                | **Unsupported**  | `quic` is not a valid Blackwire `destOverride` value. Black UI only offers `http`, `tls`, and `fakedns`; share/copy links do not carry sniffing because it is server-side inbound config. |
 
 
 ---
