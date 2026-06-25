@@ -88,7 +88,13 @@ export default function App() {
         setMessage(resultMessage);
         await refresh();
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        try {
+          await refresh();
+        } catch {
+          // Keep the original mutation error visible; refresh is best-effort after partial writes.
+        }
+        setError(errorMessage);
       } finally {
         setBusy(false);
       }
