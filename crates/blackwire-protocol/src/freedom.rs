@@ -14,15 +14,20 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UdpSocket};
 use tracing::debug;
 
 use blackwire_app::context::Context;
 use blackwire_app::dns::DnsModule;
-use blackwire_app::features::{OutboundConnectResult, OutboundHandler};
-use blackwire_common::{tcp_connect, Address, BoxedStream, PooledStream, ProxyError};
+use blackwire_app::features::{OutboundConnectResult, OutboundHandler, UdpOutboundResponse};
+use blackwire_common::{
+    protect_udp_socket, tcp_connect, Address, BoxedStream, PooledStream, ProxyError,
+};
+
+const UDP_ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(3);
 
 // ── Adaptive connection pool ─────────────────────────────────────────────────
 
@@ -655,6 +660,37 @@ impl FreedomOutbound {
         let stream = tcp_connect(addr).await?;
         Ok(Box::new(stream))
     }
+
+    async fn udp_roundtrip_resolved(
+        &self,
+        dest: &Address,
+        addr: SocketAddr,
+        payload: Bytes,
+    ) -> Result<Option<UdpOutboundResponse>, ProxyError> {
+        debug!(dest = %dest, resolved = %addr, "freedom: UDP send");
+        let bind_addr = if addr.is_ipv6() {
+            "[::]:0"
+        } else {
+            "0.0.0.0:0"
+        };
+        let socket = UdpSocket::bind(bind_addr).await.map_err(ProxyError::Io)?;
+        protect_udp_socket(&socket)?;
+        socket
+            .send_to(payload.as_ref(), addr)
+            .await
+            .map_err(ProxyError::Io)?;
+
+        let mut buf = vec![0u8; 65535];
+        let reply = tokio::time::timeout(UDP_ROUNDTRIP_TIMEOUT, socket.recv_from(&mut buf)).await;
+        match reply {
+            Err(_) => Ok(None),
+            Ok(Err(e)) => Err(ProxyError::Io(e)),
+            Ok(Ok((n, source))) => Ok(Some(UdpOutboundResponse {
+                source: Address::from(source),
+                data: Bytes::copy_from_slice(&buf[..n]),
+            })),
+        }
+    }
 }
 
 #[async_trait]
@@ -690,6 +726,30 @@ impl OutboundHandler for FreedomOutbound {
         Ok(OutboundConnectResult::stream(
             self.connect(ctx, dest).await?,
         ))
+    }
+
+    async fn udp_roundtrip(
+        &self,
+        _ctx: &Context,
+        dest: &Address,
+        payload: Bytes,
+    ) -> Result<Option<UdpOutboundResponse>, ProxyError> {
+        let addrs = self.resolve_all(dest).await?;
+        let mut last_err = None;
+
+        for addr in addrs {
+            match self
+                .udp_roundtrip_resolved(dest, addr, payload.clone())
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(err) => last_err = Some(err),
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            ProxyError::Transport("UDP send failed: address resolved to no endpoints".into())
+        }))
     }
 }
 
