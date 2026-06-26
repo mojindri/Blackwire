@@ -238,17 +238,20 @@ guided VPS setup modes.
 
 ## Apt Repository
 
-The release workflow publishes an unsigned static apt repository to GitHub Pages:
+The release workflow publishes a signed static apt repository to GitHub Pages:
 
 ```sh
-echo 'deb [trusted=yes] https://mojindri.github.io/Blackwire/apt stable main' | \
+curl -fsSL https://mojindri.github.io/Blackwire/apt/blackwire-archive-keyring.gpg | \
+  sudo tee /usr/share/keyrings/blackwire-archive-keyring.gpg >/dev/null
+echo 'deb [signed-by=/usr/share/keyrings/blackwire-archive-keyring.gpg] https://mojindri.github.io/Blackwire/apt stable main' | \
   sudo tee /etc/apt/sources.list.d/blackwire.list
 sudo apt update
 sudo apt install blackwire
 ```
 
-This repository is currently unsigned. Add GPG signing before recommending it
-as a hardened production install path.
+Configure `BLACKWIRE_APT_SIGNING_KEY` in repository secrets with the armored
+private key used to sign `InRelease` and `Release.gpg`. If the key has a
+passphrase, also configure `BLACKWIRE_APT_SIGNING_PASSPHRASE`.
 
 ## Other Package Repositories
 
