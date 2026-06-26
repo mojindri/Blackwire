@@ -46,6 +46,7 @@ use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -631,6 +632,7 @@ pub async fn grpc_accept(
 pub async fn grpc_serve<F, Fut>(
     tcp_stream: BoxedStream,
     service_name: &str,
+    handshake_timeout: Option<Duration>,
     handle: F,
 ) -> Result<(), ProxyError>
 where
@@ -639,18 +641,31 @@ where
 {
     use h2::server;
 
-    let mut conn = server::Builder::new()
+    let handshake = server::Builder::new()
         .initial_window_size(H2_INITIAL_WINDOW_SIZE)
         .initial_connection_window_size(H2_INITIAL_WINDOW_SIZE)
-        .handshake(tcp_stream)
-        .await
-        .map_err(|e| ProxyError::Transport(format!("gRPC h2 server handshake failed: {e}")))?;
+        .handshake(tcp_stream);
+
+    let mut conn = match handshake_timeout {
+        Some(limit) => tokio::time::timeout(limit, handshake)
+            .await
+            .map_err(|_| ProxyError::Timeout)?,
+        None => handshake.await,
+    }
+    .map_err(|e| ProxyError::Transport(format!("gRPC h2 server handshake failed: {e}")))?;
 
     let expected_path = format!("/{service_name}/Tun");
 
-    while let Some(accepted) = conn.accept().await {
+    let mut accepted = match handshake_timeout {
+        Some(limit) => tokio::time::timeout(limit, conn.accept())
+            .await
+            .map_err(|_| ProxyError::Timeout)?,
+        None => conn.accept().await,
+    };
+
+    while let Some(result) = accepted.take() {
         let (request, mut respond) =
-            accepted.map_err(|e| ProxyError::Transport(format!("gRPC accept error: {e}")))?;
+            result.map_err(|e| ProxyError::Transport(format!("gRPC accept error: {e}")))?;
 
         let path = request.uri().path().to_string();
         tracing::debug!(path = %path, expected = %expected_path, "gRPC: incoming request");
@@ -661,6 +676,7 @@ where
                 .body(())
                 .map_err(|e| ProxyError::Protocol(format!("gRPC: invalid 404 response: {e}")))?;
             let _ = respond.send_response(response, true);
+            accepted = conn.accept().await;
             continue;
         }
 
@@ -681,6 +697,8 @@ where
                 tracing::debug!(%error, "gRPC stream handler finished with error");
             }
         });
+
+        accepted = conn.accept().await;
     }
 
     let _ = std::future::poll_fn(|cx| conn.poll_closed(cx)).await;

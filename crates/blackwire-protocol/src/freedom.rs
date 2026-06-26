@@ -14,15 +14,20 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UdpSocket};
 use tracing::debug;
 
 use blackwire_app::context::Context;
 use blackwire_app::dns::DnsModule;
-use blackwire_app::features::{OutboundConnectResult, OutboundHandler};
-use blackwire_common::{tcp_connect, Address, BoxedStream, PooledStream, ProxyError};
+use blackwire_app::features::{OutboundConnectResult, OutboundHandler, UdpOutboundResponse};
+use blackwire_common::{
+    protect_udp_socket, tcp_connect, Address, BoxedStream, PooledStream, ProxyError,
+};
+
+const UDP_ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(3);
 
 // ── Adaptive connection pool ─────────────────────────────────────────────────
 
@@ -486,6 +491,8 @@ pub struct FreedomOutbound {
     dns: Option<Arc<DnsModule>>,
     /// Present only in Fast Profile (pool disabled when `None`).
     pool: Option<Arc<AdaptivePool>>,
+    /// Reject connections to loopback addresses after DNS resolution.
+    deny_loopback: bool,
 }
 
 impl FreedomOutbound {
@@ -495,6 +502,7 @@ impl FreedomOutbound {
             tag: tag.into(),
             dns: None,
             pool: None,
+            deny_loopback: false,
         })
     }
 
@@ -506,6 +514,7 @@ impl FreedomOutbound {
             tag,
             dns: None,
             pool: Some(pool),
+            deny_loopback: false,
         })
     }
 
@@ -515,6 +524,7 @@ impl FreedomOutbound {
             tag: tag.into(),
             dns: Some(dns),
             pool: None,
+            deny_loopback: false,
         })
     }
 
@@ -530,7 +540,16 @@ impl FreedomOutbound {
             tag,
             dns: Some(dns),
             pool: Some(pool),
+            deny_loopback: false,
         })
+    }
+
+    /// Enable or disable loopback destination blocking for this freedom outbound.
+    pub fn with_deny_loopback(mut self: Arc<Self>, deny_loopback: bool) -> Arc<Self> {
+        if let Some(outbound) = Arc::get_mut(&mut self) {
+            outbound.deny_loopback = deny_loopback;
+        }
+        self
     }
 
     async fn resolve_all(&self, dest: &Address) -> Result<Vec<SocketAddr>, ProxyError> {
@@ -569,6 +588,13 @@ impl FreedomOutbound {
         dest: &Address,
         addr: SocketAddr,
     ) -> Result<BoxedStream, ProxyError> {
+        if self.deny_loopback && addr.ip().is_loopback() {
+            return Err(ProxyError::Protocol(format!(
+                "freedom outbound '{}' rejected loopback destination {}",
+                self.tag, addr
+            )));
+        }
+
         debug!(dest = %dest, resolved = %addr, "freedom: connecting");
 
         if let Some(pool) = &self.pool {
@@ -634,6 +660,37 @@ impl FreedomOutbound {
         let stream = tcp_connect(addr).await?;
         Ok(Box::new(stream))
     }
+
+    async fn udp_roundtrip_resolved(
+        &self,
+        dest: &Address,
+        addr: SocketAddr,
+        payload: Bytes,
+    ) -> Result<Option<UdpOutboundResponse>, ProxyError> {
+        debug!(dest = %dest, resolved = %addr, "freedom: UDP send");
+        let bind_addr = if addr.is_ipv6() {
+            "[::]:0"
+        } else {
+            "0.0.0.0:0"
+        };
+        let socket = UdpSocket::bind(bind_addr).await.map_err(ProxyError::Io)?;
+        protect_udp_socket(&socket)?;
+        socket
+            .send_to(payload.as_ref(), addr)
+            .await
+            .map_err(ProxyError::Io)?;
+
+        let mut buf = vec![0u8; 65535];
+        let reply = tokio::time::timeout(UDP_ROUNDTRIP_TIMEOUT, socket.recv_from(&mut buf)).await;
+        match reply {
+            Err(_) => Ok(None),
+            Ok(Err(e)) => Err(ProxyError::Io(e)),
+            Ok(Ok((n, source))) => Ok(Some(UdpOutboundResponse {
+                source: Address::from(source),
+                data: Bytes::copy_from_slice(&buf[..n]),
+            })),
+        }
+    }
 }
 
 #[async_trait]
@@ -669,5 +726,52 @@ impl OutboundHandler for FreedomOutbound {
         Ok(OutboundConnectResult::stream(
             self.connect(ctx, dest).await?,
         ))
+    }
+
+    async fn udp_roundtrip(
+        &self,
+        _ctx: &Context,
+        dest: &Address,
+        payload: Bytes,
+    ) -> Result<Option<UdpOutboundResponse>, ProxyError> {
+        let addrs = self.resolve_all(dest).await?;
+        let mut last_err = None;
+
+        for addr in addrs {
+            match self
+                .udp_roundtrip_resolved(dest, addr, payload.clone())
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(err) => last_err = Some(err),
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            ProxyError::Transport("UDP send failed: address resolved to no endpoints".into())
+        }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[tokio::test]
+    async fn deny_loopback_rejects_loopback_destinations_before_dialing() {
+        let outbound = FreedomOutbound::new("direct").with_deny_loopback(true);
+        let dest = Address::Ipv4(Ipv4Addr::LOCALHOST, 62789);
+        let result = outbound.connect(&Context::default(), &dest).await;
+
+        match result {
+            Ok(_) => panic!("loopback destination should be rejected"),
+            Err(err) => match err {
+                ProxyError::Protocol(message) => {
+                    assert!(message.contains("rejected loopback destination"));
+                }
+                other => panic!("unexpected error: {other:?}"),
+            },
+        }
     }
 }

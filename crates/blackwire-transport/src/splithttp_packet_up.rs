@@ -11,6 +11,7 @@ use bytes::{Buf, BytesMut};
 use tokio::sync::{mpsc, Mutex};
 
 const DEFAULT_MAX_BUFFERED: usize = 64;
+const DEFAULT_MAX_BUFFERED_BYTES: usize = 8 * 1024 * 1024;
 
 /// One upload chunk in packet-up mode.
 pub struct UploadPacket {
@@ -25,6 +26,8 @@ struct QueueState {
     pending: BytesMut,
     closed: bool,
     max_buffered: usize,
+    buffered_bytes: usize,
+    max_buffered_bytes: usize,
 }
 
 impl QueueState {
@@ -42,7 +45,9 @@ impl QueueState {
                     self.heap.push(Reverse((seq, payload)));
                     return Ok(());
                 }
-                Some(Reverse((_seq, _payload))) => {}
+                Some(Reverse((_seq, payload))) => {
+                    self.buffered_bytes = self.buffered_bytes.saturating_sub(payload.len());
+                }
                 None if self.closed && self.pending.is_empty() => {
                     return Err(io::ErrorKind::UnexpectedEof.into())
                 }
@@ -74,6 +79,8 @@ impl UploadQueue {
                 pending: BytesMut::new(),
                 closed: false,
                 max_buffered,
+                buffered_bytes: 0,
+                max_buffered_bytes: DEFAULT_MAX_BUFFERED_BYTES,
             }),
             wake_tx,
             wake_rx: StdMutex::new(Some(wake_rx)),
@@ -89,6 +96,13 @@ impl UploadQueue {
         if st.closed {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "queue closed"));
         }
+        let payload_len = packet.payload.len();
+        if st.heap.len() >= st.max_buffered
+            || st.buffered_bytes.saturating_add(payload_len) > st.max_buffered_bytes
+        {
+            return Err(io::Error::other("packet-up upload queue exceeded"));
+        }
+        st.buffered_bytes = st.buffered_bytes.saturating_add(payload_len);
         st.heap.push(Reverse((packet.seq, packet.payload)));
         drop(st);
         self.bump_wake();
@@ -159,6 +173,7 @@ impl tokio::io::AsyncRead for UploadQueueReader {
                 let n = buf.remaining().min(st.pending.len());
                 buf.put_slice(&st.pending[..n]);
                 st.pending.advance(n);
+                st.buffered_bytes = st.buffered_bytes.saturating_sub(n);
                 return Poll::Ready(Ok(()));
             }
 
@@ -252,6 +267,31 @@ mod tests {
         let mut buf = [0u8; 4];
         let n = reader.read(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"AB");
+    }
+
+    #[tokio::test]
+    async fn push_rejects_packets_beyond_reorder_limit() {
+        let q = UploadQueue::new(2);
+        q.push(UploadPacket {
+            seq: 2,
+            payload: b"C".to_vec(),
+        })
+        .await
+        .unwrap();
+        q.push(UploadPacket {
+            seq: 1,
+            payload: b"B".to_vec(),
+        })
+        .await
+        .unwrap();
+        let err = q
+            .push(UploadPacket {
+                seq: 3,
+                payload: b"D".to_vec(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Other);
     }
 
     #[tokio::test]

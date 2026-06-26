@@ -187,9 +187,11 @@ curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.8/scripts/i
   | VERSION=v0.1.8 SETUP=reality PUBLIC_HOST=example.com bash
 ```
 
-Supported setup modes are `SETUP=domain`, `SETUP=reality`, `SETUP=direct`, and
-`SETUP=custom`. The installer generates UUIDs/passwords, REALITY keys and short
-IDs when needed, writes client connection hints to
+Supported setup modes are `SETUP=domain`, `SETUP=reality`, and `SETUP=custom`.
+`SETUP=direct` is rejected because it would expose a cleartext VLESS listener; use
+`SETUP=reality` or `SETUP=domain` for public VPS deployments. The installer
+generates UUIDs/passwords, REALITY keys and short IDs when needed, writes client
+connection hints to
 `/etc/blackwire/client-info.txt`, validates the generated config, and prints
 firewall/log/start commands.
 
@@ -211,7 +213,9 @@ Set `OPEN_FIREWALL=1` to open the required ports through `ufw` or firewalld when
 either is installed; cloud firewalls still need to be opened outside the server.
 Set `ACTION=uninstall REMOVE_CONFIG=1` to remove the binary, systemd unit,
 config, and state directories. `INIT_SERVER=...` remains available as an
-internal compatibility escape hatch, but release docs should prefer `SETUP`.
+internal compatibility escape hatch, but cleartext `INIT_SERVER=vless-tcp` is
+loopback-only and cannot be combined with `OPEN_FIREWALL=1`; release docs should
+prefer `SETUP`.
 
 To install the Black UI companion panel with the Linux release assets:
 
@@ -238,17 +242,20 @@ guided VPS setup modes.
 
 ## Apt Repository
 
-The release workflow publishes an unsigned static apt repository to GitHub Pages:
+The release workflow publishes a signed static apt repository to GitHub Pages:
 
 ```sh
-echo 'deb [trusted=yes] https://mojindri.github.io/Blackwire/apt stable main' | \
+curl -fsSL https://mojindri.github.io/Blackwire/apt/blackwire-archive-keyring.gpg | \
+  sudo tee /usr/share/keyrings/blackwire-archive-keyring.gpg >/dev/null
+echo 'deb [signed-by=/usr/share/keyrings/blackwire-archive-keyring.gpg] https://mojindri.github.io/Blackwire/apt stable main' | \
   sudo tee /etc/apt/sources.list.d/blackwire.list
 sudo apt update
 sudo apt install blackwire
 ```
 
-This repository is currently unsigned. Add GPG signing before recommending it
-as a hardened production install path.
+Configure `BLACKWIRE_APT_SIGNING_KEY` in repository secrets with the armored
+private key used to sign `InRelease` and `Release.gpg`. If the key has a
+passphrase, also configure `BLACKWIRE_APT_SIGNING_PASSPHRASE`.
 
 ## Other Package Repositories
 
