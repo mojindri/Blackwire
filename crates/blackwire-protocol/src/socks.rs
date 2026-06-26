@@ -30,6 +30,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::BytesMut;
@@ -40,7 +41,8 @@ use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::InboundHandler;
 use blackwire_common::{
-    read_socks5_address, write_socks5_address, Address, BoxedStream, Network, ProxyError,
+    read_socks5_address, with_handshake_timeout, write_socks5_address, Address, BoxedStream,
+    Network, ProxyError,
 };
 
 // ── SOCKS5 protocol constants ─────────────────────────────────────────────────
@@ -82,12 +84,18 @@ const REP_ATYP_NOT_SUPPORTED: u8 = 0x08;
 pub struct Socks5Inbound {
     /// Unique tag for this inbound (from config.json).
     tag: Arc<str>,
+
+    /// Optional limit for reading the SOCKS5 greeting and request.
+    handshake_timeout: Option<Duration>,
 }
 
 impl Socks5Inbound {
     /// Create a new SOCKS5 inbound with the given tag.
-    pub fn new(tag: impl Into<Arc<str>>) -> Arc<Self> {
-        Arc::new(Self { tag: tag.into() })
+    pub fn new(tag: impl Into<Arc<str>>, handshake_timeout: Option<Duration>) -> Arc<Self> {
+        Arc::new(Self {
+            tag: tag.into(),
+            handshake_timeout,
+        })
     }
 }
 
@@ -107,8 +115,11 @@ impl InboundHandler for Socks5Inbound {
         source: SocketAddr,
         dispatcher: Arc<dyn Dispatcher>,
     ) -> Result<(), ProxyError> {
-        let (request, mut stream, early_payload) =
-            socks5_handshake_with_early_payload(stream).await?;
+        let (request, mut stream, early_payload) = with_handshake_timeout(
+            self.handshake_timeout,
+            socks5_handshake_with_early_payload(stream),
+        )
+        .await?;
 
         match request {
             Socks5Request::Connect(dest) => {
