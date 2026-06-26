@@ -4,6 +4,7 @@
 //! `TrojanInbound` / `TrojanOutbound` handlers.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -23,6 +24,7 @@ pub(crate) fn build_trojan_inbound(
     cfg: &blackwire_config::schema::InboundConfig,
     auth_stores: &Arc<DashMap<String, Arc<TrojanAuthStore>>>,
     dns: Option<Arc<DnsModule>>,
+    handshake_timeout: Option<Duration>,
     user_limiter: Option<Arc<UserConnectionLimiter>>,
 ) -> Result<Arc<dyn InboundHandler>> {
     #[allow(clippy::unwrap_or_default)]
@@ -36,6 +38,7 @@ pub(crate) fn build_trojan_inbound(
         cfg.tag.as_str(),
         auth,
         dns,
+        handshake_timeout,
         user_limiter,
     ))
 }
