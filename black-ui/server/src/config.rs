@@ -354,11 +354,6 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
         "sni": sni,
         "alpn": alpn,
     });
-    if security == "tls" && tls_share_requires_insecure(inbound) {
-        payload["allowInsecure"] = json!("1");
-        payload["allowinsecure"] = json!("1");
-        payload["insecure"] = json!("1");
-    }
     if network == "xhttp" {
         payload["mode"] = json!(splithttp_share_mode(inbound));
     }
@@ -1112,9 +1107,9 @@ mod tests {
         assert_eq!(payload["alpn"], "h3");
         assert_eq!(payload["scy"], "aes-128-gcm");
         assert_eq!(payload["security"], "aes-128-gcm");
-        assert_eq!(payload["allowInsecure"], "1");
-        assert_eq!(payload["allowinsecure"], "1");
-        assert_eq!(payload["insecure"], "1");
+        assert!(payload.get("allowInsecure").is_none());
+        assert!(payload.get("allowinsecure").is_none());
+        assert!(payload.get("insecure").is_none());
         assert_vmess_payload_omits_mux(&payload);
     }
 
