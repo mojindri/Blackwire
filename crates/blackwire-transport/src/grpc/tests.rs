@@ -208,6 +208,21 @@ async fn grpc_h2_small_write_is_sent_without_explicit_flush() {
 }
 
 #[tokio::test]
+async fn grpc_serve_times_out_stalled_h2_handshake() {
+    let (_client_io, server_io) = tokio::io::duplex(1024);
+
+    let result = grpc_serve(
+        Box::new(server_io),
+        "CompatService",
+        Some(Duration::from_millis(10)),
+        |_stream| async { Ok(()) },
+    )
+    .await;
+
+    assert!(matches!(result, Err(ProxyError::Timeout)));
+}
+
+#[tokio::test]
 async fn grpc_serve_accepts_multiple_streams_on_one_h2_connection() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -218,15 +233,20 @@ async fn grpc_serve_accepts_multiple_streams_on_one_h2_connection() {
     let handled_for_server = Arc::clone(&handled);
 
     let server = tokio::spawn(async move {
-        grpc_serve(Box::new(server_io), "CompatService", move |mut stream| {
-            let handled = Arc::clone(&handled_for_server);
-            async move {
-                handled.fetch_add(1, Ordering::SeqCst);
-                stream.write_all(b"ok").await.unwrap();
-                stream.shutdown().await.unwrap();
-                Ok(())
-            }
-        })
+        grpc_serve(
+            Box::new(server_io),
+            "CompatService",
+            None,
+            move |mut stream| {
+                let handled = Arc::clone(&handled_for_server);
+                async move {
+                    handled.fetch_add(1, Ordering::SeqCst);
+                    stream.write_all(b"ok").await.unwrap();
+                    stream.shutdown().await.unwrap();
+                    Ok(())
+                }
+            },
+        )
         .await
         .unwrap();
     });

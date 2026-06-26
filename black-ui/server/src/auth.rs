@@ -11,6 +11,8 @@ const SESSION_COOKIE: &str = "black_ui_session";
 const SESSION_MAX_AGE_SECONDS: i64 = 7 * 24 * 60 * 60;
 const LOGIN_FAILURE_LIMIT: u32 = 5;
 const LOGIN_LOCK_SECONDS: i64 = 5 * 60;
+const MAX_LOGIN_USERNAME_BYTES: usize = 256;
+const MAX_LOGIN_THROTTLES: usize = 1024;
 
 #[derive(Debug, Clone)]
 struct LoginThrottle {
@@ -54,12 +56,13 @@ pub fn create_admin_session(
     username: &str,
     password: &str,
 ) -> Result<(String, String), AppError> {
-    check_login_throttle(username)?;
+    let username = normalized_username(username)?;
+    check_login_throttle(&username)?;
     let conn = state.lock_db()?;
     let row = conn
         .query_row(
             "SELECT id, username, password_hash, salt FROM admins WHERE username = ?1",
-            params![username.trim()],
+            params![username.as_str()],
             |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
@@ -72,7 +75,7 @@ pub fn create_admin_session(
         .optional()
         .map_err(|e| AppError::internal(e.into()))?;
     let Some((admin_id, username, expected, salt)) = row else {
-        record_login_failure(username);
+        record_login_failure(&username);
         return Err(AppError::unauthorized_message(
             "invalid username or password",
         ));
@@ -104,15 +107,13 @@ fn check_login_throttle(username: &str) -> Result<(), AppError> {
     let mut throttles = login_throttles()
         .lock()
         .map_err(|_| AppError::internal(anyhow::anyhow!("login throttle lock poisoned")))?;
+    prune_login_throttles(&mut throttles, now);
     if let Some(throttle) = throttles.get(&key) {
         if throttle.locked_until.is_some_and(|until| until > now) {
             return Err(AppError::too_many_requests(
                 "too many failed login attempts; retry later",
             ));
         }
-    }
-    if throttles.len() > 1024 {
-        throttles.retain(|_, throttle| throttle.locked_until.is_some_and(|until| until > now));
     }
     Ok(())
 }
@@ -121,6 +122,10 @@ fn record_login_failure(username: &str) {
     let key = throttle_key(username);
     let now = Utc::now();
     if let Ok(mut throttles) = login_throttles().lock() {
+        prune_login_throttles(&mut throttles, now);
+        if !throttles.contains_key(&key) && throttles.len() >= MAX_LOGIN_THROTTLES {
+            return;
+        }
         let entry = throttles.entry(key).or_insert(LoginThrottle {
             failures: 0,
             locked_until: None,
@@ -138,8 +143,24 @@ fn clear_login_throttle(username: &str) {
     }
 }
 
+fn prune_login_throttles(throttles: &mut HashMap<String, LoginThrottle>, now: DateTime<Utc>) {
+    throttles.retain(|_, throttle| throttle.locked_until.is_none_or(|until| until > now));
+}
+
+fn normalized_username(username: &str) -> Result<String, AppError> {
+    let username = username.trim();
+    if username.is_empty() {
+        return Err(AppError::bad_request("username is required"));
+    }
+    if username.len() > MAX_LOGIN_USERNAME_BYTES {
+        return Err(AppError::bad_request("username is too long"));
+    }
+    Ok(username.to_owned())
+}
+
 fn throttle_key(username: &str) -> String {
-    username.trim().to_ascii_lowercase()
+    let username = username.to_ascii_lowercase();
+    blake3::hash(username.as_bytes()).to_hex().to_string()
 }
 
 pub fn create_first_admin(
@@ -147,9 +168,10 @@ pub fn create_first_admin(
     username: &str,
     password: &str,
 ) -> Result<(), AppError> {
-    if username.trim().is_empty() || password.len() < 8 {
+    let username = normalized_username(username)?;
+    if password.len() < 8 {
         return Err(AppError::bad_request(
-            "username is required and password must be at least 8 characters",
+            "password must be at least 8 characters",
         ));
     }
     let conn = state.lock_db()?;
@@ -160,7 +182,7 @@ pub fn create_first_admin(
     conn.execute(
         "INSERT INTO admins (username, password_hash, salt, created_at) VALUES (?1, ?2, ?3, ?4)",
         params![
-            username.trim(),
+            username.as_str(),
             util::hash_password(password, &salt),
             salt,
             util::now()
@@ -243,8 +265,19 @@ mod tests {
         error.into_response().status()
     }
 
+    fn test_lock() -> &'static Mutex<()> {
+        static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        TEST_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn reset_login_throttles() {
+        login_throttles().lock().unwrap().clear();
+    }
+
     #[test]
     fn repeated_bad_login_attempts_are_throttled() {
+        let _guard = test_lock().lock().unwrap();
+        reset_login_throttles();
         let state = test_state();
         let username = format!("admin-{}", uuid::Uuid::new_v4());
         create_first_admin(&state, &username, "correct-password").unwrap();
@@ -259,7 +292,36 @@ mod tests {
     }
 
     #[test]
+    fn oversized_login_username_is_rejected_before_throttling() {
+        let _guard = test_lock().lock().unwrap();
+        reset_login_throttles();
+        let state = test_state();
+        let username = "a".repeat(MAX_LOGIN_USERNAME_BYTES + 1);
+
+        let err = create_admin_session(&state, &username, "wrong-password").unwrap_err();
+
+        assert_eq!(error_status(err), StatusCode::BAD_REQUEST);
+        assert!(login_throttles().lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn login_throttle_keys_are_bounded_and_capacity_limited() {
+        let _guard = test_lock().lock().unwrap();
+        reset_login_throttles();
+
+        for index in 0..MAX_LOGIN_THROTTLES + 10 {
+            record_login_failure(&format!("unknown-user-{index}"));
+        }
+
+        let throttles = login_throttles().lock().unwrap();
+        assert_eq!(throttles.len(), MAX_LOGIN_THROTTLES);
+        assert!(throttles.keys().all(|key| key.len() == blake3::OUT_LEN * 2));
+    }
+
+    #[test]
     fn successful_login_clears_bad_attempt_throttle() {
+        let _guard = test_lock().lock().unwrap();
+        reset_login_throttles();
         let state = test_state();
         let username = format!("admin-{}", uuid::Uuid::new_v4());
         create_first_admin(&state, &username, "correct-password").unwrap();

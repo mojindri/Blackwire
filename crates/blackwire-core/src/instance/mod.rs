@@ -177,6 +177,14 @@ fn pool_config_from_mode(mode: &str) -> Option<PoolConfig> {
     }
 }
 
+fn freedom_deny_loopback(settings: &serde_json::Value) -> bool {
+    settings
+        .get("denyLoopback")
+        .or_else(|| settings.get("deny_loopback"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
 fn freedom_pool_config(config: &Config, settings: &serde_json::Value) -> Option<PoolConfig> {
     if let Some(pool) = settings.get("pool") {
         if pool.is_null() {
@@ -367,8 +375,9 @@ impl Instance {
             )?;
             let handler: Arc<dyn OutboundHandler> = match out_cfg.protocol {
                 Protocol::Freedom => {
+                    let deny_loopback = freedom_deny_loopback(&out_cfg.settings);
                     let pool_cfg = freedom_pool_config(config.as_ref(), &out_cfg.settings);
-                    if let Some(cfg) = pool_cfg {
+                    let outbound = if let Some(cfg) = pool_cfg {
                         match &dns {
                             Some(module) => FreedomOutbound::new_with_dns_pooled(
                                 &out_cfg.tag,
@@ -384,7 +393,8 @@ impl Instance {
                             }
                             None => FreedomOutbound::new(&out_cfg.tag),
                         }
-                    }
+                    };
+                    outbound.with_deny_loopback(deny_loopback)
                 }
                 Protocol::Vless => build_vless_outbound(out_cfg)
                     .with_context(|| format!("building VLESS outbound '{}'", out_cfg.tag))?,
@@ -909,15 +919,24 @@ impl Instance {
         }
 
         // ── Optional: start metrics/health HTTP server ───────────────────────
-        if let Some(api_addr) = config
+        if let Some(api_config) = config
             .api
             .as_ref()
-            .and_then(blackwire_api::server::api_listen_addr)
+            .and_then(blackwire_api::server::api_server_config)
         {
             let management: blackwire_api::management::ManagementHandle = Arc::new(reload.clone());
-            let handle = blackwire_api::server::start_api_server(&api_addr, management)
-                .with_context(|| format!("starting blackwire-api gRPC server on '{api_addr}'"))?;
-            info!(addr = %api_addr, "blackwire-api gRPC server started");
+            let handle = blackwire_api::server::start_api_server(
+                &api_config.listen_addr,
+                management,
+                api_config.token.clone(),
+            )
+            .with_context(|| {
+                format!(
+                    "starting blackwire-api gRPC server on '{}'",
+                    api_config.listen_addr
+                )
+            })?;
+            info!(addr = %api_config.listen_addr, authenticated = api_config.token.is_some(), "blackwire-api gRPC server started");
             tasks.push(handle);
         }
 
