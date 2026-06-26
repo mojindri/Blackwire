@@ -498,10 +498,10 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
     // `Instance::from_config()` reads the current config snapshot, builds
     // all inbound/outbound handlers, and starts all TCP listener tasks.
     let config = effective_config(manager.get(), profile_override);
-    let api_addr = config
+    let api_config = config
         .api
         .as_ref()
-        .and_then(blackwire_api::server::api_listen_addr);
+        .and_then(blackwire_api::server::api_server_config);
     let runtime_config = instance_runtime_config(&config);
     let instance = Arc::new(tokio::sync::Mutex::new(Some(RunningInstance {
         config: Arc::clone(&runtime_config),
@@ -510,14 +510,23 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
             .context("building proxy instance from config")?,
     })));
 
-    if let Some(api_addr) = api_addr {
+    if let Some(api_config) = api_config {
         let management: blackwire_api::management::ManagementHandle = Arc::new(RuntimeControl {
             instance: Arc::clone(&instance),
             profile_override,
         });
-        blackwire_api::server::start_api_server(&api_addr, management)
-            .with_context(|| format!("starting blackwire-api gRPC server on '{api_addr}'"))?;
-        info!(addr = %api_addr, "blackwire-api gRPC server started");
+        blackwire_api::server::start_api_server(
+            &api_config.listen_addr,
+            management,
+            api_config.token.clone(),
+        )
+        .with_context(|| {
+            format!(
+                "starting blackwire-api gRPC server on '{}'",
+                api_config.listen_addr
+            )
+        })?;
+        info!(addr = %api_config.listen_addr, authenticated = api_config.token.is_some(), "blackwire-api gRPC server started");
     }
 
     // Step 4b: Apply hot-reload when config file changes (routing + VLESS users).
