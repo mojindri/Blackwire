@@ -19,7 +19,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aes_gcm::{
     aead::{generic_array::GenericArray, Aead},
@@ -36,7 +36,7 @@ use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::InboundHandler;
 use blackwire_app::user_limits::UserConnectionLimiter;
-use blackwire_common::{BoxedStream, Network, PrependedStream, ProxyError};
+use blackwire_common::{with_handshake_timeout, BoxedStream, Network, PrependedStream, ProxyError};
 
 use super::{
     password_to_psk, replay::SaltReplay, stream::Ss2022Stream, subkey::derive_subkey, u64_from_be8,
@@ -87,6 +87,7 @@ pub struct Ss2022Inbound {
     tag: Arc<str>,
     auth: Arc<Ss2022AuthStore>,
     replay: SaltReplay,
+    handshake_timeout: Option<Duration>,
     user_limiter: Option<Arc<UserConnectionLimiter>>,
 }
 
@@ -105,19 +106,21 @@ impl Ss2022Inbound {
     ) -> Arc<Self> {
         let auth = Ss2022AuthStore::new();
         auth.replace_password(password, user);
-        Self::new_with_auth_store(tag, auth, user_limiter)
+        Self::new_with_auth_store(tag, auth, None, user_limiter)
     }
 
     /// Build a new SS-2022 inbound handler from a shared reloadable auth store.
     pub fn new_with_auth_store(
         tag: impl Into<Arc<str>>,
         auth: Arc<Ss2022AuthStore>,
+        handshake_timeout: Option<Duration>,
         user_limiter: Option<Arc<UserConnectionLimiter>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
             auth,
             replay: SaltReplay::new(),
+            handshake_timeout,
             user_limiter,
         })
     }
@@ -142,55 +145,70 @@ impl InboundHandler for Ss2022Inbound {
             .auth
             .load()
             .ok_or_else(|| ProxyError::Protocol("SS-2022 auth store is empty".into()))?;
-        // Buffer the header reads. SS-2022 request header: salt(32) + fixed_ct(27) +
-        // var_ct(variable). A 128-byte BufReader covers salt + fixed_ct in one syscall
-        // and often the variable header too. Leftover bytes are recovered via PrependedStream.
-        let mut buf_reader = BufReader::with_capacity(128, &mut stream);
+        let (req_salt, req_subkey, dest, initial_payload, leftover) =
+            with_handshake_timeout(self.handshake_timeout, async {
+                // Buffer the header reads. SS-2022 request header: salt(32) + fixed_ct(27) +
+                // var_ct(variable). A 128-byte BufReader covers salt + fixed_ct in one syscall
+                // and often the variable header too. Leftover bytes are recovered via PrependedStream.
+                let mut buf_reader = BufReader::with_capacity(128, &mut stream);
 
-        let mut req_salt = [0u8; 32];
-        buf_reader.read_exact(&mut req_salt).await?;
+                let mut req_salt = [0u8; 32];
+                buf_reader.read_exact(&mut req_salt).await?;
 
-        let req_subkey = derive_subkey(&auth.psk, &req_salt);
-        let req_cipher = Aes256Gcm::new(GenericArray::from_slice(&req_subkey));
+                let req_subkey = derive_subkey(&auth.psk, &req_salt);
+                let req_cipher = Aes256Gcm::new(GenericArray::from_slice(&req_subkey));
 
-        // SIP022 request fixed header: type(1) | timestamp(8 BE) | length(2 BE)
-        let mut fixed_ct = [0u8; 27];
-        buf_reader.read_exact(&mut fixed_ct).await?;
-        let fixed = req_cipher
-            .decrypt(GenericArray::from_slice(&make_nonce(0)), fixed_ct.as_ref())
-            .map_err(|_| ProxyError::Protocol("SS-2022: fixed header decrypt failed".into()))?;
-        if fixed.len() != 11 || fixed[0] != TYPE_TCP {
-            return Err(ProxyError::Protocol(
-                "SS-2022: invalid request fixed header".into(),
-            ));
-        }
-        let ts = u64_from_be8(&fixed[1..9])?;
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        if ts.abs_diff(now) > MAX_TIME_DIFF {
-            warn!(source = %source, ts = ts, now = now, "SS-2022: timestamp drift too large");
-            return Err(ProxyError::AuthFailed);
-        }
-        let variable_len = u16::from_be_bytes([fixed[9], fixed[10]]) as usize;
+                // SIP022 request fixed header: type(1) | timestamp(8 BE) | length(2 BE)
+                let mut fixed_ct = [0u8; 27];
+                buf_reader.read_exact(&mut fixed_ct).await?;
+                let fixed = req_cipher
+                    .decrypt(GenericArray::from_slice(&make_nonce(0)), fixed_ct.as_ref())
+                    .map_err(|_| {
+                        ProxyError::Protocol("SS-2022: fixed header decrypt failed".into())
+                    })?;
+                if fixed.len() != 11 || fixed[0] != TYPE_TCP {
+                    return Err(ProxyError::Protocol(
+                        "SS-2022: invalid request fixed header".into(),
+                    ));
+                }
+                let ts = u64_from_be8(&fixed[1..9])?;
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if ts.abs_diff(now) > MAX_TIME_DIFF {
+                    warn!(source = %source, ts = ts, now = now, "SS-2022: timestamp drift too large");
+                    return Err(ProxyError::AuthFailed);
+                }
+                let variable_len = u16::from_be_bytes([fixed[9], fixed[10]]) as usize;
 
-        let mut var_ct = vec![0u8; variable_len + 16];
-        buf_reader.read_exact(&mut var_ct).await?;
+                let mut var_ct = vec![0u8; variable_len + 16];
+                buf_reader.read_exact(&mut var_ct).await?;
 
-        let leftover = buf_reader.buffer().to_vec();
-        drop(buf_reader);
+                let leftover = buf_reader.buffer().to_vec();
+                let variable = req_cipher
+                    .decrypt(GenericArray::from_slice(&make_nonce(1)), var_ct.as_ref())
+                    .map_err(|_| {
+                        ProxyError::Protocol("SS-2022: variable header decrypt failed".into())
+                    })?;
+
+                let (dest, initial_payload) = parse_variable_header(&variable)?;
+                if !self.replay.check_and_insert(&req_salt) {
+                    warn!(source = %source, "SS-2022: replayed salt");
+                    return Err(ProxyError::AuthFailed);
+                }
+
+                Ok((
+                    req_salt,
+                    req_subkey,
+                    dest,
+                    BytesMut::from(initial_payload),
+                    leftover,
+                ))
+            })
+            .await?;
         if !leftover.is_empty() {
             stream = Box::new(PrependedStream::new(stream, leftover));
-        }
-        let variable = req_cipher
-            .decrypt(GenericArray::from_slice(&make_nonce(1)), var_ct.as_ref())
-            .map_err(|_| ProxyError::Protocol("SS-2022: variable header decrypt failed".into()))?;
-
-        let (dest, initial_payload) = parse_variable_header(&variable)?;
-        if !self.replay.check_and_insert(&req_salt) {
-            warn!(source = %source, "SS-2022: replayed salt");
-            return Err(ProxyError::AuthFailed);
         }
         debug!(source = %source, dest = %dest, "SS-2022 inbound authenticated");
 
@@ -256,7 +274,7 @@ impl InboundHandler for Ss2022Inbound {
             2,
             &resp_subkey,
             2,
-            BytesMut::from(initial_payload),
+            initial_payload,
             None,
         );
 
