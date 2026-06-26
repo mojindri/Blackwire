@@ -4,7 +4,7 @@
 //! raw byte tunnel (not a WebSocket frame codec).
 
 use blackwire_common::{BoxedStream, PrependedStream, ProxyError};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 use blackwire_config::schema::StreamSettingsConfig;
@@ -37,14 +37,17 @@ pub async fn dial_httpupgrade(
     let mut reader = BufReader::new(stream);
     let mut total = 0usize;
 
-    let mut first_line = String::new();
-    let n = reader.read_line(&mut first_line).await?;
-    if n == 0 {
+    let first_line = read_limited_http_line(
+        &mut reader,
+        &mut total,
+        "HTTPUpgrade: server response headers too large",
+    )
+    .await?;
+    if first_line.is_empty() {
         return Err(ProxyError::Protocol(
             "HTTPUpgrade: server closed before response".into(),
         ));
     }
-    total += n;
     if !first_line.starts_with("HTTP/1.1 101") && !first_line.starts_with("HTTP/1.0 101") {
         return Err(ProxyError::Protocol(format!(
             "HTTPUpgrade expected 101, got: {}",
@@ -53,17 +56,15 @@ pub async fn dial_httpupgrade(
     }
 
     loop {
-        let mut line = String::new();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 {
+        let line = read_limited_http_line(
+            &mut reader,
+            &mut total,
+            "HTTPUpgrade: server response headers too large",
+        )
+        .await?;
+        if line.is_empty() {
             return Err(ProxyError::Protocol(
                 "HTTPUpgrade: server closed during headers".into(),
-            ));
-        }
-        total += n;
-        if total > MAX_HEADER_BYTES {
-            return Err(ProxyError::Protocol(
-                "HTTPUpgrade: server response headers too large".into(),
             ));
         }
         if line == "\r\n" || line == "\n" {
@@ -89,13 +90,16 @@ pub async fn accept_httpupgrade(
 ) -> Result<BoxedStream, ProxyError> {
     let mut reader = BufReader::new(stream);
     let mut total_bytes = 0usize;
-    let mut first_line = String::new();
 
-    let n = reader.read_line(&mut first_line).await?;
-    if n == 0 {
+    let first_line = read_limited_http_line(
+        &mut reader,
+        &mut total_bytes,
+        "HTTPUpgrade: headers too large",
+    )
+    .await?;
+    if first_line.is_empty() {
         return Err(ProxyError::Protocol("HTTPUpgrade: unexpected EOF".into()));
     }
-    total_bytes += n;
 
     let (method, path) = parse_get_line(first_line.trim())?;
     if let Some(want) = expected_path {
@@ -110,17 +114,15 @@ pub async fn accept_httpupgrade(
 
     let mut has_upgrade = false;
     loop {
-        let mut line = String::new();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 {
+        let line = read_limited_http_line(
+            &mut reader,
+            &mut total_bytes,
+            "HTTPUpgrade: headers too large",
+        )
+        .await?;
+        if line.is_empty() {
             return Err(ProxyError::Protocol(
                 "HTTPUpgrade: unexpected EOF in headers".into(),
-            ));
-        }
-        total_bytes += n;
-        if total_bytes > MAX_HEADER_BYTES {
-            return Err(ProxyError::Protocol(
-                "HTTPUpgrade: headers too large".into(),
             ));
         }
         if line == "\r\n" || line == "\n" {
@@ -158,6 +160,47 @@ pub async fn accept_httpupgrade(
     };
 
     Ok(stream)
+}
+
+async fn read_limited_http_line<R>(
+    reader: &mut R,
+    total_bytes: &mut usize,
+    too_large_message: &'static str,
+) -> Result<String, ProxyError>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut line = Vec::new();
+
+    loop {
+        let (chunk_len, found_newline) = {
+            let available = reader.fill_buf().await?;
+            if available.is_empty() {
+                break;
+            }
+
+            match available.iter().position(|&b| b == b'\n') {
+                Some(pos) => (pos + 1, true),
+                None => (available.len(), false),
+            }
+        };
+
+        if total_bytes.saturating_add(chunk_len) > MAX_HEADER_BYTES {
+            return Err(ProxyError::Protocol(too_large_message.into()));
+        }
+
+        let available = reader.fill_buf().await?;
+        line.extend_from_slice(&available[..chunk_len]);
+        reader.consume(chunk_len);
+        *total_bytes += chunk_len;
+
+        if found_newline {
+            break;
+        }
+    }
+
+    String::from_utf8(line)
+        .map_err(|_| ProxyError::Protocol("HTTPUpgrade: header line is not valid UTF-8".into()))
 }
 
 fn parse_get_line(line: &str) -> Result<(String, String), ProxyError> {
@@ -210,4 +253,51 @@ pub fn httpupgrade_listen_path(stream_settings: &StreamSettingsConfig) -> Option
         .as_ref()
         .or(stream_settings.ws_settings.as_ref())
         .map(|c| c.path.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn limited_http_line_rejects_oversized_request_line_before_allocating_it() {
+        let request = format!("GET /{} HTTP/1.1\r\n", "a".repeat(MAX_HEADER_BYTES));
+        let mut reader = BufReader::new(request.as_bytes());
+        let mut total = 0usize;
+
+        let err = read_limited_http_line(&mut reader, &mut total, "HTTPUpgrade: headers too large")
+            .await
+            .expect_err("oversized request line should be rejected");
+
+        assert!(
+            matches!(err, ProxyError::Protocol(msg) if msg == "HTTPUpgrade: headers too large")
+        );
+        assert!(total <= MAX_HEADER_BYTES);
+    }
+
+    #[tokio::test]
+    async fn accept_httpupgrade_rejects_oversized_header_line() {
+        let (mut client, server) = tokio::io::duplex(MAX_HEADER_BYTES * 2);
+        let header = format!(
+            "GET / HTTP/1.1\r\nUpgrade: websocket\r\nX-Oversized: {}\r\n\r\n",
+            "a".repeat(MAX_HEADER_BYTES)
+        );
+
+        let accept = tokio::spawn(accept_httpupgrade(Box::new(server), None));
+        client.write_all(header.as_bytes()).await.unwrap();
+
+        let result = accept.await.expect("accept task should not panic");
+        let Err(err) = result else {
+            panic!("oversized header line should be rejected");
+        };
+
+        assert!(
+            matches!(err, ProxyError::Protocol(msg) if msg == "HTTPUpgrade: headers too large")
+        );
+
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        assert!(response.is_empty());
+    }
 }
