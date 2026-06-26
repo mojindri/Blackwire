@@ -11,18 +11,23 @@
 //! Some tests are intentionally strict. If they fail, treat that as useful:
 //! the transport probably has a real production-hardening gap.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{
     io,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
 
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
+use tokio::net::TcpStream;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
+use blackwire_app::features::ConnectionHandler;
+use blackwire_common::{BoxedStream, ProxyError};
 use blackwire_transport::{
     decode_grpc_frame, encode_grpc_frame, ws_accept, ws_connect, GrpcStream, WsConnectConfig,
 };
@@ -30,12 +35,42 @@ use blackwire_transport::{
 use blackwire_transport::mkcp::header::HeaderType;
 use blackwire_transport::mkcp::segment::{Segment, CMD_ACK, CMD_PUSH, OVERHEAD};
 use blackwire_transport::reality::parse_client_hello;
+use blackwire_transport::tcp::{TcpConfig, TcpServerTransport};
 use blackwire_transport::tun::{
     build_udp_response_packet, current_tun_support, ensure_tun_runtime_supported, parse_ip_packet,
     TransportProtocol, TunSessionTable,
 };
 
 const SHORT_TIMEOUT: Duration = Duration::from_millis(500);
+
+struct TwoStepHandler {
+    first_byte_seen: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    second_byte_seen: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+}
+
+#[async_trait::async_trait]
+impl ConnectionHandler for TwoStepHandler {
+    async fn handle_connection(
+        &self,
+        mut stream: BoxedStream,
+        _source: SocketAddr,
+    ) -> Result<(), ProxyError> {
+        let mut first = [0u8; 1];
+        stream.read_exact(&mut first).await?;
+        if let Some(tx) = self.first_byte_seen.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
+
+        let mut second = [0u8; 1];
+        stream.read_exact(&mut second).await?;
+        if let Some(tx) = self.second_byte_seen.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
+        stream.write_all(&second).await?;
+        stream.flush().await?;
+        Ok(())
+    }
+}
 
 #[test]
 fn tun_platform_support_contract_matches_current_target() {
@@ -845,6 +880,51 @@ fn tun_session_table_tracks_reverse_udp_flow_and_expiry() {
 // ─────────────────────────────────────────────────────────────────────────────
 // General relay timeout / cancellation-style tests
 // ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn tcp_accept_does_not_apply_connection_lifetime_timeout() {
+    let transport = TcpServerTransport::new(TcpConfig::default());
+    let listener = transport
+        .bind("127.0.0.1:0".parse().unwrap())
+        .expect("bind tcp listener");
+    let addr = listener.local_addr().expect("listener addr");
+
+    let (first_tx, first_rx) = oneshot::channel();
+    let (second_tx, second_rx) = oneshot::channel();
+    let handler = Arc::new(TwoStepHandler {
+        first_byte_seen: std::sync::Mutex::new(Some(first_tx)),
+        second_byte_seen: std::sync::Mutex::new(Some(second_tx)),
+    });
+
+    let server = tokio::spawn(async move {
+        let _ = transport.serve_listener(listener, handler).await;
+    });
+
+    let mut client = TcpStream::connect(addr).await.expect("connect tcp client");
+    client.write_all(&[1]).await.expect("write first byte");
+    timeout(SHORT_TIMEOUT, first_rx)
+        .await
+        .expect("handler did not receive first byte")
+        .expect("first byte signal dropped");
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    client.write_all(&[2]).await.expect("write second byte");
+    timeout(SHORT_TIMEOUT, second_rx)
+        .await
+        .expect("handler did not stay alive for second byte")
+        .expect("second byte signal dropped");
+
+    let mut echoed = [0u8; 1];
+    timeout(SHORT_TIMEOUT, client.read_exact(&mut echoed))
+        .await
+        .expect("handler did not echo second byte")
+        .expect("read echo");
+    assert_eq!(echoed, [2]);
+
+    server.abort();
+    let _ = server.await;
+}
 
 #[tokio::test]
 async fn grpc_read_from_idle_peer_times_out_in_test_harness() {
