@@ -214,7 +214,22 @@ jobs:
         with:
           ref: ${{ needs.prepare-release.outputs.tag }}
 
+      - name: Check apt signing secret
+        id: apt-signing
+        env:
+          APT_SIGNING_KEY: ${{ secrets.BLACKWIRE_APT_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$APT_SIGNING_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping apt repository publish because BLACKWIRE_APT_SIGNING_KEY is not configured."
+          fi
+
       - name: Download Debian assets
+        if: steps.apt-signing.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -227,6 +242,7 @@ jobs:
           ls -l apt-input
 
       - name: Build signed apt metadata
+        if: steps.apt-signing.outputs.enabled == 'true'
         env:
           APT_SIGNING_KEY: ${{ secrets.BLACKWIRE_APT_SIGNING_KEY }}
           APT_SIGNING_PASSPHRASE: ${{ secrets.BLACKWIRE_APT_SIGNING_PASSPHRASE }}
@@ -238,6 +254,7 @@ jobs:
           bash scripts/build-apt-repo.sh apt-input apt stable main
 
       - name: Publish gh-pages apt repository
+        if: steps.apt-signing.outputs.enabled == 'true'
         shell: bash
         run: |
           set -euo pipefail
