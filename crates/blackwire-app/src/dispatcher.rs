@@ -76,7 +76,7 @@ use tokio::net::TcpStream;
 
 use crate::context::Context;
 use crate::dns::DnsModule;
-use crate::features::OutboundHandler;
+use crate::features::{OutboundHandler, UdpOutboundResponse};
 use crate::metrics::{
     record_connection_accepted, record_connection_closed, record_connection_plan_selected,
     record_dns, record_dns_prefetch, record_early_payload, record_early_payload_written,
@@ -191,6 +191,14 @@ pub trait Dispatcher: Send + Sync + 'static {
         ctx: &Context,
         dest: &Address,
     ) -> Result<BoxedStream, ProxyError>;
+
+    /// Route one UDP datagram through the selected outbound and wait for one reply.
+    async fn dispatch_udp_datagram(
+        &self,
+        ctx: Context,
+        dest: Address,
+        payload: bytes::Bytes,
+    ) -> Result<Option<UdpOutboundResponse>, ProxyError>;
 }
 
 /// The standard dispatcher implementation.
@@ -682,6 +690,15 @@ impl Dispatcher for DefaultDispatcher {
     ) -> Result<BoxedStream, ProxyError> {
         DefaultDispatcher::connect_outbound(self, ctx, dest).await
     }
+
+    async fn dispatch_udp_datagram(
+        &self,
+        ctx: Context,
+        dest: Address,
+        payload: bytes::Bytes,
+    ) -> Result<Option<UdpOutboundResponse>, ProxyError> {
+        DefaultDispatcher::dispatch_udp_datagram(self, ctx, dest, payload).await
+    }
 }
 
 impl DefaultDispatcher {
@@ -804,6 +821,57 @@ impl DefaultDispatcher {
             .stream)
     }
 
+    /// Route one UDP packet through the configured outbound graph.
+    pub async fn dispatch_udp_datagram(
+        &self,
+        ctx: Context,
+        dest: Address,
+        payload: bytes::Bytes,
+    ) -> Result<Option<UdpOutboundResponse>, ProxyError> {
+        let dest = self.restore_fakeip_destination(&dest).into_owned();
+
+        let t_route = Instant::now();
+        let route = self
+            .pick_route_xray(
+                &ctx.inbound_tag,
+                &dest,
+                blackwire_common::Network::Udp,
+                ctx.user.as_deref(),
+                ctx.sniffed_protocol.as_deref(),
+                ctx.sniffed_domain.as_deref(),
+            )
+            .await?;
+        record_route(&ctx.inbound_tag, t_route.elapsed());
+
+        relay_log!(self.profile, outbound = %route.outbound_tag, "UDP route selected");
+        let outbound = self
+            .outbounds
+            .get(route.outbound_tag.as_ref())
+            .ok_or_else(|| {
+                ProxyError::Protocol(format!("outbound '{}' not found", route.outbound_tag))
+            })?;
+
+        let t_connect = Instant::now();
+        let result = tokio::time::timeout(
+            OUTBOUND_CONNECT_TIMEOUT,
+            outbound.udp_roundtrip(&ctx, &dest, payload),
+        )
+        .await
+        .map_err(|_| ProxyError::Timeout)
+        .and_then(|result| result)
+        .map_err(|e| {
+            warn!(
+                outbound = %route.outbound_tag,
+                dest = %dest,
+                error = %e,
+                "UDP outbound failed"
+            );
+            e
+        });
+        record_outbound_connect(&ctx.inbound_tag, &route.outbound_tag, t_connect.elapsed());
+        result
+    }
+
     async fn connect_outbound_result(
         &self,
         ctx: &Context,
@@ -820,6 +888,7 @@ impl DefaultDispatcher {
             .pick_route_xray(
                 &ctx.inbound_tag,
                 &dest,
+                blackwire_common::Network::Tcp,
                 ctx.user.as_deref(),
                 ctx.sniffed_protocol.as_deref(),
                 ctx.sniffed_domain.as_deref(),
@@ -878,6 +947,7 @@ impl DefaultDispatcher {
         &self,
         inbound_tag: &str,
         dest: &Address,
+        network: blackwire_common::Network,
         user: Option<&str>,
         sniffed_protocol: Option<&str>,
         sniffed_domain: Option<&str>,
@@ -892,6 +962,7 @@ impl DefaultDispatcher {
                 for ip_dest in &ips {
                     let ctx = Self::routing_ctx(
                         ip_dest,
+                        network,
                         inbound_tag,
                         user,
                         sniffed_protocol,
@@ -925,7 +996,14 @@ impl DefaultDispatcher {
             None
         };
 
-        let ctx = Self::routing_ctx(dest, inbound_tag, user, sniffed_protocol, sniffed_domain);
+        let ctx = Self::routing_ctx(
+            dest,
+            network,
+            inbound_tag,
+            user,
+            sniffed_protocol,
+            sniffed_domain,
+        );
         let (route, matched) = self.router.pick_route_match(&ctx);
         if matched || strategy == RoutingDomainStrategy::AsIs {
             if let Some(h) = prefetch {
@@ -946,6 +1024,7 @@ impl DefaultDispatcher {
                     for ip_dest in &ips {
                         let ctx = Self::routing_ctx(
                             ip_dest,
+                            network,
                             inbound_tag,
                             user,
                             sniffed_protocol,
@@ -1030,6 +1109,7 @@ impl DefaultDispatcher {
 
     fn routing_ctx<'a>(
         dest: &'a Address,
+        network: blackwire_common::Network,
         inbound_tag: &'a str,
         user: Option<&'a str>,
         sniffed_protocol: Option<&'a str>,
@@ -1037,7 +1117,7 @@ impl DefaultDispatcher {
     ) -> crate::router::RoutingContext<'a> {
         crate::router::RoutingContext {
             dest,
-            network: blackwire_common::Network::Tcp,
+            network,
             inbound_tag,
             user,
             sniffed_protocol,
@@ -1174,6 +1254,80 @@ mod tests {
             runtime_stats::get(&format!("inbound>>>{}>>>traffic>>>uplink", inbound), false),
             Some(LIVE_TRAFFIC_FLUSH_BYTES as i64)
         );
+    }
+
+    #[tokio::test]
+    async fn dispatch_udp_datagram_routes_to_udp_outbound() {
+        use std::sync::Mutex as StdMutex;
+
+        struct UdpRouter;
+
+        impl Router for UdpRouter {
+            fn pick_route_match(&self, ctx: &RoutingContext<'_>) -> (Route, bool) {
+                assert_eq!(ctx.network, blackwire_common::Network::Udp);
+                (
+                    Route {
+                        outbound_tag: Arc::from("udp-out"),
+                    },
+                    true,
+                )
+            }
+        }
+
+        struct CaptureUdpOutbound {
+            captured: Arc<StdMutex<Option<(Address, bytes::Bytes)>>>,
+        }
+
+        #[async_trait]
+        impl OutboundHandler for CaptureUdpOutbound {
+            fn tag(&self) -> &str {
+                "udp-out"
+            }
+
+            async fn connect(
+                &self,
+                _ctx: &Context,
+                _dest: &Address,
+            ) -> Result<BoxedStream, ProxyError> {
+                Err(ProxyError::Protocol("TCP not used".into()))
+            }
+
+            async fn udp_roundtrip(
+                &self,
+                _ctx: &Context,
+                dest: &Address,
+                payload: bytes::Bytes,
+            ) -> Result<Option<UdpOutboundResponse>, ProxyError> {
+                *self.captured.lock().unwrap() = Some((dest.clone(), payload));
+                Ok(Some(UdpOutboundResponse {
+                    source: dest.clone(),
+                    data: bytes::Bytes::from_static(b"pong"),
+                }))
+            }
+        }
+
+        let captured = Arc::new(StdMutex::new(None));
+        let mut outbounds: HashMap<String, Arc<dyn OutboundHandler>> = HashMap::new();
+        outbounds.insert(
+            "udp-out".to_string(),
+            Arc::new(CaptureUdpOutbound {
+                captured: Arc::clone(&captured),
+            }),
+        );
+        let dispatcher = DefaultDispatcher::new(Arc::new(UdpRouter), outbounds);
+
+        let ctx = Context::new("hysteria2-in", "127.0.0.1:1080".parse().unwrap());
+        let dest = Address::Ipv4("127.0.0.1".parse().unwrap(), 53);
+        let response = dispatcher
+            .dispatch_udp_datagram(ctx, dest.clone(), bytes::Bytes::from_static(b"ping"))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(response.data.as_ref(), b"pong");
+        let captured = captured.lock().unwrap().clone().unwrap();
+        assert_eq!(captured.0, dest);
+        assert_eq!(captured.1.as_ref(), b"ping");
     }
 
     #[tokio::test]

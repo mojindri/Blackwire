@@ -4,6 +4,7 @@
 //! `VmessInbound` / `VmessOutbound` handlers.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use dashmap::DashMap;
@@ -21,6 +22,7 @@ use crate::outbound_transport::{uses_outbound_transport, TransportVmessOutbound}
 pub(crate) fn build_vmess_inbound(
     cfg: &blackwire_config::schema::InboundConfig,
     registries: &Arc<DashMap<String, Arc<VmessUserRegistry>>>,
+    handshake_timeout: Option<Duration>,
     user_limiter: Option<Arc<UserConnectionLimiter>>,
 ) -> Result<Arc<dyn InboundHandler>> {
     #[allow(clippy::unwrap_or_default)]
@@ -29,7 +31,12 @@ pub(crate) fn build_vmess_inbound(
         .or_insert_with(VmessUserRegistry::new)
         .clone();
     populate_vmess_registry(&registry, cfg)?;
-    Ok(VmessInbound::new(cfg.tag.as_str(), registry, user_limiter))
+    Ok(VmessInbound::new(
+        cfg.tag.as_str(),
+        registry,
+        handshake_timeout,
+        user_limiter,
+    ))
 }
 
 pub(crate) fn populate_vmess_registry(
