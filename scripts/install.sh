@@ -124,6 +124,16 @@ validate_server_port() {
     validate_port "$SERVER_PORT" SERVER_PORT
 }
 
+validate_vless_tcp_listener() {
+    case "$SERVER_LISTEN" in
+        127.*|localhost|::1) ;;
+        *)
+            die "INIT_SERVER=vless-tcp is cleartext and only allowed on loopback listeners; use SETUP=reality or SETUP=domain for public VPS deployments"
+            ;;
+    esac
+    [ "$OPEN_FIREWALL" != "1" ] || die "OPEN_FIREWALL=1 is not allowed with cleartext INIT_SERVER=vless-tcp"
+}
+
 validate_ws_path() {
     WS_PATH="$PROXY_PATH"
     case "$WS_PATH" in
@@ -220,6 +230,7 @@ generate_server_config() {
 
     case "$INIT_SERVER" in
         vless-tcp)
+            validate_vless_tcp_listener
             sudo_cmd sh -c "cat > '$CONFIG_DIR/config.json'" <<JSON
 {
   "log": {
@@ -496,7 +507,7 @@ resolve_setup() {
             INIT_SERVER="vless-reality"
             ;;
         direct)
-            INIT_SERVER="vless-tcp"
+            die "SETUP=direct would generate cleartext VLESS; use SETUP=reality or SETUP=domain for public VPS deployments"
             ;;
         custom)
             [ -n "$CONFIG_PATH" ] || [ -n "$CONFIG_URL" ] || die "SETUP=custom requires CONFIG_PATH or CONFIG_URL"
@@ -944,6 +955,8 @@ print_next_steps() {
     fi
     if [ "$SETUP" = "domain" ] || [ "$INIT_SERVER" = "vless-ws-nginx" ]; then
         log "next: ensure tcp/80 and tcp/443 are open in your VPS/cloud firewall"
+    elif [ "$INIT_SERVER" = "vless-tcp" ]; then
+        log "next: vless-tcp is cleartext and loopback-only; do not expose tcp/${SERVER_PORT} publicly"
     else
         log "next: ensure tcp/${SERVER_PORT} is open in your VPS/cloud firewall"
     fi
