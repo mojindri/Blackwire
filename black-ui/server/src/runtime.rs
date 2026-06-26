@@ -443,7 +443,7 @@ mod tests {
             operations: Mutex::new(vec![]),
         });
         let port = unused_port();
-        let handle = start_api_server(&format!("127.0.0.1:{port}"), fake.clone()).unwrap();
+        let handle = start_api_server(&format!("127.0.0.1:{port}"), fake.clone(), None).unwrap();
         wait_for_probe(port).await;
 
         sync_config(&state, &format!("127.0.0.1:{port}"))
