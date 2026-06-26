@@ -153,24 +153,57 @@ describe("advancedConfigConfigurator", () => {
     expect(buildSectionValue(state)).toBe(JSON.stringify("latency", null, 2));
   });
 
-  it("preserves explicit false for fast.strictProduction", () => {
+  it("preserves explicit false and relay settings for fast profile", () => {
     const state = {
       ...createSectionEditorState({
         name: "fast",
         enabled: true,
-        value: JSON.stringify({ strictProduction: true, pool: "disabled", splice: "adaptive" }),
+        value: JSON.stringify({
+          strictProduction: true,
+          pool: "disabled",
+          splice: "adaptive",
+          relay: { engine: "v2", flush: "adaptive", initialBuffer: 16384, maxBuffer: 262144 }
+        }),
         updatedAt: ""
       }),
       fastStrictProduction: false,
       fastPool: "adaptive",
-      fastSplice: "always"
+      fastSplice: "always",
+      fastRelayEngine: "legacy",
+      fastRelayFlush: "immediate",
+      fastRelayInitialBuffer: "32768",
+      fastRelayMaxBuffer: "524288"
     };
 
     expect(parseValue(buildSectionValue(state))).toEqual({
       strictProduction: false,
       pool: "adaptive",
-      splice: "always"
+      splice: "always",
+      relay: {
+        engine: "legacy",
+        flush: "immediate",
+        initialBuffer: 32768,
+        maxBuffer: 524288
+      }
     });
+  });
+
+  it("validates fast relay buffer fields as positive integers", () => {
+    const state = {
+      ...createSectionEditorState({
+        name: "fast",
+        enabled: true,
+        value: JSON.stringify({}),
+        updatedAt: ""
+      }),
+      fastRelayInitialBuffer: "0",
+      fastRelayMaxBuffer: "10.5"
+    };
+
+    expect(validateSectionState(state)).toEqual([
+      { field: "fastRelayInitialBuffer", message: "Relay initial buffer must be a positive integer." },
+      { field: "fastRelayMaxBuffer", message: "Relay max buffer must be a positive integer." }
+    ]);
   });
 
   it("serializes api, metrics, and tun structured sections", () => {

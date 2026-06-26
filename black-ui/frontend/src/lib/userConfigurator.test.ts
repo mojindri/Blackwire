@@ -54,6 +54,21 @@ const inbounds: Inbound[] = [
     limits: "{}",
     createdAt: "",
     updatedAt: ""
+  },
+  {
+    id: 4,
+    tag: "tuic-main",
+    listen: "0.0.0.0",
+    port: 9443,
+    protocol: "tuic",
+    enabled: true,
+    transport: "quic",
+    settings: "{}",
+    streamSettings: "{}",
+    sniffing: "{}",
+    limits: "{}",
+    createdAt: "",
+    updatedAt: ""
   }
 ];
 
@@ -83,13 +98,17 @@ describe("userConfigurator", () => {
       {
         ...createUserEditorState(user, inbounds),
         password: "new-secret",
-        trafficLimitGB: "12.5"
+        trafficLimitGB: "12.5",
+        upMbps: "25",
+        downMbps: "100"
       },
       protocol
     );
     const built = buildUserInput(state, protocol);
 
     expect(built.credential?.password).toBe("new-secret");
+    expect(built.credential?.upMbps).toBe(25);
+    expect(built.credential?.downMbps).toBe(100);
     expect(built.credential?.customKey).toBe("keep-me");
     expect(built.trafficLimitBytes).toBe(Math.round(12.5 * 1024 * 1024 * 1024));
   });
@@ -137,7 +156,8 @@ describe("userConfigurator", () => {
         email: "alice@example.com",
         uuid: "not-a-uuid",
         password: "",
-        trafficLimitGB: "0"
+        trafficLimitGB: "0",
+        upMbps: "-1"
       },
       "trojan",
       inbounds
@@ -154,7 +174,79 @@ describe("userConfigurator", () => {
       inbounds
     );
 
-    expect(trojanIssues.map((issue) => issue.field)).toEqual(["uuid", "password", "trafficLimitGB"]);
+    expect(trojanIssues.map((issue) => issue.field)).toEqual(["uuid", "password", "trafficLimitGB", "upMbps"]);
     expect(hy2Issues.map((issue) => issue.field)).toContain("auth");
+  });
+
+  it("treats TUIC users as structured password credentials", () => {
+    const user: ManagedUser = {
+      id: 11,
+      inboundId: 4,
+      email: "tuic@example.com",
+      uuid: "459dc0c8-d891-4768-9234-faf11fd26b5d",
+      flow: "",
+      credential: { password: "old-secret", customKey: "keep-me" },
+      note: "",
+      enabled: true,
+      trafficLimitBytes: null,
+      expiryAt: null,
+      uploadBytes: 0,
+      downloadBytes: 0,
+      subToken: "token",
+      enforcementStatus: "active",
+      createdAt: "",
+      updatedAt: ""
+    };
+    const protocol = activeUserProtocol(inbounds, user.inboundId);
+    const state = syncCredentialFromFields(
+      {
+        ...createUserEditorState(user, inbounds),
+        password: "new-tuic-secret"
+      },
+      protocol
+    );
+    const built = buildUserInput(state, protocol);
+
+    expect(protocol).toBe("tuic");
+    expect(built.credential?.password).toBe("new-tuic-secret");
+    expect(built.credential?.customKey).toBe("keep-me");
+    expect(validateUserState(state, protocol, inbounds)).toEqual([]);
+  });
+
+  it("round-trips per-user bandwidth aliases into canonical Mbps fields", () => {
+    const user: ManagedUser = {
+      id: 12,
+      inboundId: 1,
+      email: "limited@example.com",
+      uuid: "459dc0c8-d891-4768-9234-faf11fd26b5d",
+      flow: "",
+      credential: { upload_mbps: 15, downloadMbps: 80, customKey: "keep-me" },
+      note: "",
+      enabled: true,
+      trafficLimitBytes: null,
+      expiryAt: null,
+      uploadBytes: 0,
+      downloadBytes: 0,
+      subToken: "token",
+      enforcementStatus: "active",
+      createdAt: "",
+      updatedAt: ""
+    };
+    const state = syncCredentialFromFields(
+      {
+        ...createUserEditorState(user, inbounds),
+        upMbps: "20"
+      },
+      "vless"
+    );
+    const built = buildUserInput(state, "vless");
+
+    expect(createUserEditorState(user, inbounds).upMbps).toBe("15");
+    expect(createUserEditorState(user, inbounds).downMbps).toBe("80");
+    expect(built.credential?.upload_mbps).toBeUndefined();
+    expect(built.credential?.downloadMbps).toBeUndefined();
+    expect(built.credential?.upMbps).toBe(20);
+    expect(built.credential?.downMbps).toBe(80);
+    expect(built.credential?.customKey).toBe("keep-me");
   });
 });

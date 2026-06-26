@@ -74,18 +74,28 @@ export function InboundDrawer({
     [capabilities]
   );
   const transportOptions = useMemo(
-    () =>
-      capabilities?.transports.filter((item) =>
-        ["tcp", "ws", "grpc", "httpupgrade", "splithttp", "quic"].includes(item.key)
-      ) ?? [
-        { key: "tcp", label: "TCP", status: "supported", notes: "" },
-        { key: "ws", label: "WebSocket", status: "supported", notes: "" },
-        { key: "grpc", label: "gRPC", status: "supported", notes: "" },
-        { key: "httpupgrade", label: "HTTPUpgrade", status: "supported", notes: "" },
-        { key: "splithttp", label: "SplitHTTP", status: "supported", notes: "" },
-        { key: "quic", label: "QUIC", status: "supported", notes: "" }
-      ],
-    [capabilities]
+    () => {
+      const visible =
+        capabilities?.transports.filter((item) =>
+          ["tcp", "ws", "grpc", "httpupgrade", "splithttp", "quic"].includes(item.key)
+        ) ?? [
+          { key: "tcp", label: "TCP", status: "supported", notes: "" },
+          { key: "ws", label: "WebSocket", status: "supported", notes: "" },
+          { key: "grpc", label: "gRPC", status: "supported", notes: "" },
+          { key: "httpupgrade", label: "HTTPUpgrade", status: "supported", notes: "" },
+          { key: "splithttp", label: "SplitHTTP", status: "supported", notes: "" },
+          { key: "quic", label: "QUIC", status: "supported", notes: "" }
+        ];
+      const current = capabilities?.transports.find((item) => item.key === state.network);
+      if (current && !visible.some((item) => item.key === current.key)) {
+        return [...visible, current];
+      }
+      if (!current && state.network && !visible.some((item) => item.key === state.network)) {
+        return [...visible, { key: state.network, label: state.network, status: "deprecated", notes: "Legacy transport retained for editing existing configs" }];
+      }
+      return visible;
+    },
+    [capabilities, state.network]
   );
   const securityOptions = useMemo(
     () =>
@@ -202,14 +212,17 @@ export function InboundDrawer({
 
         {activeTab === "protocol" ? (
           <section className="drawer-card configurator-section">
-            {state.protocol === "vless" || state.protocol === "vmess" ? (
-              <Field label={state.protocol === "vless" ? "Decryption" : "Encryption"}>
+            {state.protocol === "vless" ? (
+              <Field label="Decryption">
                 <Input
                   value={state.decryption}
                   onChange={(e) => updateStructured({ decryption: e.target.value })}
-                  placeholder={state.protocol === "vless" ? "none" : "auto"}
+                  placeholder="none"
                 />
               </Field>
+            ) : null}
+            {state.protocol === "vmess" ? (
+              <p className="field-hint">VMess inbound accepts AEAD body security only. Clients must not use VMess body security none.</p>
             ) : null}
             {state.protocol === "shadowsocks" ? (
               <Field label="Method" hint="Inbound-level method only. Managed users still live in Users.">

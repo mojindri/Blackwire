@@ -13,6 +13,8 @@ export interface UserEditorState {
   note: string;
   enabled: boolean;
   trafficLimitGB: string;
+  upMbps: string;
+  downMbps: string;
   expiryLocal: string;
   credentialText: string;
   credentialError: string;
@@ -42,6 +44,8 @@ export function createUserEditorState(user: ManagedUser | null, inbounds: Inboun
     note: user?.note ?? "",
     enabled: user?.enabled ?? true,
     trafficLimitGB: bytesToGigabytesString(user?.trafficLimitBytes ?? null),
+    upMbps: numberString(credential.upMbps ?? credential.up_mbps ?? credential.uploadMbps ?? credential.upload_mbps),
+    downMbps: numberString(credential.downMbps ?? credential.down_mbps ?? credential.downloadMbps ?? credential.download_mbps),
     expiryLocal: toInputDateTime(user?.expiryAt ?? null),
     credentialText,
     credentialError: ""
@@ -59,7 +63,9 @@ export function replaceCredentialJson(state: UserEditorState, text: string): Use
     credentialError: "",
     password: stringValue(parsed.value.password) ?? "",
     auth: stringValue(parsed.value.auth) ?? "",
-    method: stringValue(parsed.value.method) ?? ""
+    method: stringValue(parsed.value.method) ?? "",
+    upMbps: numberString(parsed.value.upMbps ?? parsed.value.up_mbps ?? parsed.value.uploadMbps ?? parsed.value.upload_mbps),
+    downMbps: numberString(parsed.value.downMbps ?? parsed.value.down_mbps ?? parsed.value.downloadMbps ?? parsed.value.download_mbps)
   };
 }
 
@@ -74,6 +80,7 @@ export function syncCredentialFromFields(state: UserEditorState, protocol: UserP
   delete credential.password;
   delete credential.auth;
   delete credential.method;
+  deleteBandwidthFields(credential);
 
   if (protocol === "trojan" || protocol === "shadowsocks" || protocol === "tuic") {
     if (state.password.trim()) credential.password = state.password.trim();
@@ -84,6 +91,8 @@ export function syncCredentialFromFields(state: UserEditorState, protocol: UserP
   if (protocol === "shadowsocks" && state.method.trim()) {
     credential.method = state.method.trim();
   }
+  applyPositiveNumberField(credential, "upMbps", state.upMbps);
+  applyPositiveNumberField(credential, "downMbps", state.downMbps);
 
   return {
     ...state,
@@ -99,6 +108,7 @@ export function buildUserInput(state: UserEditorState, protocol: UserProtocol): 
   delete next.password;
   delete next.auth;
   delete next.method;
+  deleteBandwidthFields(next);
 
   if (protocol === "trojan" || protocol === "shadowsocks" || protocol === "tuic") {
     if (state.password.trim()) next.password = state.password.trim();
@@ -109,6 +119,8 @@ export function buildUserInput(state: UserEditorState, protocol: UserProtocol): 
   if (protocol === "shadowsocks" && state.method.trim()) {
     next.method = state.method.trim();
   }
+  applyPositiveNumberField(next, "upMbps", state.upMbps);
+  applyPositiveNumberField(next, "downMbps", state.downMbps);
 
   return {
     inboundId: state.inboundId,
@@ -125,7 +137,14 @@ export function buildUserInput(state: UserEditorState, protocol: UserProtocol): 
 
 export function activeUserProtocol(inbounds: Inbound[], inboundId: number): UserProtocol {
   const protocol = inbounds.find((item) => item.id === inboundId)?.protocol;
-  if (protocol === "vless" || protocol === "vmess" || protocol === "trojan" || protocol === "shadowsocks" || protocol === "hysteria2") {
+  if (
+    protocol === "vless" ||
+    protocol === "vmess" ||
+    protocol === "trojan" ||
+    protocol === "shadowsocks" ||
+    protocol === "hysteria2" ||
+    protocol === "tuic"
+  ) {
     return protocol;
   }
   return "unknown";
@@ -156,6 +175,17 @@ export function validateUserState(state: UserEditorState, protocol: UserProtocol
     const parsed = Number(state.trafficLimitGB.trim());
     if (!Number.isFinite(parsed) || parsed <= 0) {
       issues.push({ field: "trafficLimitGB", message: "Traffic limit must be a positive GB value." });
+    }
+  }
+  for (const [field, label, value] of [
+    ["upMbps", "Upload Mbps", state.upMbps],
+    ["downMbps", "Download Mbps", state.downMbps]
+  ] as const) {
+    if (value.trim()) {
+      const parsed = Number(value.trim());
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        issues.push({ field, message: `${label} must be a positive number.` });
+      }
     }
   }
   if (state.credentialError) {
@@ -193,6 +223,31 @@ function cloneObject(value?: Record<string, unknown>): Record<string, unknown> {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function numberString(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "";
+  return value % 1 === 0 ? String(value) : String(value);
+}
+
+function applyPositiveNumberField(target: Record<string, unknown>, key: string, value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  const parsed = Number(trimmed);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    target[key] = parsed;
+  }
+}
+
+function deleteBandwidthFields(target: Record<string, unknown>) {
+  delete target.upMbps;
+  delete target.up_mbps;
+  delete target.uploadMbps;
+  delete target.upload_mbps;
+  delete target.downMbps;
+  delete target.down_mbps;
+  delete target.downloadMbps;
+  delete target.download_mbps;
 }
 
 function bytesToGigabytesString(bytes: number | null): string {
