@@ -246,7 +246,10 @@ $(api_config_section)
   "outbounds": [
     {
       "tag": "freedom",
-      "protocol": "freedom"
+      "protocol": "freedom",
+      "settings": {
+        "denyLoopback": true
+      }
     }
   ],
   "routing": {
@@ -314,7 +317,10 @@ $(api_config_section)
   "outbounds": [
     {
       "tag": "freedom",
-      "protocol": "freedom"
+      "protocol": "freedom",
+      "settings": {
+        "denyLoopback": true
+      }
     }
   ],
   "routing": {
@@ -378,7 +384,10 @@ $(api_config_section)
   "outbounds": [
     {
       "tag": "freedom",
-      "protocol": "freedom"
+      "protocol": "freedom",
+      "settings": {
+        "denyLoopback": true
+      }
     }
   ],
   "routing": {
@@ -445,7 +454,10 @@ $(api_config_section)
   "outbounds": [
     {
       "tag": "freedom",
-      "protocol": "freedom"
+      "protocol": "freedom",
+      "settings": {
+        "denyLoopback": true
+      }
     }
   ],
   "routing": {
