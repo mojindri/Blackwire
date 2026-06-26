@@ -643,12 +643,14 @@ impl Instance {
                     in_cfg,
                     &reload.trojan_auth_stores,
                     dns.clone(),
+                    handshake_timeout,
                     Some(Arc::clone(&user_connection_limiter)),
                 )
                 .with_context(|| format!("building Trojan inbound '{}'", in_cfg.tag))?,
                 Protocol::Vmess => build_vmess_inbound(
                     in_cfg,
                     &reload.vmess_registries,
+                    handshake_timeout,
                     Some(Arc::clone(&user_connection_limiter)),
                 )
                 .with_context(|| format!("building VMess inbound '{}'", in_cfg.tag))?,
@@ -657,6 +659,7 @@ impl Instance {
                 Protocol::Shadowsocks => build_ss2022_inbound(
                     in_cfg,
                     &reload.ss2022_auth_stores,
+                    handshake_timeout,
                     Some(Arc::clone(&user_connection_limiter)),
                 )
                 .with_context(|| format!("building SS-2022 inbound '{}'", in_cfg.tag))?,

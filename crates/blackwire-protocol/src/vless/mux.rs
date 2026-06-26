@@ -769,7 +769,9 @@ mod tests {
     use async_trait::async_trait;
     use blackwire_app::context::Context;
     use blackwire_app::dispatcher::Dispatcher;
+    use blackwire_app::features::UdpOutboundResponse;
     use blackwire_common::{tcp_connect, Address, BoxedStream};
+    use bytes::Bytes;
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -797,6 +799,15 @@ mod tests {
                 _ => return Err(ProxyError::Protocol("mux test: ipv4 only".into())),
             };
             Ok(Box::new(tcp_connect(socket_addr).await?))
+        }
+
+        async fn dispatch_udp_datagram(
+            &self,
+            _ctx: Context,
+            _dest: Address,
+            _payload: Bytes,
+        ) -> Result<Option<UdpOutboundResponse>, ProxyError> {
+            Ok(None)
         }
     }
 

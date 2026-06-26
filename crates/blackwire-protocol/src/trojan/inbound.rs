@@ -21,6 +21,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
@@ -34,7 +35,9 @@ use blackwire_app::features::InboundHandler;
 use blackwire_app::user_limits::UserConnectionLimiter;
 use tokio::io::BufReader;
 
-use blackwire_common::{Address, BoxedStream, Network, PrependedStream, ProxyError};
+use blackwire_common::{
+    with_handshake_timeout, Address, BoxedStream, Network, PrependedStream, ProxyError,
+};
 
 use super::codec::{compute_token, decode_request, CMD_CONNECT, CMD_UDP_ASSOCIATE, TOKEN_LEN};
 
@@ -127,6 +130,8 @@ pub struct TrojanInbound {
 
     /// DNS module for UDP relay domain resolution.
     dns: Option<Arc<DnsModule>>,
+    /// Optional limit for reading and authenticating the Trojan request header.
+    handshake_timeout: Option<Duration>,
     /// Optional authenticated per-user connection limiter.
     user_limiter: Option<Arc<UserConnectionLimiter>>,
 }
@@ -162,7 +167,7 @@ impl TrojanInbound {
     ) -> Arc<Self> {
         let auth = TrojanAuthStore::new();
         auth.replace_users(users);
-        Self::new_with_auth_store(tag, auth, dns, user_limiter)
+        Self::new_with_auth_store(tag, auth, dns, None, user_limiter)
     }
 
     /// Create a new Trojan inbound handler backed by a shared auth store.
@@ -170,12 +175,14 @@ impl TrojanInbound {
         tag: impl Into<Arc<str>>,
         auth: Arc<TrojanAuthStore>,
         dns: Option<Arc<DnsModule>>,
+        handshake_timeout: Option<Duration>,
         user_limiter: Option<Arc<UserConnectionLimiter>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
             auth,
             dns,
+            handshake_timeout,
             user_limiter,
         })
     }
@@ -197,28 +204,32 @@ impl InboundHandler for TrojanInbound {
         source: SocketAddr,
         dispatcher: Arc<dyn Dispatcher>,
     ) -> Result<(), ProxyError> {
-        // Buffer the header reads to collapse ~5-6 small recvfrom syscalls into one.
-        // The Trojan header (token 56B + CRLF + cmd + atyp + addr + CRLF) fits in 128 bytes.
-        // Any payload read ahead is recovered via PrependedStream.
-        let mut buf_reader = BufReader::with_capacity(128, &mut stream);
-        let request = decode_request(&mut buf_reader).await.map_err(|e| {
-            debug!(source = %source, error = %e, "Trojan header parse failed");
-            e
-        })?;
-        let leftover = buf_reader.buffer().to_vec();
-        drop(buf_reader);
+        let (request, user, leftover) = with_handshake_timeout(self.handshake_timeout, async {
+            // Buffer the header reads to collapse ~5-6 small recvfrom syscalls into one.
+            // The Trojan header (token 56B + CRLF + cmd + atyp + addr + CRLF) fits in 128 bytes.
+            // Any payload read ahead is recovered via PrependedStream.
+            let mut buf_reader = BufReader::with_capacity(128, &mut stream);
+            let request = decode_request(&mut buf_reader).await.map_err(|e| {
+                debug!(source = %source, error = %e, "Trojan header parse failed");
+                e
+            })?;
+            let leftover = buf_reader.buffer().to_vec();
+
+            // Validate the token in constant time.
+            let user = match self.auth.validate_token(&request.token) {
+                Some(user) => user,
+                None => {
+                    warn!(source = %source, "Trojan auth failed — dropping connection");
+                    return Err(ProxyError::AuthFailed);
+                }
+            };
+
+            Ok((request, user, leftover))
+        })
+        .await?;
         if !leftover.is_empty() {
             stream = Box::new(PrependedStream::new(stream, leftover));
         }
-
-        // Validate the token in constant time.
-        let user = match self.auth.validate_token(&request.token) {
-            Some(user) => user,
-            None => {
-                warn!(source = %source, "Trojan auth failed — dropping connection");
-                return Err(ProxyError::AuthFailed);
-            }
-        };
 
         debug!(
             source = %source,
