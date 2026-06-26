@@ -354,6 +354,9 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
         "sni": sni,
         "alpn": alpn,
     });
+    if security == "tls" && tls_share_requires_insecure(inbound) {
+        payload["allowInsecure"] = json!(true);
+    }
     if network == "xhttp" {
         payload["mode"] = json!(splithttp_share_mode(inbound));
     }
@@ -526,7 +529,7 @@ fn tls_share_alpn(inbound: &Inbound) -> Option<String> {
 fn tuic_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Result<String> {
     let password = credential_string(user, "password").unwrap_or_else(|| user.uuid.clone());
     let mut params = vec![format!("uuid={}", util::url_escape(&user.uuid))];
-    if tls_share_explicitly_allows_insecure(inbound) {
+    if tls_share_requires_insecure(inbound) {
         params.push("insecure=1".to_string());
     }
     if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
@@ -742,6 +745,59 @@ mod tests {
             payload.get("xmux").is_none(),
             "vmess share payload unexpectedly enables xmux: {payload}"
         );
+    }
+
+    fn tls_policy_inbound(cert_file: &str, extra_tls: serde_json::Value) -> Inbound {
+        let mut tls = json!({
+            "serverName": "www.microsoft.com",
+            "certificateFile": cert_file,
+            "keyFile": "/etc/blackwire/certs/test.key"
+        });
+        if let (Some(base), Some(extra)) = (tls.as_object_mut(), extra_tls.as_object()) {
+            for (key, value) in extra {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+        Inbound {
+            id: 1,
+            tag: "tls-policy".into(),
+            listen: "::".into(),
+            port: 443,
+            protocol: "vless".into(),
+            enabled: true,
+            transport: "quic".into(),
+            settings: "{}".into(),
+            stream_settings: json!({
+                "network": "quic",
+                "security": "tls",
+                "tlsSettings": tls
+            })
+            .to_string(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn tls_share_insecure_policy_matches_certificate_source() {
+        assert!(tls_share_requires_insecure(&tls_policy_inbound(
+            "/etc/blackwire/certs/generated.crt",
+            json!({})
+        )));
+        assert!(tls_share_requires_insecure(&tls_policy_inbound(
+            "/opt/custom/public.pem",
+            json!({"allowInsecure": true})
+        )));
+        assert!(!tls_share_requires_insecure(&tls_policy_inbound(
+            "/etc/letsencrypt/live/example.com/fullchain.pem",
+            json!({})
+        )));
+        assert!(!tls_share_requires_insecure(&tls_policy_inbound(
+            "/opt/custom/public.pem",
+            json!({})
+        )));
     }
 
     #[test]
@@ -1110,7 +1166,7 @@ mod tests {
         assert_eq!(payload["alpn"], "h3");
         assert_eq!(payload["scy"], "aes-128-gcm");
         assert_eq!(payload["security"], "aes-128-gcm");
-        assert!(payload.get("allowInsecure").is_none());
+        assert_eq!(payload["allowInsecure"], true);
         assert!(payload.get("allowinsecure").is_none());
         assert!(payload.get("insecure").is_none());
         assert_vmess_payload_omits_mux(&payload);
@@ -1638,7 +1694,7 @@ mod tests {
     }
 
     #[test]
-    fn tuic_subscription_omits_insecure_for_path_only_certificate() {
+    fn tuic_subscription_includes_insecure_for_self_signed_cert() {
         let settings = Settings {
             config_path: "/tmp/config.json".into(),
             grpc_enabled: false,
@@ -1695,7 +1751,7 @@ mod tests {
         let link = tuic_link(&settings, &inbound, &user).unwrap();
         assert_eq!(
             link,
-            "tuic://ccdc43c9-5fd4-4d60-a363-17071e7a3f20:secret@203.0.113.10:443?uuid=ccdc43c9-5fd4-4d60-a363-17071e7a3f20&sni=www.microsoft.com&alpn=h3#tuic%40example.local"
+            "tuic://ccdc43c9-5fd4-4d60-a363-17071e7a3f20:secret@203.0.113.10:443?uuid=ccdc43c9-5fd4-4d60-a363-17071e7a3f20&insecure=1&sni=www.microsoft.com&alpn=h3#tuic%40example.local"
         );
         assert_link_omits_mux_params(&link);
 
