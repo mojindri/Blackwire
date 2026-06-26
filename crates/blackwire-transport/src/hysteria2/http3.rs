@@ -87,14 +87,18 @@ pub async fn serve_connection(
     if !authenticated {
         bail!("Hysteria2 HTTP/3 authentication rejected");
     }
-    // Keep the HTTP/3 server driver alive for the QUIC session without calling
+    // Keep the HTTP/3 server state alive for the QUIC session without calling
     // `accept()` again. Official hysteria uses http3.StreamDispatcher to hijack
     // proxy streams (varint 0x401); the Rust `h3` crate has no equivalent, so we
     // take proxy streams via `conn.accept_bi()` below. A competing `h3_conn.accept()`
     // would treat 0x401 TCPRequest bytes as HTTP/3 and reset the connection.
+    //
+    // Tie this guard task to QUIC connection closure so `h3_conn` is dropped and
+    // the task exits when the client disconnects.
+    let h3_guard_conn = conn.clone();
     tokio::spawn(async move {
-        let _h3_conn = h3_conn;
-        std::future::pending::<()>().await
+        h3_guard_conn.closed().await;
+        drop(h3_conn);
     });
 
     let inbound_tag = config.tag.clone();
