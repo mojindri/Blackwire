@@ -11,6 +11,7 @@ use bytes::{Buf, BytesMut};
 use tokio::sync::{mpsc, Mutex};
 
 const DEFAULT_MAX_BUFFERED: usize = 64;
+const DEFAULT_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// One upload chunk in packet-up mode.
 pub struct UploadPacket {
@@ -25,6 +26,8 @@ struct QueueState {
     pending: BytesMut,
     closed: bool,
     max_buffered: usize,
+    max_bytes: usize,
+    queued_bytes: usize,
 }
 
 impl QueueState {
@@ -42,7 +45,9 @@ impl QueueState {
                     self.heap.push(Reverse((seq, payload)));
                     return Ok(());
                 }
-                Some(Reverse((_seq, _payload))) => {}
+                Some(Reverse((_seq, payload))) => {
+                    self.queued_bytes = self.queued_bytes.saturating_sub(payload.len());
+                }
                 None if self.closed && self.pending.is_empty() => {
                     return Err(io::ErrorKind::UnexpectedEof.into())
                 }
@@ -60,11 +65,16 @@ pub struct UploadQueue {
 }
 
 impl UploadQueue {
-    pub fn new(max_buffered: usize) -> Arc<Self> {
+    pub fn new(max_buffered: usize, max_bytes: usize) -> Arc<Self> {
         let max_buffered = if max_buffered == 0 {
             DEFAULT_MAX_BUFFERED
         } else {
             max_buffered
+        };
+        let max_bytes = if max_bytes == 0 {
+            DEFAULT_MAX_BYTES
+        } else {
+            max_bytes
         };
         let (wake_tx, wake_rx) = mpsc::unbounded_channel();
         Arc::new(Self {
@@ -74,6 +84,8 @@ impl UploadQueue {
                 pending: BytesMut::new(),
                 closed: false,
                 max_buffered,
+                max_bytes,
+                queued_bytes: 0,
             }),
             wake_tx,
             wake_rx: StdMutex::new(Some(wake_rx)),
@@ -89,6 +101,12 @@ impl UploadQueue {
         if st.closed {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "queue closed"));
         }
+        let payload_len = packet.payload.len();
+        if payload_len > st.max_bytes || st.queued_bytes.saturating_add(payload_len) > st.max_bytes
+        {
+            return Err(io::Error::other("packet-up session buffer exceeded"));
+        }
+        st.queued_bytes += payload_len;
         st.heap.push(Reverse((packet.seq, packet.payload)));
         drop(st);
         self.bump_wake();
@@ -159,6 +177,7 @@ impl tokio::io::AsyncRead for UploadQueueReader {
                 let n = buf.remaining().min(st.pending.len());
                 buf.put_slice(&st.pending[..n]);
                 st.pending.advance(n);
+                st.queued_bytes = st.queued_bytes.saturating_sub(n);
                 return Poll::Ready(Ok(()));
             }
 
@@ -235,7 +254,7 @@ mod tests {
 
     #[tokio::test]
     async fn reorder_by_seq() {
-        let q = UploadQueue::new(8);
+        let q = UploadQueue::new(8, 1024 * 1024);
         q.push(UploadPacket {
             seq: 1,
             payload: b"B".to_vec(),
@@ -255,8 +274,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_payloads_that_exceed_session_byte_limit() {
+        let q = UploadQueue::new(8, 4);
+        q.push(UploadPacket {
+            seq: 0,
+            payload: b"1234".to_vec(),
+        })
+        .await
+        .unwrap();
+        let err = q
+            .push(UploadPacket {
+                seq: 1,
+                payload: b"5".to_vec(),
+            })
+            .await
+            .expect_err("session cap should reject extra buffered bytes");
+        assert_eq!(err.to_string(), "packet-up session buffer exceeded");
+    }
+
+    #[tokio::test]
     async fn read_waits_for_out_of_order_push() {
-        let q = UploadQueue::new(8);
+        let q = UploadQueue::new(8, 1024 * 1024);
         q.push(UploadPacket {
             seq: 1,
             payload: b"B".to_vec(),

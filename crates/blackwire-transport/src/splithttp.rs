@@ -49,6 +49,13 @@ const MAX_HEADER_BYTES: usize = 16384;
 /// stream an unbounded body (or send a huge Content-Length) and exhaust memory.
 const MAX_PACKET_UP_BODY_BYTES: usize = 2 * 1024 * 1024;
 
+/// Maximum bytes retained for one unauthenticated packet-up session before the
+/// authenticated download leg starts draining it.
+const MAX_PACKET_UP_SESSION_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum number of pending packet-up sessions retained globally.
+const MAX_PACKET_UP_SESSIONS: usize = 1024;
+
 /// Normalized XHTTP mode (subset implemented in this crate).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplitHttpMode {
@@ -124,11 +131,21 @@ pub async fn splithttp_connect(
 static PACKET_UP_SESSIONS: LazyLock<DashMap<String, Arc<UploadQueue>>> =
     LazyLock::new(DashMap::new);
 
-fn upsert_packet_up_session(session_id: &str) -> Arc<UploadQueue> {
-    PACKET_UP_SESSIONS
+fn upsert_packet_up_session(session_id: &str) -> Result<Arc<UploadQueue>, ProxyError> {
+    if let Some(queue) = PACKET_UP_SESSIONS.get(session_id) {
+        return Ok(queue.clone());
+    }
+
+    if PACKET_UP_SESSIONS.len() >= MAX_PACKET_UP_SESSIONS {
+        return Err(ProxyError::Protocol(
+            "packet-up global session limit exceeded".into(),
+        ));
+    }
+
+    Ok(PACKET_UP_SESSIONS
         .entry(session_id.to_string())
-        .or_insert_with(|| UploadQueue::new(64))
-        .clone()
+        .or_insert_with(|| UploadQueue::new(64, MAX_PACKET_UP_SESSION_BYTES))
+        .clone())
 }
 
 fn x_padding_header(cfg: &SplitHttpConfig) -> Option<(String, String)> {
@@ -472,7 +489,7 @@ pub async fn splithttp_accept_h2_packet_up(
                 }
             };
 
-            let queue = upsert_packet_up_session(&session);
+            let queue = upsert_packet_up_session(&session)?;
             let mut body = request.into_body();
             let mut payload = Vec::new();
             let mut body_error = false;
@@ -556,7 +573,7 @@ pub async fn splithttp_accept_h2_packet_up(
                 continue;
             }
 
-            let queue = upsert_packet_up_session(&session);
+            let queue = upsert_packet_up_session(&session)?;
             let mut body = request.into_body();
             tokio::spawn(async move {
                 while let Some(chunk) = body.data().await {
@@ -739,7 +756,7 @@ async fn packet_up_accept(
             .parse()
             .map_err(|_| ProxyError::Protocol(format!("packet-up invalid seq '{seq}'")))?;
         let body = read_request_body(&mut stream, request).await?;
-        let queue = upsert_packet_up_session(&session);
+        let queue = upsert_packet_up_session(&session)?;
         queue
             .push(UploadPacket {
                 seq: seq_num,
@@ -760,7 +777,7 @@ async fn packet_up_accept(
                 "packet-up GET requires session id in path".into(),
             ));
         }
-        let queue = upsert_packet_up_session(&session);
+        let queue = upsert_packet_up_session(&session)?;
         stream
             .write_all(
                 b"HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
