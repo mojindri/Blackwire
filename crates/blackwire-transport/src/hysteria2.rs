@@ -366,7 +366,7 @@ impl Hysteria2Client {
             .await
             .map_err(|e| ProxyError::Transport(format!("QUIC handshake: {e}")))?;
 
-        let h3_driver = timeout(
+        let (h3_driver, _auth) = timeout(
             CLIENT_AUTH_TIMEOUT,
             client_h3_auth(&conn, &self.config.password, rx_bps),
         )
@@ -479,7 +479,7 @@ async fn client_h3_auth(
     conn: &quinn::Connection,
     password: &str,
     rx_bps: u64,
-) -> Result<tokio::task::JoinHandle<()>, ProxyError> {
+) -> Result<(tokio::task::JoinHandle<()>, proto::AuthResponse), ProxyError> {
     use http::header::{HeaderName, HeaderValue};
     use http::{Method, Request};
 
@@ -539,8 +539,8 @@ async fn client_h3_auth(
         return Err(ProxyError::AuthFailed);
     }
 
-    let _auth = proto::auth_response_from_headers(resp.headers(), resp.status().as_u16());
-    Ok(driver_task)
+    let auth = proto::auth_response_from_headers(resp.headers(), resp.status().as_u16());
+    Ok((driver_task, auth))
 }
 
 struct Hysteria2Stream {
@@ -914,14 +914,14 @@ impl Hysteria2UdpSession {
             .await
             .map_err(|e| ProxyError::Transport(format!("QUIC handshake: {e}")))?;
 
-        client_h3_auth(&conn, &config.password, rx_bps).await?;
+        let (_h3_driver, auth) = client_h3_auth(&conn, &config.password, rx_bps).await?;
 
         Ok(Self {
             conn,
             _endpoint: endpoint,
             session_id: rand::random(),
             packet_id: std::sync::atomic::AtomicU16::new(0),
-            datagram_enabled: config.datagram_enabled,
+            datagram_enabled: config.datagram_enabled && auth.udp_enabled,
             datagram_policy: config.datagram_policy,
             fec_encoder: StdMutex::new(udp::FecEncoder::new(config.fec)),
             fec_decoder: StdMutex::new(udp::FecDecoder::new(config.fec)),
