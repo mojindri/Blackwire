@@ -234,6 +234,18 @@ impl InboundHandler for VmessInbound {
             "VMess header decoded"
         );
 
+        if request.security == Security::None {
+            warn!(
+                source = %source,
+                inbound = %self.tag,
+                user = %user.email,
+                "rejecting VMess request with unauthenticated body security"
+            );
+            return Err(ProxyError::Protocol(
+                "VMess: unauthenticated body security is not accepted by inbound".into(),
+            ));
+        }
+
         // 7. Derive response keys.
         let resp_key = response_body_key(&request.key);
         let resp_iv = response_body_iv(&request.iv);
