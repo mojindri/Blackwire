@@ -44,6 +44,10 @@ pub type PacketUpH2TunnelFn = Arc<dyn Fn(SplitHttpAcceptResult) + Send + Sync>;
 
 const MAX_HEADER_BYTES: usize = 16384;
 
+/// Maximum bytes accepted for an HTTP/1.1 chunk-size line, excluding CRLF.
+/// Chunk-size is parsed before proxy authentication, so bound it explicitly.
+const MAX_CHUNK_SIZE_LINE_BYTES: usize = 1024;
+
 /// Maximum bytes accepted for a single packet-up POST body. XHTTP uplink packets
 /// are small (one MTU-ish chunk per POST); without a cap a malicious client could
 /// stream an unbounded body (or send a huge Content-Length) and exhaust memory.
@@ -1077,6 +1081,42 @@ fn put_chunk_size_hex(buf: &mut BytesMut, value: usize) {
     buf.put_slice(&digits[i..]);
 }
 
+fn parse_chunk_size_line(line: &[u8]) -> io::Result<usize> {
+    let size_part = line
+        .split(|b| *b == b';')
+        .next()
+        .unwrap_or(line)
+        .trim_ascii();
+    if size_part.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SplitHTTP empty chunk-size line",
+        ));
+    }
+
+    let mut value = 0usize;
+    for &byte in size_part {
+        let digit = match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'a'..=b'f' => byte - b'a' + 10,
+            b'A'..=b'F' => byte - b'A' + 10,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "SplitHTTP invalid chunk-size line",
+                ));
+            }
+        } as usize;
+        value = value
+            .checked_mul(16)
+            .and_then(|v| v.checked_add(digit))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "SplitHTTP chunk size overflow")
+            })?;
+    }
+    Ok(value)
+}
+
 impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -1110,9 +1150,13 @@ impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
 
             if self.chunk_remaining == 0 {
                 if let Some(line_end) = self.read_buf.windows(2).position(|w| w == b"\r\n") {
-                    let line = String::from_utf8_lossy(&self.read_buf[..line_end]);
-                    let size = usize::from_str_radix(line.trim(), 16)
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                    if line_end > MAX_CHUNK_SIZE_LINE_BYTES {
+                        return Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "SplitHTTP chunk-size line too large",
+                        )));
+                    }
+                    let size = parse_chunk_size_line(&self.read_buf[..line_end])?;
                     self.read_buf.advance(line_end + 2);
                     if size == 0 {
                         self.eof = true;
@@ -1122,8 +1166,18 @@ impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
                     continue;
                 }
 
+                if self.read_buf.len() >= MAX_CHUNK_SIZE_LINE_BYTES + 2 {
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "SplitHTTP chunk-size line too large",
+                    )));
+                }
+
                 let mut tmp = [0u8; 4096];
-                let mut rb = ReadBuf::new(&mut tmp);
+                let read_len = tmp
+                    .len()
+                    .min(MAX_CHUNK_SIZE_LINE_BYTES + 2 - self.read_buf.len());
+                let mut rb = ReadBuf::new(&mut tmp[..read_len]);
                 match Pin::new(&mut self.inner).poll_read(cx, &mut rb) {
                     Poll::Ready(Ok(())) => {
                         if rb.filled().is_empty() {
@@ -1214,6 +1268,80 @@ mod tests {
         let mut buf = [0u8; 8];
         let n = tunnel.read(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"hello");
+    }
+
+    #[tokio::test]
+    async fn stream_one_rejects_oversized_chunk_size_line() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let server = Box::new(server) as BoxedStream;
+        let accept_task = tokio::spawn(async move {
+            splithttp_accept(server, Some("/split"), None, SplitHttpMode::StreamOne, None).await
+        });
+
+        client
+            .write_all(
+                b"POST /split HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: chunked\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        client
+            .write_all(&vec![b'1'; MAX_CHUNK_SIZE_LINE_BYTES + 2])
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        let mut raw = vec![0u8; 512];
+        let n = client.read(&mut raw).await.unwrap();
+        let resp = String::from_utf8_lossy(&raw[..n]);
+        assert!(resp.contains("200 OK"), "response: {resp}");
+
+        let SplitHttpAcceptResult::Tunnel(mut tunnel) =
+            accept_task.await.unwrap().expect("accept failed")
+        else {
+            panic!("expected stream-one tunnel");
+        };
+        let mut buf = [0u8; 8];
+        let err = tunnel
+            .read(&mut buf)
+            .await
+            .expect_err("expected oversized chunk-size error");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("chunk-size line too large"));
+    }
+
+    #[tokio::test]
+    async fn stream_one_allows_maximum_chunk_size_line_with_extension() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let server = Box::new(server) as BoxedStream;
+        let accept_task = tokio::spawn(async move {
+            splithttp_accept(server, Some("/split"), None, SplitHttpMode::StreamOne, None).await
+        });
+
+        client
+            .write_all(
+                b"POST /split HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: chunked\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let extension_len = MAX_CHUNK_SIZE_LINE_BYTES - b"1;".len();
+        client.write_all(b"1;").await.unwrap();
+        client.write_all(&vec![b'a'; extension_len]).await.unwrap();
+        client.write_all(b"\r\nx\r\n").await.unwrap();
+        client.flush().await.unwrap();
+
+        let mut raw = vec![0u8; 512];
+        let n = client.read(&mut raw).await.unwrap();
+        let resp = String::from_utf8_lossy(&raw[..n]);
+        assert!(resp.contains("200 OK"), "response: {resp}");
+
+        let SplitHttpAcceptResult::Tunnel(mut tunnel) =
+            accept_task.await.unwrap().expect("accept failed")
+        else {
+            panic!("expected stream-one tunnel");
+        };
+        let mut buf = [0u8; 8];
+        let n = tunnel.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"x");
     }
 
     #[tokio::test]
