@@ -36,7 +36,9 @@ use blackwire_app::features::InboundHandler;
 use blackwire_app::runtime_stats;
 use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_app::{wait_for_user_write_budget, UserBandwidthDirection};
-use blackwire_common::{BoxedStream, BufferPool, Network, PrependedStream, ProxyError};
+use blackwire_common::{
+    with_handshake_timeout, BoxedStream, BufferPool, Network, PrependedStream, ProxyError,
+};
 
 use super::auth::{cmd_key, validate_auth_id, MAX_TIME_DIFF_SECS};
 use super::codec::{
@@ -127,6 +129,7 @@ impl Default for VmessUserRegistry {
 pub struct VmessInbound {
     tag: Arc<str>,
     registry: Arc<VmessUserRegistry>,
+    handshake_timeout: Option<Duration>,
     user_limiter: Option<Arc<UserConnectionLimiter>>,
 }
 
@@ -135,11 +138,13 @@ impl VmessInbound {
     pub fn new(
         tag: impl Into<Arc<str>>,
         registry: Arc<VmessUserRegistry>,
+        handshake_timeout: Option<Duration>,
         user_limiter: Option<Arc<UserConnectionLimiter>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             tag: tag.into(),
             registry,
+            handshake_timeout,
             user_limiter,
         })
     }
@@ -161,59 +166,62 @@ impl InboundHandler for VmessInbound {
         source: SocketAddr,
         dispatcher: Arc<dyn Dispatcher>,
     ) -> Result<(), ProxyError> {
-        // Buffer the header reads to reduce per-connection syscalls.
-        // VMess header wire sequence: auth_id(16) + enc_len(18) + nonce(8) + enc_header(N+16).
-        // A 128-byte BufReader covers the fixed fields (42 bytes) and most headers in one
-        // recvfrom call. Any payload bytes read ahead are recovered via PrependedStream.
-        let mut buf_reader = BufReader::with_capacity(128, &mut stream);
+        let (user, request, leftover) = with_handshake_timeout(self.handshake_timeout, async {
+            // Buffer the header reads to reduce per-connection syscalls.
+            // VMess header wire sequence: auth_id(16) + enc_len(18) + nonce(8) + enc_header(N+16).
+            // A 128-byte BufReader covers the fixed fields (42 bytes) and most headers in one
+            // recvfrom call. Any payload bytes read ahead are recovered via PrependedStream.
+            let mut buf_reader = BufReader::with_capacity(128, &mut stream);
 
-        // 1. Read 16-byte auth ID.
-        let mut auth_id = [0u8; 16];
-        buf_reader.read_exact(&mut auth_id).await?;
+            // 1. Read 16-byte auth ID.
+            let mut auth_id = [0u8; 16];
+            buf_reader.read_exact(&mut auth_id).await?;
 
-        // 2. Identify user.
-        let user = match self.registry.find_by_auth(&auth_id) {
-            Some(u) => u,
-            None => {
-                warn!(source = %source, auth_id = %hex::encode(auth_id), "VMess auth failed — no matching user");
-                return Err(ProxyError::AuthFailed);
-            }
-        };
+            // 2. Identify user.
+            let user = match self.registry.find_by_auth(&auth_id) {
+                Some(u) => u,
+                None => {
+                    warn!(source = %source, auth_id = %hex::encode(auth_id), "VMess auth failed — no matching user");
+                    return Err(ProxyError::AuthFailed);
+                }
+            };
 
-        debug!(source = %source, user = %user.email, "VMess authenticated");
+            debug!(source = %source, user = %user.email, "VMess authenticated");
 
-        // 3. Read encrypted length (18 bytes).
-        let mut enc_len = [0u8; 18];
-        buf_reader.read_exact(&mut enc_len).await?;
+            // 3. Read encrypted length (18 bytes).
+            let mut enc_len = [0u8; 18];
+            buf_reader.read_exact(&mut enc_len).await?;
 
-        // 4. Read 8-byte connection nonce.
-        let mut connection_nonce = [0u8; 8];
-        buf_reader.read_exact(&mut connection_nonce).await?;
+            // 4. Read 8-byte connection nonce.
+            let mut connection_nonce = [0u8; 8];
+            buf_reader.read_exact(&mut connection_nonce).await?;
 
-        // 5. Decrypt header length using nonce.
-        let header_len =
-            decrypt_length_field(&user.cmd_key, &auth_id, &connection_nonce, &enc_len)?;
+            // 5. Decrypt header length using nonce.
+            let header_len =
+                decrypt_length_field(&user.cmd_key, &auth_id, &connection_nonce, &enc_len)?;
 
-        // 6. Decrypt request header.
-        let request = match decode_header(
-            &mut buf_reader,
-            &user.cmd_key,
-            &auth_id,
-            &connection_nonce,
-            header_len,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(source = %source, error = %e, header_len, "VMess header decode failed");
-                return Err(e);
-            }
-        };
+            // 6. Decrypt request header.
+            let request = match decode_header(
+                &mut buf_reader,
+                &user.cmd_key,
+                &auth_id,
+                &connection_nonce,
+                header_len,
+            )
+            .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(source = %source, error = %e, header_len, "VMess header decode failed");
+                    return Err(e);
+                }
+            };
 
-        // Recover any payload bytes over-read into the BufReader's internal buffer.
-        let leftover = buf_reader.buffer().to_vec();
-        drop(buf_reader);
+            // Recover any payload bytes over-read into the BufReader's internal buffer.
+            let leftover = buf_reader.buffer().to_vec();
+            Ok((user, request, leftover))
+        })
+        .await?;
         if !leftover.is_empty() {
             stream = Box::new(PrependedStream::new(stream, leftover));
         }
@@ -225,6 +233,18 @@ impl InboundHandler for VmessInbound {
             command = ?request.command,
             "VMess header decoded"
         );
+
+        if request.security == Security::None {
+            warn!(
+                source = %source,
+                inbound = %self.tag,
+                user = %user.email,
+                "rejecting VMess request with unauthenticated body security"
+            );
+            return Err(ProxyError::Protocol(
+                "VMess: unauthenticated body security is not accepted by inbound".into(),
+            ));
+        }
 
         // 7. Derive response keys.
         let resp_key = response_body_key(&request.key);
