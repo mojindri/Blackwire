@@ -149,10 +149,6 @@ impl InboundHandler for Ss2022Inbound {
 
         let mut req_salt = [0u8; 32];
         buf_reader.read_exact(&mut req_salt).await?;
-        if !self.replay.check_and_insert(&req_salt) {
-            warn!(source = %source, "SS-2022: replayed salt");
-            return Err(ProxyError::AuthFailed);
-        }
 
         let req_subkey = derive_subkey(&auth.psk, &req_salt);
         let req_cipher = Aes256Gcm::new(GenericArray::from_slice(&req_subkey));
@@ -192,6 +188,10 @@ impl InboundHandler for Ss2022Inbound {
             .map_err(|_| ProxyError::Protocol("SS-2022: variable header decrypt failed".into()))?;
 
         let (dest, initial_payload) = parse_variable_header(&variable)?;
+        if !self.replay.check_and_insert(&req_salt) {
+            warn!(source = %source, "SS-2022: replayed salt");
+            return Err(ProxyError::AuthFailed);
+        }
         debug!(source = %source, dest = %dest, "SS-2022 inbound authenticated");
 
         let _user_permit = if let (Some(limiter), Some(user)) = (&self.user_limiter, &auth.user) {

@@ -94,7 +94,7 @@ fn parse_server_config(
 ) -> Result<Hysteria2ServerConfig> {
     let s = &cfg.settings;
 
-    let password = s["auth"].as_str().unwrap_or_default().to_string();
+    let password = require_hysteria2_auth(s, &cfg.tag)?.to_string();
     let user = hysteria2_user_label(s, &password);
     #[allow(clippy::unwrap_or_default)]
     let auth = auth_stores
@@ -506,11 +506,20 @@ fn require_field<'a>(value: &'a str, field: &str) -> Result<&'a str> {
     Ok(value)
 }
 
+fn require_hysteria2_auth<'a>(settings: &'a serde_json::Value, tag: &str) -> Result<&'a str> {
+    let auth = settings.get("auth").and_then(|value| value.as_str());
+    match auth {
+        Some(auth) if !auth.is_empty() => Ok(auth),
+        Some(_) => anyhow::bail!("Hysteria2 inbound '{tag}' settings.auth must not be empty"),
+        None => anyhow::bail!("Hysteria2 inbound '{tag}' missing string settings.auth"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::hysteria2_user_label;
+    use super::{hysteria2_user_label, require_hysteria2_auth};
 
     #[test]
     fn hysteria2_user_label_matches_auth_client() {
@@ -547,5 +556,27 @@ mod tests {
         });
 
         assert!(hysteria2_user_label(&settings, "secret").is_none());
+    }
+
+    #[test]
+    fn require_hysteria2_auth_rejects_missing_non_string_and_empty_values() {
+        for settings in [
+            json!({}),
+            json!({ "auth": "" }),
+            json!({ "auth": 42 }),
+            json!({ "auth": null }),
+        ] {
+            assert!(require_hysteria2_auth(&settings, "h2-public").is_err());
+        }
+    }
+
+    #[test]
+    fn require_hysteria2_auth_accepts_non_empty_string() {
+        let settings = json!({ "auth": "secret" });
+
+        assert_eq!(
+            require_hysteria2_auth(&settings, "h2-public").unwrap(),
+            "secret"
+        );
     }
 }
