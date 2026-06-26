@@ -226,6 +226,22 @@ protect_config_for_service() {
     fi
 }
 
+protect_tls_material_for_service() {
+    cert_dir="$CONFIG_DIR/certs"
+    [ -d "$cert_dir" ] || return 0
+
+    group="$(config_group)"
+    if getent group "$group" >/dev/null 2>&1; then
+        sudo_cmd find "$cert_dir" -type d -exec chown "root:$group" {} +
+        sudo_cmd find "$cert_dir" -type d -exec chmod 0750 {} +
+        sudo_cmd find "$cert_dir" -type f -exec chown "root:$group" {} +
+        sudo_cmd find "$cert_dir" -type f -exec chmod 0640 {} +
+        log "protected TLS material in $cert_dir for service group '$group'"
+    else
+        log "group '$group' not found; left TLS material in $cert_dir unchanged"
+    fi
+}
+
 prepare_runtime_dirs() {
     ensure_black_ui_group
     group="$(config_group)"
@@ -934,6 +950,7 @@ install_config() {
     if [ -f "$CONFIG_DIR/config.json" ]; then
         sudo_cmd "$PREFIX/bin/blackwire" test -c "$CONFIG_DIR/config.json"
         protect_config_for_service "$CONFIG_DIR/config.json"
+        protect_tls_material_for_service
         log "config validation passed: $CONFIG_DIR/config.json"
         if [ "$INSTALL_BLACK_UI" = "1" ] && ! sudo_cmd grep -Eq '"api"[[:space:]]*:' "$CONFIG_DIR/config.json"; then
             log "black-ui is installed, but $CONFIG_DIR/config.json has no api listener; gRPC live apply will be unavailable"
