@@ -486,6 +486,8 @@ pub struct FreedomOutbound {
     dns: Option<Arc<DnsModule>>,
     /// Present only in Fast Profile (pool disabled when `None`).
     pool: Option<Arc<AdaptivePool>>,
+    /// Reject connections to loopback addresses after DNS resolution.
+    deny_loopback: bool,
 }
 
 impl FreedomOutbound {
@@ -495,6 +497,7 @@ impl FreedomOutbound {
             tag: tag.into(),
             dns: None,
             pool: None,
+            deny_loopback: false,
         })
     }
 
@@ -506,6 +509,7 @@ impl FreedomOutbound {
             tag,
             dns: None,
             pool: Some(pool),
+            deny_loopback: false,
         })
     }
 
@@ -515,6 +519,7 @@ impl FreedomOutbound {
             tag: tag.into(),
             dns: Some(dns),
             pool: None,
+            deny_loopback: false,
         })
     }
 
@@ -530,7 +535,16 @@ impl FreedomOutbound {
             tag,
             dns: Some(dns),
             pool: Some(pool),
+            deny_loopback: false,
         })
+    }
+
+    /// Enable or disable loopback destination blocking for this freedom outbound.
+    pub fn with_deny_loopback(mut self: Arc<Self>, deny_loopback: bool) -> Arc<Self> {
+        if let Some(outbound) = Arc::get_mut(&mut self) {
+            outbound.deny_loopback = deny_loopback;
+        }
+        self
     }
 
     async fn resolve_all(&self, dest: &Address) -> Result<Vec<SocketAddr>, ProxyError> {
@@ -569,6 +583,13 @@ impl FreedomOutbound {
         dest: &Address,
         addr: SocketAddr,
     ) -> Result<BoxedStream, ProxyError> {
+        if self.deny_loopback && addr.ip().is_loopback() {
+            return Err(ProxyError::Protocol(format!(
+                "freedom outbound '{}' rejected loopback destination {}",
+                self.tag, addr
+            )));
+        }
+
         debug!(dest = %dest, resolved = %addr, "freedom: connecting");
 
         if let Some(pool) = &self.pool {
@@ -669,5 +690,28 @@ impl OutboundHandler for FreedomOutbound {
         Ok(OutboundConnectResult::stream(
             self.connect(ctx, dest).await?,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[tokio::test]
+    async fn deny_loopback_rejects_loopback_destinations_before_dialing() {
+        let outbound = FreedomOutbound::new("direct").with_deny_loopback(true);
+        let dest = Address::Ipv4(Ipv4Addr::LOCALHOST, 62789);
+        let result = outbound.connect(&Context::default(), &dest).await;
+
+        match result {
+            Ok(_) => panic!("loopback destination should be rejected"),
+            Err(err) => match err {
+                ProxyError::Protocol(message) => {
+                    assert!(message.contains("rejected loopback destination"));
+                }
+                other => panic!("unexpected error: {other:?}"),
+            },
+        }
     }
 }
