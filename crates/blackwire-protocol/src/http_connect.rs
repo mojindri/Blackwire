@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tracing::debug;
 
 use blackwire_app::context::Context;
@@ -138,39 +138,13 @@ pub async fn parse_connect_request_with_early_payload(
     stream: BoxedStream,
 ) -> Result<(Address, BoxedStream, Option<Vec<u8>>), ProxyError> {
     let mut reader = BufReader::new(stream);
-    let mut total_bytes = 0usize;
-    let mut first_line = String::new();
-
-    // Read the request line.
-    let n = reader.read_line(&mut first_line).await?;
-    if n == 0 {
-        return Err(ProxyError::Protocol("HTTP CONNECT: unexpected EOF".into()));
-    }
-    total_bytes += n;
-
-    // Drain the remaining headers until the blank line.
-    loop {
-        let mut line = String::new();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 {
-            return Err(ProxyError::Protocol(
-                "HTTP CONNECT: unexpected EOF in headers".into(),
-            ));
-        }
-        total_bytes += n;
-
-        if total_bytes > MAX_HEADER_BYTES {
-            return Err(ProxyError::Protocol(
-                "HTTP CONNECT: headers too large".into(),
-            ));
-        }
-
-        // A blank line (\r\n or \n alone) terminates the headers.
-        if line == "\r\n" || line == "\n" {
-            break;
-        }
-    }
-
+    let header_block = read_bounded_header_block(&mut reader).await?;
+    let header_text = std::str::from_utf8(&header_block)
+        .map_err(|_| ProxyError::Protocol("HTTP CONNECT: headers are not valid UTF-8".into()))?;
+    let first_line = header_text
+        .lines()
+        .next()
+        .ok_or_else(|| ProxyError::Protocol("HTTP CONNECT: missing request line".into()))?;
     let dest = parse_request_line(first_line.trim())?;
 
     // Preserve any bytes already read past the header block (Xray BufferedReader).
@@ -183,6 +157,39 @@ pub async fn parse_connect_request_with_early_payload(
     };
 
     Ok((dest, inner, early_payload))
+}
+
+async fn read_bounded_header_block(
+    reader: &mut BufReader<BoxedStream>,
+) -> Result<Vec<u8>, ProxyError> {
+    let mut header_block = Vec::new();
+
+    loop {
+        if header_block.len() >= MAX_HEADER_BYTES {
+            return Err(ProxyError::Protocol(
+                "HTTP CONNECT: headers too large".into(),
+            ));
+        }
+
+        let mut byte = [0u8; 1];
+        let n = reader.read(&mut byte).await?;
+        if n == 0 {
+            return Err(ProxyError::Protocol(
+                if header_block.is_empty() {
+                    "HTTP CONNECT: unexpected EOF"
+                } else {
+                    "HTTP CONNECT: unexpected EOF in headers"
+                }
+                .into(),
+            ));
+        }
+
+        header_block.push(byte[0]);
+
+        if header_block.ends_with(b"\r\n\r\n") || header_block.ends_with(b"\n\n") {
+            return Ok(header_block);
+        }
+    }
 }
 
 /// Parse the request line `CONNECT host:port HTTP/1.1` into an `Address`.
@@ -335,5 +342,30 @@ mod tests {
         let mut tail = vec![0u8; 12];
         stream.read_exact(&mut tail).await.unwrap();
         assert_eq!(&tail, b"CLIENT_HELLO");
+    }
+
+    #[tokio::test]
+    async fn overlong_request_line_rejected_before_newline() {
+        let mut req = b"CONNECT example.com:443 HTTP/1.1 ".to_vec();
+        req.extend(std::iter::repeat_n(b'a', MAX_HEADER_BYTES));
+
+        let result = parse_from_bytes(&req).await;
+
+        assert!(
+            matches!(result, Err(ProxyError::Protocol(message)) if message == "HTTP CONNECT: headers too large")
+        );
+    }
+
+    #[tokio::test]
+    async fn overlong_header_line_rejected() {
+        let mut req = b"CONNECT example.com:443 HTTP/1.1\r\nX-Long: ".to_vec();
+        req.extend(std::iter::repeat_n(b'a', MAX_HEADER_BYTES));
+        req.extend_from_slice(b"\r\n\r\n");
+
+        let result = parse_from_bytes(&req).await;
+
+        assert!(
+            matches!(result, Err(ProxyError::Protocol(message)) if message == "HTTP CONNECT: headers too large")
+        );
     }
 }
