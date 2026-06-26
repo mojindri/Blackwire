@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use blackwire_app::context::Context;
 use blackwire_app::dispatcher::Dispatcher;
-use blackwire_app::features::InboundHandler;
+use blackwire_app::features::{InboundHandler, UdpOutboundResponse};
 use blackwire_common::{Address, BoxedStream, ProxyError};
 use blackwire_protocol::vless::codec as vless_codec;
 use blackwire_protocol::vless::{VlessInbound, VlessUser, VlessUserRegistry};
@@ -39,6 +39,16 @@ impl Dispatcher for CountingDispatcher {
     ) -> Result<BoxedStream, ProxyError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         Err(ProxyError::Protocol("connect_outbound stub".into()))
+    }
+
+    async fn dispatch_udp_datagram(
+        &self,
+        _ctx: Context,
+        _dest: Address,
+        _payload: bytes::Bytes,
+    ) -> Result<Option<UdpOutboundResponse>, ProxyError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(None)
     }
 }
 
