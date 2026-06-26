@@ -85,6 +85,11 @@ pub struct TcpConfig {
 /// For each accepted connection, it spawns a Tokio task that calls the
 /// `ConnectionHandler`. This way, one slow or stuck connection cannot block
 /// other connections from being accepted.
+///
+/// TCP intentionally does not enforce protocol handshake or relay idle
+/// deadlines around `ConnectionHandler::handle_connection`. Protocol and
+/// wrapper layers own those scoped timeouts because a transport-level
+/// wall-clock timeout would also kill healthy long-lived proxy sessions.
 pub struct TcpServerTransport {
     /// Stored for future use (SO_MARK on accepted streams, TFO).
     #[allow(dead_code)]
