@@ -499,11 +499,14 @@ fn hysteria2_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
     ))
 }
 
-fn tls_share_requires_insecure(inbound: &Inbound) -> bool {
-    if stream_bool(inbound, "/tlsSettings/allowInsecure")
+fn tls_share_explicitly_allows_insecure(inbound: &Inbound) -> bool {
+    stream_bool(inbound, "/tlsSettings/allowInsecure")
         || stream_bool(inbound, "/tlsSettings/insecure")
         || stream_bool(inbound, "/tlsSettings/skipCertVerify")
-    {
+}
+
+fn tls_share_requires_insecure(inbound: &Inbound) -> bool {
+    if tls_share_explicitly_allows_insecure(inbound) {
         return true;
     }
 
@@ -528,7 +531,7 @@ fn tls_share_alpn(inbound: &Inbound) -> Option<String> {
 fn tuic_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Result<String> {
     let password = credential_string(user, "password").unwrap_or_else(|| user.uuid.clone());
     let mut params = vec![format!("uuid={}", util::url_escape(&user.uuid))];
-    if tls_share_requires_insecure(inbound) {
+    if tls_share_explicitly_allows_insecure(inbound) {
         params.push("insecure=1".to_string());
     }
     if let Some(value) = stream_value(inbound, "/tlsSettings/serverName") {
@@ -1640,7 +1643,7 @@ mod tests {
     }
 
     #[test]
-    fn tuic_subscription_includes_insecure_for_self_signed_cert() {
+    fn tuic_subscription_omits_insecure_for_path_only_certificate() {
         let settings = Settings {
             config_path: "/tmp/config.json".into(),
             grpc_enabled: false,
@@ -1652,7 +1655,7 @@ mod tests {
             adaptive_routing_enabled: false,
             ..Settings::default()
         };
-        let inbound = Inbound {
+        let mut inbound = Inbound {
             id: 1,
             tag: "tuic-in".into(),
             listen: "::".into(),
@@ -1694,6 +1697,23 @@ mod tests {
             updated_at: String::new(),
         };
 
+        let link = tuic_link(&settings, &inbound, &user).unwrap();
+        assert_eq!(
+            link,
+            "tuic://ccdc43c9-5fd4-4d60-a363-17071e7a3f20:secret@203.0.113.10:443?uuid=ccdc43c9-5fd4-4d60-a363-17071e7a3f20&sni=www.microsoft.com&alpn=h3#tuic%40example.local"
+        );
+        assert_link_omits_mux_params(&link);
+
+        inbound.stream_settings = r#"{
+          "network": "tcp",
+          "security": "tls",
+          "tlsSettings": {
+            "serverName": "www.microsoft.com",
+            "certificateFile": "/etc/blackwire/certs/tuic.crt",
+            "allowInsecure": true
+          }
+        }"#
+        .into();
         let link = tuic_link(&settings, &inbound, &user).unwrap();
         assert_eq!(
             link,
