@@ -52,6 +52,35 @@ fn inbound_listener_changes_detects_port_change() {
 }
 
 #[test]
+fn inbound_listener_changes_reports_added_listener_once() {
+    let old = minimal_config(1080);
+    let mut new = old.clone();
+    new.inbounds.push(InboundConfig {
+        tag: "extra".into(),
+        listen: "127.0.0.1".parse::<IpAddr>().unwrap(),
+        port: 1081,
+        protocol: Protocol::Socks,
+        settings: serde_json::json!({}),
+        stream_settings: None,
+        limits: None,
+        sniffing: None,
+    });
+
+    let changes = inbound_listener_changes(&old, &new);
+    assert_eq!(changes, vec!["extra".to_string()]);
+}
+
+#[test]
+fn inbound_listener_changes_reports_removed_listener() {
+    let old = minimal_config(1080);
+    let mut new = old.clone();
+    new.inbounds.clear();
+
+    let changes = inbound_listener_changes(&old, &new);
+    assert_eq!(changes, vec!["in".to_string()]);
+}
+
+#[test]
 fn requires_instance_restart_ignores_vless_client_list_changes() {
     let mut old = minimal_config(1080);
     old.inbounds[0].protocol = Protocol::Vless;
