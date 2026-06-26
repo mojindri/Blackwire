@@ -41,6 +41,7 @@ BLACK_UI_STATIC_DIR="${BLACK_UI_STATIC_DIR:-/usr/local/share/black-ui/frontend/d
 BLACK_UI_PUBLIC_BASE_URL="${BLACK_UI_PUBLIC_BASE_URL:-}"
 BLACK_UI_PANEL_PATH="${BLACK_UI_PANEL_PATH:-/panel}"
 BLACK_UI_COOKIE_SECURE="${BLACK_UI_COOKIE_SECURE:-}"
+BLACK_UI_GROUP="${BLACK_UI_GROUP:-black-ui}"
 
 log() {
     printf 'blackwire-install: %s\n' "$*"
@@ -150,6 +151,21 @@ service_group() {
     fi
 }
 
+config_group() {
+    if [ "$INSTALL_BLACK_UI" = "1" ]; then
+        echo "$BLACK_UI_GROUP"
+    else
+        service_group
+    fi
+}
+
+ensure_black_ui_group() {
+    [ "$INSTALL_BLACK_UI" = "1" ] || return 0
+    if ! getent group "$BLACK_UI_GROUP" >/dev/null 2>&1; then
+        sudo_cmd groupadd --system "$BLACK_UI_GROUP"
+    fi
+}
+
 api_config_section() {
     [ "$INSTALL_BLACK_UI" = "1" ] || return 0
     cat <<JSON
@@ -186,7 +202,7 @@ resolve_socket_addr() {
 
 protect_config_for_service() {
     path="$1"
-    group="$(service_group)"
+    group="$(config_group)"
     if getent group "$group" >/dev/null 2>&1; then
         sudo_cmd chown "root:$group" "$path"
         if [ "$INSTALL_BLACK_UI" = "1" ]; then
@@ -201,9 +217,10 @@ protect_config_for_service() {
 }
 
 prepare_runtime_dirs() {
-    group="$(service_group)"
+    ensure_black_ui_group
+    group="$(config_group)"
     sudo_cmd install -d -m 0755 "$PREFIX/bin"
-    if [ "$INSTALL_BLACK_UI" = "1" ] && getent group "$group" >/dev/null 2>&1; then
+    if [ "$INSTALL_BLACK_UI" = "1" ]; then
         sudo_cmd install -d -m 0770 -o root -g "$group" "$CONFIG_DIR"
     else
         sudo_cmd install -d -m 0755 "$CONFIG_DIR"
@@ -739,7 +756,7 @@ install_systemd_unit() {
 
     unit_path="/etc/systemd/system/blackwire.service"
     tmp_unit="$(mktemp)"
-    group="$(service_group)"
+    group="$(config_group)"
     cat > "$tmp_unit" <<UNIT
 [Unit]
 Description=blackwire proxy runtime
@@ -789,7 +806,7 @@ install_black_ui_systemd_unit() {
 
     unit_path="/etc/systemd/system/black-ui.service"
     tmp_unit="$(mktemp)"
-    group="$(service_group)"
+    group="$(config_group)"
     cookie_secure="$BLACK_UI_COOKIE_SECURE"
     if [ -z "$cookie_secure" ]; then
         if [ "$SETUP" = "domain" ]; then
@@ -849,7 +866,7 @@ install_black_ui() {
     )
     ui_binary="$(find "$ui_workdir" -type f -name black-ui -perm -111 | head -n 1)"
     [ -n "$ui_binary" ] || die "black-ui binary not found in $ui_asset"
-    group="$(service_group)"
+    group="$(config_group)"
     sudo_cmd install -d -m 0755 "$PREFIX/bin" "$BLACK_UI_STATIC_DIR"
     sudo_cmd install -d -m 0750 -o "$SERVICE_USER" -g "$group" "$BLACK_UI_DATA_DIR"
     sudo_cmd install -m 0755 "$ui_binary" "$PREFIX/bin/black-ui"
