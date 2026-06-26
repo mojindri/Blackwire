@@ -302,9 +302,9 @@ async fn run_server_driver(
     let idle_timer = tokio::time::sleep(SERVER_SESSION_IDLE_TIMEOUT);
     tokio::pin!(idle_timer);
     let mut pending: VecDeque<Bytes> = VecDeque::new();
-    // Hoisted allocations reused every tick: flush_out for KCP output segments,
-    // kcp_recv_buf for reassembled KCP message bytes, send_buf for header-wrapped frames.
-    let mut flush_out: Vec<Vec<u8>> = Vec::new();
+    // Hoist bounded scratch allocations for the full session. Keep KCP output
+    // segment vectors per-tick so attacker-inflated ACK batches cannot pin
+    // high-water outer Vec capacity until the session idle timeout.
     let mut kcp_recv_buf = vec![0u8; 65535];
     let mut send_buf: Vec<u8> = Vec::with_capacity(2048);
 
@@ -319,7 +319,7 @@ async fn run_server_driver(
             }
             _ = ticker.tick() => {
                 kcp.update(now_ms());
-                flush_out.clear();
+                let mut flush_out: Vec<Vec<u8>> = Vec::new();
                 kcp.flush(&mut flush_out);
                 if kcp.is_dead() {
                     return;
