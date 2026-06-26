@@ -217,12 +217,15 @@ jobs:
             --dir apt-input
           ls -l apt-input
 
-      - name: Build apt metadata
+      - name: Build signed apt metadata
+        env:
+          APT_SIGNING_KEY: ${{ secrets.BLACKWIRE_APT_SIGNING_KEY }}
+          APT_SIGNING_PASSPHRASE: ${{ secrets.BLACKWIRE_APT_SIGNING_PASSPHRASE }}
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y dpkg-dev
+          sudo apt-get install -y dpkg-dev gnupg
           bash scripts/build-apt-repo.sh apt-input apt stable main
 
       - name: Publish gh-pages apt repository
@@ -247,7 +250,8 @@ jobs:
           <meta charset="utf-8">
           <title>Blackwire apt repository</title>
           <h1>Blackwire apt repository</h1>
-          <pre>deb [trusted=yes] https://mojindri.github.io/Blackwire/apt stable main</pre>
+          <pre>curl -fsSL https://mojindri.github.io/Blackwire/apt/blackwire-archive-keyring.gpg | sudo tee /usr/share/keyrings/blackwire-archive-keyring.gpg >/dev/null
+          deb [signed-by=/usr/share/keyrings/blackwire-archive-keyring.gpg] https://mojindri.github.io/Blackwire/apt stable main</pre>
           HTML
           sed -i 's/^          //' index.html
           git config user.name "github-actions[bot]"
