@@ -48,6 +48,7 @@ const MAX_HEADER_BYTES: usize = 16384;
 /// are small (one MTU-ish chunk per POST); without a cap a malicious client could
 /// stream an unbounded body (or send a huge Content-Length) and exhaust memory.
 const MAX_PACKET_UP_BODY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PACKET_UP_SESSIONS: usize = 256;
 
 /// Normalized XHTTP mode (subset implemented in this crate).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,11 +125,19 @@ pub async fn splithttp_connect(
 static PACKET_UP_SESSIONS: LazyLock<DashMap<String, Arc<UploadQueue>>> =
     LazyLock::new(DashMap::new);
 
-fn upsert_packet_up_session(session_id: &str) -> Arc<UploadQueue> {
-    PACKET_UP_SESSIONS
+fn upsert_packet_up_session(session_id: &str) -> Result<Arc<UploadQueue>, ProxyError> {
+    if let Some(queue) = PACKET_UP_SESSIONS.get(session_id) {
+        return Ok(queue.clone());
+    }
+    if PACKET_UP_SESSIONS.len() >= MAX_PACKET_UP_SESSIONS {
+        return Err(ProxyError::Protocol(
+            "packet-up session limit exceeded".into(),
+        ));
+    }
+    Ok(PACKET_UP_SESSIONS
         .entry(session_id.to_string())
         .or_insert_with(|| UploadQueue::new(64))
-        .clone()
+        .clone())
 }
 
 fn x_padding_header(cfg: &SplitHttpConfig) -> Option<(String, String)> {
@@ -472,7 +481,16 @@ pub async fn splithttp_accept_h2_packet_up(
                 }
             };
 
-            let queue = upsert_packet_up_session(&session);
+            let queue = match upsert_packet_up_session(&session) {
+                Ok(queue) => queue,
+                Err(_) => {
+                    let _ = respond.send_response(
+                        http::Response::builder().status(503).body(()).unwrap(),
+                        true,
+                    );
+                    continue;
+                }
+            };
             let mut body = request.into_body();
             let mut payload = Vec::new();
             let mut body_error = false;
@@ -556,7 +574,16 @@ pub async fn splithttp_accept_h2_packet_up(
                 continue;
             }
 
-            let queue = upsert_packet_up_session(&session);
+            let queue = match upsert_packet_up_session(&session) {
+                Ok(queue) => queue,
+                Err(_) => {
+                    let _ = respond.send_response(
+                        http::Response::builder().status(503).body(()).unwrap(),
+                        true,
+                    );
+                    continue;
+                }
+            };
             let mut body = request.into_body();
             tokio::spawn(async move {
                 while let Some(chunk) = body.data().await {
@@ -738,8 +765,8 @@ async fn packet_up_accept(
         let seq_num: u64 = seq
             .parse()
             .map_err(|_| ProxyError::Protocol(format!("packet-up invalid seq '{seq}'")))?;
+        let queue = upsert_packet_up_session(&session)?;
         let body = read_request_body(&mut stream, request).await?;
-        let queue = upsert_packet_up_session(&session);
         queue
             .push(UploadPacket {
                 seq: seq_num,
@@ -760,7 +787,7 @@ async fn packet_up_accept(
                 "packet-up GET requires session id in path".into(),
             ));
         }
-        let queue = upsert_packet_up_session(&session);
+        let queue = upsert_packet_up_session(&session)?;
         stream
             .write_all(
                 b"HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
@@ -771,6 +798,7 @@ async fn packet_up_accept(
         return Ok(SplitHttpAcceptResult::Tunnel(Box::new(PacketUpConn {
             reader,
             writer: stream,
+            session_id: session,
         })));
     }
 
@@ -783,6 +811,13 @@ async fn packet_up_accept(
 struct PacketUpConn {
     reader: UploadQueueReader,
     writer: BoxedStream,
+    session_id: String,
+}
+
+impl Drop for PacketUpConn {
+    fn drop(&mut self) {
+        remove_packet_up_session(&self.session_id);
+    }
 }
 
 impl AsyncRead for PacketUpConn {
