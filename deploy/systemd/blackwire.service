@@ -21,7 +21,7 @@ Wants=network-online.target
 [Service]
 # Run as an unprivileged user.
 User=nobody
-Group=nobody
+Group=black-ui
 
 # The binary and config file paths.
 ExecStart=/usr/local/bin/blackwire run -c /etc/blackwire/config.json

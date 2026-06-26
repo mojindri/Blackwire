@@ -49,7 +49,21 @@ CONTROL
 cat > "$root/DEBIAN/postinst" <<'POSTINST'
 #!/bin/sh
 set -e
+if ! getent group black-ui >/dev/null 2>&1; then
+    groupadd --system black-ui
+fi
 mkdir -p /etc/blackwire /var/lib/blackwire /run/blackwire
+chown root:black-ui /etc/blackwire
+chmod 0770 /etc/blackwire
+if [ -f /etc/blackwire/config.json ]; then
+    chown root:black-ui /etc/blackwire/config.json
+    chmod 0660 /etc/blackwire/config.json
+fi
+if [ -d /etc/blackwire/certs ]; then
+    chown -R root:black-ui /etc/blackwire/certs
+    find /etc/blackwire/certs -type d -exec chmod 0750 {} +
+    find /etc/blackwire/certs -type f -exec chmod 0640 {} +
+fi
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true
 fi

@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 User=nobody
-Group=nogroup
+Group=black-ui
 ExecStart=/usr/local/bin/black-ui
 WorkingDirectory=/var/lib/black-ui
 Environment=BLACK_UI_DATA_DIR=/var/lib/black-ui
