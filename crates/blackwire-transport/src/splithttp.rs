@@ -49,6 +49,16 @@ const MAX_HEADER_BYTES: usize = 16384;
 /// stream an unbounded body (or send a huge Content-Length) and exhaust memory.
 const MAX_PACKET_UP_BODY_BYTES: usize = 2 * 1024 * 1024;
 
+/// Maximum packet-up download sessions accepted on one HTTP/2 connection before
+/// proxy authentication has completed. This keeps multiplexed h2 streams from
+/// bypassing the outer TCP connection limiter.
+const MAX_PACKET_UP_H2_SESSIONS_PER_CONN: usize = 64;
+
+/// Maximum global packet-up upload queues. POST requests may arrive before their
+/// matching GET, so a global cap prevents unauthenticated clients from creating
+/// unbounded idle queues.
+const MAX_PACKET_UP_TOTAL_SESSIONS: usize = 4096;
+
 /// Normalized XHTTP mode (subset implemented in this crate).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplitHttpMode {
@@ -124,11 +134,21 @@ pub async fn splithttp_connect(
 static PACKET_UP_SESSIONS: LazyLock<DashMap<String, Arc<UploadQueue>>> =
     LazyLock::new(DashMap::new);
 
-fn upsert_packet_up_session(session_id: &str) -> Arc<UploadQueue> {
-    PACKET_UP_SESSIONS
-        .entry(session_id.to_string())
-        .or_insert_with(|| UploadQueue::new(64))
-        .clone()
+fn upsert_packet_up_session(session_id: &str) -> Option<Arc<UploadQueue>> {
+    if let Some(queue) = PACKET_UP_SESSIONS.get(session_id) {
+        return Some(queue.clone());
+    }
+
+    if PACKET_UP_SESSIONS.len() >= MAX_PACKET_UP_TOTAL_SESSIONS {
+        return None;
+    }
+
+    Some(
+        PACKET_UP_SESSIONS
+            .entry(session_id.to_string())
+            .or_insert_with(|| UploadQueue::new(64))
+            .clone(),
+    )
 }
 
 fn x_padding_header(cfg: &SplitHttpConfig) -> Option<(String, String)> {
@@ -472,7 +492,27 @@ pub async fn splithttp_accept_h2_packet_up(
                 }
             };
 
-            let queue = upsert_packet_up_session(&session);
+            if request
+                .headers()
+                .get(http::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<usize>().ok())
+                .is_some_and(|n| n > MAX_PACKET_UP_BODY_BYTES)
+            {
+                let _ = respond.send_response(
+                    http::Response::builder().status(413).body(()).unwrap(),
+                    true,
+                );
+                continue;
+            }
+
+            let Some(queue) = upsert_packet_up_session(&session) else {
+                let _ = respond.send_response(
+                    http::Response::builder().status(503).body(()).unwrap(),
+                    true,
+                );
+                continue;
+            };
             let mut body = request.into_body();
             let mut payload = Vec::new();
             let mut body_error = false;
@@ -548,6 +588,13 @@ pub async fn splithttp_accept_h2_packet_up(
                 );
                 continue;
             }
+            if download_sessions.len() >= MAX_PACKET_UP_H2_SESSIONS_PER_CONN {
+                let _ = respond.send_response(
+                    http::Response::builder().status(429).body(()).unwrap(),
+                    true,
+                );
+                continue;
+            }
             if !download_sessions.insert(session.clone()) {
                 let _ = respond.send_response(
                     http::Response::builder().status(409).body(()).unwrap(),
@@ -556,7 +603,14 @@ pub async fn splithttp_accept_h2_packet_up(
                 continue;
             }
 
-            let queue = upsert_packet_up_session(&session);
+            let Some(queue) = upsert_packet_up_session(&session) else {
+                download_sessions.remove(&session);
+                let _ = respond.send_response(
+                    http::Response::builder().status(503).body(()).unwrap(),
+                    true,
+                );
+                continue;
+            };
             let mut body = request.into_body();
             tokio::spawn(async move {
                 while let Some(chunk) = body.data().await {
@@ -739,7 +793,8 @@ async fn packet_up_accept(
             .parse()
             .map_err(|_| ProxyError::Protocol(format!("packet-up invalid seq '{seq}'")))?;
         let body = read_request_body(&mut stream, request).await?;
-        let queue = upsert_packet_up_session(&session);
+        let queue = upsert_packet_up_session(&session)
+            .ok_or_else(|| ProxyError::Protocol("packet-up session limit reached".into()))?;
         queue
             .push(UploadPacket {
                 seq: seq_num,
@@ -760,7 +815,8 @@ async fn packet_up_accept(
                 "packet-up GET requires session id in path".into(),
             ));
         }
-        let queue = upsert_packet_up_session(&session);
+        let queue = upsert_packet_up_session(&session)
+            .ok_or_else(|| ProxyError::Protocol("packet-up session limit reached".into()))?;
         stream
             .write_all(
                 b"HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
@@ -1380,6 +1436,68 @@ mod tests {
         }
 
         assert_eq!(tunnels.lock().unwrap().len(), 2);
+        drop(client);
+        accept_task.abort();
+    }
+
+    #[tokio::test]
+    async fn packet_up_h2_limits_download_sessions_per_connection() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (client_io, server_io) = tokio::io::duplex(256 * 1024);
+        let server = Box::new(server_io) as BoxedStream;
+        let tunnel_count = Arc::new(AtomicUsize::new(0));
+        let count_cb = tunnel_count.clone();
+        let on_tunnel: PacketUpH2TunnelFn = Arc::new(move |accepted| {
+            if matches!(accepted, SplitHttpAcceptResult::Tunnel(_)) {
+                count_cb.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let accept_task = tokio::spawn(async move {
+            splithttp_accept(
+                server,
+                Some("/split-limit"),
+                None,
+                SplitHttpMode::PacketUp,
+                Some(on_tunnel),
+            )
+            .await
+        });
+
+        let (mut client, conn) = client::Builder::new().handshake(client_io).await.unwrap();
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+
+        let mut responses = Vec::new();
+        for i in 0..=MAX_PACKET_UP_H2_SESSIONS_PER_CONN {
+            let request = http::Request::builder()
+                .method(http::Method::GET)
+                .uri(format!(
+                    "https://example.test/split-limit/limit-session-{i}"
+                ))
+                .body(())
+                .unwrap();
+            let (response, mut send) = client.send_request(request, false).unwrap();
+            send.send_data(Bytes::new(), true).unwrap();
+            responses.push(response);
+        }
+
+        let last_response = responses.pop().unwrap().await.unwrap();
+        assert_eq!(last_response.status(), http::StatusCode::TOO_MANY_REQUESTS);
+
+        for _ in 0..100 {
+            if tunnel_count.load(Ordering::SeqCst) == MAX_PACKET_UP_H2_SESSIONS_PER_CONN {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            tunnel_count.load(Ordering::SeqCst),
+            MAX_PACKET_UP_H2_SESSIONS_PER_CONN
+        );
+
+        drop(responses);
         drop(client);
         accept_task.abort();
     }
