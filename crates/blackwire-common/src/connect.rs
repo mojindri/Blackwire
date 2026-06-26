@@ -148,22 +148,26 @@ pub async fn tcp_connect(addr: SocketAddr) -> Result<TcpStream, ProxyError> {
 
 /// Dial a host/port string (e.g. `"127.0.0.1:80"`) with [`TCP_CONNECT_TIMEOUT`].
 pub async fn tcp_connect_to(addr: impl ToSocketAddrs) -> Result<TcpStream, ProxyError> {
-    let mut last_err = None;
-    for socket_addr in tokio::net::lookup_host(addr)
-        .await
-        .map_err(ProxyError::Io)?
-    {
-        match tcp_connect(socket_addr).await {
-            Ok(stream) => return Ok(stream),
-            Err(ProxyError::Io(e)) => last_err = Some(e),
-            Err(e) => return Err(e),
+    tokio::time::timeout(TCP_CONNECT_TIMEOUT, async move {
+        let mut last_err = None;
+        for socket_addr in tokio::net::lookup_host(addr)
+            .await
+            .map_err(ProxyError::Io)?
+        {
+            match tcp_connect(socket_addr).await {
+                Ok(stream) => return Ok(stream),
+                Err(ProxyError::Io(e)) => last_err = Some(e),
+                Err(e) => return Err(e),
+            }
         }
-    }
 
-    Err(last_err.map_or_else(
-        || ProxyError::Transport("TCP connect failed: address resolved to no endpoints".into()),
-        ProxyError::Io,
-    ))
+        Err(last_err.map_or_else(
+            || ProxyError::Transport("TCP connect failed: address resolved to no endpoints".into()),
+            ProxyError::Io,
+        ))
+    })
+    .await
+    .map_err(|_| ProxyError::Timeout)?
 }
 
 fn protected_tcp_socket(addr: SocketAddr) -> Result<TcpSocket, ProxyError> {
