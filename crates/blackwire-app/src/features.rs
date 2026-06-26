@@ -18,6 +18,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use tokio::io::AsyncWriteExt;
 
 use blackwire_common::{Address, BoxedStream, ProxyError};
@@ -33,6 +34,14 @@ pub struct OutboundConnectResult {
     pub wrote_early_payload: bool,
     /// Optional bytes produced during connect that must be delivered to the inbound before relay.
     pub returned_early_response: Option<Vec<u8>>,
+}
+
+/// One UDP response returned by an outbound UDP exchange.
+pub struct UdpOutboundResponse {
+    /// Source address of the reply packet.
+    pub source: Address,
+    /// Reply payload.
+    pub data: Bytes,
 }
 
 impl OutboundConnectResult {
@@ -130,6 +139,23 @@ pub trait OutboundHandler: Send + Sync + 'static {
             wrote_early_payload,
             returned_early_response: None,
         })
+    }
+
+    /// Send one UDP datagram through this outbound and wait for one reply.
+    ///
+    /// Outbounds that do not implement native UDP fail closed. This prevents
+    /// UDP-capable inbounds from silently bypassing routing policy with direct
+    /// sockets when the selected outbound cannot carry UDP.
+    async fn udp_roundtrip(
+        &self,
+        _ctx: &Context,
+        _dest: &Address,
+        _payload: Bytes,
+    ) -> Result<Option<UdpOutboundResponse>, ProxyError> {
+        Err(ProxyError::Protocol(format!(
+            "outbound '{}' does not support UDP",
+            self.tag()
+        )))
     }
 }
 
