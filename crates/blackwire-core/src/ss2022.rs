@@ -4,6 +4,7 @@
 //! `Ss2022Inbound` / `Ss2022Outbound` handlers.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -31,6 +32,7 @@ use crate::net::socket_addr_from_address_port;
 pub(crate) fn build_ss2022_inbound(
     cfg: &blackwire_config::schema::InboundConfig,
     auth_stores: &Arc<DashMap<String, Arc<Ss2022AuthStore>>>,
+    handshake_timeout: Option<Duration>,
     user_limiter: Option<Arc<UserConnectionLimiter>>,
 ) -> Result<Arc<dyn InboundHandler>> {
     #[allow(clippy::unwrap_or_default)]
@@ -42,6 +44,7 @@ pub(crate) fn build_ss2022_inbound(
     Ok(Ss2022Inbound::new_with_auth_store(
         cfg.tag.as_str(),
         auth,
+        handshake_timeout,
         user_limiter,
     ))
 }
