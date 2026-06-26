@@ -198,31 +198,9 @@ impl RealityServer {
                 }
             }
 
-            // Xray/sing-box: Seal with hello.Raw where session_id[0..16] is plaintext, [16..32] zero.
-            for plaintext16 in
-                candidate_reality_tokens(&self.config.short_ids, self.config.max_time_diff)
-            {
-                let Ok(seal_aad) = xray_plaintext_session_id_aad(handshake_body, &plaintext16)
-                else {
-                    continue;
-                };
-                if let Some(token) = decrypt_and_validate_reality_token(
-                    fields,
-                    &auth_key,
-                    &seal_aad,
-                    &self.config.short_ids,
-                    self.config.max_time_diff,
-                ) {
-                    log_reality_auth_ok(
-                        peer_kind,
-                        RealityAadMode::PlaintextSession,
-                        fields,
-                        &token,
-                        &auth_key,
-                    );
-                    return Ok(auth_key);
-                }
-            }
+            // Do not brute-force plaintext-session AAD variants here. This path is
+            // unauthenticated and must remain constant-work with respect to the
+            // configured short_ids and max_time_diff window.
         }
 
         Err(anyhow::anyhow!("REALITY authentication failed"))
@@ -264,7 +242,6 @@ fn join_record(record_header: [u8; 5], handshake_body: &[u8]) -> Vec<u8> {
 enum RealityAadMode {
     Zeroed,
     Wire,
-    PlaintextSession,
 }
 
 impl RealityAadMode {
@@ -272,7 +249,6 @@ impl RealityAadMode {
         match self {
             Self::Zeroed => "zeroed",
             Self::Wire => "wire",
-            Self::PlaintextSession => "plaintext_session",
         }
     }
 }
@@ -482,71 +458,9 @@ fn strip_zero_padding(short_id: &[u8]) -> &[u8] {
     &short_id[..last_nonzero]
 }
 
-/// AAD with plaintext in session_id[0..16] and zeros in [16..32] — Xray/sing-box Seal layout.
-fn xray_plaintext_session_id_aad(handshake_body: &[u8], plaintext16: &[u8]) -> Result<Vec<u8>> {
-    let sid_start = SESSION_ID_OFFSET_IN_HANDSHAKE_BODY;
-    let sid_end = sid_start + 32;
-    if handshake_body.len() < sid_end {
-        anyhow::bail!("handshake body too short to contain session_id");
-    }
-    if plaintext16.len() != 16 {
-        anyhow::bail!("REALITY token plaintext must be 16 bytes");
-    }
-
-    let mut aad = handshake_body.to_vec();
-    aad[sid_start..sid_start + 16].copy_from_slice(plaintext16);
-    aad[sid_start + 16..sid_end].fill(0);
-    Ok(aad)
-}
-
-/// Candidate 16-byte session tokens for Xray/sing-box ClientHello sealing.
-fn candidate_reality_tokens(short_ids: &[Vec<u8>], max_time_diff: i64) -> Vec<[u8; 16]> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    let window = max_time_diff.clamp(1, 600);
-    // sing-box: 1.8.1 (+ byte 3 may be non-zero from PutUint64 before version overwrite).
-    // Xray 26.3.x uses core.Version bytes in the first three slots.
-    const VERSION_PREFIXES: &[[u8; 4]] =
-        &[[1, 8, 1, 0], [26, 3, 27, 0], [1, 8, 0, 0], [0, 0, 0, 0]];
-
-    let mut out = Vec::new();
-    for short_id in short_ids {
-        let mut sid8 = [0u8; 8];
-        let copy_len = short_id.len().min(8);
-        sid8[..copy_len].copy_from_slice(&short_id[..copy_len]);
-
-        for prefix in VERSION_PREFIXES {
-            // sing-box leaves byte 3 from PutUint64; for current Unix times it is 0.
-            let b3_end = if prefix[..3] == [1, 8, 1] {
-                1u8
-            } else {
-                prefix[3]
-            };
-            for b3 in 0..=b3_end {
-                for dt in -window..=window {
-                    let ts = (now + dt) as u32;
-                    let mut pt = [0u8; 16];
-                    pt[..3].copy_from_slice(&prefix[..3]);
-                    pt[3] = b3;
-                    pt[4..8].copy_from_slice(&ts.to_be_bytes());
-                    pt[8..16].copy_from_slice(&sid8);
-                    out.push(pt);
-                }
-            }
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes_gcm::aead::{Aead, KeyInit, Payload};
-    use aes_gcm::{Aes256Gcm, Key, Nonce};
-    use hkdf::Hkdf;
-    use sha2::Sha256;
     use x25519_dalek::{PublicKey, StaticSecret};
 
     /// Static sing-box Chrome ClientHello fixture (see `testdata/README.md`).
@@ -587,78 +501,5 @@ mod tests {
         let secret = StaticSecret::from(priv_bytes);
         let derived = *PublicKey::from(&secret).as_bytes();
         assert_eq!(derived, expected_pub);
-    }
-
-    #[test]
-    fn xray_reality_gcm_uses_plaintext_session_id_in_aad() {
-        let mut random = [0u8; 32];
-        random[20..].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-        let mut session_plain = [0u8; 32];
-        session_plain[0] = 1;
-        session_plain[1] = 8;
-        session_plain[2] = 1;
-        session_plain[4..8].copy_from_slice(&1_700_000_000u32.to_be_bytes());
-
-        let mut raw = vec![0u8; 100];
-        raw[4] = 0x03;
-        raw[5] = 0x03;
-        raw[6..38].copy_from_slice(&random);
-        raw[38] = 32;
-        raw[39..71].copy_from_slice(&session_plain);
-
-        let shared = [7u8; 32];
-        let mut auth_key = [0u8; 32];
-        Hkdf::<Sha256>::new(Some(&random[..20]), &shared)
-            .expand(REALITY_HKDF_INFO, &mut auth_key)
-            .unwrap();
-
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&auth_key));
-        let nonce = Nonce::from_slice(&random[20..32]);
-        let ct = cipher
-            .encrypt(
-                nonce,
-                Payload {
-                    msg: &session_plain[..16],
-                    aad: &raw,
-                },
-            )
-            .unwrap();
-
-        let mut session_wire = [0u8; 32];
-        session_wire[..ct.len()].copy_from_slice(&ct);
-        let mut original = raw.clone();
-        original[39..71].copy_from_slice(&session_wire);
-
-        let zeroed = xray_zeroed_session_id_aad(&original).unwrap();
-        let seal_aad = xray_plaintext_session_id_aad(&original, &session_plain[..16]).unwrap();
-
-        assert!(cipher
-            .decrypt(
-                nonce,
-                Payload {
-                    msg: &session_wire,
-                    aad: &original,
-                },
-            )
-            .is_err());
-        assert!(cipher
-            .decrypt(
-                nonce,
-                Payload {
-                    msg: &session_wire,
-                    aad: &zeroed,
-                },
-            )
-            .is_err());
-        let plain = cipher
-            .decrypt(
-                nonce,
-                Payload {
-                    msg: &session_wire,
-                    aad: &seal_aad,
-                },
-            )
-            .unwrap();
-        assert_eq!(&plain[..16], &session_plain[..16]);
     }
 }

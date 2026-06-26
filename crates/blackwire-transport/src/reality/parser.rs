@@ -310,4 +310,9 @@ mod tests {
         body.extend(vec![0u8; 80]);
         assert!(parse_client_hello(&body).is_err());
     }
+
+    #[test]
+    fn truncated_key_share_extension_does_not_panic() {
+        assert!(collect_x25519_auth_keys(&[0x00]).is_empty());
+    }
 }
