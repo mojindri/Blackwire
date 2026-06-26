@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 User=nobody
-Group=nogroup
+Group=black-ui
 ExecStart=/usr/bin/blackwire run -c /etc/blackwire/config.json
 ExecReload=/bin/kill -HUP $MAINPID
 WorkingDirectory=/var/lib/blackwire
