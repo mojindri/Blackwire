@@ -919,15 +919,24 @@ impl Instance {
         }
 
         // ── Optional: start metrics/health HTTP server ───────────────────────
-        if let Some(api_addr) = config
+        if let Some(api_config) = config
             .api
             .as_ref()
-            .and_then(blackwire_api::server::api_listen_addr)
+            .and_then(blackwire_api::server::api_server_config)
         {
             let management: blackwire_api::management::ManagementHandle = Arc::new(reload.clone());
-            let handle = blackwire_api::server::start_api_server(&api_addr, management)
-                .with_context(|| format!("starting blackwire-api gRPC server on '{api_addr}'"))?;
-            info!(addr = %api_addr, "blackwire-api gRPC server started");
+            let handle = blackwire_api::server::start_api_server(
+                &api_config.listen_addr,
+                management,
+                api_config.token.clone(),
+            )
+            .with_context(|| {
+                format!(
+                    "starting blackwire-api gRPC server on '{}'",
+                    api_config.listen_addr
+                )
+            })?;
+            info!(addr = %api_config.listen_addr, authenticated = api_config.token.is_some(), "blackwire-api gRPC server started");
             tasks.push(handle);
         }
 
