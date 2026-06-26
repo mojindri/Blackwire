@@ -8,6 +8,21 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.11 - 2026-06-27
+
+### Fixed
+
+- Prevented live config reload and gRPC runtime sync from rebuilding listener
+  sockets inside the running process. Structural listener changes are now
+  persisted but require a clean service restart, avoiding overlapping
+  `SO_REUSEPORT` accept loops after UI/config writes.
+- Fixed listener-change reporting so added inbounds are listed once and removed
+  inbounds are reported by tag.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.11`.
+
 ## 0.1.10 - 2026-06-27
 
 ### Changed

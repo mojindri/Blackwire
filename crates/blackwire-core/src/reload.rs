@@ -439,9 +439,9 @@ pub fn inbound_listener_changes(old: &Config, new: &Config) -> Vec<String> {
             changed.push(new_in.tag.clone());
         }
     }
-    for new_in in &new.inbounds {
-        if !old.inbounds.iter().any(|i| i.tag == new_in.tag) {
-            changed.push(new_in.tag.clone());
+    for old_in in &old.inbounds {
+        if !new.inbounds.iter().any(|i| i.tag == old_in.tag) {
+            changed.push(old_in.tag.clone());
         }
     }
     changed

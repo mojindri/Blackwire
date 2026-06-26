@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use validator::Validate;
 
 use blackwire_api::management::{InboundManagement, NativeEndpointConfig};
@@ -52,7 +52,7 @@ use blackwire_config::schema::{
     ProfileViolation,
 };
 use blackwire_config::ConfigManager;
-use blackwire_core::{requires_instance_restart, Instance};
+use blackwire_core::{inbound_listener_changes, requires_instance_restart, Instance};
 
 struct RunningInstance {
     config: Arc<Config>,
@@ -552,41 +552,17 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                 };
 
                 if should_restart {
-                    info!("structural config change detected — rebuilding running instance");
-                    let (old_config, old_instance) = {
-                        let mut guard = live_instance.lock().await;
-                        let Some(running) = guard.take() else {
-                            break;
-                        };
-                        (running.config, running.instance)
+                    let changed_listeners = {
+                        let guard = live_instance.lock().await;
+                        guard
+                            .as_ref()
+                            .map(|running| inbound_listener_changes(&running.config, &new_config))
+                            .unwrap_or_default()
                     };
-                    drop(old_instance);
-
-                    let rebuilt = match Instance::from_config(Arc::clone(&new_config)).await {
-                        Ok(instance) => {
-                            info!("instance rebuilt successfully after config change");
-                            Some(RunningInstance {
-                                config: Arc::clone(&new_config),
-                                instance,
-                            })
-                        }
-                        Err(e) => {
-                            error!(error = %e, "instance rebuild failed — attempting rollback to previous config");
-                            match Instance::from_config(Arc::clone(&old_config)).await {
-                                Ok(instance) => Some(RunningInstance {
-                                    config: old_config,
-                                    instance,
-                                }),
-                                Err(rollback_err) => {
-                                    error!(error = %rollback_err, "rollback failed — no running instance remains");
-                                    None
-                                }
-                            }
-                        }
-                    };
-
-                    let mut guard = live_instance.lock().await;
-                    *guard = rebuilt;
+                    warn!(
+                        changed_listeners = ?changed_listeners,
+                        "structural config change detected; keeping current listeners until service restart"
+                    );
                     continue;
                 }
 
@@ -599,6 +575,11 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                 };
                 if let Err(e) = reload.apply(&new_config) {
                     error!(error = %e, "config reload apply failed — keeping prior routing/users");
+                    continue;
+                }
+                let mut guard = live_instance.lock().await;
+                if let Some(running) = guard.as_mut() {
+                    running.config = new_config;
                 }
             }
         });
@@ -672,7 +653,7 @@ impl RuntimeControl {
         Ok(f(&running.instance.reload))
     }
 
-    async fn rebuild_with_config(&self, new_config: Config) -> Result<(), String> {
+    async fn apply_reloadable_config(&self, new_config: Config) -> Result<(), String> {
         let runtime_config = Arc::new(new_config);
         runtime_config
             .validate()
@@ -680,44 +661,30 @@ impl RuntimeControl {
         apply_profile_override_and_validate(&runtime_config, self.profile_override)
             .map_err(|e| format!("{e:#}"))?;
 
-        let (old_config, old_instance) = {
-            let mut guard = self.instance.lock().await;
+        let reload = {
+            let guard = self.instance.lock().await;
             let running = guard
-                .take()
+                .as_ref()
                 .ok_or_else(|| "no running instance is available".to_string())?;
-            (running.config, running.instance)
+            if requires_instance_restart(&running.config, &runtime_config) {
+                let changed_listeners = inbound_listener_changes(&running.config, &runtime_config);
+                return Err(format!(
+                    "structural runtime changes require a blackwire service restart; changed listeners: {changed_listeners:?}"
+                ));
+            }
+            running.instance.reload.clone()
         };
-        drop(old_instance);
 
-        match Instance::from_config(Arc::clone(&runtime_config)).await {
-            Ok(instance) => {
-                let mut guard = self.instance.lock().await;
-                *guard = Some(RunningInstance {
-                    config: runtime_config,
-                    instance,
-                });
-                Ok(())
-            }
-            Err(e) => {
-                let rollback = Instance::from_config(Arc::clone(&old_config)).await;
-                let mut guard = self.instance.lock().await;
-                match rollback {
-                    Ok(instance) => {
-                        *guard = Some(RunningInstance {
-                            config: old_config,
-                            instance,
-                        });
-                        Err(format!("instance rebuild failed; rolled back: {e:#}"))
-                    }
-                    Err(rollback_err) => {
-                        *guard = None;
-                        Err(format!(
-                            "instance rebuild failed and rollback failed; no instance is running: rebuild={e:#}; rollback={rollback_err:#}"
-                        ))
-                    }
-                }
-            }
-        }
+        reload
+            .apply(&runtime_config)
+            .map_err(|e| format!("runtime reload failed: {e:#}"))?;
+
+        let mut guard = self.instance.lock().await;
+        let running = guard
+            .as_mut()
+            .ok_or_else(|| "no running instance is available".to_string())?;
+        running.config = runtime_config;
+        Ok(())
     }
 
     async fn mutate_config(
@@ -734,7 +701,7 @@ impl RuntimeControl {
                 .clone()
         };
         f(&mut new_config)?;
-        self.rebuild_with_config(new_config).await
+        self.apply_reloadable_config(new_config).await
     }
 }
 
