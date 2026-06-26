@@ -94,6 +94,10 @@ export interface AdvancedConfigEditorState {
   fastStrictProduction: boolean;
   fastPool: string;
   fastSplice: string;
+  fastRelayEngine: string;
+  fastRelayFlush: string;
+  fastRelayInitialBuffer: string;
+  fastRelayMaxBuffer: string;
   fastLinuxIoUring: string;
 }
 
@@ -158,6 +162,10 @@ export function createSectionEditorState(section: ConfigSection | null): Advance
     fastStrictProduction: boolValue(asObject(value).strictProduction),
     fastPool: stringValue(asObject(value).pool),
     fastSplice: stringValue(asObject(value).splice),
+    fastRelayEngine: stringValue(asObject(asObject(value).relay).engine),
+    fastRelayFlush: stringValue(asObject(asObject(value).relay).flush),
+    fastRelayInitialBuffer: numberString(asObject(asObject(value).relay).initialBuffer),
+    fastRelayMaxBuffer: numberString(asObject(asObject(value).relay).maxBuffer),
     fastLinuxIoUring: stringValue(asObject(asObject(value).linux).ioUring)
   };
 }
@@ -240,7 +248,17 @@ export function validateSectionState(state: AdvancedConfigEditorState): Advanced
     issues.push({ field: "profile", message: "Profile value is required." });
   }
   if (state.name === "fast") {
-    // pool, splice, and linux.ioUring are all optional — omitting them uses the runtime default
+    for (const [field, label, value] of [
+      ["fastRelayInitialBuffer", "Relay initial buffer", state.fastRelayInitialBuffer],
+      ["fastRelayMaxBuffer", "Relay max buffer", state.fastRelayMaxBuffer]
+    ] as const) {
+      if (value.trim()) {
+        const parsed = Number(value.trim());
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+          issues.push({ field, message: `${label} must be a positive integer.` });
+        }
+      }
+    }
   }
   return issues;
 }
@@ -370,6 +388,13 @@ function buildSectionObject(state: AdvancedConfigEditorState, base: unknown): un
     root.strictProduction = state.fastStrictProduction;
     setOrDelete(root, "pool", state.fastPool.trim());
     setOrDelete(root, "splice", state.fastSplice.trim());
+    const relay = asObject(root.relay);
+    setOrDelete(relay, "engine", state.fastRelayEngine.trim());
+    setOrDelete(relay, "flush", state.fastRelayFlush.trim());
+    setOrDeleteNumber(relay, "initialBuffer", state.fastRelayInitialBuffer);
+    setOrDeleteNumber(relay, "maxBuffer", state.fastRelayMaxBuffer);
+    if (Object.keys(relay).length > 0) root.relay = relay;
+    else delete root.relay;
     const linux = asObject(root.linux);
     setOrDelete(linux, "ioUring", state.fastLinuxIoUring.trim());
     if (Object.keys(linux).length > 0) root.linux = linux;

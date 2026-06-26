@@ -31,7 +31,7 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "vmess",
                 "VMess AEAD",
                 "supported",
-                "Legacy alterId is hidden",
+                "AEAD body security only; legacy alterId and body security=none are not supported",
             ),
             item(
                 "trojan",
@@ -249,6 +249,20 @@ mod tests {
         assert_eq!(httpupgrade.status, "supported");
         assert!(httpupgrade.notes.contains("VMess URLTest"));
         assert!(httpupgrade.notes.contains("Hiddify"));
+    }
+
+    #[test]
+    fn vmess_documents_aead_body_security_requirement() {
+        let capabilities = blackwire_capabilities();
+        let vmess = capabilities
+            .protocols
+            .iter()
+            .find(|item| item.key == "vmess")
+            .expect("VMess capability should be visible to Black UI");
+
+        assert_eq!(vmess.status, "supported");
+        assert!(vmess.notes.contains("AEAD body security"));
+        assert!(vmess.notes.contains("body security=none"));
     }
 
     #[test]

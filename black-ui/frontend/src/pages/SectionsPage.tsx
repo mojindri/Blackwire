@@ -25,6 +25,8 @@ const profileOptions = ["compat", "fast", "latency", "throughput", "badnet", "mo
 const routingStrategies = ["adaptive", "random", "roundRobin", "latency"];
 const fastPoolOptions = ["", "disabled", "adaptive", "fixed"];
 const fastSpliceOptions = ["", "disabled", "adaptive", "always"];
+const fastRelayEngineOptions = ["", "legacy", "v2"];
+const fastRelayFlushOptions = ["", "immediate", "deferred", "adaptive"];
 const fastLinuxIoUringOptions = ["", "disabled", "auto", "require"];
 
 export function SectionsPage({
@@ -617,6 +619,30 @@ function FastEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; o
               </option>
             ))}
           </Select>
+        </Field>
+        <Field label="Relay engine">
+          <Select value={editor.fastRelayEngine} onChange={(e) => onChange({ ...editor, fastRelayEngine: e.target.value })}>
+            {fastRelayEngineOptions.map((item) => (
+              <option key={item} value={item}>
+                {item || "default (v2)"}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Relay flush">
+          <Select value={editor.fastRelayFlush} onChange={(e) => onChange({ ...editor, fastRelayFlush: e.target.value })}>
+            {fastRelayFlushOptions.map((item) => (
+              <option key={item} value={item}>
+                {item || "default (adaptive)"}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Relay initial buffer">
+          <Input value={editor.fastRelayInitialBuffer} onChange={(e) => onChange({ ...editor, fastRelayInitialBuffer: e.target.value })} placeholder="16384" type="number" min="1" />
+        </Field>
+        <Field label="Relay max buffer">
+          <Input value={editor.fastRelayMaxBuffer} onChange={(e) => onChange({ ...editor, fastRelayMaxBuffer: e.target.value })} placeholder="262144" type="number" min="1" />
         </Field>
         <Field label="Linux io_uring" hint="Leave empty to use the runtime default (disabled). Set to auto to opt in.">
           <Select value={editor.fastLinuxIoUring} onChange={(e) => onChange({ ...editor, fastLinuxIoUring: e.target.value })}>
