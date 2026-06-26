@@ -44,10 +44,24 @@ pub type PacketUpH2TunnelFn = Arc<dyn Fn(SplitHttpAcceptResult) + Send + Sync>;
 
 const MAX_HEADER_BYTES: usize = 16384;
 
+/// Maximum bytes accepted for an HTTP/1.1 chunk-size line, excluding CRLF.
+/// Chunk-size is parsed before proxy authentication, so bound it explicitly.
+const MAX_CHUNK_SIZE_LINE_BYTES: usize = 1024;
+
 /// Maximum bytes accepted for a single packet-up POST body. XHTTP uplink packets
 /// are small (one MTU-ish chunk per POST); without a cap a malicious client could
 /// stream an unbounded body (or send a huge Content-Length) and exhaust memory.
 const MAX_PACKET_UP_BODY_BYTES: usize = 2 * 1024 * 1024;
+
+/// Maximum packet-up download sessions accepted on one HTTP/2 connection before
+/// proxy authentication has completed. This keeps multiplexed h2 streams from
+/// bypassing the outer TCP connection limiter.
+const MAX_PACKET_UP_H2_SESSIONS_PER_CONN: usize = 64;
+
+/// Maximum global packet-up upload queues. POST requests may arrive before their
+/// matching GET, so a global cap prevents unauthenticated clients from creating
+/// unbounded idle queues.
+const MAX_PACKET_UP_TOTAL_SESSIONS: usize = 4096;
 
 /// Normalized XHTTP mode (subset implemented in this crate).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,11 +138,21 @@ pub async fn splithttp_connect(
 static PACKET_UP_SESSIONS: LazyLock<DashMap<String, Arc<UploadQueue>>> =
     LazyLock::new(DashMap::new);
 
-fn upsert_packet_up_session(session_id: &str) -> Arc<UploadQueue> {
-    PACKET_UP_SESSIONS
-        .entry(session_id.to_string())
-        .or_insert_with(|| UploadQueue::new(64))
-        .clone()
+fn upsert_packet_up_session(session_id: &str) -> Option<Arc<UploadQueue>> {
+    if let Some(queue) = PACKET_UP_SESSIONS.get(session_id) {
+        return Some(queue.clone());
+    }
+
+    if PACKET_UP_SESSIONS.len() >= MAX_PACKET_UP_TOTAL_SESSIONS {
+        return None;
+    }
+
+    Some(
+        PACKET_UP_SESSIONS
+            .entry(session_id.to_string())
+            .or_insert_with(|| UploadQueue::new(64))
+            .clone(),
+    )
 }
 
 fn x_padding_header(cfg: &SplitHttpConfig) -> Option<(String, String)> {
@@ -472,7 +496,27 @@ pub async fn splithttp_accept_h2_packet_up(
                 }
             };
 
-            let queue = upsert_packet_up_session(&session);
+            if request
+                .headers()
+                .get(http::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<usize>().ok())
+                .is_some_and(|n| n > MAX_PACKET_UP_BODY_BYTES)
+            {
+                let _ = respond.send_response(
+                    http::Response::builder().status(413).body(()).unwrap(),
+                    true,
+                );
+                continue;
+            }
+
+            let Some(queue) = upsert_packet_up_session(&session) else {
+                let _ = respond.send_response(
+                    http::Response::builder().status(503).body(()).unwrap(),
+                    true,
+                );
+                continue;
+            };
             let mut body = request.into_body();
             let mut payload = Vec::new();
             let mut body_error = false;
@@ -548,6 +592,13 @@ pub async fn splithttp_accept_h2_packet_up(
                 );
                 continue;
             }
+            if download_sessions.len() >= MAX_PACKET_UP_H2_SESSIONS_PER_CONN {
+                let _ = respond.send_response(
+                    http::Response::builder().status(429).body(()).unwrap(),
+                    true,
+                );
+                continue;
+            }
             if !download_sessions.insert(session.clone()) {
                 let _ = respond.send_response(
                     http::Response::builder().status(409).body(()).unwrap(),
@@ -556,7 +607,14 @@ pub async fn splithttp_accept_h2_packet_up(
                 continue;
             }
 
-            let queue = upsert_packet_up_session(&session);
+            let Some(queue) = upsert_packet_up_session(&session) else {
+                download_sessions.remove(&session);
+                let _ = respond.send_response(
+                    http::Response::builder().status(503).body(()).unwrap(),
+                    true,
+                );
+                continue;
+            };
             let mut body = request.into_body();
             tokio::spawn(async move {
                 while let Some(chunk) = body.data().await {
@@ -739,7 +797,8 @@ async fn packet_up_accept(
             .parse()
             .map_err(|_| ProxyError::Protocol(format!("packet-up invalid seq '{seq}'")))?;
         let body = read_request_body(&mut stream, request).await?;
-        let queue = upsert_packet_up_session(&session);
+        let queue = upsert_packet_up_session(&session)
+            .ok_or_else(|| ProxyError::Protocol("packet-up session limit reached".into()))?;
         queue
             .push(UploadPacket {
                 seq: seq_num,
@@ -760,7 +819,8 @@ async fn packet_up_accept(
                 "packet-up GET requires session id in path".into(),
             ));
         }
-        let queue = upsert_packet_up_session(&session);
+        let queue = upsert_packet_up_session(&session)
+            .ok_or_else(|| ProxyError::Protocol("packet-up session limit reached".into()))?;
         stream
             .write_all(
                 b"HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
@@ -771,6 +831,7 @@ async fn packet_up_accept(
         return Ok(SplitHttpAcceptResult::Tunnel(Box::new(PacketUpConn {
             reader,
             writer: stream,
+            session_id: session,
         })));
     }
 
@@ -783,6 +844,13 @@ async fn packet_up_accept(
 struct PacketUpConn {
     reader: UploadQueueReader,
     writer: BoxedStream,
+    session_id: String,
+}
+
+impl Drop for PacketUpConn {
+    fn drop(&mut self) {
+        remove_packet_up_session(&self.session_id);
+    }
 }
 
 impl AsyncRead for PacketUpConn {
@@ -1013,6 +1081,42 @@ fn put_chunk_size_hex(buf: &mut BytesMut, value: usize) {
     buf.put_slice(&digits[i..]);
 }
 
+fn parse_chunk_size_line(line: &[u8]) -> io::Result<usize> {
+    let size_part = line
+        .split(|b| *b == b';')
+        .next()
+        .unwrap_or(line)
+        .trim_ascii();
+    if size_part.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SplitHTTP empty chunk-size line",
+        ));
+    }
+
+    let mut value = 0usize;
+    for &byte in size_part {
+        let digit = match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'a'..=b'f' => byte - b'a' + 10,
+            b'A'..=b'F' => byte - b'A' + 10,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "SplitHTTP invalid chunk-size line",
+                ));
+            }
+        } as usize;
+        value = value
+            .checked_mul(16)
+            .and_then(|v| v.checked_add(digit))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "SplitHTTP chunk size overflow")
+            })?;
+    }
+    Ok(value)
+}
+
 impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -1046,9 +1150,13 @@ impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
 
             if self.chunk_remaining == 0 {
                 if let Some(line_end) = self.read_buf.windows(2).position(|w| w == b"\r\n") {
-                    let line = String::from_utf8_lossy(&self.read_buf[..line_end]);
-                    let size = usize::from_str_radix(line.trim(), 16)
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                    if line_end > MAX_CHUNK_SIZE_LINE_BYTES {
+                        return Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "SplitHTTP chunk-size line too large",
+                        )));
+                    }
+                    let size = parse_chunk_size_line(&self.read_buf[..line_end])?;
                     self.read_buf.advance(line_end + 2);
                     if size == 0 {
                         self.eof = true;
@@ -1058,8 +1166,18 @@ impl<S: AsyncRead + Unpin> AsyncRead for SplitHttpStream<S> {
                     continue;
                 }
 
+                if self.read_buf.len() >= MAX_CHUNK_SIZE_LINE_BYTES + 2 {
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "SplitHTTP chunk-size line too large",
+                    )));
+                }
+
                 let mut tmp = [0u8; 4096];
-                let mut rb = ReadBuf::new(&mut tmp);
+                let read_len = tmp
+                    .len()
+                    .min(MAX_CHUNK_SIZE_LINE_BYTES + 2 - self.read_buf.len());
+                let mut rb = ReadBuf::new(&mut tmp[..read_len]);
                 match Pin::new(&mut self.inner).poll_read(cx, &mut rb) {
                     Poll::Ready(Ok(())) => {
                         if rb.filled().is_empty() {
@@ -1150,6 +1268,80 @@ mod tests {
         let mut buf = [0u8; 8];
         let n = tunnel.read(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"hello");
+    }
+
+    #[tokio::test]
+    async fn stream_one_rejects_oversized_chunk_size_line() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let server = Box::new(server) as BoxedStream;
+        let accept_task = tokio::spawn(async move {
+            splithttp_accept(server, Some("/split"), None, SplitHttpMode::StreamOne, None).await
+        });
+
+        client
+            .write_all(
+                b"POST /split HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: chunked\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        client
+            .write_all(&vec![b'1'; MAX_CHUNK_SIZE_LINE_BYTES + 2])
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        let mut raw = vec![0u8; 512];
+        let n = client.read(&mut raw).await.unwrap();
+        let resp = String::from_utf8_lossy(&raw[..n]);
+        assert!(resp.contains("200 OK"), "response: {resp}");
+
+        let SplitHttpAcceptResult::Tunnel(mut tunnel) =
+            accept_task.await.unwrap().expect("accept failed")
+        else {
+            panic!("expected stream-one tunnel");
+        };
+        let mut buf = [0u8; 8];
+        let err = tunnel
+            .read(&mut buf)
+            .await
+            .expect_err("expected oversized chunk-size error");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("chunk-size line too large"));
+    }
+
+    #[tokio::test]
+    async fn stream_one_allows_maximum_chunk_size_line_with_extension() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let server = Box::new(server) as BoxedStream;
+        let accept_task = tokio::spawn(async move {
+            splithttp_accept(server, Some("/split"), None, SplitHttpMode::StreamOne, None).await
+        });
+
+        client
+            .write_all(
+                b"POST /split HTTP/1.1\r\nHost: example.test\r\nTransfer-Encoding: chunked\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let extension_len = MAX_CHUNK_SIZE_LINE_BYTES - b"1;".len();
+        client.write_all(b"1;").await.unwrap();
+        client.write_all(&vec![b'a'; extension_len]).await.unwrap();
+        client.write_all(b"\r\nx\r\n").await.unwrap();
+        client.flush().await.unwrap();
+
+        let mut raw = vec![0u8; 512];
+        let n = client.read(&mut raw).await.unwrap();
+        let resp = String::from_utf8_lossy(&raw[..n]);
+        assert!(resp.contains("200 OK"), "response: {resp}");
+
+        let SplitHttpAcceptResult::Tunnel(mut tunnel) =
+            accept_task.await.unwrap().expect("accept failed")
+        else {
+            panic!("expected stream-one tunnel");
+        };
+        let mut buf = [0u8; 8];
+        let n = tunnel.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"x");
     }
 
     #[tokio::test]
@@ -1380,6 +1572,68 @@ mod tests {
         }
 
         assert_eq!(tunnels.lock().unwrap().len(), 2);
+        drop(client);
+        accept_task.abort();
+    }
+
+    #[tokio::test]
+    async fn packet_up_h2_limits_download_sessions_per_connection() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (client_io, server_io) = tokio::io::duplex(256 * 1024);
+        let server = Box::new(server_io) as BoxedStream;
+        let tunnel_count = Arc::new(AtomicUsize::new(0));
+        let count_cb = tunnel_count.clone();
+        let on_tunnel: PacketUpH2TunnelFn = Arc::new(move |accepted| {
+            if matches!(accepted, SplitHttpAcceptResult::Tunnel(_)) {
+                count_cb.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let accept_task = tokio::spawn(async move {
+            splithttp_accept(
+                server,
+                Some("/split-limit"),
+                None,
+                SplitHttpMode::PacketUp,
+                Some(on_tunnel),
+            )
+            .await
+        });
+
+        let (mut client, conn) = client::Builder::new().handshake(client_io).await.unwrap();
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+
+        let mut responses = Vec::new();
+        for i in 0..=MAX_PACKET_UP_H2_SESSIONS_PER_CONN {
+            let request = http::Request::builder()
+                .method(http::Method::GET)
+                .uri(format!(
+                    "https://example.test/split-limit/limit-session-{i}"
+                ))
+                .body(())
+                .unwrap();
+            let (response, mut send) = client.send_request(request, false).unwrap();
+            send.send_data(Bytes::new(), true).unwrap();
+            responses.push(response);
+        }
+
+        let last_response = responses.pop().unwrap().await.unwrap();
+        assert_eq!(last_response.status(), http::StatusCode::TOO_MANY_REQUESTS);
+
+        for _ in 0..100 {
+            if tunnel_count.load(Ordering::SeqCst) == MAX_PACKET_UP_H2_SESSIONS_PER_CONN {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            tunnel_count.load(Ordering::SeqCst),
+            MAX_PACKET_UP_H2_SESSIONS_PER_CONN
+        );
+
+        drop(responses);
         drop(client);
         accept_task.abort();
     }

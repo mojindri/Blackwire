@@ -338,11 +338,15 @@ impl ConnectionHandler for GrpcConnectionHandler {
     ) -> Result<(), ProxyError> {
         let service_name = self.service_name.clone();
         let inner = Arc::clone(&self.inner);
-        let _ = self.handshake_timeout;
-        grpc_serve(stream, &service_name, move |grpc_stream| {
-            let inner = Arc::clone(&inner);
-            async move { inner.handle_connection(grpc_stream, source).await }
-        })
+        grpc_serve(
+            stream,
+            &service_name,
+            self.handshake_timeout,
+            move |grpc_stream| {
+                let inner = Arc::clone(&inner);
+                async move { inner.handle_connection(grpc_stream, source).await }
+            },
+        )
         .await
     }
 }

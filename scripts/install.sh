@@ -41,6 +41,7 @@ BLACK_UI_STATIC_DIR="${BLACK_UI_STATIC_DIR:-/usr/local/share/black-ui/frontend/d
 BLACK_UI_PUBLIC_BASE_URL="${BLACK_UI_PUBLIC_BASE_URL:-}"
 BLACK_UI_PANEL_PATH="${BLACK_UI_PANEL_PATH:-/panel}"
 BLACK_UI_COOKIE_SECURE="${BLACK_UI_COOKIE_SECURE:-}"
+BLACK_UI_GROUP="${BLACK_UI_GROUP:-black-ui}"
 
 log() {
     printf 'blackwire-install: %s\n' "$*"
@@ -124,6 +125,16 @@ validate_server_port() {
     validate_port "$SERVER_PORT" SERVER_PORT
 }
 
+validate_vless_tcp_listener() {
+    case "$SERVER_LISTEN" in
+        127.*|localhost|::1) ;;
+        *)
+            die "INIT_SERVER=vless-tcp is cleartext and only allowed on loopback listeners; use SETUP=reality or SETUP=domain for public VPS deployments"
+            ;;
+    esac
+    [ "$OPEN_FIREWALL" != "1" ] || die "OPEN_FIREWALL=1 is not allowed with cleartext INIT_SERVER=vless-tcp"
+}
+
 validate_ws_path() {
     WS_PATH="$PROXY_PATH"
     case "$WS_PATH" in
@@ -147,6 +158,21 @@ service_group() {
         echo "nobody"
     else
         echo "nogroup"
+    fi
+}
+
+config_group() {
+    if [ "$INSTALL_BLACK_UI" = "1" ]; then
+        echo "$BLACK_UI_GROUP"
+    else
+        service_group
+    fi
+}
+
+ensure_black_ui_group() {
+    [ "$INSTALL_BLACK_UI" = "1" ] || return 0
+    if ! getent group "$BLACK_UI_GROUP" >/dev/null 2>&1; then
+        sudo_cmd groupadd --system "$BLACK_UI_GROUP"
     fi
 }
 
@@ -186,7 +212,7 @@ resolve_socket_addr() {
 
 protect_config_for_service() {
     path="$1"
-    group="$(service_group)"
+    group="$(config_group)"
     if getent group "$group" >/dev/null 2>&1; then
         sudo_cmd chown "root:$group" "$path"
         if [ "$INSTALL_BLACK_UI" = "1" ]; then
@@ -201,9 +227,10 @@ protect_config_for_service() {
 }
 
 prepare_runtime_dirs() {
-    group="$(service_group)"
+    ensure_black_ui_group
+    group="$(config_group)"
     sudo_cmd install -d -m 0755 "$PREFIX/bin"
-    if [ "$INSTALL_BLACK_UI" = "1" ] && getent group "$group" >/dev/null 2>&1; then
+    if [ "$INSTALL_BLACK_UI" = "1" ]; then
         sudo_cmd install -d -m 0770 -o root -g "$group" "$CONFIG_DIR"
     else
         sudo_cmd install -d -m 0755 "$CONFIG_DIR"
@@ -220,6 +247,7 @@ generate_server_config() {
 
     case "$INIT_SERVER" in
         vless-tcp)
+            validate_vless_tcp_listener
             sudo_cmd sh -c "cat > '$CONFIG_DIR/config.json'" <<JSON
 {
   "log": {
@@ -246,7 +274,10 @@ $(api_config_section)
   "outbounds": [
     {
       "tag": "freedom",
-      "protocol": "freedom"
+      "protocol": "freedom",
+      "settings": {
+        "denyLoopback": true
+      }
     }
   ],
   "routing": {
@@ -314,7 +345,10 @@ $(api_config_section)
   "outbounds": [
     {
       "tag": "freedom",
-      "protocol": "freedom"
+      "protocol": "freedom",
+      "settings": {
+        "denyLoopback": true
+      }
     }
   ],
   "routing": {
@@ -378,7 +412,10 @@ $(api_config_section)
   "outbounds": [
     {
       "tag": "freedom",
-      "protocol": "freedom"
+      "protocol": "freedom",
+      "settings": {
+        "denyLoopback": true
+      }
     }
   ],
   "routing": {
@@ -445,7 +482,10 @@ $(api_config_section)
   "outbounds": [
     {
       "tag": "freedom",
-      "protocol": "freedom"
+      "protocol": "freedom",
+      "settings": {
+        "denyLoopback": true
+      }
     }
   ],
   "routing": {
@@ -496,7 +536,7 @@ resolve_setup() {
             INIT_SERVER="vless-reality"
             ;;
         direct)
-            INIT_SERVER="vless-tcp"
+            die "SETUP=direct would generate cleartext VLESS; use SETUP=reality or SETUP=domain for public VPS deployments"
             ;;
         custom)
             [ -n "$CONFIG_PATH" ] || [ -n "$CONFIG_URL" ] || die "SETUP=custom requires CONFIG_PATH or CONFIG_URL"
@@ -739,7 +779,7 @@ install_systemd_unit() {
 
     unit_path="/etc/systemd/system/blackwire.service"
     tmp_unit="$(mktemp)"
-    group="$(service_group)"
+    group="$(config_group)"
     cat > "$tmp_unit" <<UNIT
 [Unit]
 Description=blackwire proxy runtime
@@ -789,7 +829,7 @@ install_black_ui_systemd_unit() {
 
     unit_path="/etc/systemd/system/black-ui.service"
     tmp_unit="$(mktemp)"
-    group="$(service_group)"
+    group="$(config_group)"
     cookie_secure="$BLACK_UI_COOKIE_SECURE"
     if [ -z "$cookie_secure" ]; then
         if [ "$SETUP" = "domain" ]; then
@@ -849,7 +889,7 @@ install_black_ui() {
     )
     ui_binary="$(find "$ui_workdir" -type f -name black-ui -perm -111 | head -n 1)"
     [ -n "$ui_binary" ] || die "black-ui binary not found in $ui_asset"
-    group="$(service_group)"
+    group="$(config_group)"
     sudo_cmd install -d -m 0755 "$PREFIX/bin" "$BLACK_UI_STATIC_DIR"
     sudo_cmd install -d -m 0750 -o "$SERVICE_USER" -g "$group" "$BLACK_UI_DATA_DIR"
     sudo_cmd install -m 0755 "$ui_binary" "$PREFIX/bin/black-ui"
@@ -944,6 +984,8 @@ print_next_steps() {
     fi
     if [ "$SETUP" = "domain" ] || [ "$INIT_SERVER" = "vless-ws-nginx" ]; then
         log "next: ensure tcp/80 and tcp/443 are open in your VPS/cloud firewall"
+    elif [ "$INIT_SERVER" = "vless-tcp" ]; then
+        log "next: vless-tcp is cleartext and loopback-only; do not expose tcp/${SERVER_PORT} publicly"
     else
         log "next: ensure tcp/${SERVER_PORT} is open in your VPS/cloud firewall"
     fi

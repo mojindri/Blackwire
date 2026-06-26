@@ -84,12 +84,6 @@ pub async fn relay_v3_handshake(
     psk: &[u8],
     backend_addr: &str,
 ) -> Result<([u8; 32], Vec<u8>), ProxyError> {
-    let mut backend = tcp_connect_to(backend_addr).await.map_err(|e| {
-        ProxyError::Transport(format!(
-            "ShadowTLS: cannot connect to backend {backend_addr}: {e}"
-        ))
-    })?;
-
     let (record_type, version, payload) = read_tls_record(client).await?;
     if record_type != TLS_RECORD_HANDSHAKE || payload.first() != Some(&0x01) {
         return Err(ProxyError::Protocol(
@@ -98,6 +92,12 @@ pub async fn relay_v3_handshake(
     }
     let client_hello = encode_tls_record(record_type, version, &payload);
     verify_client_hello_session_id(&client_hello, psk)?;
+
+    let mut backend = tcp_connect_to(backend_addr).await.map_err(|e| {
+        ProxyError::Transport(format!(
+            "ShadowTLS: cannot connect to backend {backend_addr}: {e}"
+        ))
+    })?;
     write_tls_record(&mut backend, record_type, version, &payload).await?;
 
     tokio::time::timeout(HANDSHAKE_TIMEOUT, do_v3_relay(client, &mut backend, psk))
@@ -335,6 +335,27 @@ fn encode_tls_record(record_type: u8, version: [u8; 2], payload: &[u8]) -> Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn relay_v3_handshake_does_not_connect_backend_before_client_record() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let backend_addr = listener.local_addr().unwrap().to_string();
+        let (_client, server) = tokio::io::duplex(64);
+        let mut server_stream: BoxedStream = Box::new(server);
+
+        let handshake = tokio::spawn(async move {
+            relay_v3_handshake(&mut server_stream, b"test-psk", &backend_addr).await
+        });
+
+        let backend_accept =
+            tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
+
+        assert!(
+            backend_accept.is_err(),
+            "backend should not receive a connection before the client sends a TLS record"
+        );
+        handshake.abort();
+    }
 
     #[test]
     fn extract_server_random_happy() {
