@@ -96,12 +96,15 @@ pub async fn serve_connection(
         None => bail!("connection closed before Hysteria2 auth"),
     };
 
-    timeout(
+    let authenticated = timeout(
         H3_AUTH_HANDLE_TIMEOUT,
         handle_h3_auth_request(resolver, &auth.password, server_rx_bps, true),
     )
     .await
     .context("handle HTTP/3 auth timed out")??;
+    if !authenticated {
+        bail!("Hysteria2 HTTP/3 authentication rejected");
+    }
     // Keep the HTTP/3 server driver alive for the QUIC session without calling
     // `accept()` again. Official hysteria uses http3.StreamDispatcher to hijack
     // proxy streams (varint 0x401); the Rust `h3` crate has no equivalent, so we
@@ -637,7 +640,7 @@ async fn handle_h3_auth_request(
     password: &str,
     server_rx_bps: u64,
     udp_enabled: bool,
-) -> Result<()> {
+) -> Result<bool> {
     let (req, mut stream) = resolver
         .resolve_request()
         .await
@@ -657,7 +660,8 @@ async fn handle_h3_auth_request(
             .body(())
             .context("build 404 response")?;
         stream.send_response(resp).await.context("send 404")?;
-        return stream.finish().await.context("finish 404 stream");
+        stream.finish().await.context("finish 404 stream")?;
+        return Ok(false);
     }
 
     match super::auth::verify_auth_request(req.headers(), password) {
@@ -681,7 +685,8 @@ async fn handle_h3_auth_request(
                 .send_response(resp)
                 .await
                 .context("send auth success")?;
-            stream.finish().await.context("finish auth stream")
+            stream.finish().await.context("finish auth stream")?;
+            Ok(true)
         }
         Err(AuthError::WrongPassword) => {
             let resp = Response::builder()
@@ -689,7 +694,8 @@ async fn handle_h3_auth_request(
                 .body(())
                 .context("build auth failure response")?;
             stream.send_response(resp).await.context("send auth 404")?;
-            stream.finish().await.context("finish auth failure")
+            stream.finish().await.context("finish auth failure")?;
+            Ok(false)
         }
         Err(AuthError::Protocol(msg)) => Err(anyhow::anyhow!("auth protocol error: {msg}")),
     }
