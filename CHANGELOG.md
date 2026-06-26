@@ -8,6 +8,22 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.9 - 2026-06-26
+
+### Changed
+
+- Black UI now reflects the current protocol and fast-profile surface: TUIC users
+  are treated as structured credentials, per-user upload/download Mbps fields are
+  editable, and Fast Profile relay engine/flush/buffer controls are exposed.
+- Release metadata and install examples now reference `v0.1.9`.
+
+### Fixed
+
+- VMess inbound editing no longer shows a misleading body encryption field; the UI
+  now documents the current AEAD-only behavior instead.
+- Deprecated mKCP transport options stay hidden for new configs while legacy
+  existing entries remain editable.
+
 ## 0.1.8 - 2026-06-26
 
 ### Changed
