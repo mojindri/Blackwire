@@ -8,6 +8,16 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.8 - 2026-06-26
+
+### Changed
+
+- Repository release metadata was aligned to `0.1.8`: workspace/version manifest,
+  frontend version, and all user-facing install examples/release docs now reference
+  `v0.1.8`.
+- Release and docs consistency were verified during the version bump to keep installer
+  and manual install command examples in sync across README and user documentation.
+
 ## 0.1.7 - 2026-06-26
 
 ### Changed
