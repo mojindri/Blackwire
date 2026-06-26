@@ -127,10 +127,6 @@ impl TcpServerTransport {
         #[cfg(unix)]
         socket.set_reuse_port(true).map_err(ProxyError::Io)?;
         socket.set_nonblocking(true).map_err(ProxyError::Io)?;
-        // Apply larger TCP buffers once on the listening socket so accepted
-        // sockets inherit them; this avoids per-connection setsockopt syscalls.
-        let _ = socket.set_recv_buffer_size(4 * 1024 * 1024);
-        let _ = socket.set_send_buffer_size(4 * 1024 * 1024);
         socket.bind(&addr.into()).map_err(ProxyError::Io)?;
 
         #[cfg(target_os = "linux")]
@@ -333,6 +329,12 @@ impl TcpServerTransport {
         sock.set_tcp_nodelay(true)?;
         sock.set_keepalive(true)?;
         let _ = sock.set_tcp_keepalive(&tcp_keepalive_config());
+
+        // Apply larger TCP buffers only after accept/admission. Setting these on
+        // the listener would allow unauthenticated sockets in the kernel accept
+        // queue to inherit large receive buffers before connection limits run.
+        let _ = sock.set_recv_buffer_size(4 * 1024 * 1024);
+        let _ = sock.set_send_buffer_size(4 * 1024 * 1024);
 
         Ok(())
     }
