@@ -8,6 +8,15 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.10 - 2026-06-27
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.10`.
+- The release asset workflow now skips the optional GitHub Pages apt repository
+  publish step when `BLACKWIRE_APT_SIGNING_KEY` is not configured, while still
+  allowing signed apt publication when the secret exists.
+
 ## 0.1.9 - 2026-06-26
 
 ### Changed
