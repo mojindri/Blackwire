@@ -8,6 +8,22 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.12 - 2026-06-27
+
+### Fixed
+
+- Black UI subscription links now apply self-signed TLS verification bypass flags
+  consistently across supported TLS-backed share formats. VMess TLS exports include
+  `allowInsecure` when Blackwire-generated certificates require it, and TUIC exports
+  now use the same self-signed certificate detection as VLESS, Trojan, and Hysteria2.
+- Added coverage for the shared TLS share-link policy so Blackwire self-signed
+  certificates, explicit insecure settings, Let’s Encrypt certificates, and custom
+  public certificate paths stay distinct.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.12`.
+
 ## 0.1.11 - 2026-06-27
 
 ### Fixed
