@@ -34,3 +34,4 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 validator.workspace = true
+x25519-dalek.workspace = true

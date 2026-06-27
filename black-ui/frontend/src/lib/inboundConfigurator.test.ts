@@ -149,11 +149,76 @@ describe("inboundConfigurator", () => {
       listen: "example.com",
       port: 0,
       network: "ws",
-      security: "reality"
+      security: "reality",
+      realityServerName: "www.microsoft.com",
+      realityPrivateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+      realityPublicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
+      realityShortId: "feedbeef"
     });
 
     expect(validIssues).toEqual([]);
     expect(invalidIssues.map((issue) => issue.field)).toEqual(["listen", "port", "security"]);
+  });
+
+  it("validates REALITY credentials before generated links can be saved", () => {
+    const missingIssues = validateInboundState({
+      ...createInboundEditorState(),
+      network: "tcp",
+      security: "reality",
+      realityServerName: "",
+      realityPrivateKey: "",
+      realityPublicKey: "",
+      realityShortId: ""
+    });
+    const malformedIssues = validateInboundState({
+      ...createInboundEditorState(),
+      network: "tcp",
+      security: "reality",
+      realityServerName: "www.microsoft.com",
+      realityPrivateKey: "random-private-key",
+      realityPublicKey: "random-public-key",
+      realityShortId: "xyz"
+    });
+
+    expect(missingIssues.map((issue) => issue.field)).toEqual([
+      "realityServerName",
+      "realityPrivateKey",
+      "realityPublicKey",
+      "realityShortId"
+    ]);
+    expect(malformedIssues.map((issue) => issue.field)).toEqual([
+      "realityPrivateKey",
+      "realityPublicKey",
+      "realityShortId"
+    ]);
+  });
+
+  it("validates TLS server link and certificate pair fields", () => {
+    const missingSni = validateInboundState({
+      ...createInboundEditorState(),
+      security: "tls",
+      tlsServerName: "",
+      tlsCertificateFile: "",
+      tlsKeyFile: ""
+    });
+    const missingKey = validateInboundState({
+      ...createInboundEditorState(),
+      security: "tls",
+      tlsServerName: "proxy.example.com",
+      tlsCertificateFile: "/etc/blackwire/fullchain.pem",
+      tlsKeyFile: ""
+    });
+    const missingCert = validateInboundState({
+      ...createInboundEditorState(),
+      security: "tls",
+      tlsServerName: "proxy.example.com",
+      tlsCertificateFile: "",
+      tlsKeyFile: "/etc/blackwire/privkey.pem"
+    });
+
+    expect(missingSni.map((issue) => issue.field)).toEqual(["tlsServerName"]);
+    expect(missingKey.map((issue) => issue.field)).toEqual(["tlsKeyFile"]);
+    expect(missingCert.map((issue) => issue.field)).toEqual(["tlsCertificateFile"]);
   });
 
   it("surfaces non-blocking compatibility notices for client-sensitive inbounds", () => {
@@ -171,6 +236,7 @@ describe("inboundConfigurator", () => {
       network: "tcp",
       security: "reality",
       realityServerName: "www.microsoft.com",
+      realityPrivateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
       realityPublicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
       realityShortId: "feedbeef",
       realityFingerprint: "chrome",
@@ -182,6 +248,7 @@ describe("inboundConfigurator", () => {
     expect(built.transport).toBe("reality");
     expect(streamSettings.network).toBe("tcp");
     expect(streamSettings.security).toBe("reality");
+    expect(streamSettings.realitySettings.privateKey).toBe("769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c");
     expect(streamSettings.realitySettings.publicKey).toBe("e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142");
     expect(streamSettings.realitySettings.shortId).toBe("feedbeef");
     expect(streamSettings.realitySettings.shortIds).toEqual(["feedbeef"]);

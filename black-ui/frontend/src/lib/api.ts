@@ -8,9 +8,12 @@ import type {
   ManagedUser,
   Outbound,
   OutboundInput,
+  RealityClientValues,
+  RealityGeneratedValues,
   ServiceStatus,
   Settings,
   Status,
+  TlsServerValues,
   TrafficSnapshot,
   UserInput
 } from "./types";
@@ -63,6 +66,9 @@ export const api = {
     request<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
   traffic: () => request<TrafficSnapshot>("/api/runtime/traffic"),
   probe: () => request<{ reachable: boolean; address: string }>("/api/runtime/probe", { method: "POST" }),
+  realityClientValues: () => request<RealityClientValues[]>("/api/reality/client-values"),
+  realityGenerateValues: () => request<RealityGeneratedValues>("/api/reality/generate-values", { method: "POST" }),
+  tlsServerValues: () => request<TlsServerValues[]>("/api/tls/server-values"),
   inbounds: () => request<Inbound[]>("/api/inbounds"),
   createInbound: (input: InboundInput) => request<ApplyResult>("/api/inbounds", body(input)),
   updateInbound: (id: number, input: InboundInput) =>

@@ -114,6 +114,15 @@ fn api_router() -> Router<AppState> {
         )
         .route("/runtime/probe", post(handlers::runtime_probe))
         .route("/runtime/traffic", get(handlers::runtime_traffic))
+        .route(
+            "/reality/client-values",
+            get(handlers::reality_client_values),
+        )
+        .route(
+            "/reality/generate-values",
+            post(handlers::reality_generate_values),
+        )
+        .route("/tls/server-values", get(handlers::tls_server_values))
         .route("/service/status", get(handlers::service_status))
         .route(
             "/service/restart-blackwire",

@@ -384,6 +384,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "validator",
+ "x25519-dalek",
 ]
 
 [[package]]

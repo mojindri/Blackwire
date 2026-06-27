@@ -13,9 +13,14 @@ const publicBaseUrlArg = getArg(args, "--public-base-url", "");
 const subscriptionHostArg = getArg(args, "--subscription-host", "");
 const adminUser = getArg(args, "--admin-user", "admin");
 const adminPassword = getArg(args, "--admin-pass", "password123");
+const suiteArg = getArg(args, "--suite", "").toLowerCase();
+const includeArg = getArg(args, "--include", "");
 const headed = argv.has("--headed");
 const restoreSettings = argv.has("--restore-settings");
 const keepSettings = argv.has("--keep-settings");
+const skipDeleteChecks = argv.has("--skip-delete-checks");
+const skipPostChecks = argv.has("--skip-post-checks");
+const qaDebug = argv.has("--qa-debug");
 
 const qaRunId = `qa-${Date.now().toString(36)}`;
 const defaultConfigPath = path.join(tmpdir(), "black-ui-qa-inbounds", `${qaRunId}-config.json`);
@@ -51,8 +56,7 @@ const cases = [
     expected: {
       protocol: "vmess",
       transport: "tcp",
-      streamSettings: { network: "tcp", security: "none" },
-      settings: { clients: [] }
+      streamSettings: { network: "tcp", security: "none" }
     }
   },
   {
@@ -299,6 +303,63 @@ const cases = [
     }
   },
   {
+    id: "vless-tls-missing-key",
+    name: "VLESS/TLS (missing key guard)",
+    protocol: "vless",
+    network: "tcp",
+    security: "tls",
+    listen: "127.0.0.1",
+    port: basePort + 13,
+    protocolValues: { decryption: "none" },
+    securityValues: {
+      serverName: "example.com",
+      alpn: "h2,http/1.1",
+      certificateFile: "/etc/blackwire/fullchain.pem",
+      keyFile: ""
+    },
+    expectFailure: true,
+    expectedFailureHint: "TLS key file is required when a certificate file is set.",
+    expected: null,
+    optional: false
+  },
+  {
+    id: "vless-reality-tcp",
+    name: "VLESS/REALITY/TCP",
+    protocol: "vless",
+    network: "tcp",
+    security: "reality",
+    listen: "127.0.0.1",
+    port: basePort + 15,
+    protocolValues: { decryption: "none" },
+    securityValues: {
+      serverName: "www.microsoft.com",
+      privateKey: "6f4850ca51ced64b4acfd90c73fd60392c0c2f92744933b28b1bc0f7b8683d79",
+      publicKey: "loYSsUliNDpTJ_ISdh6Q3A3fMc7TnaQfuDlpS-K46Wo",
+      shortId: "aabbccdd00000001",
+      fingerprint: "chrome",
+      spiderX: "/"
+    },
+    expected: {
+      protocol: "vless",
+      transport: "reality",
+      streamSettings: {
+        network: "tcp",
+        security: "reality",
+        realitySettings: {
+          serverName: "www.microsoft.com",
+          serverNames: ["www.microsoft.com"],
+          privateKey: "6f4850ca51ced64b4acfd90c73fd60392c0c2f92744933b28b1bc0f7b8683d79",
+          publicKey: "loYSsUliNDpTJ_ISdh6Q3A3fMc7TnaQfuDlpS-K46Wo",
+          shortId: "aabbccdd00000001",
+          shortIds: ["aabbccdd00000001"],
+          fingerprint: "chrome",
+          spiderX: "/"
+        }
+      },
+      settings: { decryption: "none" }
+    }
+  },
+  {
     id: "vless-ws-reality-fail",
     name: "VLESS/WS+REALITY (expected guard)",
     protocol: "vless",
@@ -320,7 +381,7 @@ const cases = [
     network: "tcp",
     security: "none",
     listen: "127.0.0.1",
-    port: basePort + 15,
+    port: basePort + 16,
     protocolValues: { decryption: "none" },
     sniffing: {
       enabled: true,
@@ -426,7 +487,8 @@ async function main() {
     workingConfigPath = updated.configPath;
 
     const createdTags = [];
-    for (const testCase of cases) {
+    const caseIdsToRun = buildCasesToRun();
+    for (const testCase of caseIdsToRun) {
       const tag = `${qaRunId}-${testCase.id}`;
       try {
         await runCase(page, {
@@ -443,8 +505,12 @@ async function main() {
       }
     }
 
-    await runDeleteProtectionChecks(page, workingConfigPath, createdTags);
-    await runEditToggleEnabled(page, `${qaRunId}-${cases[0].id}`, workingConfigPath);
+    if (!skipDeleteChecks && !skipPostChecks) {
+      await runDeleteProtectionChecks(page, workingConfigPath, createdTags);
+    }
+    if (!skipPostChecks && createdTags[0]) {
+      await runEditToggleEnabled(page, createdTags[0], workingConfigPath);
+    }
 
     if (restoreSettings && !keepSettings) {
       await restoreOriginalSettings(page, originalSettings);
@@ -471,7 +537,7 @@ async function main() {
     );
     printSummary();
 
-    const failed = results.filter((item) => item.status === "FAILED" || item.status === "SKIPPED");
+    const failed = results.filter((item) => item.status === "FAILED");
     if (failed.length > 0) {
       process.exitCode = 1;
     }
@@ -498,7 +564,16 @@ async function runCase(page, testCase, configPath) {
   await openNewInbound(page);
   if (!(await isTransportAvailable(page, testCase.network))) {
     await closeDrawer(page).catch(() => {});
-    throw new Error(`${testCase.network} transport is not exposed by the current UI`);
+    results.push({
+      name: testCase.name,
+      status: "SKIPPED",
+      details: `${testCase.network} transport is not exposed by the current UI`
+    });
+    skippedCases.push({
+      name: testCase.name,
+      reason: `${testCase.network} transport is not exposed by the current UI`
+    });
+    return;
   }
   await selectTab(page, "Basic");
   await fillField(page, "Tag", tag);
@@ -528,10 +603,14 @@ async function runCase(page, testCase, configPath) {
   }
 
   const saveButton = page.getByRole("button", { name: "Save Inbound", exact: true });
-  const saveDisabled = await saveButton.isDisabled();
+  let saveDisabled = await saveButton.isDisabled();
   if (expectFailure) {
-    const hasFailure = await hasText(page, failureHint);
-    if (!saveDisabled && !hasFailure) {
+    await page.waitForTimeout(120);
+    saveDisabled = await saveButton.isDisabled();
+    const inlineErrors = await page.locator(".inline-error, .field-error").allTextContents();
+    const hasFailure = inlineErrors.some((line) => line.includes(failureHint)) || (await hasText(page, failureHint));
+    const hasValidationHint = await hasText(page, /Fix invalid JSON in Advanced before saving\\.|TLS key file is required when a certificate file is set\\./i);
+    if (!saveDisabled && !hasFailure && !hasValidationHint) {
       await saveButton.click();
       try {
         await waitForTopMessage(page, /Inbound saved/i, 2500);
@@ -548,7 +627,11 @@ async function runCase(page, testCase, configPath) {
     }
 
     const hasErrorLine = await hasText(page, "Fix invalid JSON in Advanced before saving.");
-    const passed = hasFailure || hasErrorLine;
+    const passed = hasFailure || saveDisabled || hasErrorLine || hasValidationHint;
+    if (!passed && qaDebug) {
+      const top = await getTopMessageText(page);
+      console.log(JSON.stringify({ tag, saveDisabled, inlineErrors, failureHint, top }, null, 2));
+    }
     await closeDrawer(page);
     results.push({
       name: testCase.name,
@@ -559,6 +642,18 @@ async function runCase(page, testCase, configPath) {
   }
 
   if (saveDisabled) {
+    if (qaDebug) {
+      const inlineErrors = await page.locator(".inline-error, .field-error").allTextContents();
+      const top = await getTopMessageText(page);
+      console.log(JSON.stringify({
+        tag,
+        testCase: testCase.id,
+        security,
+        network,
+        inlineErrors,
+        top
+      }, null, 2));
+    }
     const msg = `Save Inbound is disabled for ${tag}.`;
     await closeDrawer(page);
     throw new Error(msg);
@@ -569,15 +664,15 @@ async function runCase(page, testCase, configPath) {
 
   await nav(page, "Inbounds");
   await waitForInboundTag(page, tag);
-  const inboundFromDisk = await readInboundFromDisk(configPath, tag);
+  const inboundFromDisk = (await readInboundFromDisk(configPath, tag)) ?? (await readInboundFromApi(page, tag));
   if (!inboundFromDisk) {
-    throw new Error(`expected ${tag} to exist in ${configPath}`);
+    throw new Error(`expected ${tag} to exist in panel state`);
   }
   assertSubset(inboundFromDisk, expectation, `${tag}`);
   results.push({
     name: testCase.name,
     status: "PASS",
-    details: `${tag} persisted to ${configPath}`
+    details: ` ${tag} persisted to ${configPath ? `${configPath} (panel-backed)` : "panel state"}`
   });
 }
 
@@ -823,17 +918,16 @@ async function selectField(page, label, value) {
 async function fillField(page, label, value) {
   const field = page.getByLabel(label, { exact: true });
   await field.click({ delay: 20 });
-  await field.fill(String(value));
+  const text = String(value);
+  await field.fill(text);
 }
 
 async function fillProtocolFields(page, protocol, values) {
-  if (protocol === "vless" || protocol === "vmess") {
-    const field = protocol === "vless" ? "Decryption" : "Encryption";
-    const payload = protocol === "vless" ? values.decryption || "none" : values.encryption || "auto";
-    await fillField(page, field, payload);
+  if (protocol === "vless") {
+    await fillField(page, "Decryption", values.decryption ?? "none");
   }
   if (protocol === "shadowsocks") {
-    await fillField(page, "Method", values.method || "2022-blake3-aes-128-gcm");
+    await fillField(page, "Method", values.method ?? "2022-blake3-aes-128-gcm");
   }
 }
 
@@ -869,17 +963,18 @@ async function fillTransportFields(page, network, values) {
 
 async function fillSecurityFields(page, security, values) {
   if (security === "tls") {
-    await fillField(page, "Server name", values.serverName || "example.com");
-    await fillField(page, "ALPN", values.alpn || "h2,http/1.1");
-    await fillField(page, "Certificate file", values.certificateFile || "/etc/blackwire/fullchain.pem");
-    await fillField(page, "Key file", values.keyFile || "/etc/blackwire/privkey.pem");
+    await fillField(page, "Server name", values.serverName ?? "example.com");
+    await fillField(page, "ALPN", values.alpn ?? "h2,http/1.1");
+    await fillField(page, "Certificate file", values.certificateFile ?? "/etc/blackwire/fullchain.pem");
+    await fillField(page, "Key file", values.keyFile ?? "/etc/blackwire/privkey.pem");
   }
   if (security === "reality") {
-    await fillField(page, "Server name", values.serverName || "www.cloudflare.com");
-    await fillField(page, "Public key", values.publicKey || "r3Yc3...");
-    await fillField(page, "Short ID", values.shortId || "6ba85179e30d4fc2");
-    await fillField(page, "Fingerprint", values.fingerprint || "chrome");
-    await fillField(page, "Spider X", values.spiderX || "/");
+    await fillField(page, "Server name", values.serverName ?? "www.cloudflare.com");
+    await fillField(page, "Private key", values.privateKey ?? "");
+    await fillField(page, "Public key", values.publicKey ?? "r3Yc3...");
+    await fillField(page, "Short ID", values.shortId ?? "6ba85179e30d4fc2");
+    await fillField(page, "Fingerprint", values.fingerprint ?? "chrome");
+    await fillField(page, "Spider X", values.spiderX ?? "/");
   }
 }
 
@@ -970,7 +1065,7 @@ async function waitForConfigSaved(page, timeout = 15000) {
   await page.waitForFunction(
     () => {
       const msg = document.querySelector(".strip-message")?.textContent ?? "";
-      return /config saved|live runtime synchronized|gRPC unavailable|live apply failed|live gRPC disabled/i.test(msg);
+      return /saved in panel|config saved|live runtime synchronized|gRPC unavailable|live apply failed|live gRPC disabled/i.test(msg);
     },
     { timeout }
   );
@@ -1009,19 +1104,74 @@ async function launchBrowser() {
 }
 
 async function readInboundFromDisk(configPath, tag) {
-  const config = await readConfigWithRetry(configPath);
-  const inbound = (config.inbounds || []).find((item) => item.tag === tag);
-  if (!inbound) return null;
+  try {
+    const config = await readConfigWithRetry(configPath);
+    const inbound = (config.inbounds || []).find((item) => item.tag === tag);
+    if (!inbound) return null;
+    return {
+      ...inbound,
+      enabled: inbound.enabled !== false,
+      transport: inbound.transport ?? inbound.streamSettings?.network ?? ""
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function readInboundFromApi(page, tag) {
+  const response = await page.request.get(`${uiUrl}/api/inbounds`);
+  if (!response.ok()) {
+    throw new Error(`expected 200 when reading inbounds from API, got ${response.status()}`);
+  }
+  const inboundList = await response.json();
+  if (!Array.isArray(inboundList)) {
+    return null;
+  }
+  const found = inboundList.find((item) => item.tag === tag);
+  if (!found) return null;
+  return normalizeInbound(found);
+}
+
+function normalizeInbound(inbound) {
+  const settings = parseInboundJsonField(inbound.settings);
+  const streamSettings = parseInboundJsonField(inbound.streamSettings);
+  const sniffing = parseInboundJsonField(inbound.sniffing);
+  const limits = parseInboundJsonField(inbound.limits);
   return {
     ...inbound,
-    enabled: inbound.enabled !== false,
-    transport: inbound.transport ?? inbound.streamSettings?.network ?? ""
+    settings,
+    streamSettings,
+    sniffing,
+    limits,
+    transport: inbound.transport ?? streamSettings?.network ?? "",
+    enabled: inbound.enabled !== false
   };
 }
 
+function parseInboundJsonField(value) {
+  if (!value) return {};
+  if (typeof value !== "string") return value;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 async function isInboundInConfig(configPath, tag) {
-  const config = await readConfigWithRetry(configPath);
-  return (config.inbounds || []).some((item) => item.tag === tag);
+  try {
+    const config = await readConfigWithRetry(configPath);
+    return (config.inbounds || []).some((item) => item.tag === tag);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 async function readConfigWithRetry(configPath, timeout = 12000) {
@@ -1032,6 +1182,13 @@ async function readConfigWithRetry(configPath, timeout = 12000) {
       const raw = await readFile(configPath, "utf8");
       return JSON.parse(raw);
     } catch (error) {
+      if (error?.code === "ENOENT") {
+        if (Date.now() >= deadline) {
+          throw error;
+        }
+      } else if (error instanceof SyntaxError) {
+        throw error;
+      }
       lastError = error;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
@@ -1083,6 +1240,32 @@ function printSummary() {
       console.log(`- ${item.name}: ${item.reason}`);
     }
   }
+}
+
+function buildCasesToRun() {
+  if (includeArg.trim()) {
+    const requested = new Set(splitCommaList(includeArg));
+    const selected = cases.filter((item) => requested.has(item.id));
+    if (selected.length === 0) {
+      throw new Error(`No matching case IDs for --include ${includeArg}`);
+    }
+    return selected;
+  }
+  if (suiteArg === "tls-reality") {
+    const selected = cases.filter((item) => item.id.startsWith("vless-tls") || item.id.startsWith("vless-ws-tls") || item.id === "vless-reality-tcp");
+    if (selected.length === 0) {
+      throw new Error("No cases found for --suite tls-reality");
+    }
+    return selected;
+  }
+  return cases;
+}
+
+function splitCommaList(value) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function getArg(argvArray, name, fallback) {

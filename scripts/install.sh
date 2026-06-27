@@ -39,6 +39,7 @@ BLACK_UI_LISTEN="${BLACK_UI_LISTEN:-127.0.0.1:18080}"
 BLACK_UI_DATA_DIR="${BLACK_UI_DATA_DIR:-/var/lib/black-ui}"
 BLACK_UI_STATIC_DIR="${BLACK_UI_STATIC_DIR:-/usr/local/share/black-ui/frontend/dist}"
 BLACK_UI_PUBLIC_BASE_URL="${BLACK_UI_PUBLIC_BASE_URL:-}"
+BLACK_UI_SUBSCRIPTION_HOST="${BLACK_UI_SUBSCRIPTION_HOST:-}"
 BLACK_UI_PANEL_PATH="${BLACK_UI_PANEL_PATH:-/panel}"
 BLACK_UI_COOKIE_SECURE="${BLACK_UI_COOKIE_SECURE:-}"
 BLACK_UI_GROUP="${BLACK_UI_GROUP:-black-ui}"
@@ -939,6 +940,28 @@ install_black_ui_systemd_unit() {
             cookie_secure=0
         fi
     fi
+    black_ui_public_base_url="$BLACK_UI_PUBLIC_BASE_URL"
+    black_ui_subscription_host="$BLACK_UI_SUBSCRIPTION_HOST"
+    if [ -z "$black_ui_subscription_host" ]; then
+        if [ -n "$DOMAIN" ]; then
+            black_ui_subscription_host="$DOMAIN"
+        elif [ "$PUBLIC_HOST" != "<server-ip-or-domain>" ]; then
+            black_ui_subscription_host="$PUBLIC_HOST"
+        fi
+    fi
+    if [ -z "$black_ui_public_base_url" ] && [ -n "$black_ui_subscription_host" ]; then
+        listen_port="${BLACK_UI_LISTEN##*:}"
+        case "$listen_port" in
+            ''|*[!0-9]*) listen_port="18080" ;;
+        esac
+        scheme="http"
+        [ "$SETUP" = "domain" ] && scheme="https"
+        if [ "$SETUP" = "domain" ]; then
+            black_ui_public_base_url="${scheme}://${black_ui_subscription_host}${BLACK_UI_PANEL_PATH}"
+        else
+            black_ui_public_base_url="${scheme}://${black_ui_subscription_host}:${listen_port}"
+        fi
+    fi
     cat > "$tmp_unit" <<UNIT
 [Unit]
 Description=black-ui Blackwire control panel
@@ -955,6 +978,8 @@ Environment=BLACK_UI_DATA_DIR=${BLACK_UI_DATA_DIR}
 Environment=BLACK_UI_LISTEN=${BLACK_UI_LISTEN}
 Environment=BLACK_UI_STATIC_DIR=${BLACK_UI_STATIC_DIR}
 Environment=BLACK_UI_COOKIE_SECURE=${cookie_secure}
+Environment=BLACK_UI_PUBLIC_BASE_URL=${black_ui_public_base_url}
+Environment=BLACK_UI_SUBSCRIPTION_HOST=${black_ui_subscription_host}
 Restart=on-failure
 RestartSec=5s
 ProtectSystem=strict
@@ -1011,8 +1036,28 @@ install_black_ui() {
     fi
     rm -rf "$ui_workdir"
     install_black_ui_systemd_unit
-    if [ -n "$BLACK_UI_PUBLIC_BASE_URL" ]; then
-        log "black-ui public base URL: $BLACK_UI_PUBLIC_BASE_URL"
+    effective_public_base_url="$BLACK_UI_PUBLIC_BASE_URL"
+    effective_subscription_host="$BLACK_UI_SUBSCRIPTION_HOST"
+    if [ -z "$effective_subscription_host" ]; then
+        if [ -n "$DOMAIN" ]; then
+            effective_subscription_host="$DOMAIN"
+        elif [ "$PUBLIC_HOST" != "<server-ip-or-domain>" ]; then
+            effective_subscription_host="$PUBLIC_HOST"
+        fi
+    fi
+    if [ -z "$effective_public_base_url" ] && [ -n "$effective_subscription_host" ]; then
+        listen_port="${BLACK_UI_LISTEN##*:}"
+        case "$listen_port" in
+            ''|*[!0-9]*) listen_port="18080" ;;
+        esac
+        if [ "$SETUP" = "domain" ]; then
+            effective_public_base_url="https://${effective_subscription_host}${BLACK_UI_PANEL_PATH}"
+        else
+            effective_public_base_url="http://${effective_subscription_host}:${listen_port}"
+        fi
+    fi
+    if [ -n "$effective_public_base_url" ]; then
+        log "black-ui public base URL: $effective_public_base_url"
     elif [ -n "$DOMAIN" ]; then
         log "black-ui can be reverse-proxied at https://${DOMAIN}${BLACK_UI_PANEL_PATH}"
     else

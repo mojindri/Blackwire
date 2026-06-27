@@ -93,8 +93,16 @@ pub fn init(conn: &Connection, data_dir: &Path) -> Result<()> {
     set_default(conn, "grpcEnabled", "true")?;
     set_default(conn, "grpcAddress", "127.0.0.1:62789")?;
     set_default(conn, "firewallAutoOpen", "false")?;
-    set_default(conn, "publicBaseUrl", "http://127.0.0.1:18080")?;
-    set_default(conn, "subscriptionHost", "127.0.0.1")?;
+    let public_base_url = std::env::var("BLACK_UI_PUBLIC_BASE_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:18080".into());
+    let subscription_host = std::env::var("BLACK_UI_SUBSCRIPTION_HOST")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "127.0.0.1".into());
+    set_default(conn, "publicBaseUrl", &public_base_url)?;
+    set_default(conn, "subscriptionHost", &subscription_host)?;
     set_default(conn, "enforcementIntervalSeconds", "30")?;
     set_default(conn, "adaptiveRoutingEnabled", "false")?;
     set_default(conn, "adaptiveTuningMode", "recommend")?;

@@ -18,9 +18,10 @@ use crate::{
     models::{
         ApplyResult, BulkInput, CapabilityMap, ConfigSection, ConfigSectionInput, Inbound,
         InboundInput, LoginInput, LoginResponse, ManagedUser, Outbound, OutboundInput,
-        ServiceStatus, Settings, SetupInput, Status, TrafficSnapshot, UserInput,
+        RealityClientValues, RealityGeneratedValues, ServiceStatus, Settings, SetupInput, Status,
+        TlsServerValues, TrafficSnapshot, UserInput,
     },
-    runtime, service,
+    reality_values, runtime, service,
     state::AppState,
     util,
 };
@@ -176,6 +177,34 @@ pub async fn runtime_traffic(
             inbounds: vec![],
         });
     Ok(Json(snapshot))
+}
+
+pub async fn reality_client_values(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<RealityClientValues>> {
+    let _ = auth::require(&headers, &state)?;
+    let settings = current_settings(&state)?;
+    reality_values::load(&settings.config_path)
+        .map(Json)
+        .map_err(AppError::internal)
+}
+
+pub async fn reality_generate_values(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<RealityGeneratedValues> {
+    let _ = auth::require(&headers, &state)?;
+    Ok(Json(reality_values::generate()))
+}
+
+pub async fn tls_server_values(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<TlsServerValues>> {
+    let _ = auth::require(&headers, &state)?;
+    let settings = current_settings(&state)?;
+    Ok(Json(reality_values::load_tls(&settings.config_path)))
 }
 
 pub async fn service_status(
