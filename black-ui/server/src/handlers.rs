@@ -1040,8 +1040,9 @@ async fn apply_user_change(
 pub async fn subscription_base64(
     State(state): State<AppState>,
     Path(token): Path<String>,
+    headers: HeaderMap,
 ) -> Response {
-    match subscription_link(&state, &token) {
+    match subscription_link(&state, &token, &headers) {
         Ok(link) => {
             let body = general_purpose::STANDARD.encode(link);
             ([("content-type", "text/plain; charset=utf-8")], body).into_response()
@@ -1053,16 +1054,17 @@ pub async fn subscription_base64(
 pub async fn subscription_raw(
     State(state): State<AppState>,
     Path(token): Path<String>,
+    headers: HeaderMap,
 ) -> Response {
-    match subscription_link(&state, &token) {
+    match subscription_link(&state, &token, &headers) {
         Ok(link) => ([("content-type", "text/plain; charset=utf-8")], link).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
-fn subscription_link(state: &AppState, token: &str) -> anyhow::Result<String> {
+fn subscription_link(state: &AppState, token: &str, headers: &HeaderMap) -> anyhow::Result<String> {
     let conn = state.lock_db()?;
-    let settings = db::load_settings(&conn)?;
+    let settings = public_subscription_settings(db::load_settings(&conn)?, headers);
     let user = db::load_user_by_token(&conn, token)?.ok_or_else(|| anyhow::anyhow!("not found"))?;
     if !user.enabled || user.enforcement_status != "active" {
         anyhow::bail!("user disabled");
@@ -1073,6 +1075,46 @@ fn subscription_link(state: &AppState, token: &str) -> anyhow::Result<String> {
     let inbound = db::load_inbound(&conn, user.inbound_id)?
         .ok_or_else(|| anyhow::anyhow!("inbound missing"))?;
     config::subscription_link(&settings, &inbound, &user)
+}
+
+fn public_subscription_settings(mut settings: Settings, headers: &HeaderMap) -> Settings {
+    if is_local_host(&settings.subscription_host) {
+        if let Some(host) = public_request_host(headers) {
+            settings.subscription_host = host;
+        }
+    }
+    settings
+}
+
+fn public_request_host(headers: &HeaderMap) -> Option<String> {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())?
+        .trim();
+    let host = host_without_port(host)?;
+    if is_local_host(&host) {
+        return None;
+    }
+    Some(host)
+}
+
+fn host_without_port(host: &str) -> Option<String> {
+    if host.is_empty() {
+        return None;
+    }
+    if let Some(rest) = host.strip_prefix('[') {
+        let end = rest.find(']')?;
+        return Some(rest[..end].to_string());
+    }
+    if host.matches(':').count() == 1 {
+        return host.split(':').next().map(str::to_string);
+    }
+    Some(host.to_string())
+}
+
+fn is_local_host(host: &str) -> bool {
+    let host = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    host == "localhost" || host == "::1" || host.starts_with("127.")
 }
 
 fn user_limit_status(user: &ManagedUser) -> Result<Option<&'static str>, AppError> {
@@ -1108,6 +1150,12 @@ fn validate_inbound(input: &InboundInput) -> Result<(), AppError> {
     if input.tag.trim().is_empty() || input.listen.trim().is_empty() {
         return Err(AppError::bad_request("tag and listen are required"));
     }
+    if input.enabled && public_client_inbound(input) && is_local_host(input.listen.trim()) {
+        return Err(AppError::bad_request(format!(
+            "{} over {} must listen on a public bind address such as 0.0.0.0 or ::; 127.0.0.1 is local-only and cannot be reached by copied client links",
+            input.protocol, input.transport
+        )));
+    }
     if !matches!(
         input.protocol.as_str(),
         "socks" | "http" | "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "tuic"
@@ -1125,6 +1173,13 @@ fn validate_inbound(input: &InboundInput) -> Result<(), AppError> {
     validate_optional_json("sniffing", input.sniffing.as_deref())?;
     validate_optional_json("limits", input.limits.as_deref())?;
     Ok(())
+}
+
+fn public_client_inbound(input: &InboundInput) -> bool {
+    matches!(
+        input.protocol.as_str(),
+        "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "tuic"
+    )
 }
 
 fn ensure_unique_inbound_tag(
@@ -1336,6 +1391,69 @@ mod tests {
             settings: Some(settings.into()),
             stream_settings: None,
         }
+    }
+
+    fn inbound(protocol: &str, transport: &str, listen: &str, enabled: bool) -> InboundInput {
+        InboundInput {
+            tag: format!("{protocol}-{transport}"),
+            listen: listen.into(),
+            port: 443,
+            protocol: protocol.into(),
+            enabled,
+            transport: transport.into(),
+            settings: None,
+            stream_settings: None,
+            sniffing: None,
+            limits: None,
+        }
+    }
+
+    #[test]
+    fn subscription_settings_replace_local_host_with_public_request_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_static("203.0.113.10:18080"),
+        );
+        let settings = Settings {
+            subscription_host: "127.0.0.1".into(),
+            ..Settings::default()
+        };
+
+        let settings = public_subscription_settings(settings, &headers);
+
+        assert_eq!(settings.subscription_host, "203.0.113.10");
+    }
+
+    #[test]
+    fn subscription_settings_keep_explicit_public_subscription_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_static("203.0.113.10:18080"),
+        );
+        let settings = Settings {
+            subscription_host: "proxy.example.com".into(),
+            ..Settings::default()
+        };
+
+        let settings = public_subscription_settings(settings, &headers);
+
+        assert_eq!(settings.subscription_host, "proxy.example.com");
+    }
+
+    #[test]
+    fn public_client_inbounds_reject_localhost_listen() {
+        let err = validate_inbound(&inbound("hysteria2", "quic", "127.0.0.1", true))
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("127.0.0.1 is local-only"));
+        assert!(validate_inbound(&inbound("hysteria2", "quic", "0.0.0.0", true)).is_ok());
+        assert!(validate_inbound(&inbound("hysteria2", "quic", "::", true)).is_ok());
+        assert!(validate_inbound(&inbound("hysteria2", "quic", "127.0.0.1", false)).is_ok());
+        assert!(validate_inbound(&inbound("vless", "tcp", "127.0.0.1", true)).is_err());
+        assert!(validate_inbound(&inbound("socks", "tcp", "127.0.0.1", true)).is_ok());
     }
 
     #[test]

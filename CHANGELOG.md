@@ -8,6 +8,21 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.24 - 2026-06-27
+
+### Fixed
+
+- Black UI now rejects enabled shareable proxy inbounds bound to loopback
+  addresses, preventing public subscription links from pointing at listeners
+  that only accept local connections.
+- Subscription link generation now replaces a stale local subscription host with
+  the current public request host when the panel is accessed over a non-local
+  address.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.24`.
+
 ## 0.1.23 - 2026-06-27
 
 ### Added
