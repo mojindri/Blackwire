@@ -15,6 +15,7 @@ mod reality_values;
 mod runtime;
 mod service;
 mod state;
+mod tls_cert;
 mod util;
 
 use anyhow::Result;

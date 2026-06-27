@@ -742,6 +742,34 @@ tr.row-selected {
   gap: 14px;
 }
 
+.configurator-helper-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.configurator-helper-row div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.configurator-helper-row strong {
+  color: #263244;
+  font-size: 13px;
+}
+
+.configurator-helper-row span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .toggle-grid {
   display: flex;
   gap: 10px;
@@ -802,6 +830,61 @@ tr.row-selected {
   border-color: #b7e2df;
   background: var(--teal-soft);
   color: var(--teal-dark);
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.dialog-panel {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+}
+
+.dialog-head,
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px;
+}
+
+.dialog-head {
+  border-bottom: 1px solid var(--line);
+}
+
+.dialog-head h3 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+
+.dialog-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.dialog-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.dialog-actions {
+  border-top: 1px solid var(--line);
+  justify-content: flex-end;
 }
 
 .inline-error {
@@ -945,6 +1028,13 @@ tr.row-selected {
   white-space: pre;
 }
 
+.tls-command-box {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .auth-shell {
   min-height: 100vh;
   display: grid;
@@ -1057,8 +1147,15 @@ tr.row-selected {
   }
 
   .configurator-grid,
+  .configurator-helper-row,
   .summary-head {
     grid-template-columns: 1fr;
+  }
+
+  .configurator-helper-row,
+  .dialog-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .summary-head {

@@ -264,7 +264,7 @@ protect_tls_material_for_service() {
     group="$(config_group)"
     if getent group "$group" >/dev/null 2>&1; then
         sudo_cmd find "$cert_dir" -type d -exec chown "root:$group" {} +
-        sudo_cmd find "$cert_dir" -type d -exec chmod 0750 {} +
+        sudo_cmd find "$cert_dir" -type d -exec chmod 0770 {} +
         sudo_cmd find "$cert_dir" -type f -exec chown "root:$group" {} +
         sudo_cmd find "$cert_dir" -type f -exec chmod 0640 {} +
         log "protected TLS material in $cert_dir for service group '$group'"

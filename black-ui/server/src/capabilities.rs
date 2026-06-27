@@ -89,8 +89,8 @@ pub fn blackwire_capabilities() -> CapabilityMap {
             item(
                 "quic",
                 "QUIC",
-                "experimental",
-                "Legacy V2Ray QUIC transport; external-client support varies",
+                "supported",
+                "V2Ray QUIC transport; sing-box interop covered, Xray 26+ legacy-client row is skipped",
             ),
             item(
                 "httpupgrade",
@@ -226,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn quic_transport_is_visible_but_experimental() {
+    fn quic_transport_is_supported_with_documented_client_limits() {
         let capabilities = blackwire_capabilities();
         let quic = capabilities
             .transports
@@ -234,8 +234,9 @@ mod tests {
             .find(|item| item.key == "quic")
             .expect("QUIC transport should remain visible to Black UI");
 
-        assert_eq!(quic.status, "experimental");
-        assert!(quic.notes.contains("external-client"));
+        assert_eq!(quic.status, "supported");
+        assert!(quic.notes.contains("sing-box"));
+        assert!(quic.notes.contains("Xray 26+"));
     }
 
     #[test]

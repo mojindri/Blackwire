@@ -59,6 +59,18 @@ export interface TlsServerValues {
   allowInsecure: boolean;
 }
 
+export interface TlsSelfSignedInput {
+  serverName: string;
+  days: number;
+}
+
+export interface TlsSelfSignedResult {
+  serverName: string;
+  certificateFile: string;
+  keyFile: string;
+  days: number;
+}
+
 export interface Inbound {
   id: number;
   tag: string;

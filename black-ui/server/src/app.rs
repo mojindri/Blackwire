@@ -123,6 +123,10 @@ fn api_router() -> Router<AppState> {
             post(handlers::reality_generate_values),
         )
         .route("/tls/server-values", get(handlers::tls_server_values))
+        .route(
+            "/tls/generate-self-signed",
+            post(handlers::tls_generate_self_signed),
+        )
         .route("/service/status", get(handlers::service_status))
         .route(
             "/service/restart-blackwire",

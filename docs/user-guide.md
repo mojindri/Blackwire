@@ -21,8 +21,8 @@ Linux release assets currently support:
 Basic install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.20/scripts/install.sh \
-  | VERSION=v0.1.20 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.21/scripts/install.sh \
+  | VERSION=v0.1.21 bash
 ```
 
 The service is not started by default. Blackwire needs a valid config before it
@@ -31,22 +31,22 @@ can run.
 Install with an existing config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.20/scripts/install.sh \
-  | VERSION=v0.1.20 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.21/scripts/install.sh \
+  | VERSION=v0.1.21 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
 ```
 
 Generate a VLESS REALITY VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.20/scripts/install.sh \
-  | VERSION=v0.1.20 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.21/scripts/install.sh \
+  | VERSION=v0.1.21 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
 ```
 
 Generate a domain + nginx + TLS setup:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.20/scripts/install.sh \
-  | VERSION=v0.1.20 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.21/scripts/install.sh \
+  | VERSION=v0.1.21 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 For domain setup, point DNS at the VPS first and open `tcp/80` and `tcp/443` in
@@ -60,9 +60,10 @@ sudo cat /etc/blackwire/client-info.txt
 
 ## Black UI
 
-Black UI reads runtime capabilities from the companion server. TUIC v5 is
-available in the inbound and outbound protocol pickers as an experimental QUIC
-protocol with TCP proxy and native UDP relay support.
+Black UI reads runtime capabilities from the companion server. QUIC transport
+and TUIC v5 are available in the inbound and outbound protocol pickers as
+supported UDP-based options; throughput still depends on the client, firewall,
+NAT, and network path.
 
 Black UI is the companion web panel for controlled deployments and operator
 testing. Do not expose it directly to the public internet.
@@ -70,15 +71,15 @@ testing. Do not expose it directly to the public internet.
 Install the panel:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.20/scripts/install.sh \
-  | VERSION=v0.1.20 INSTALL_BLACK_UI=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.21/scripts/install.sh \
+  | VERSION=v0.1.21 INSTALL_BLACK_UI=1 bash
 ```
 
 Install Blackwire with domain setup and Black UI:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.20/scripts/install.sh \
-  | VERSION=v0.1.20 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.21/scripts/install.sh \
+  | VERSION=v0.1.21 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
 ```
 
 Defaults:
@@ -92,6 +93,13 @@ Defaults:
 ```
 
 With domain setup, the installer reverse-proxies Black UI at `/panel/`.
+
+In the inbound TLS security section, Black UI can generate a self-signed
+certificate and key on the server for IP-only or lab deployments. Generated
+files are stored under `/etc/blackwire/certs` with service-readable permissions,
+and the panel fills the TLS certificate/key paths automatically. Clients still
+need to trust that certificate or use their explicit insecure/skip-verify
+setting. For public domain deployments, prefer a normal CA-issued certificate.
 
 Useful commands:
 
@@ -142,21 +150,21 @@ sudo journalctl -u nginx -n 100 --no-pager
 Upgrade:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.20/scripts/install.sh \
-  | VERSION=v0.1.20 ACTION=upgrade bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.21/scripts/install.sh \
+  | VERSION=v0.1.21 ACTION=upgrade bash
 ```
 
 Uninstall but keep config and state:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.20/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.21/scripts/install.sh \
   | ACTION=uninstall bash
 ```
 
 Remove config and state too:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.20/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.21/scripts/install.sh \
   | ACTION=uninstall REMOVE_CONFIG=1 bash
 ```
 
@@ -279,8 +287,8 @@ Users cannot connect:
 If GitHub downloads fail, try IPv4:
 
 ```sh
-curl -4 -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.20/scripts/install.sh \
-  | VERSION=v0.1.20 bash
+curl -4 -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.21/scripts/install.sh \
+  | VERSION=v0.1.21 bash
 ```
 
 ## Advanced

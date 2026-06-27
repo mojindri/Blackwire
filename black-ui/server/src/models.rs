@@ -112,6 +112,27 @@ pub struct TlsServerValues {
     pub allow_insecure: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsSelfSignedInput {
+    pub server_name: String,
+    #[serde(default = "default_tls_self_signed_days")]
+    pub days: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsSelfSignedResult {
+    pub server_name: String,
+    pub certificate_file: String,
+    pub key_file: String,
+    pub days: u16,
+}
+
+fn default_tls_self_signed_days() -> i64 {
+    365
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Inbound {
