@@ -13,7 +13,7 @@ export async function fetchSubscriptionContent(url: string): Promise<{ ok: boole
   if (!url) return { ok: false, content: "", message: "Nothing to copy" };
 
   try {
-    const response = await fetch(url.endsWith("/raw") ? url : `${url}/raw`, { cache: "no-store" });
+    const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) {
       return { ok: false, content: "", message: `Subscription returned ${response.status}` };
     }
