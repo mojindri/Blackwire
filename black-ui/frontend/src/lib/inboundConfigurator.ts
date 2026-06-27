@@ -386,7 +386,8 @@ export function inboundCompatibilityNotice(
   if (security === "reality" && network !== "tcp") {
     return {
       tone: "warning",
-      message: "REALITY should stay on TCP-compatible transports for generated links and common clients."
+      message:
+        "REALITY is best on TCP-compatible transport paths, but this editor allows it on any transport for manual testing."
     };
   }
   return null;
@@ -404,9 +405,6 @@ export function validateInboundState(state: InboundEditorState): InboundValidati
   }
   if (!Number.isInteger(state.port) || state.port < 1 || state.port > 65535) {
     issues.push({ field: "port", message: "Port must be between 1 and 65535." });
-  }
-  if (state.security === "reality" && state.network !== "tcp") {
-    issues.push({ field: "security", message: "REALITY currently works only with TCP in this editor." });
   }
   if (state.security === "tls") {
     if (!state.tlsServerName.trim()) {
