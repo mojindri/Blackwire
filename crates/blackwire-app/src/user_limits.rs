@@ -55,12 +55,19 @@ impl UserConnectionLimiter {
     /// has already reached the configured cap.
     pub fn try_acquire(self: &Arc<Self>, user: Option<&Arc<str>>) -> Option<UserConnectionPermit> {
         let user = user?.clone();
+        let max = self.max_connections_per_user();
+        if max == usize::MAX {
+            return Some(UserConnectionPermit {
+                limiter: None,
+                user,
+                counter: None,
+            });
+        }
         let counter = self
             .counters
             .entry(Arc::clone(&user))
             .or_insert_with(|| Arc::new(UserCounter::new()))
             .clone();
-        let max = self.max_connections_per_user();
         let active = counter.active.fetch_add(1, Ordering::AcqRel) + 1;
         if active > max {
             counter.active.fetch_sub(1, Ordering::AcqRel);
@@ -68,9 +75,9 @@ impl UserConnectionLimiter {
         }
 
         Some(UserConnectionPermit {
-            limiter: Arc::clone(self),
+            limiter: Some(Arc::clone(self)),
             user,
-            counter,
+            counter: Some(counter),
         })
     }
 }
@@ -78,18 +85,24 @@ impl UserConnectionLimiter {
 /// Owned permit that keeps one per-user connection slot occupied.
 #[derive(Debug)]
 pub struct UserConnectionPermit {
-    limiter: Arc<UserConnectionLimiter>,
+    limiter: Option<Arc<UserConnectionLimiter>>,
     user: Arc<str>,
-    counter: Arc<UserCounter>,
+    counter: Option<Arc<UserCounter>>,
 }
 
 impl Drop for UserConnectionPermit {
     fn drop(&mut self) {
-        let previous = self.counter.active.fetch_sub(1, Ordering::AcqRel);
+        let Some(limiter) = &self.limiter else {
+            return;
+        };
+        let Some(counter) = &self.counter else {
+            return;
+        };
+        let previous = counter.active.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0, "user connection counter underflow");
         if previous <= 1 {
-            self.limiter.counters.remove_if(&self.user, |_, current| {
-                Arc::ptr_eq(current, &self.counter) && current.active.load(Ordering::Acquire) == 0
+            limiter.counters.remove_if(&self.user, |_, current| {
+                Arc::ptr_eq(current, counter) && current.active.load(Ordering::Acquire) == 0
             });
         }
     }

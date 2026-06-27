@@ -369,12 +369,12 @@ pub enum FastRelayEngine {
 #[serde(rename_all = "lowercase")]
 pub enum FastRelayFlushPolicy {
     /// Flush after each write, matching legacy semantics.
-    #[default]
     Immediate,
     /// Flush when a direction reaches EOF/shutdown.
     Deferred,
     /// Coalesce flushes per burst: flush only when the source pauses or reaches
     /// EOF. Keeps bulk syscall pressure low without delaying interactive writes.
+    #[default]
     Adaptive,
 }
 

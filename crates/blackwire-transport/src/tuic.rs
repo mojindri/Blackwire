@@ -29,7 +29,7 @@ use tokio::{
     sync::{Mutex, OwnedSemaphorePermit, Semaphore},
     time::timeout,
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::quic::{
@@ -203,7 +203,7 @@ impl TuicServer {
                     let conn = match incoming.await {
                         Ok(conn) => conn,
                         Err(e) => {
-                            warn!("TUIC v5 QUIC handshake failed: {e}");
+                            debug!("TUIC v5 QUIC handshake failed: {e}");
                             continue;
                         }
                     };
@@ -212,7 +212,7 @@ impl TuicServer {
                     tokio::spawn(async move {
                         let _permits = permits;
                         if let Err(e) = serve_connection(conn, config, dispatcher).await {
-                            warn!("TUIC v5 connection closed: {e}");
+                            debug!("TUIC v5 connection closed: {e}");
                         }
                     });
                 }
@@ -869,7 +869,7 @@ async fn handle_udp_packet(
             }
         }
         Ok(Err(e)) => warn!("TUIC UDP recv failed: {e}"),
-        Err(_) => warn!("TUIC UDP recv timed out"),
+        Err(_) => debug!("TUIC UDP recv timed out"),
     }
 }
 

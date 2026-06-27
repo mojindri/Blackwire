@@ -32,7 +32,7 @@ use blackwire_common::{Address, BoxedStream, ProxyError, ReunionStream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{timeout, Instant, Sleep};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Maximum concurrent QUIC connections on a single Hysteria2 server.
 ///
@@ -220,7 +220,7 @@ impl Hysteria2Server {
                     let conn = match incoming.await {
                         Ok(c) => c,
                         Err(e) => {
-                            warn!("QUIC connection failed during handshake: {e}");
+                            debug!("QUIC connection failed during handshake: {e}");
                             continue;
                         }
                     };
@@ -230,7 +230,7 @@ impl Hysteria2Server {
                     tokio::spawn(async move {
                         let _permits = permits;
                         if let Err(e) = http3::serve_connection(conn, config, dispatcher).await {
-                            warn!("Hysteria2 connection closed: {e}");
+                            debug!("Hysteria2 connection closed: {e}");
                         }
                     });
                 }

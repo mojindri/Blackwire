@@ -34,15 +34,12 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use blackwire_connmgr::{global_manager, CloseReason, Protocol, RelayPath, Transport};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 macro_rules! relay_log {
     ($profile:expr, $($args:tt)*) => {
-        if $profile == ProfileMode::Fast {
-            debug!($($args)*);
-        } else {
-            info!($($args)*);
-        }
+        let _ = $profile;
+        debug!($($args)*);
     };
 }
 
@@ -210,8 +207,7 @@ pub struct DefaultDispatcher {
     outbounds: std::collections::HashMap<String, Arc<dyn OutboundHandler>>,
     dns: Option<Arc<DnsModule>>,
     sniffing: Arc<ArcSwap<HashMap<String, Arc<SniffingConfig>>>>,
-    /// Operating profile. Under `Fast`, per-connection relay logs are emitted at
-    /// `debug` level rather than `info` to reduce log overhead on hot paths.
+    /// Operating profile for relay and splice policy selection.
     profile: ProfileMode,
     splice_policy: FastSplicePolicy,
     relay_policy: FastRelayConfig,

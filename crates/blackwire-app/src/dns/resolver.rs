@@ -7,9 +7,10 @@
 //! The resolver is async and integrates cleanly with the Tokio runtime.
 
 use std::net::IpAddr;
-
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use dashmap::DashMap;
 use hickory_resolver::config::{
     ConnectionConfig, LookupIpStrategy, NameServerConfig, ResolverConfig,
 };
@@ -19,9 +20,19 @@ use tracing::debug;
 
 use blackwire_common::ProxyError;
 
+const POSITIVE_CACHE_TTL: Duration = Duration::from_secs(60);
+const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(10);
+
 /// A DNS resolver that can perform real name lookups.
 pub struct DnsResolver {
     inner: TokioResolver,
+    cache: DashMap<String, DnsCacheEntry>,
+}
+
+#[derive(Clone)]
+struct DnsCacheEntry {
+    expires_at: Instant,
+    result: Result<Vec<IpAddr>, String>,
 }
 
 impl DnsResolver {
@@ -59,27 +70,57 @@ impl DnsResolver {
             }
         };
 
-        Ok(Self { inner: resolver })
+        Ok(Self {
+            inner: resolver,
+            cache: DashMap::new(),
+        })
     }
 
     /// Resolve a domain name to a list of IP addresses.
     ///
     /// Returns all A and AAAA records from the first successful lookup.
     pub async fn resolve(&self, domain: &str) -> Result<Vec<IpAddr>, ProxyError> {
-        debug!(domain = %domain, "DNS resolve");
-        let lookup = self
+        let key = domain.trim_end_matches('.').to_ascii_lowercase();
+        let now = Instant::now();
+        if let Some(entry) = self.cache.get(&key) {
+            if entry.expires_at > now {
+                debug!(domain = %domain, "DNS cache hit");
+                return entry
+                    .result
+                    .clone()
+                    .map_err(|e| ProxyError::DnsResolutionFailed(format!("{domain}: {e}")));
+            }
+        }
+
+        debug!(domain = %domain, "DNS cache miss");
+        let resolved = self
             .inner
             .lookup_ip(domain)
             .await
-            .map_err(|e| ProxyError::DnsResolutionFailed(format!("{domain}: {e}")))?;
+            .map(|lookup| lookup.iter().collect::<Vec<IpAddr>>())
+            .map_err(|e| e.to_string())
+            .and_then(|ips| {
+                if ips.is_empty() {
+                    Err("no records returned".to_string())
+                } else {
+                    Ok(ips)
+                }
+            });
 
-        let ips: Vec<IpAddr> = lookup.iter().collect();
-        if ips.is_empty() {
-            return Err(ProxyError::DnsResolutionFailed(format!(
-                "{domain}: no records returned"
-            )));
-        }
-        Ok(ips)
+        let ttl = if resolved.is_ok() {
+            POSITIVE_CACHE_TTL
+        } else {
+            NEGATIVE_CACHE_TTL
+        };
+        self.cache.insert(
+            key,
+            DnsCacheEntry {
+                expires_at: now + ttl,
+                result: resolved.clone(),
+            },
+        );
+
+        resolved.map_err(|e| ProxyError::DnsResolutionFailed(format!("{domain}: {e}")))
     }
 }
 
