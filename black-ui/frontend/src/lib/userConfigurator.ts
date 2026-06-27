@@ -26,6 +26,7 @@ export interface UserValidationIssue {
 }
 
 const EMPTY_CREDENTIAL = "{}";
+const SECRET_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 export function createUserEditorState(user: ManagedUser | null, inbounds: Inbound[]): UserEditorState {
   const defaultInboundId = inbounds[0]?.id ?? 0;
@@ -197,6 +198,13 @@ export function validateUserState(state: UserEditorState, protocol: UserProtocol
 export function protocolLabel(protocol: UserProtocol): string {
   if (protocol === "unknown") return "custom";
   return protocol;
+}
+
+export function generateCredentialSecret(length = 32): string {
+  const size = Math.max(16, Math.min(64, Math.floor(length)));
+  const bytes = new Uint8Array(size);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => SECRET_ALPHABET[byte & 63]).join("");
 }
 
 function parseCredential(raw: string): { value: Record<string, unknown>; error: string } {
