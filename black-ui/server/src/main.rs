@@ -11,6 +11,7 @@ mod error;
 mod firewall;
 mod handlers;
 mod models;
+mod reality_values;
 mod runtime;
 mod service;
 mod state;

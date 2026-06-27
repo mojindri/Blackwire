@@ -11,6 +11,7 @@
     "qa": "node scripts/qa-all.mjs",
     "qa:flow": "node scripts/qa-flow.mjs",
     "qa:inbounds:panel": "node scripts/qa-inbounds-structured.mjs --headed --restore-settings",
+    "qa:inbounds:tls-reality": "node scripts/qa-inbounds-structured.mjs --suite tls-reality --ui-url http://127.0.0.1:18180 --restore-settings",
     "qa:outbounds:panel": "node scripts/qa-outbounds-structured.mjs --headed --restore-settings",
     "qa:advanced-config:panel": "node scripts/qa-advanced-config-structured.mjs --headed --restore-settings",
     "preview": "vite preview --host 127.0.0.1 --port 18181"

@@ -38,6 +38,7 @@ export interface InboundEditorState {
   tlsCertificateFile: string;
   tlsKeyFile: string;
   realityServerName: string;
+  realityPrivateKey: string;
   realityPublicKey: string;
   realityShortId: string;
   realityFingerprint: string;
@@ -114,6 +115,7 @@ export function createInboundEditorState(inbound?: Inbound | null): InboundEdito
       stringValue(objectValue(streamSettings.value.realitySettings)?.serverName) ??
       arrayOfStrings(objectValue(streamSettings.value.realitySettings)?.serverNames)[0] ??
       "",
+    realityPrivateKey: stringValue(objectValue(streamSettings.value.realitySettings)?.privateKey) ?? "",
     realityPublicKey: stringValue(objectValue(streamSettings.value.realitySettings)?.publicKey) ?? "",
     realityShortId:
       stringValue(objectValue(streamSettings.value.realitySettings)?.shortId) ??
@@ -246,6 +248,7 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
       delete realitySettings.maxTimeDiffSeconds;
       delete realitySettings.maxTimeDiff;
     }
+    applyStringField(realitySettings, "privateKey", state.realityPrivateKey);
     applyStringField(realitySettings, "publicKey", state.realityPublicKey);
     applyStringField(realitySettings, "fingerprint", state.realityFingerprint);
     applyStringField(realitySettings, "spiderX", state.realitySpiderX);
@@ -402,6 +405,37 @@ export function validateInboundState(state: InboundEditorState): InboundValidati
   if (state.security === "reality" && state.network !== "tcp") {
     issues.push({ field: "security", message: "REALITY currently works only with TCP in this editor." });
   }
+  if (state.security === "tls") {
+    if (!state.tlsServerName.trim()) {
+      issues.push({ field: "tlsServerName", message: "TLS server name is required for generated public client links." });
+    }
+    if (state.tlsCertificateFile.trim() && !state.tlsKeyFile.trim()) {
+      issues.push({ field: "tlsKeyFile", message: "TLS key file is required when a certificate file is set." });
+    }
+    if (state.tlsKeyFile.trim() && !state.tlsCertificateFile.trim()) {
+      issues.push({ field: "tlsCertificateFile", message: "TLS certificate file is required when a key file is set." });
+    }
+  }
+  if (state.security === "reality") {
+    if (!state.realityServerName.trim()) {
+      issues.push({ field: "realityServerName", message: "REALITY server name is required." });
+    }
+    if (!state.realityPrivateKey.trim()) {
+      issues.push({ field: "realityPrivateKey", message: "REALITY private key is required for the server listener." });
+    } else if (!isRealityPrivateKey(state.realityPrivateKey.trim())) {
+      issues.push({ field: "realityPrivateKey", message: "REALITY private key must be a 32-byte hex X25519 private key." });
+    }
+    if (!state.realityPublicKey.trim()) {
+      issues.push({ field: "realityPublicKey", message: "REALITY public key is required and must come from the server key pair." });
+    } else if (!isRealityPublicKey(state.realityPublicKey.trim())) {
+      issues.push({ field: "realityPublicKey", message: "REALITY public key must be a 32-byte hex key or base64url X25519 public key from the server." });
+    }
+    if (!state.realityShortId.trim()) {
+      issues.push({ field: "realityShortId", message: "REALITY short ID is required and must match a server shortIds entry." });
+    } else if (!isRealityShortId(state.realityShortId.trim())) {
+      issues.push({ field: "realityShortId", message: "REALITY short ID must be even-length hex, up to 16 characters." });
+    }
+  }
   return issues;
 }
 
@@ -444,6 +478,7 @@ function syncStructuredFields(state: InboundEditorState): InboundEditorState {
     tlsCertificateFile: next.tlsCertificateFile,
     tlsKeyFile: next.tlsKeyFile,
     realityServerName: next.realityServerName,
+    realityPrivateKey: next.realityPrivateKey,
     realityPublicKey: next.realityPublicKey,
     realityShortId: next.realityShortId,
     realityFingerprint: next.realityFingerprint,
@@ -606,4 +641,22 @@ function isValidIpv4(value: string): boolean {
 
 function isLikelyIpv6(value: string): boolean {
   return /^[0-9a-fA-F:]+$/.test(value) && value.includes(":");
+}
+
+function isRealityPublicKey(value: string): boolean {
+  if (/^[0-9a-fA-F]{64}$/.test(value)) {
+    return true;
+  }
+  if (/^[A-Za-z0-9_-]{43}$/.test(value)) {
+    return true;
+  }
+  return /^[A-Za-z0-9+/]{43}=?$/.test(value);
+}
+
+function isRealityPrivateKey(value: string): boolean {
+  return /^[0-9a-fA-F]{64}$/.test(value);
+}
+
+function isRealityShortId(value: string): boolean {
+  return value.length > 0 && value.length <= 16 && value.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(value);
 }

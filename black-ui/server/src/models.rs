@@ -76,6 +76,41 @@ pub struct Status {
     pub run_command: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RealityClientValues {
+    pub source: String,
+    pub tag: Option<String>,
+    pub address: Option<String>,
+    pub port: Option<u16>,
+    pub uuid: Option<String>,
+    pub private_key: Option<String>,
+    pub public_key: String,
+    pub short_id: String,
+    pub server_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RealityGeneratedValues {
+    pub private_key: String,
+    pub public_key: String,
+    pub short_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsServerValues {
+    pub source: String,
+    pub tag: Option<String>,
+    pub port: Option<u16>,
+    pub server_name: Option<String>,
+    pub alpn: Vec<String>,
+    pub certificate_file: Option<String>,
+    pub key_file: Option<String>,
+    pub allow_insecure: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Inbound {

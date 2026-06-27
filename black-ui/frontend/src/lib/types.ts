@@ -29,6 +29,35 @@ export interface Status {
   runCommand: string;
 }
 
+export interface RealityClientValues {
+  source: string;
+  tag: string | null;
+  address: string | null;
+  port: number | null;
+  uuid: string | null;
+  privateKey: string | null;
+  publicKey: string;
+  shortId: string;
+  serverName: string;
+}
+
+export interface RealityGeneratedValues {
+  privateKey: string;
+  publicKey: string;
+  shortId: string;
+}
+
+export interface TlsServerValues {
+  source: string;
+  tag: string | null;
+  port: number | null;
+  serverName: string | null;
+  alpn: string[];
+  certificateFile: string | null;
+  keyFile: string | null;
+  allowInsecure: boolean;
+}
+
 export interface Inbound {
   id: number;
   tag: string;

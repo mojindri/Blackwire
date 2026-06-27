@@ -1,5 +1,6 @@
-import { AlertCircle, Save, Trash2, X } from "lucide-react";
+import { AlertCircle, KeyRound, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { api } from "../../lib/api";
 import type { CapabilityMap, Inbound, InboundInput } from "../../lib/types";
 import {
   buildInboundInput,
@@ -51,9 +52,14 @@ export function InboundDrawer({
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>("basic");
   const [state, setState] = useState<InboundEditorState>(() => createInboundEditorState(editing));
+  const [realityImportMessage, setRealityImportMessage] = useState("");
+  const [realityImportBusy, setRealityImportBusy] = useState(false);
+  const [realityGenerateBusy, setRealityGenerateBusy] = useState(false);
 
   useEffect(() => {
     setState(createInboundEditorState(editing));
+    setRealityImportMessage("");
+    setRealityGenerateBusy(false);
     setActiveTab("basic");
   }, [editing]);
 
@@ -130,6 +136,53 @@ export function InboundDrawer({
       onCreate(input);
     }
     onClose();
+  };
+
+  const importRealityValues = async () => {
+    setRealityImportBusy(true);
+    setRealityImportMessage("");
+    try {
+      const values = await api.realityClientValues();
+      const selected = values.find((item) => item.tag === state.tag) ?? values[0];
+      if (!selected) {
+        setRealityImportMessage("No server-generated REALITY values found.");
+        return;
+      }
+      updateStructured({
+        realityPrivateKey: selected.privateKey ?? state.realityPrivateKey,
+        realityPublicKey: selected.publicKey,
+        realityShortId: selected.shortId,
+        realityServerName: selected.serverName,
+        security: "reality",
+        network: "tcp"
+      });
+      const source = selected.tag ? `${selected.source} (${selected.tag})` : selected.source;
+      setRealityImportMessage(`Loaded REALITY values from ${source}.`);
+    } catch (error) {
+      setRealityImportMessage(error instanceof Error ? error.message : "Failed to load server REALITY values.");
+    } finally {
+      setRealityImportBusy(false);
+    }
+  };
+
+  const generateRealityValues = async () => {
+    setRealityGenerateBusy(true);
+    setRealityImportMessage("");
+    try {
+      const generated = await api.realityGenerateValues();
+      updateStructured({
+        realityPrivateKey: generated.privateKey,
+        realityPublicKey: generated.publicKey,
+        realityShortId: generated.shortId,
+        security: "reality",
+        network: "tcp"
+      });
+      setRealityImportMessage("Generated matching REALITY private key, public key, and short ID.");
+    } catch (error) {
+      setRealityImportMessage(error instanceof Error ? error.message : "Failed to generate REALITY values.");
+    } finally {
+      setRealityGenerateBusy(false);
+    }
   };
 
   return (
@@ -338,40 +391,66 @@ export function InboundDrawer({
             </Field>
 
             {state.security === "tls" ? (
-              <div className="configurator-grid">
-                <Field label="Server name">
-                  <Input value={state.tlsServerName} onChange={(e) => updateStructured({ tlsServerName: e.target.value })} placeholder="example.com" />
-                </Field>
-                <Field label="ALPN">
-                  <Input value={state.tlsAlpn} onChange={(e) => updateStructured({ tlsAlpn: e.target.value })} placeholder="h2, http/1.1" />
-                </Field>
-                <Field label="Certificate file">
-                  <Input value={state.tlsCertificateFile} onChange={(e) => updateStructured({ tlsCertificateFile: e.target.value })} placeholder="/etc/blackwire/fullchain.pem" />
-                </Field>
-                <Field label="Key file">
-                  <Input value={state.tlsKeyFile} onChange={(e) => updateStructured({ tlsKeyFile: e.target.value })} placeholder="/etc/blackwire/privkey.pem" />
-                </Field>
-              </div>
+              <>
+                <p className="field-hint">
+                  Configure TLS explicitly. The server name must match the certificate clients will validate.
+                </p>
+                <div className="configurator-grid">
+                  <Field label="Server name" hint="Used as SNI in generated client links.">
+                    <Input value={state.tlsServerName} onChange={(e) => updateStructured({ tlsServerName: e.target.value })} placeholder="example.com" />
+                  </Field>
+                  <Field label="ALPN" hint="Comma-separated list, for example h2, http/1.1.">
+                    <Input value={state.tlsAlpn} onChange={(e) => updateStructured({ tlsAlpn: e.target.value })} placeholder="h2, http/1.1" />
+                  </Field>
+                  <Field label="Certificate file" hint="Server-side certificate path. Pair it with the matching key file.">
+                    <Input value={state.tlsCertificateFile} onChange={(e) => updateStructured({ tlsCertificateFile: e.target.value })} placeholder="/etc/blackwire/fullchain.pem" />
+                  </Field>
+                  <Field label="Key file" hint="Server-side private key path for the certificate.">
+                    <Input value={state.tlsKeyFile} onChange={(e) => updateStructured({ tlsKeyFile: e.target.value })} placeholder="/etc/blackwire/privkey.pem" />
+                  </Field>
+                </div>
+                <p className="field-hint">
+                  Domain setup: point the domain to this server, issue a trusted certificate for that exact name, set Server name to the domain, then use the certificate and key paths.
+                </p>
+                <p className="field-hint">
+                  Public-IP or self-signed setup: set Server name to the value your client will use, provide the self-signed certificate and key, and expect clients to require insecure/skip-cert-verify mode.
+                </p>
+              </>
             ) : null}
 
             {state.security === "reality" ? (
-              <div className="configurator-grid">
-                <Field label="Server name">
-                  <Input value={state.realityServerName} onChange={(e) => updateStructured({ realityServerName: e.target.value })} placeholder="www.cloudflare.com" />
-                </Field>
-                <Field label="Public key">
-                  <Input value={state.realityPublicKey} onChange={(e) => updateStructured({ realityPublicKey: e.target.value })} placeholder="base64-x25519-public-key" />
-                </Field>
-                <Field label="Short ID">
-                  <Input value={state.realityShortId} onChange={(e) => updateStructured({ realityShortId: e.target.value })} placeholder="6ba85179e30d4fc2" />
-                </Field>
-                <Field label="Fingerprint">
-                  <Input value={state.realityFingerprint} onChange={(e) => updateStructured({ realityFingerprint: e.target.value })} placeholder="chrome" />
-                </Field>
-                <Field label="Spider X">
-                  <Input value={state.realitySpiderX} onChange={(e) => updateStructured({ realitySpiderX: e.target.value })} placeholder="/" />
-                </Field>
-              </div>
+              <>
+                <p className="field-hint">
+                  Use the values generated by the running server. The public key is derived from the server private key, and the short ID must match one of the server shortIds entries.
+                </p>
+                <Button type="button" variant="secondary" icon={<KeyRound size={16} />} onClick={generateRealityValues} loading={realityGenerateBusy} disabled={busy || realityGenerateBusy}>
+                  Generate REALITY Key Pair
+                </Button>
+                <Button type="button" variant="secondary" icon={<KeyRound size={16} />} onClick={importRealityValues} loading={realityImportBusy} disabled={busy || realityImportBusy}>
+                  Load Server REALITY Values
+                </Button>
+                {realityImportMessage ? <p className="field-hint">{realityImportMessage}</p> : null}
+                <div className="configurator-grid">
+                  <Field label="Server name" hint="Must be allowed by server realitySettings.serverNames.">
+                    <Input value={state.realityServerName} onChange={(e) => updateStructured({ realityServerName: e.target.value })} placeholder="www.cloudflare.com" />
+                  </Field>
+                  <Field label="Private key" hint="Server-side key stored in the inbound config. Generated client links use the matching public key.">
+                    <Input value={state.realityPrivateKey} onChange={(e) => updateStructured({ realityPrivateKey: e.target.value })} placeholder="64-character server private key" />
+                  </Field>
+                  <Field label="Public key" hint="Paste from server client-info or derive from the REALITY privateKey; do not randomize this value.">
+                    <Input value={state.realityPublicKey} onChange={(e) => updateStructured({ realityPublicKey: e.target.value })} placeholder="base64-x25519-public-key" />
+                  </Field>
+                  <Field label="Short ID" hint="Must exactly match one server shortIds value; changing one character breaks REALITY auth.">
+                    <Input value={state.realityShortId} onChange={(e) => updateStructured({ realityShortId: e.target.value })} placeholder="6ba85179e30d4fc2" />
+                  </Field>
+                  <Field label="Fingerprint">
+                    <Input value={state.realityFingerprint} onChange={(e) => updateStructured({ realityFingerprint: e.target.value })} placeholder="chrome" />
+                  </Field>
+                  <Field label="Spider X">
+                    <Input value={state.realitySpiderX} onChange={(e) => updateStructured({ realitySpiderX: e.target.value })} placeholder="/" />
+                  </Field>
+                </div>
+              </>
             ) : null}
 
             {state.security === "none" ? <p className="field-hint">Use only on trusted links. TLS or REALITY is usually the better default for public-facing listeners.</p> : null}
