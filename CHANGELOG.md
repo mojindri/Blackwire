@@ -10,6 +10,36 @@ This project is pre-1.0. The support contract is owned by
 
 No release-facing changes yet.
 
+## 0.1.18 - 2026-06-27
+
+### Added
+
+- Black UI now exposes server-side REALITY value generation/loading so generated
+  VLESS/REALITY links use matching private key, public key, short ID, and server
+  name values.
+- Structured inbound QA now covers TLS certificate/key validation and
+  VLESS/REALITY TCP persistence.
+
+### Fixed
+
+- TLS structured inbound validation now blocks certificate-only or key-only
+  configurations before save.
+- Structured inbound QA now matches the current UI surface: VMess/TCP no longer
+  expects a removed encryption field, and unavailable KCP is reported as skipped
+  instead of failed.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.18`.
+
+## 0.1.17 - 2026-06-27
+
+### Changed
+
+- Relay performance defaults were adjusted for better wrapped-transport
+  throughput under load.
+- Release metadata and install examples now reference `v0.1.17`.
+
 ## 0.1.16 - 2026-06-27
 
 ### Fixed
