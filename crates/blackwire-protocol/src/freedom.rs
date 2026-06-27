@@ -30,6 +30,20 @@ use blackwire_common::{
 const UDP_ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(3);
 const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(250);
 
+/// Address-family policy for direct Freedom connects.
+///
+/// `Auto` keeps the current behavior: domains resolve to all returned addresses
+/// and TCP uses Happy Eyeballs when both IPv4 and IPv6 are available.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreedomIpStrategy {
+    Auto,
+    UseIp,
+    PreferIpv4,
+    PreferIpv6,
+    UseIpv4,
+    UseIpv6,
+}
+
 // ── Adaptive connection pool ─────────────────────────────────────────────────
 
 /// Configuration for the adaptive TCP connection pool.
@@ -494,6 +508,10 @@ pub struct FreedomOutbound {
     pool: Option<Arc<AdaptivePool>>,
     /// Reject connections to loopback addresses after DNS resolution.
     deny_loopback: bool,
+    /// Address-family policy applied after domain resolution.
+    ip_strategy: FreedomIpStrategy,
+    /// Fail fast when a client sends a literal IPv6 destination on an IPv4-only deployment.
+    reject_ipv6_literal: bool,
 }
 
 impl FreedomOutbound {
@@ -504,6 +522,8 @@ impl FreedomOutbound {
             dns: None,
             pool: None,
             deny_loopback: false,
+            ip_strategy: FreedomIpStrategy::Auto,
+            reject_ipv6_literal: false,
         })
     }
 
@@ -516,6 +536,8 @@ impl FreedomOutbound {
             dns: None,
             pool: Some(pool),
             deny_loopback: false,
+            ip_strategy: FreedomIpStrategy::Auto,
+            reject_ipv6_literal: false,
         })
     }
 
@@ -526,6 +548,8 @@ impl FreedomOutbound {
             dns: Some(dns),
             pool: None,
             deny_loopback: false,
+            ip_strategy: FreedomIpStrategy::Auto,
+            reject_ipv6_literal: false,
         })
     }
 
@@ -542,6 +566,8 @@ impl FreedomOutbound {
             dns: Some(dns),
             pool: Some(pool),
             deny_loopback: false,
+            ip_strategy: FreedomIpStrategy::Auto,
+            reject_ipv6_literal: false,
         })
     }
 
@@ -553,10 +579,34 @@ impl FreedomOutbound {
         self
     }
 
+    /// Select how resolved domain addresses are filtered before dialing.
+    pub fn with_ip_strategy(mut self: Arc<Self>, ip_strategy: FreedomIpStrategy) -> Arc<Self> {
+        if let Some(outbound) = Arc::get_mut(&mut self) {
+            outbound.ip_strategy = ip_strategy;
+        }
+        self
+    }
+
+    /// Reject literal IPv6 destinations before dialing.
+    pub fn with_reject_ipv6_literal(mut self: Arc<Self>, reject_ipv6_literal: bool) -> Arc<Self> {
+        if let Some(outbound) = Arc::get_mut(&mut self) {
+            outbound.reject_ipv6_literal = reject_ipv6_literal;
+        }
+        self
+    }
+
     async fn resolve_all(&self, dest: &Address) -> Result<Vec<SocketAddr>, ProxyError> {
         match dest {
             Address::Ipv4(ip, port) => Ok(vec![SocketAddr::new(IpAddr::V4(*ip), *port)]),
-            Address::Ipv6(ip, port) => Ok(vec![SocketAddr::new(IpAddr::V6(*ip), *port)]),
+            Address::Ipv6(ip, port) => {
+                if self.reject_ipv6_literal {
+                    return Err(ProxyError::Protocol(format!(
+                        "freedom outbound '{}' rejected literal IPv6 destination [{}]:{}",
+                        self.tag, ip, port
+                    )));
+                }
+                Ok(vec![SocketAddr::new(IpAddr::V6(*ip), *port)])
+            }
             Address::Domain(name, port) => {
                 if let Some(dns) = &self.dns {
                     let ips = dns.resolve(name).await?;
@@ -564,24 +614,71 @@ impl FreedomOutbound {
                         .into_iter()
                         .map(|ip| SocketAddr::new(ip, *port))
                         .collect::<Vec<_>>();
-                    if addrs.is_empty() {
-                        return Err(ProxyError::DnsResolutionFailed(format!(
-                            "{name}: no records returned"
-                        )));
-                    }
-                    return Ok(addrs);
+                    return self.filter_resolved_addrs(name, addrs);
                 }
 
                 let addrs = tokio::net::lookup_host((name.as_str(), *port))
                     .await
                     .map_err(|e| ProxyError::DnsResolutionFailed(format!("{name}: {e}")))?
                     .collect::<Vec<_>>();
-                if addrs.is_empty() {
-                    return Err(ProxyError::DnsResolutionFailed(name.clone()));
-                }
-                Ok(addrs)
+                self.filter_resolved_addrs(name, addrs)
             }
         }
+    }
+
+    fn filter_resolved_addrs(
+        &self,
+        name: &str,
+        mut addrs: Vec<SocketAddr>,
+    ) -> Result<Vec<SocketAddr>, ProxyError> {
+        match self.ip_strategy {
+            FreedomIpStrategy::Auto
+            | FreedomIpStrategy::UseIp
+            | FreedomIpStrategy::PreferIpv4
+            | FreedomIpStrategy::PreferIpv6 => {}
+            FreedomIpStrategy::UseIpv4 => addrs.retain(SocketAddr::is_ipv4),
+            FreedomIpStrategy::UseIpv6 => addrs.retain(SocketAddr::is_ipv6),
+        }
+        if addrs.is_empty() {
+            let reason = match self.ip_strategy {
+                FreedomIpStrategy::UseIpv4 => "no IPv4 records returned",
+                FreedomIpStrategy::UseIpv6 => "no IPv6 records returned",
+                FreedomIpStrategy::Auto
+                | FreedomIpStrategy::UseIp
+                | FreedomIpStrategy::PreferIpv4
+                | FreedomIpStrategy::PreferIpv6 => "no records returned",
+            };
+            Err(ProxyError::DnsResolutionFailed(format!("{name}: {reason}")))
+        } else {
+            Ok(addrs)
+        }
+    }
+
+    fn ordered_addrs(&self, mut addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
+        match self.ip_strategy {
+            FreedomIpStrategy::PreferIpv6 | FreedomIpStrategy::UseIpv6 => {
+                addrs.sort_by_key(SocketAddr::is_ipv4)
+            }
+            FreedomIpStrategy::Auto
+            | FreedomIpStrategy::UseIp
+            | FreedomIpStrategy::PreferIpv4
+            | FreedomIpStrategy::UseIpv4 => addrs.sort_by_key(SocketAddr::is_ipv6),
+        }
+        addrs
+    }
+
+    fn should_race_happy_eyeballs(&self) -> bool {
+        matches!(
+            self.ip_strategy,
+            FreedomIpStrategy::Auto
+                | FreedomIpStrategy::UseIp
+                | FreedomIpStrategy::PreferIpv4
+                | FreedomIpStrategy::PreferIpv6
+        )
+    }
+
+    fn happy_eyeballs_prefers_ipv6(&self) -> bool {
+        matches!(self.ip_strategy, FreedomIpStrategy::PreferIpv6)
     }
 
     async fn connect_resolved(
@@ -733,24 +830,26 @@ impl OutboundHandler for FreedomOutbound {
     }
 
     async fn connect(&self, _ctx: &Context, dest: &Address) -> Result<BoxedStream, ProxyError> {
-        let mut addrs = self.resolve_all(dest).await?;
-        addrs.sort_by_key(|addr| addr.is_ipv6());
-        if let Some(v4_index) = addrs.iter().position(SocketAddr::is_ipv4) {
-            if let Some(v6_index) = addrs.iter().position(SocketAddr::is_ipv6) {
-                let v4 = addrs.remove(v4_index);
-                let v6_index = if v6_index > v4_index {
-                    v6_index - 1
-                } else {
-                    v6_index
-                };
-                let v6 = addrs.remove(v6_index);
-                match self.connect_happy_eyeballs_pair(dest, v4, v6).await {
-                    Ok(stream) => return Ok(stream),
-                    Err(err) => debug!(
-                        dest = %dest,
-                        error = %err,
-                        "freedom: happy-eyeballs pair failed; trying remaining addresses"
-                    ),
+        let mut addrs = self.ordered_addrs(self.resolve_all(dest).await?);
+        if self.should_race_happy_eyeballs() {
+            if let Some(v4_index) = addrs.iter().position(SocketAddr::is_ipv4) {
+                if let Some(v6_index) = addrs.iter().position(SocketAddr::is_ipv6) {
+                    let v4 = addrs[v4_index];
+                    let v6 = addrs[v6_index];
+                    addrs.retain(|addr| *addr != v4 && *addr != v6);
+                    let (first, second) = if self.happy_eyeballs_prefers_ipv6() {
+                        (v6, v4)
+                    } else {
+                        (v4, v6)
+                    };
+                    match self.connect_happy_eyeballs_pair(dest, first, second).await {
+                        Ok(stream) => return Ok(stream),
+                        Err(err) => debug!(
+                            dest = %dest,
+                            error = %err,
+                            "freedom: happy-eyeballs pair failed; trying remaining addresses"
+                        ),
+                    }
                 }
             }
         }
@@ -788,7 +887,7 @@ impl OutboundHandler for FreedomOutbound {
         dest: &Address,
         payload: Bytes,
     ) -> Result<Option<UdpOutboundResponse>, ProxyError> {
-        let addrs = self.resolve_all(dest).await?;
+        let addrs = self.ordered_addrs(self.resolve_all(dest).await?);
         let mut last_err = None;
 
         for addr in addrs {
@@ -810,7 +909,7 @@ impl OutboundHandler for FreedomOutbound {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
     #[tokio::test]
     async fn deny_loopback_rejects_loopback_destinations_before_dialing() {
@@ -826,6 +925,56 @@ mod tests {
                 }
                 other => panic!("unexpected error: {other:?}"),
             },
+        }
+    }
+
+    #[test]
+    fn use_ipv4_filters_resolved_domain_addresses() {
+        let outbound = FreedomOutbound::new("direct").with_ip_strategy(FreedomIpStrategy::UseIpv4);
+        let addrs = vec![
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 443),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)), 443),
+        ];
+
+        let filtered = outbound
+            .filter_resolved_addrs("example.com", addrs)
+            .unwrap();
+
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered[0].is_ipv4());
+    }
+
+    #[test]
+    fn prefer_ipv6_orders_addresses_without_filtering() {
+        let outbound =
+            FreedomOutbound::new("direct").with_ip_strategy(FreedomIpStrategy::PreferIpv6);
+        let addrs = vec![
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)), 443),
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 443),
+        ];
+
+        let filtered = outbound
+            .filter_resolved_addrs("example.com", addrs)
+            .unwrap();
+        let ordered = outbound.ordered_addrs(filtered);
+
+        assert_eq!(ordered.len(), 2);
+        assert!(ordered[0].is_ipv6());
+        assert!(ordered[1].is_ipv4());
+    }
+
+    #[tokio::test]
+    async fn reject_ipv6_literal_fails_before_dialing() {
+        let outbound = FreedomOutbound::new("direct").with_reject_ipv6_literal(true);
+        let dest = Address::Ipv6(Ipv6Addr::LOCALHOST, 443);
+        let result = outbound.resolve_all(&dest).await;
+
+        match result {
+            Ok(_) => panic!("literal IPv6 destination should be rejected"),
+            Err(ProxyError::Protocol(message)) => {
+                assert!(message.contains("rejected literal IPv6 destination"));
+            }
+            Err(other) => panic!("unexpected error: {other:?}"),
         }
     }
 }

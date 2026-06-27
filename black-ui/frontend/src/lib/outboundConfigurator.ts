@@ -17,6 +17,8 @@ export interface OutboundEditorState {
   security: string;
   address: string;
   port: string;
+  freedomIpStrategy: string;
+  freedomRejectIpv6Literal: boolean;
   userId: string;
   password: string;
   method: string;
@@ -74,6 +76,7 @@ export interface OutboundValidationIssue {
 const DEFAULT_PROTOCOL = "freedom";
 const DEFAULT_NETWORK = "tcp";
 const DEFAULT_SECURITY = "none";
+const DEFAULT_FREEDOM_IP_STRATEGY = "auto";
 const DEFAULT_HYSTERIA2_CONGESTION_MODE = "standard";
 const DEFAULT_HYSTERIA2_MIN_ACK_RATE = "0.8";
 const DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS = "80";
@@ -99,6 +102,13 @@ export function createOutboundEditorState(outbound?: Outbound | null): OutboundE
     security,
     address: stringValue(settings.value.address) ?? "",
     port: numberString(settings.value.port),
+    freedomIpStrategy: normalizeFreedomIpStrategy(
+      stringValue(settings.value.domainStrategy) ??
+        stringValue(settings.value.domain_strategy) ??
+        stringValue(settings.value.ipStrategy) ??
+        stringValue(settings.value.ip_strategy)
+    ),
+    freedomRejectIpv6Literal: boolValue(settings.value.rejectIpv6Literal) ?? boolValue(settings.value.reject_ipv6_literal) ?? false,
     userId: stringValue(user0?.id) ?? stringValue(settings.value.uuid) ?? "",
     password: stringValue(settings.value.password) ?? "",
     method: stringValue(settings.value.method) ?? "",
@@ -236,6 +246,29 @@ export function buildOutboundInput(state: OutboundEditorState): OutboundInput {
     delete settings.method;
   } else {
     delete settings.uuid;
+  }
+
+  if (state.protocol === "freedom") {
+    const ipStrategy = normalizeFreedomIpStrategy(state.freedomIpStrategy);
+    if (ipStrategy === DEFAULT_FREEDOM_IP_STRATEGY) {
+      delete settings.domainStrategy;
+    } else {
+      settings.domainStrategy = ipStrategy;
+    }
+    delete settings.domain_strategy;
+    delete settings.ipStrategy;
+    delete settings.ip_strategy;
+
+    if (state.freedomRejectIpv6Literal) settings.rejectIpv6Literal = true;
+    else delete settings.rejectIpv6Literal;
+    delete settings.reject_ipv6_literal;
+  } else {
+    delete settings.domainStrategy;
+    delete settings.domain_strategy;
+    delete settings.ipStrategy;
+    delete settings.ip_strategy;
+    delete settings.rejectIpv6Literal;
+    delete settings.reject_ipv6_literal;
   }
 
   streamSettings.network = state.network;
@@ -448,6 +481,8 @@ function syncStructuredFields(state: OutboundEditorState): OutboundEditorState {
     security: next.security,
     address: next.address,
     port: next.port,
+    freedomIpStrategy: next.freedomIpStrategy,
+    freedomRejectIpv6Literal: next.freedomRejectIpv6Literal,
     userId: next.userId,
     password: next.password,
     method: next.method,
@@ -592,6 +627,36 @@ function numberString(value: unknown): string {
 function stringOrNumberString(value: unknown): string {
   if (typeof value === "string") return value;
   return numberString(value);
+}
+
+function normalizeFreedomIpStrategy(value: string | undefined): string {
+  switch ((value ?? "").trim().toLowerCase().replace(/[_\-\s]/g, "")) {
+    case "":
+    case "auto":
+    case "asis":
+      return "auto";
+    case "useip":
+    case "ip":
+      return "UseIP";
+    case "preferipv4":
+    case "preferip4":
+      return "PreferIPv4";
+    case "preferipv6":
+    case "preferip6":
+      return "PreferIPv6";
+    case "useipv4":
+    case "useip4":
+    case "ipv4":
+    case "ip4":
+      return "UseIPv4";
+    case "useipv6":
+    case "useip6":
+    case "ipv6":
+    case "ip6":
+      return "UseIPv6";
+    default:
+      return "auto";
+  }
 }
 
 function arrayOfStrings(value: unknown): string[] {

@@ -170,6 +170,70 @@ describe("outboundConfigurator", () => {
     expect(issues.map((issue) => issue.field)).toEqual(["address", "port"]);
   });
 
+  it("serializes freedom IP strategy and IPv6 literal guard", () => {
+    const built = buildOutboundInput(
+      syncOutboundAfterStructuredChange({
+        ...createOutboundEditorState({
+          id: 1,
+          tag: "freedom",
+          protocol: "freedom",
+          enabled: true,
+          settings: JSON.stringify({
+            denyLoopback: true,
+            customSetting: "keep-me"
+          }),
+          streamSettings: "",
+          createdAt: "",
+          updatedAt: ""
+        }),
+        freedomIpStrategy: "PreferIPv4",
+        freedomRejectIpv6Literal: true
+      })
+    );
+
+    expect(parseObject(built.settings)).toEqual({
+      denyLoopback: true,
+      customSetting: "keep-me",
+      domainStrategy: "PreferIPv4",
+      rejectIpv6Literal: true
+    });
+
+    expect(
+      createOutboundEditorState({
+        id: 1,
+        tag: "freedom",
+        protocol: "freedom",
+        enabled: true,
+        settings: JSON.stringify({ ip_strategy: "prefer-ipv6" }),
+        streamSettings: "",
+        createdAt: "",
+        updatedAt: ""
+      }).freedomIpStrategy
+    ).toBe("PreferIPv6");
+
+    const cleared = buildOutboundInput(
+      syncOutboundAfterStructuredChange({
+        ...createOutboundEditorState({
+          id: 1,
+          tag: "freedom",
+          protocol: "freedom",
+          enabled: true,
+          settings: JSON.stringify({
+            domainStrategy: "UseIPv4",
+            rejectIpv6Literal: true
+          }),
+          streamSettings: "",
+          createdAt: "",
+          updatedAt: ""
+        }),
+        freedomIpStrategy: "auto",
+        freedomRejectIpv6Literal: false
+      })
+    );
+
+    expect(parseObject(cleared.settings)).toEqual({});
+  });
+
   it("round-trips hysteria2 settings without leaking unrelated structured fields", () => {
     const defaultState = createOutboundEditorState(null);
     expect(defaultState.hysteria2EndpointShards).toBe("1");
