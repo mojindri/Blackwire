@@ -489,6 +489,90 @@ describe("inboundConfigurator", () => {
     }
   });
 
+  it("covers inbounds protocol, transport, and security matrix", () => {
+    const protocols = ["vless", "vmess", "trojan", "shadowsocks", "hysteria2", "socks", "http"] as const;
+    const networks = [
+      { network: "tcp", settings: {}, extras: {} },
+      { network: "ws", settings: { wsSettings: { path: "/ws", headers: { Host: "ws.example.com" } } }, extras: { wsPath: "/ws", wsHost: "ws.example.com" } },
+      { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
+      { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
+      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
+      { network: "kcp", settings: { kcpSettings: { header: "srtp", mtu: 1350 } }, extras: { kcpHeader: "srtp", kcpMtu: "1350" } },
+      { network: "quic", settings: {}, extras: {} }
+    ] as const;
+    const securities = [
+      { security: "none", patch: {}, settings: {} },
+      { security: "tls", patch: { tlsServerName: "tls.example.com" }, settings: { tlsSettings: { serverName: "tls.example.com" } } },
+      {
+        security: "reality",
+        patch: {
+          realityServerName: "www.microsoft.com",
+          realityPrivateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+          realityPublicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
+          realityShortId: "feedbeef",
+          realityDest: "93.184.216.34:443"
+        },
+        settings: {
+          realitySettings: {
+            serverName: "www.microsoft.com",
+            shortId: "feedbeef",
+            shortIds: ["feedbeef"],
+            serverNames: ["www.microsoft.com"],
+            privateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+            publicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142"
+          }
+        }
+      }
+    ] as const;
+
+    for (const protocol of protocols) {
+      for (const network of networks) {
+        for (const security of securities) {
+          const label = `${protocol}-${network.network}-${security.security}`;
+          const built = buildInboundInput(
+            syncAfterStructuredChange({
+              ...createInboundEditorState(),
+              protocol,
+              shadowsocksMethod: protocol === "shadowsocks" ? "2022-blake3-aes-128-gcm" : "",
+              network: network.network,
+              security: security.security,
+              ...network.extras,
+              ...security.patch
+            })
+          );
+          const parsed = parseObject(built.streamSettings);
+
+          expect(built.protocol).toBe(protocol);
+          expect(parsed, label).toMatchObject({
+            network: network.network,
+            security: security.security,
+            ...network.settings,
+            ...security.settings
+          });
+
+          if (protocol === "vless") {
+            const settings = parseObject(built.settings);
+            expect(settings.decryption || "none").toBe("none");
+          }
+
+          if (protocol !== "shadowsocks") {
+            const settings = parseObject(built.settings);
+            expect(settings.method).toBeUndefined();
+          }
+
+          if (security.security === "none") {
+            expect(parsed.tlsSettings).toBeUndefined();
+            expect(parsed.realitySettings).toBeUndefined();
+          } else if (security.security === "tls") {
+            expect(parsed.realitySettings).toBeUndefined();
+          } else {
+            expect(parsed.tlsSettings).toBeUndefined();
+          }
+        }
+      }
+    }
+  });
+
   it("serializes sniffing and limits while clearing them when no longer needed", () => {
     const enabledState = syncAfterStructuredChange({
       ...createInboundEditorState(),
