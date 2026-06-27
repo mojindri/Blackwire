@@ -217,6 +217,9 @@ config, and state directories. `INIT_SERVER=...` remains available as an
 internal compatibility escape hatch, but cleartext `INIT_SERVER=vless-tcp` is
 loopback-only and cannot be combined with `OPEN_FIREWALL=1`; release docs should
 prefer `SETUP`.
+`INIT_SERVER=hysteria2` generates a QUIC/TLS Hysteria2 config with
+`settings.auth`; provide `DOMAIN` for ACME or `TLS_CERT_FILE`/`TLS_KEY_FILE` for
+custom certificates, and open `udp/$SERVER_PORT`.
 
 To install the Black UI companion panel with the Linux release assets:
 
