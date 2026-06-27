@@ -700,7 +700,8 @@ impl OutboundHandler for FreedomOutbound {
     }
 
     async fn connect(&self, _ctx: &Context, dest: &Address) -> Result<BoxedStream, ProxyError> {
-        let addrs = self.resolve_all(dest).await?;
+        let mut addrs = self.resolve_all(dest).await?;
+        addrs.sort_by_key(|addr| addr.is_ipv6());
         let mut last_err = None;
 
         for addr in addrs {

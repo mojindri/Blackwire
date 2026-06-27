@@ -10,6 +10,25 @@ This project is pre-1.0. The support contract is owned by
 
 No release-facing changes yet.
 
+## 0.1.15 - 2026-06-27
+
+### Fixed
+
+- Freedom outbound DNS resolution now explicitly queries A and AAAA records with
+  IPv4-first ordering, reducing tail latency when VPS IPv6 routes or destination
+  AAAA records are flaky.
+- Freedom outbound now tries IPv4 resolved addresses before IPv6 addresses while
+  keeping IPv6 available as fallback.
+- Installer systemd updates now restart already-running Blackwire and Black UI
+  services after unit rewrites, so changed service users/groups take effect
+  immediately.
+- Installer now uses a dedicated `blackwire` system user by default instead of
+  `nobody`, avoiding fragile runtime permissions and systemd safety warnings.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.15`.
+
 ## 0.1.14 - 2026-06-27
 
 ### Added

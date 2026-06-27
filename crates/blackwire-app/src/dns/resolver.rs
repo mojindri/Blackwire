@@ -10,7 +10,9 @@ use std::net::IpAddr;
 
 use std::sync::Arc;
 
-use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
+use hickory_resolver::config::{
+    ConnectionConfig, LookupIpStrategy, NameServerConfig, ResolverConfig,
+};
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::TokioResolver;
 use tracing::debug;
@@ -38,11 +40,12 @@ impl DnsResolver {
         } else {
             match build_custom_config(servers).await {
                 Some(config) => {
-                    TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
-                        .build()
-                        .map_err(|e| {
-                            ProxyError::Protocol(format!("DNS custom resolver build: {e}"))
-                        })?
+                    let mut builder =
+                        TokioResolver::builder_with_config(config, TokioRuntimeProvider::default());
+                    builder.options_mut().ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
+                    builder.build().map_err(|e| {
+                        ProxyError::Protocol(format!("DNS custom resolver build: {e}"))
+                    })?
                 }
                 None => {
                     // All operator-configured servers were unparseable.
@@ -84,13 +87,15 @@ impl DnsResolver {
 ///
 /// This matches xray's `NewLocalDNSClient()` fallback path.
 fn build_system_resolver() -> Result<TokioResolver, ProxyError> {
-    TokioResolver::builder(TokioRuntimeProvider::default())
-        .unwrap_or_else(|_| {
+    let mut builder =
+        TokioResolver::builder(TokioRuntimeProvider::default()).unwrap_or_else(|_| {
             TokioResolver::builder_with_config(
                 ResolverConfig::default(),
                 TokioRuntimeProvider::default(),
             )
-        })
+        });
+    builder.options_mut().ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
+    builder
         .build()
         .map_err(|e| ProxyError::Protocol(format!("DNS system resolver build: {e}")))
 }
