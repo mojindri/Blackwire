@@ -61,7 +61,7 @@ if [ -f /etc/blackwire/config.json ]; then
 fi
 if [ -d /etc/blackwire/certs ]; then
     chown -R root:black-ui /etc/blackwire/certs
-    find /etc/blackwire/certs -type d -exec chmod 0750 {} +
+    find /etc/blackwire/certs -type d -exec chmod 0770 {} +
     find /etc/blackwire/certs -type f -exec chmod 0640 {} +
 fi
 if command -v systemctl >/dev/null 2>&1; then

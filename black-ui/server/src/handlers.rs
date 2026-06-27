@@ -19,11 +19,11 @@ use crate::{
         ApplyResult, BulkInput, CapabilityMap, ConfigSection, ConfigSectionInput, Inbound,
         InboundInput, LoginInput, LoginResponse, ManagedUser, Outbound, OutboundInput,
         RealityClientValues, RealityGeneratedValues, ServiceStatus, Settings, SetupInput, Status,
-        TlsServerValues, TrafficSnapshot, UserInput,
+        TlsSelfSignedInput, TlsSelfSignedResult, TlsServerValues, TrafficSnapshot, UserInput,
     },
     reality_values, runtime, service,
     state::AppState,
-    util,
+    tls_cert, util,
 };
 
 pub async fn setup(
@@ -205,6 +205,17 @@ pub async fn tls_server_values(
     let _ = auth::require(&headers, &state)?;
     let settings = current_settings(&state)?;
     Ok(Json(reality_values::load_tls(&settings.config_path)))
+}
+
+pub async fn tls_generate_self_signed(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<TlsSelfSignedInput>,
+) -> ApiResult<TlsSelfSignedResult> {
+    let _ = auth::require(&headers, &state)?;
+    tls_cert::generate_self_signed(input)
+        .map(Json)
+        .map_err(AppError::bad_request)
 }
 
 pub async fn service_status(

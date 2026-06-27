@@ -1,4 +1,4 @@
-import { AlertCircle, KeyRound, Save, Trash2, X } from "lucide-react";
+import { AlertCircle, KeyRound, Save, Terminal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api";
 import type { CapabilityMap, Inbound, InboundInput } from "../../lib/types";
@@ -13,6 +13,12 @@ import {
   type InboundEditorState,
   type SliceKey
 } from "../../lib/inboundConfigurator";
+import {
+  buildTlsSelfSignedInput,
+  defaultTlsSelfSignedValues,
+  expectedTlsSelfSignedPaths,
+  type TlsSelfSignedValues
+} from "../../lib/tlsSelfSigned";
 import { Button } from "../atoms/Button";
 import { IconButton } from "../atoms/IconButton";
 import { Input, Select, Textarea } from "../atoms/Input";
@@ -55,11 +61,18 @@ export function InboundDrawer({
   const [realityImportMessage, setRealityImportMessage] = useState("");
   const [realityImportBusy, setRealityImportBusy] = useState(false);
   const [realityGenerateBusy, setRealityGenerateBusy] = useState(false);
+  const [tlsSelfSignedOpen, setTlsSelfSignedOpen] = useState(false);
+  const [tlsSelfSigned, setTlsSelfSigned] = useState<TlsSelfSignedValues>(() => defaultTlsSelfSignedValues(""));
+  const [tlsSelfSignedBusy, setTlsSelfSignedBusy] = useState(false);
+  const [tlsSelfSignedMessage, setTlsSelfSignedMessage] = useState("");
 
   useEffect(() => {
     setState(createInboundEditorState(editing));
     setRealityImportMessage("");
     setRealityGenerateBusy(false);
+    setTlsSelfSignedOpen(false);
+    setTlsSelfSignedBusy(false);
+    setTlsSelfSignedMessage("");
     setActiveTab("basic");
   }, [editing]);
 
@@ -119,6 +132,7 @@ export function InboundDrawer({
   const validationIssues = validateInboundState(state);
   const canDelete = !busy && inboundsCount > 1;
   const saveDisabled = busy || jsonErrors.length > 0 || validationIssues.length > 0;
+  const tlsSelfSignedPreview = useMemo(() => expectedTlsSelfSignedPaths(tlsSelfSigned.serverName), [tlsSelfSigned.serverName]);
 
   const updateStructured = (patch: Partial<InboundEditorState>) => {
     setState((current) => syncAfterStructuredChange({ ...current, ...patch }));
@@ -183,6 +197,36 @@ export function InboundDrawer({
       setRealityImportMessage(error instanceof Error ? error.message : "Failed to generate REALITY values.");
     } finally {
       setRealityGenerateBusy(false);
+    }
+  };
+
+  const openTlsSelfSignedDialog = () => {
+    setTlsSelfSigned(defaultTlsSelfSignedValues(state.tlsServerName));
+    setTlsSelfSignedMessage("");
+    setTlsSelfSignedOpen(true);
+  };
+
+  const updateTlsSelfSigned = (patch: Partial<TlsSelfSignedValues>) => {
+    setTlsSelfSigned((current) => ({ ...current, ...patch }));
+    setTlsSelfSignedMessage("");
+  };
+
+  const generateTlsSelfSignedCertificate = async () => {
+    setTlsSelfSignedBusy(true);
+    setTlsSelfSignedMessage("");
+    try {
+      const generated = await api.tlsGenerateSelfSigned(buildTlsSelfSignedInput(tlsSelfSigned));
+      updateStructured({
+        tlsServerName: generated.serverName,
+        tlsCertificateFile: generated.certificateFile,
+        tlsKeyFile: generated.keyFile
+      });
+      setTlsSelfSignedOpen(false);
+      setTlsSelfSignedMessage("Generated certificate on the server and applied the paths.");
+    } catch (error) {
+      setTlsSelfSignedMessage(error instanceof Error ? error.message : "Failed to generate certificate.");
+    } finally {
+      setTlsSelfSignedBusy(false);
     }
   };
 
@@ -396,6 +440,16 @@ export function InboundDrawer({
                 <p className="field-hint">
                   Configure TLS explicitly. The server name must match the certificate clients will validate.
                 </p>
+                <div className="configurator-helper-row">
+                  <div>
+                    <strong>Self-signed certificate</strong>
+                    <span>Generate server-side certificate files when you need IP-only or lab TLS.</span>
+                  </div>
+                  <Button type="button" variant="secondary" icon={<Terminal size={16} />} onClick={openTlsSelfSignedDialog}>
+                    Self-Signed Helper
+                  </Button>
+                </div>
+                {!tlsSelfSignedOpen && tlsSelfSignedMessage ? <p className="copy-feedback">{tlsSelfSignedMessage}</p> : null}
                 <div className="configurator-grid">
                   <Field label="Server name" hint="Used as SNI in generated client links.">
                     <Input value={state.tlsServerName} onChange={(e) => updateStructured({ tlsServerName: e.target.value })} placeholder="example.com" />
@@ -577,6 +631,50 @@ export function InboundDrawer({
           Save Inbound
         </Button>
       </div>
+      {tlsSelfSignedOpen ? (
+        <div className="dialog-backdrop" role="presentation">
+          <section className="dialog-panel" role="dialog" aria-modal="true" aria-labelledby="tls-self-signed-title">
+            <div className="dialog-head">
+              <div>
+                <h3 id="tls-self-signed-title">Generate Self-Signed TLS Certificate</h3>
+                <p>Black UI writes the certificate and key on the server, then fills the TLS paths for this inbound.</p>
+              </div>
+              <IconButton label="Close self-signed TLS helper" onClick={() => setTlsSelfSignedOpen(false)}>
+                <X size={18} />
+              </IconButton>
+            </div>
+            <div className="dialog-body">
+              <div className="compatibility-notice compatibility-notice-warning">
+                <AlertCircle size={15} />
+                <span>Self-signed TLS needs client trust setup or insecure/skip-cert-verify mode. For a real domain, a public CA certificate is the normal path.</span>
+              </div>
+              <div className="configurator-grid">
+                <Field label="Server name or IP" hint="Use the exact value clients will connect to.">
+                  <Input value={tlsSelfSigned.serverName} onChange={(e) => updateTlsSelfSigned({ serverName: e.target.value })} placeholder="example.com or 203.0.113.10" />
+                </Field>
+                <Field label="Valid days" hint="Clamped to 3650 days by the backend.">
+                  <Input type="number" min={1} max={3650} value={tlsSelfSigned.days} onChange={(e) => updateTlsSelfSigned({ days: e.target.value })} />
+                </Field>
+                <Field label="Default certificate file" hint="The backend response is applied after generation.">
+                  <Input value={tlsSelfSignedPreview.certificateFile} readOnly />
+                </Field>
+                <Field label="Default key file" hint="The backend response is applied after generation.">
+                  <Input value={tlsSelfSignedPreview.keyFile} readOnly />
+                </Field>
+              </div>
+              {tlsSelfSignedMessage ? <p className="copy-feedback">{tlsSelfSignedMessage}</p> : null}
+            </div>
+            <div className="dialog-actions">
+              <Button type="button" variant="ghost" onClick={() => setTlsSelfSignedOpen(false)} disabled={tlsSelfSignedBusy}>
+                Cancel
+              </Button>
+              <Button type="button" variant="primary" icon={<Save size={16} />} onClick={generateTlsSelfSignedCertificate} loading={tlsSelfSignedBusy} disabled={busy || tlsSelfSignedBusy}>
+                Generate on Server
+              </Button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </aside>
   );
 }

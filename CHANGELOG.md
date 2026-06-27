@@ -6,9 +6,20 @@ This project is pre-1.0. The support contract is owned by
 [docs/release.md](docs/release.md), and detailed feature evidence is owned by
 [docs/feature-matrix.md](docs/feature-matrix.md).
 
-## Unreleased
+## 0.1.21 - 2026-06-27
 
-No release-facing changes yet.
+### Added
+
+- Black UI TLS inbound editing can now generate self-signed certificate/key
+  files on the server and apply the generated paths to the inbound form.
+
+### Changed
+
+- Black UI capabilities now classify V2Ray QUIC transport as supported, with
+  notes about sing-box coverage and the Xray 26+ legacy-client skip.
+- Installer and Debian package hardening keep `/etc/blackwire/certs`
+  group-writable for Black UI while preserving `0640` certificate/key files.
+- Release metadata and install examples now reference `v0.1.21`.
 
 ## 0.1.20 - 2026-06-27
 

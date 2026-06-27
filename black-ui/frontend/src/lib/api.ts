@@ -13,6 +13,8 @@ import type {
   ServiceStatus,
   Settings,
   Status,
+  TlsSelfSignedInput,
+  TlsSelfSignedResult,
   TlsServerValues,
   TrafficSnapshot,
   UserInput
@@ -69,6 +71,8 @@ export const api = {
   realityClientValues: () => request<RealityClientValues[]>("/api/reality/client-values"),
   realityGenerateValues: () => request<RealityGeneratedValues>("/api/reality/generate-values", { method: "POST" }),
   tlsServerValues: () => request<TlsServerValues[]>("/api/tls/server-values"),
+  tlsGenerateSelfSigned: (input: TlsSelfSignedInput) =>
+    request<TlsSelfSignedResult>("/api/tls/generate-self-signed", body(input)),
   inbounds: () => request<Inbound[]>("/api/inbounds"),
   createInbound: (input: InboundInput) => request<ApplyResult>("/api/inbounds", body(input)),
   updateInbound: (id: number, input: InboundInput) =>
