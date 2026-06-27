@@ -154,20 +154,36 @@ pub struct RealityConfig {
     #[serde(
         default,
         rename = "serverName",
+        alias = "server_name",
         skip_serializing_if = "String::is_empty"
     )]
     pub server_name: String,
 
+    /// Server-side allowed SNI values. Wildcards are not supported.
+    #[serde(
+        default,
+        rename = "serverNames",
+        alias = "server_names",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub server_names: Vec<String>,
+
     /// Maximum allowed time difference in seconds.
-    #[serde(default = "default_max_time_diff", rename = "maxTimeDiff")]
+    #[serde(default, rename = "maxTimeDiff")]
     pub max_time_diff: u64,
+
+    /// Explicit maximum allowed time difference in seconds.
+    #[serde(
+        default,
+        rename = "maxTimeDiffSeconds",
+        alias = "max_time_diff_seconds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_time_diff_seconds: Option<u64>,
 }
 
 fn default_fingerprint() -> String {
     "chrome".to_string()
-}
-fn default_max_time_diff() -> u64 {
-    60
 }
 
 /// WebSocket transport settings.

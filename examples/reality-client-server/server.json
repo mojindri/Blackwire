@@ -26,7 +26,8 @@
           "privateKey": "8cb13706aa547712de8f687dc32e66b0ec2e753ba310e734b72fb52ce5e6a4a8",
           "shortIds": ["0123456789abcdef"],
           "serverName": "www.example.com",
-          "maxTimeDiff": 120
+          "serverNames": ["www.example.com"],
+          "maxTimeDiffSeconds": 60
         }
       }
     }

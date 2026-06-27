@@ -25,6 +25,8 @@ use blackwire_transport::{
     RealityServerConfig, Tls13Stream,
 };
 
+const MAX_LEGACY_REALITY_TIME_DIFF_SECONDS: u64 = 3600;
+
 /// Return true when a config section asks for REALITY transport.
 pub(crate) fn uses_reality(stream_settings: &Option<StreamSettingsConfig>) -> bool {
     stream_settings
@@ -197,12 +199,57 @@ pub(crate) fn build_reality_server(
         anyhow::bail!("REALITY inbound requires at least one shortIds entry");
     }
 
+    let server_names = reality_server_names(reality)?;
+    let max_time_diff = reality_max_time_diff_seconds(reality)?;
+
     Ok(Arc::new(RealityServer::new(RealityServerConfig {
         private_key: parse_hex_32(&reality.private_key, "privateKey")?,
         short_ids,
+        server_names,
         fallback,
-        max_time_diff: reality.max_time_diff as i64,
+        max_time_diff: max_time_diff as i64,
     })))
+}
+
+fn reality_server_names(reality: &blackwire_config::schema::RealityConfig) -> Result<Vec<String>> {
+    let mut names = reality
+        .server_names
+        .iter()
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+
+    let legacy = reality.server_name.trim();
+    if !legacy.is_empty() && !names.iter().any(|name| name == legacy) {
+        names.push(legacy.to_string());
+    }
+
+    if names.is_empty() {
+        anyhow::bail!("REALITY inbound requires non-empty serverNames");
+    }
+    if let Some(name) = names.iter().find(|name| name.contains('*')) {
+        anyhow::bail!("REALITY serverNames does not support wildcards: '{name}'");
+    }
+
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+fn reality_max_time_diff_seconds(reality: &blackwire_config::schema::RealityConfig) -> Result<u64> {
+    if let Some(explicit) = reality.max_time_diff_seconds {
+        return Ok(explicit);
+    }
+
+    let legacy = reality.max_time_diff;
+    if legacy > MAX_LEGACY_REALITY_TIME_DIFF_SECONDS {
+        anyhow::bail!(
+            "REALITY maxTimeDiff is interpreted as seconds by Blackwire; \
+             value {legacy} is suspiciously large, use maxTimeDiffSeconds explicitly"
+        );
+    }
+    Ok(legacy)
 }
 
 fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {

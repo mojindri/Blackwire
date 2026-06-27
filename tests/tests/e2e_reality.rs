@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use blackwire_transport::reality::{
@@ -62,6 +62,68 @@ async fn start_fallback_echo(port: u16) {
     });
 }
 
+async fn reality_fallback_response_for_probe(probe: &[u8]) -> Vec<u8> {
+    let (priv_bytes, _) = gen_keypair();
+    let reality_port = free_port().await;
+    let fallback_port = free_port().await;
+    let reality_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, reality_port));
+    let fallback_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, fallback_port));
+
+    start_fallback_echo(fallback_port).await;
+
+    let server = Arc::new(RealityServer::new(RealityServerConfig {
+        private_key: priv_bytes,
+        short_ids: vec![vec![0xCA, 0xFE, 0xBA, 0xBE]],
+        server_names: vec!["www.microsoft.com".to_string()],
+        fallback: fallback_addr,
+        max_time_diff: 120,
+    }));
+
+    let server_task = tokio::spawn(async move {
+        let listener = TcpListener::bind(reality_addr).await.unwrap();
+        let (tcp, _) = listener.accept().await.unwrap();
+        matches!(
+            server.accept_direct(Box::new(tcp)).await,
+            Err(blackwire_common::ProxyError::FallbackRequired)
+        )
+    });
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let mut client = TcpStream::connect(reality_addr).await.unwrap();
+    client.write_all(probe).await.unwrap();
+
+    let mut buf = vec![0u8; 1024];
+    let n = tokio::time::timeout(Duration::from_secs(2), client.read(&mut buf))
+        .await
+        .expect("fallback read timed out")
+        .expect("fallback read");
+    buf.truncate(n);
+
+    drop(client);
+    let fallback_triggered = tokio::time::timeout(Duration::from_secs(2), server_task)
+        .await
+        .expect("server task timed out")
+        .expect("server task join");
+    assert!(fallback_triggered, "probe must trigger REALITY fallback");
+
+    buf
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reality_random_tcp_probe_is_forwarded_to_fallback() {
+    let probe = b"HELLO";
+    let response = reality_fallback_response_for_probe(probe).await;
+    assert_eq!(&response, probe);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reality_oversized_tls_record_probe_is_forwarded_to_fallback() {
+    let probe = [0x16, 0x03, 0x01, 0xff, 0xff];
+    let response = reality_fallback_response_for_probe(&probe).await;
+    assert_eq!(response, probe);
+}
+
 // Verify that a legitimate client can authenticate and exchange data with the server.
 //
 // This tests the full REALITY crypto pipeline:
@@ -86,6 +148,7 @@ async fn reality_legitimate_client_can_authenticate_and_exchange_data() {
     let server = Arc::new(RealityServer::new(RealityServerConfig {
         private_key: priv_bytes,
         short_ids: vec![short_id.clone()],
+        server_names: vec!["www.microsoft.com".to_string()],
         fallback: fallback_addr,
         max_time_diff: 120,
     }));
@@ -185,6 +248,7 @@ async fn reality_wrong_key_triggers_fallback() {
     let server = Arc::new(RealityServer::new(RealityServerConfig {
         private_key: priv_bytes,
         short_ids: vec![short_id.clone()],
+        server_names: vec!["www.microsoft.com".to_string()],
         fallback: fallback_addr,
         max_time_diff: 120,
     }));

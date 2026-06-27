@@ -99,7 +99,8 @@ fn server_config(vless_port: u16, fallback_port: u16) -> Arc<blackwire_config::s
                         "privateKey": "{REALITY_PRIVATE_KEY}",
                         "shortIds": ["{REALITY_SHORT_ID}"],
                         "serverName": "www.example.com",
-                        "maxTimeDiff": 120
+                        "serverNames": ["www.example.com"],
+                        "maxTimeDiffSeconds": 60
                     }}
                 }}
             }}],

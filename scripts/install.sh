@@ -221,16 +221,19 @@ resolve_socket_addr() {
 protect_config_for_service() {
     path="$1"
     group="$(config_group)"
-    if getent group "$group" >/dev/null 2>&1; then
-        sudo_cmd chown "root:$group" "$path"
-        if [ "$INSTALL_BLACK_UI" = "1" ]; then
-            sudo_cmd chmod 0660 "$path"
+    if ! getent group "$group" >/dev/null 2>&1; then
+        if command -v groupadd >/dev/null 2>&1; then
+            sudo_cmd groupadd --system "$group" || die "failed to create service group '$group'"
         else
-            sudo_cmd chmod 0640 "$path"
+            die "service group '$group' is missing; create it before installing"
         fi
+    fi
+
+    sudo_cmd chown "root:$group" "$path"
+    if [ "$INSTALL_BLACK_UI" = "1" ]; then
+        sudo_cmd chmod 0660 "$path"
     else
-        sudo_cmd chmod 0644 "$path"
-        log "group '$group' not found; left $path world-readable so the service can read it"
+        sudo_cmd chmod 0640 "$path"
     fi
 }
 
@@ -340,12 +343,21 @@ INFO
   },
 $(api_config_section)
 $(dns_config_section)
+  "limits": {
+    "maxConnections": 4096,
+    "maxConnectionsPerInbound": 2048,
+    "maxConnectionsPerUser": 64,
+    "maxHandshakeSeconds": 5
+  },
   "inbounds": [
     {
       "tag": "vless-reality-in",
       "protocol": "vless",
       "listen": "$SERVER_LISTEN",
       "port": $SERVER_PORT,
+      "limits": {
+        "maxHandshakeSeconds": 5
+      },
       "settings": {
         "clients": [
           {
@@ -363,7 +375,8 @@ $(dns_config_section)
           "privateKey": "$private_key",
           "shortIds": ["$sid"],
           "serverName": "$REALITY_SERVER_NAME",
-          "maxTimeDiff": 120
+          "serverNames": ["$REALITY_SERVER_NAME"],
+          "maxTimeDiffSeconds": 60
         }
       }
     }
@@ -686,7 +699,36 @@ setup_nginx_ws_proxy() {
     webroot="/var/www/blackwire-${DOMAIN}"
     sudo_cmd install -d -m 0755 "$webroot"
     sudo_cmd sh -c "cat > '$webroot/index.html'" <<HTML
-blackwire
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome</title>
+</head>
+<body>
+  <main>
+    <h1>Welcome</h1>
+    <p>This site is available.</p>
+  </main>
+</body>
+</html>
+HTML
+    sudo_cmd sh -c "cat > '$webroot/404.html'" <<HTML
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Not Found</title>
+</head>
+<body>
+  <main>
+    <h1>Not Found</h1>
+    <p>The requested page was not found.</p>
+  </main>
+</body>
+</html>
 HTML
 
     nginx_available="/etc/nginx/sites-available/blackwire-${DOMAIN}.conf"
@@ -697,6 +739,7 @@ server {
     server_name $DOMAIN;
     root $webroot;
     index index.html;
+    error_page 404 /404.html;
 
     location / {
         try_files \$uri \$uri/ =404;
@@ -766,6 +809,7 @@ server {
 
     root $webroot;
     index index.html;
+    error_page 404 /404.html;
 
     location / {
         try_files \$uri \$uri/ =404;
@@ -788,6 +832,9 @@ NGINX
     sudo_cmd nginx -t
     sudo_cmd systemctl reload nginx
     log "installed nginx TLS reverse proxy for https://$DOMAIN$WS_PATH"
+    if [ "$INSTALL_BLACK_UI" = "1" ]; then
+        log "warning: ${BLACK_UI_PANEL_PATH}/ exposes a control panel path; protect it with external auth or an IP allow-list"
+    fi
 }
 
 download_url() {

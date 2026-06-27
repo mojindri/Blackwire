@@ -443,6 +443,7 @@ mod tests {
         let server = Arc::new(RealityServer::new(RealityServerConfig {
             private_key: priv_bytes,
             short_ids: vec![short_id.clone()],
+            server_names: vec!["www.example.com".to_string()],
             fallback,
             max_time_diff: 120,
         }));
@@ -563,6 +564,7 @@ mod tests {
         let server = Arc::new(RealityServer::new(RealityServerConfig {
             private_key: priv_bytes,
             short_ids: vec![short_id.clone()],
+            server_names: vec!["www.microsoft.com".to_string()],
             fallback,
             max_time_diff: 120,
         }));

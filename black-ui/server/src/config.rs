@@ -246,6 +246,7 @@ pub fn subscription_link(
 }
 
 pub fn vless_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> String {
+    let stream_settings_json = serde_json::from_str::<Value>(&inbound.stream_settings).ok();
     let mut params = vec![
         format!("type={}", share_network(inbound)),
         "encryption=none".into(),
@@ -261,35 +262,37 @@ pub fn vless_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) ->
     if security == "reality" {
         params.push("security=reality".into());
         params.push("headerType=none".into());
-        if let Some(value) = reality_value(inbound, "/realitySettings/publicKey") {
+        if let Some(value) =
+            stream_json_string(stream_settings_json.as_ref(), "/realitySettings/publicKey")
+        {
             params.push(format!(
                 "pbk={}",
                 util::url_escape(&reality_public_key_share_value(&value))
             ));
         }
-        if let Some(value) = reality_value(inbound, "/realitySettings/shortId").or_else(|| {
-            serde_json::from_str::<Value>(&inbound.stream_settings)
-                .ok()
-                .and_then(|v| {
-                    v.pointer("/realitySettings/shortIds")
-                        .and_then(Value::as_array)
-                        .and_then(|ids| ids.first())
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
+        if let Some(value) = stream_json_string(
+            stream_settings_json.as_ref(),
+            "/realitySettings/shortId",
+        )
+        .or_else(|| {
+            stream_json_first_string(stream_settings_json.as_ref(), "/realitySettings/shortIds")
         }) {
             params.push(format!("sid={}", util::url_escape(&value)));
         }
-        if let Some(value) = reality_value(inbound, "/realitySettings/serverName") {
+        if let Some(value) = reality_server_name(stream_settings_json.as_ref()) {
             params.push(format!("sni={}", util::url_escape(&value)));
         }
-        if let Some(value) = reality_value(inbound, "/realitySettings/fingerprint") {
+        if let Some(value) = stream_json_string(
+            stream_settings_json.as_ref(),
+            "/realitySettings/fingerprint",
+        ) {
             params.push(format!("fp={}", util::url_escape(&value)));
         } else {
             params.push("fp=chrome".into());
         }
         let spider_x =
-            reality_value(inbound, "/realitySettings/spiderX").unwrap_or_else(|| "/".into());
+            stream_json_string(stream_settings_json.as_ref(), "/realitySettings/spiderX")
+                .unwrap_or_else(|| "/".into());
         params.push(format!("spx={}", url_escape_query_value(&spider_x)));
     } else if security == "tls" {
         params.push("security=tls".into());
@@ -367,8 +370,25 @@ fn vmess_link(settings: &Settings, inbound: &Inbound, user: &ManagedUser) -> Str
     format!("vmess://{encoded}")
 }
 
-fn reality_value(inbound: &Inbound, pointer: &str) -> Option<String> {
-    stream_value(inbound, pointer)
+fn reality_server_name(stream_settings: Option<&Value>) -> Option<String> {
+    stream_json_string(stream_settings, "/realitySettings/serverName")
+        .or_else(|| stream_json_first_string(stream_settings, "/realitySettings/serverNames"))
+}
+
+fn stream_json_string(stream_settings: Option<&Value>, pointer: &str) -> Option<String> {
+    stream_settings?
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn stream_json_first_string(stream_settings: Option<&Value>, pointer: &str) -> Option<String> {
+    stream_settings?
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .and_then(|values| values.first())
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn reality_public_key_share_value(value: &str) -> String {
@@ -1031,6 +1051,71 @@ mod tests {
         assert!(link.contains("fp=chrome"));
         assert!(link.contains("spx=%2F"));
         assert!(link.ends_with("#Mollah"));
+        assert_link_omits_mux_params(&link);
+    }
+
+    #[test]
+    fn vless_reality_subscription_uses_server_names_allow_list_for_sni() {
+        let settings = Settings {
+            config_path: "/tmp/config.json".into(),
+            grpc_enabled: false,
+            grpc_address: "127.0.0.1:62789".into(),
+            firewall_auto_open: false,
+            public_base_url: "http://127.0.0.1:18080".into(),
+            subscription_host: "203.0.113.10".into(),
+            enforcement_interval_seconds: 30,
+            adaptive_routing_enabled: false,
+            ..Settings::default()
+        };
+        let inbound = Inbound {
+            id: 1,
+            tag: "vless-reality-in".into(),
+            listen: "0.0.0.0".into(),
+            port: 443,
+            protocol: "vless".into(),
+            enabled: true,
+            transport: "reality".into(),
+            settings: "{}".into(),
+            stream_settings: r#"{
+              "network": "tcp",
+              "security": "reality",
+              "realitySettings": {
+                "publicKey": "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
+                "shortId": "feedbeef",
+                "serverNames": ["www.microsoft.com"],
+                "maxTimeDiffSeconds": 60,
+                "fingerprint": "chrome"
+              }
+            }"#
+            .into(),
+            sniffing: String::new(),
+            limits: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let user = ManagedUser {
+            id: 1,
+            inbound_id: 1,
+            email: "Mollah".into(),
+            uuid: "459dc0c8-d891-4768-9234-faf11fd26b5d".into(),
+            flow: String::new(),
+            credential: json!({}),
+            note: String::new(),
+            enabled: true,
+            traffic_limit_bytes: None,
+            expiry_at: None,
+            upload_bytes: 0,
+            download_bytes: 0,
+            sub_token: "token".into(),
+            enforcement_status: "active".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let link = vless_link(&settings, &inbound, &user);
+
+        assert!(link.contains("sni=www.microsoft.com"));
+        assert!(link.contains("security=reality"));
         assert_link_omits_mux_params(&link);
     }
 

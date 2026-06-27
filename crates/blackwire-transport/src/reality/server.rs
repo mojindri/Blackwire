@@ -38,6 +38,9 @@ pub struct RealityServerConfig {
     /// Valid short IDs for this server. Clients must present one of them.
     pub short_ids: Vec<Vec<u8>>,
 
+    /// Allowed ClientHello SNI values. Wildcards are intentionally unsupported.
+    pub server_names: Vec<String>,
+
     /// Real HTTPS destination used when authentication fails.
     pub fallback: SocketAddr,
 
@@ -59,6 +62,14 @@ impl RealityServer {
         if config.max_time_diff <= 0 {
             config.max_time_diff = MAX_TIME_DIFF_SECS;
         }
+        config.server_names = config
+            .server_names
+            .into_iter()
+            .map(|name| name.trim().to_ascii_lowercase())
+            .filter(|name| !name.is_empty())
+            .collect();
+        config.server_names.sort();
+        config.server_names.dedup();
         let private_key = StaticSecret::from(config.private_key);
         Self {
             private_key,
@@ -141,6 +152,16 @@ impl RealityServer {
                 return self.do_fallback(stream, all_bytes).await;
             }
         };
+        if !self
+            .config
+            .server_names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&fields.sni))
+        {
+            debug!("ClientHello SNI not in REALITY allow-list — forwarding to fallback");
+            let all_bytes = join_record(record_header, &handshake_body);
+            return self.do_fallback(stream, all_bytes).await;
+        }
 
         let auth_key = match self.derive_auth_key(&fields, &handshake_body) {
             Ok(key) => key,
@@ -321,7 +342,7 @@ fn log_reality_auth_ok(
     aad_mode: RealityAadMode,
     fields: &ClientHelloFields,
     token: &[u8],
-    auth_key: &[u8; 32],
+    _auth_key: &[u8; 32],
 ) {
     let version = if token.len() >= 4 {
         format!(
@@ -336,14 +357,13 @@ fn log_reality_auth_ok(
         peer_key = peer_kind.as_str(),
         aad = aad_mode.as_str(),
         client_version = %version,
-        short_id = %short_id_hex,
-        auth_key_prefix = %hex::encode(&auth_key[..4]),
         "REALITY auth succeeded"
     );
     if std::env::var_os("REALITY_DEBUG_HELLO").is_some() {
         debug!(
             sni = %fields.sni,
             random_prefix = %hex::encode(&fields.random[..4]),
+            short_id = %short_id_hex,
             "REALITY_DEBUG_HELLO"
         );
     }
@@ -475,6 +495,7 @@ mod tests {
         let server = RealityServer::new(RealityServerConfig {
             private_key: priv_bytes,
             short_ids: vec![short_id],
+            server_names: vec!["www.microsoft.com".to_string()],
             fallback: "127.0.0.1:80".parse().unwrap(),
             // This fixture is a static Docker capture. Keep the test focused on
             // Xray/sing-box REALITY decrypt + cert HMAC, not wall-clock freshness.

@@ -437,12 +437,14 @@ async fn reality_inbound_rejects_invalid_private_key_and_empty_short_ids() {
             "dest": "127.0.0.1:443",
             "privateKey": "not-hex",
             "shortIds": ["00"],
+            "serverNames": ["www.microsoft.com"],
             "maxTimeDiff": 30
         }),
         json!({
             "dest": "127.0.0.1:443",
             "privateKey": "1111111111111111111111111111111111111111111111111111111111111111",
             "shortIds": [],
+            "serverNames": ["www.microsoft.com"],
             "maxTimeDiff": 30
         }),
     ];
@@ -469,6 +471,140 @@ async fn reality_inbound_rejects_invalid_private_key_and_empty_short_ids() {
         assert!(
             Instance::from_config(Arc::new(cfg)).await.is_err(),
             "invalid REALITY inbound settings were accepted"
+        );
+    }
+}
+
+#[tokio::test]
+async fn reality_inbound_rejects_empty_or_wildcard_server_names() {
+    let cases = [
+        json!({
+            "dest": "127.0.0.1:443",
+            "privateKey": "8cb13706aa547712de8f687dc32e66b0ec2e753ba310e734b72fb52ce5e6a4a8",
+            "shortIds": ["0123456789abcdef"],
+            "serverNames": []
+        }),
+        json!({
+            "dest": "127.0.0.1:443",
+            "privateKey": "8cb13706aa547712de8f687dc32e66b0ec2e753ba310e734b72fb52ce5e6a4a8",
+            "shortIds": ["0123456789abcdef"],
+            "serverNames": ["*.example.com"]
+        }),
+    ];
+
+    for reality_settings in cases {
+        let cfg = base_config(
+            json!([{
+                "tag": "vless-reality",
+                "listen": "127.0.0.1",
+                "port": 0,
+                "protocol": "vless",
+                "settings": {
+                    "clients": [{ "id": "00000000-0000-4000-8000-000000000001" }]
+                },
+                "streamSettings": {
+                    "security": "reality",
+                    "network": "tcp",
+                    "realitySettings": reality_settings
+                }
+            }]),
+            json!([freedom_outbound("direct")]),
+        );
+
+        assert!(
+            Instance::from_config(Arc::new(cfg)).await.is_err(),
+            "unsafe REALITY serverNames were accepted"
+        );
+    }
+}
+
+#[tokio::test]
+async fn reality_inbound_uses_explicit_time_diff_and_rejects_large_legacy_value() {
+    let explicit = json!({
+        "dest": "127.0.0.1:443",
+        "privateKey": "8cb13706aa547712de8f687dc32e66b0ec2e753ba310e734b72fb52ce5e6a4a8",
+        "shortIds": ["0123456789abcdef"],
+        "serverNames": ["www.microsoft.com"],
+        "maxTimeDiff": 999999,
+        "maxTimeDiffSeconds": 60
+    });
+    let legacy_large = json!({
+        "dest": "127.0.0.1:443",
+        "privateKey": "8cb13706aa547712de8f687dc32e66b0ec2e753ba310e734b72fb52ce5e6a4a8",
+        "shortIds": ["0123456789abcdef"],
+        "serverNames": ["www.microsoft.com"],
+        "maxTimeDiff": 999999
+    });
+
+    let cfg = base_config(
+        json!([{
+            "tag": "vless-reality-explicit",
+            "listen": "127.0.0.1",
+            "port": 0,
+            "protocol": "vless",
+            "settings": {
+                "clients": [{ "id": "00000000-0000-4000-8000-000000000001" }]
+            },
+            "streamSettings": {
+                "security": "reality",
+                "network": "tcp",
+                "realitySettings": explicit
+            }
+        }]),
+        json!([freedom_outbound("direct")]),
+    );
+    assert!(
+        Instance::from_config(Arc::new(cfg)).await.is_ok(),
+        "explicit maxTimeDiffSeconds should be accepted"
+    );
+
+    let cfg = base_config(
+        json!([{
+            "tag": "vless-reality-legacy",
+            "listen": "127.0.0.1",
+            "port": 0,
+            "protocol": "vless",
+            "settings": {
+                "clients": [{ "id": "00000000-0000-4000-8000-000000000001" }]
+            },
+            "streamSettings": {
+                "security": "reality",
+                "network": "tcp",
+                "realitySettings": legacy_large
+            }
+        }]),
+        json!([freedom_outbound("direct")]),
+    );
+    let err = Instance::from_config(Arc::new(cfg)).await.unwrap_err();
+    assert!(
+        format!("{err:#}").contains("maxTimeDiff is interpreted as seconds"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn vless_inbound_rejects_misleading_unsupported_security_fields() {
+    let cases = [
+        json!({ "clients": [{ "id": "00000000-0000-4000-8000-000000000001" }], "decryption": "aes-128-gcm" }),
+        json!({ "clients": [{ "id": "00000000-0000-4000-8000-000000000001" }], "fallbacks": [] }),
+        json!({ "clients": [{ "id": "00000000-0000-4000-8000-000000000001" }], "paddingSettings": {} }),
+    ];
+
+    for settings in cases {
+        let cfg = base_config(
+            json!([{
+                "tag": "vless-in",
+                "listen": "127.0.0.1",
+                "port": 0,
+                "protocol": "vless",
+                "settings": settings
+            }]),
+            json!([freedom_outbound("direct")]),
+        );
+
+        assert!(
+            Instance::from_config(Arc::new(cfg)).await.is_err(),
+            "misleading VLESS settings were accepted"
         );
     }
 }

@@ -144,6 +144,67 @@ fn generate_test_keypair() -> ([u8; 32], [u8; 32]) {
     (raw, *public.as_bytes())
 }
 
+fn build_expired_reality_client_hello(
+    server_public_key: [u8; 32],
+    short_id: &[u8],
+    sni: &str,
+) -> bytes::BytesMut {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    use aes_gcm::{Aes256Gcm, Key, Nonce};
+    use blackwire_tls::ClientHelloBuilder;
+    use hkdf::Hkdf;
+    use sha2::Sha256;
+
+    let client_secret = StaticSecret::random();
+    let client_pub = *PublicKey::from(&client_secret).as_bytes();
+    let shared = client_secret
+        .diffie_hellman(&PublicKey::from(server_public_key))
+        .as_bytes()
+        .to_vec();
+
+    let mut random = [0u8; 32];
+    rand::rng().fill(&mut random[..]);
+
+    let mut auth_key = [0u8; 32];
+    Hkdf::<Sha256>::new(Some(&random[..20]), &shared)
+        .expand(b"REALITY", &mut auth_key)
+        .unwrap();
+
+    let mut session_id = [0u8; 32];
+    session_id[0] = 1;
+    session_id[1] = 8;
+    session_id[2] = 1;
+    session_id[4..8].copy_from_slice(&1u32.to_be_bytes());
+    let sid_len = short_id.len().min(8);
+    session_id[8..8 + sid_len].copy_from_slice(&short_id[..sid_len]);
+
+    let mut rng = rand::rng();
+    let mut hello = ClientHelloBuilder::chrome_131().build(
+        sni,
+        &random,
+        &[0u8; 32],
+        Some(&client_pub),
+        &mut rng,
+    );
+    let handshake_body = &hello[5..];
+    let session_id_offset_in_record = 5 + 39;
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&auth_key));
+    let nonce = Nonce::from_slice(&random[20..32]);
+    let encrypted = cipher
+        .encrypt(
+            nonce,
+            Payload {
+                msg: &session_id[..16],
+                aad: handshake_body,
+            },
+        )
+        .unwrap();
+    hello[session_id_offset_in_record..session_id_offset_in_record + 32]
+        .copy_from_slice(&encrypted);
+    hello
+}
+
 // ── Dummy fallback TCP server ─────────────────────────────────────────────────
 
 /// Binds a local TCP listener that accepts one connection, writes a marker
@@ -181,6 +242,7 @@ async fn d0_self_valid_auth_succeeds() {
     let server = Arc::new(RealityServer::new(RealityServerConfig {
         private_key: priv_bytes,
         short_ids: vec![short_id.clone()],
+        server_names: vec!["example.com".to_string()],
         fallback: fallback_addr,
         max_time_diff: 120,
     }));
@@ -275,6 +337,7 @@ async fn d0_self_wrong_short_id_triggers_fallback() {
     let server = Arc::new(RealityServer::new(RealityServerConfig {
         private_key: priv_bytes,
         short_ids: vec![allowed_id],
+        server_names: vec!["example.com".to_string()],
         fallback: fallback_addr,
         max_time_diff: 120,
     }));
@@ -322,14 +385,64 @@ async fn d0_self_wrong_short_id_triggers_fallback() {
     );
 }
 
-/// A replayed ClientHello (same bytes sent twice) must be rejected or trigger
-/// fallback.  The encrypted session_id contains a timestamp; a significant
-/// skew causes rejection.
-///
-/// This test mocks the clock skew by setting `max_time_diff = 0`, so the
-/// timestamp check always fails.
+/// Our server must reject a valid REALITY token when the ClientHello SNI is not
+/// in the configured allow-list.
 #[tokio::test]
-async fn d0_self_zero_max_time_diff_triggers_fallback() {
+async fn d0_self_wrong_sni_triggers_fallback() {
+    let (priv_bytes, pub_bytes) = generate_test_keypair();
+    let short_id = vec![0xAA, 0xBB, 0xCC, 0xDD];
+    let fallback_addr = spawn_dummy_fallback().await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server_addr = listener.local_addr().unwrap();
+
+    let server = Arc::new(RealityServer::new(RealityServerConfig {
+        private_key: priv_bytes,
+        short_ids: vec![short_id.clone()],
+        server_names: vec!["allowed.example".to_string()],
+        fallback: fallback_addr,
+        max_time_diff: 120,
+    }));
+
+    let (tx, rx) = oneshot::channel::<bool>();
+    let srv = server.clone();
+    tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await {
+            let triggered = matches!(
+                srv.accept_direct(Box::new(stream)).await,
+                Err(ProxyError::FallbackRequired)
+            );
+            let _ = tx.send(triggered);
+        }
+    });
+
+    let client = RealityClient::new(RealityClientConfig {
+        server: server_addr,
+        server_public_key: pub_bytes,
+        short_id,
+        sni: "wrong.example".to_string(),
+        fingerprint: "chrome".to_string(),
+    });
+    let dial_result = timeout(Duration::from_secs(10), client.dial()).await;
+    assert!(
+        dial_result.map(|r| r.is_err()).unwrap_or(true),
+        "wrong SNI should not complete the TLS 1.3 handshake"
+    );
+
+    let fallback_triggered = timeout(Duration::from_secs(10), rx)
+        .await
+        .expect("server timed out after 10 s — fallback did not complete")
+        .expect("channel closed");
+
+    assert!(
+        fallback_triggered,
+        "wrong SNI must trigger FallbackRequired, not succeed"
+    );
+}
+
+/// Variant coverage for the wrong short-ID fallback path.
+#[tokio::test]
+async fn d0_self_wrong_short_id_variant_triggers_fallback() {
     let (priv_bytes, pub_bytes) = generate_test_keypair();
     let short_id = vec![0xAA, 0xBB];
     let fallback_addr = spawn_dummy_fallback().await;
@@ -337,17 +450,10 @@ async fn d0_self_zero_max_time_diff_triggers_fallback() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let server_addr = listener.local_addr().unwrap();
 
-    // max_time_diff = 0 means ANY timestamp difference fails.
-    // In practice the real timestamp is always != 0 skew unless the test
-    // runs in under 1 second from the epoch, so this reliably triggers fallback.
-    // NOTE: RealityServer clamps <=0 to MAX_TIME_DIFF_SECS internally, so we
-    // cannot test this via config. Instead we use a deliberately wrong short_id.
-    //
-    // This test therefore doubles as a "wrong short_id → fallback" check with
-    // a different short_id value to increase variant coverage.
     let server = Arc::new(RealityServer::new(RealityServerConfig {
         private_key: priv_bytes,
         short_ids: vec![vec![0xDE, 0xAD]], // different from client's short_id
+        server_names: vec!["example.com".to_string()],
         fallback: fallback_addr,
         max_time_diff: 120,
     }));
@@ -389,6 +495,53 @@ async fn d0_self_zero_max_time_diff_triggers_fallback() {
         .expect("channel closed");
 
     assert!(triggered, "mismatched short_id must trigger fallback");
+}
+
+/// A valid-looking REALITY ClientHello with an expired timestamp must trigger
+/// fallback instead of authenticating.
+#[tokio::test]
+async fn d0_self_expired_timestamp_triggers_fallback() {
+    let (priv_bytes, pub_bytes) = generate_test_keypair();
+    let short_id = vec![0xAA, 0xBB, 0xCC, 0xDD];
+    let fallback_addr = spawn_dummy_fallback().await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server_addr = listener.local_addr().unwrap();
+
+    let server = Arc::new(RealityServer::new(RealityServerConfig {
+        private_key: priv_bytes,
+        short_ids: vec![short_id.clone()],
+        server_names: vec!["example.com".to_string()],
+        fallback: fallback_addr,
+        max_time_diff: 120,
+    }));
+
+    let (tx, rx) = oneshot::channel::<bool>();
+    let srv = server.clone();
+    tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await {
+            let triggered = matches!(
+                srv.accept_direct(Box::new(stream)).await,
+                Err(ProxyError::FallbackRequired)
+            );
+            let _ = tx.send(triggered);
+        }
+    });
+
+    let mut stream = TcpStream::connect(server_addr).await.unwrap();
+    let hello = build_expired_reality_client_hello(pub_bytes, &short_id, "example.com");
+    stream.write_all(&hello).await.unwrap();
+    drop(stream);
+
+    let fallback_triggered = timeout(Duration::from_secs(10), rx)
+        .await
+        .expect("server timed out after 10 s — fallback did not complete")
+        .expect("channel closed");
+
+    assert!(
+        fallback_triggered,
+        "expired REALITY timestamp must trigger fallback"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

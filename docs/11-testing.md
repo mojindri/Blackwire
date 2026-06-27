@@ -258,6 +258,17 @@ Legacy alias: `make -C labs/realistic xray`.
 
 See [tests/interop/README.md](../tests/interop/README.md) for the full protocol notes.
 
+ClientHello summary helper:
+
+```sh
+tools/tls_clienthello_summary.py crates/blackwire-transport/src/reality/testdata/singbox-chrome-hello.bin
+```
+
+This emits SNI, ALPN, cipher suites, supported groups, extension order, and a
+JA3-compatible string/hash from a TLS ClientHello record or raw ClientHello
+message. It is an evidence/debugging helper; it does not imply byte-identical
+browser TLS fingerprinting.
+
 ---
 
 ## Tier 10 — VPS external-client matrix
