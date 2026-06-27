@@ -8,6 +8,11 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+### Added
+
+- Installer `INIT_SERVER=hysteria2` now generates a TLS Hysteria2 server config
+  with top-level `settings.auth`, client hints, and UDP firewall guidance.
+
 ## 0.1.22 - 2026-06-27
 
 ### Fixed

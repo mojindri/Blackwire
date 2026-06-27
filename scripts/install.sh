@@ -29,6 +29,7 @@ PROXY_PATH="${PROXY_PATH:-$WS_PATH}"
 INTERNAL_PORT="${INTERNAL_PORT:-10080}"
 REALITY_DEST="${REALITY_DEST:-www.microsoft.com:443}"
 REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-www.microsoft.com}"
+HYSTERIA2_AUTH="${HYSTERIA2_AUTH:-}"
 PUBLIC_HOST="${PUBLIC_HOST:-<server-ip-or-domain>}"
 OPEN_FIREWALL="${OPEN_FIREWALL:-0}"
 BLACKWIRE_API_LISTEN="${BLACKWIRE_API_LISTEN:-127.0.0.1:62789}"
@@ -572,7 +573,79 @@ TLS certificate: $TLS_CERT_FILE
 TLS key: $TLS_KEY_FILE
 INFO
             ;;
-        *) die "unsupported INIT_SERVER value: $INIT_SERVER (use vless-tcp, vless-reality, vless-ws-nginx, or trojan-tls)" ;;
+        hysteria2)
+            prepare_tls_certificate
+            if [ "$SERVICE_USER" = "nobody" ] && [ "$SERVICE_GROUP" = "" ]; then
+                SERVICE_USER="root"
+                SERVICE_GROUP="root"
+                log "using root service user for TLS so certificate private key is readable"
+            fi
+            auth="$HYSTERIA2_AUTH"
+            if [ -z "$auth" ]; then
+                auth="$(short_id)$(short_id)$(short_id)$(short_id)"
+            fi
+            sudo_cmd sh -c "cat > '$CONFIG_DIR/config.json'" <<JSON
+{
+  "log": {
+    "level": "info",
+    "json": false
+  },
+$(api_config_section)
+$(dns_config_section)
+  "inbounds": [
+    {
+      "tag": "hysteria2-in",
+      "protocol": "hysteria2",
+      "listen": "$SERVER_LISTEN",
+      "port": $SERVER_PORT,
+      "settings": {
+        "auth": "$auth",
+        "upMbps": 100,
+        "downMbps": 100
+      },
+      "streamSettings": {
+        "network": "quic",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${DOMAIN:-$PUBLIC_HOST}",
+          "certificateFile": "$TLS_CERT_FILE",
+          "keyFile": "$TLS_KEY_FILE"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "freedom",
+      "protocol": "freedom",
+      "settings": {
+        "denyLoopback": true
+      }
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "outboundTag": "freedom"
+      }
+    ]
+  }
+}
+JSON
+            protect_config_for_service "$CONFIG_DIR/config.json"
+            sudo_cmd sh -c "cat > '$info_file'" <<INFO
+Generated Hysteria2 TLS server config
+
+Address: ${DOMAIN:-$PUBLIC_HOST}
+Port: $SERVER_PORT
+Auth: $auth
+Network: quic
+Security: tls
+TLS certificate: $TLS_CERT_FILE
+TLS key: $TLS_KEY_FILE
+INFO
+            ;;
+        *) die "unsupported INIT_SERVER value: $INIT_SERVER (use vless-tcp, vless-reality, vless-ws-nginx, trojan-tls, or hysteria2)" ;;
     esac
 
     sudo_cmd chmod 0600 "$info_file"
@@ -649,7 +722,7 @@ prepare_tls_certificate() {
         return 0
     fi
 
-    [ -n "$DOMAIN" ] || die "INIT_SERVER=trojan-tls requires DOMAIN, or set TLS_CERT_FILE and TLS_KEY_FILE"
+    [ -n "$DOMAIN" ] || die "TLS server setup requires DOMAIN, or set TLS_CERT_FILE and TLS_KEY_FILE"
 
     if ! command -v certbot >/dev/null 2>&1; then
         if [ "$INSTALL_CERTBOT" = "1" ]; then
@@ -1105,6 +1178,8 @@ configure_firewall() {
 
     if [ "$SETUP" = "domain" ] || [ "$INIT_SERVER" = "vless-ws-nginx" ]; then
         firewall_ports="80/tcp 443/tcp"
+    elif [ "$INIT_SERVER" = "hysteria2" ]; then
+        firewall_ports="${SERVER_PORT}/udp"
     else
         firewall_ports="${SERVER_PORT}/tcp"
     fi
@@ -1143,6 +1218,8 @@ print_next_steps() {
         log "next: ensure tcp/80 and tcp/443 are open in your VPS/cloud firewall"
     elif [ "$INIT_SERVER" = "vless-tcp" ]; then
         log "next: vless-tcp is cleartext and loopback-only; do not expose tcp/${SERVER_PORT} publicly"
+    elif [ "$INIT_SERVER" = "hysteria2" ]; then
+        log "next: ensure udp/${SERVER_PORT} is open in your VPS/cloud firewall"
     else
         log "next: ensure tcp/${SERVER_PORT} is open in your VPS/cloud firewall"
     fi
