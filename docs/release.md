@@ -220,6 +220,9 @@ prefer `SETUP`.
 `INIT_SERVER=hysteria2` generates a QUIC/TLS Hysteria2 config with
 `settings.auth`; provide `DOMAIN` for ACME or `TLS_CERT_FILE`/`TLS_KEY_FILE` for
 custom certificates, and open `udp/$SERVER_PORT`.
+Generated Trojan TLS and Hysteria2 configs copy certificate and key material into
+`/etc/blackwire/certs` with service-readable permissions before validation, so
+the runtime does not depend on direct access to `/etc/letsencrypt/live`.
 
 To install the Black UI companion panel with the Linux release assets:
 
