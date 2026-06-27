@@ -104,6 +104,7 @@ pub fn init(conn: &Connection, data_dir: &Path) -> Result<()> {
     set_default(conn, "adaptiveTuningState", "{}")?;
     seed_default_outbound(conn)?;
     seed_default_sections(conn)?;
+    enable_fast_dns_for_default_section(conn)?;
     Ok(())
 }
 
@@ -156,7 +157,7 @@ fn seed_default_sections(conn: &Connection) -> Result<()> {
     let defaults = [
         ("log", 1, r#"{"level":"info","json":false}"#),
         ("routing", 1, r#"{"rules":[{"outboundTag":"freedom"}]}"#),
-        ("dns", 0, r#"{"servers":[]}"#),
+        ("dns", 1, r#"{"servers":["1.1.1.1","8.8.8.8"]}"#),
         (
             "tun",
             0,
@@ -184,6 +185,19 @@ fn seed_default_sections(conn: &Connection) -> Result<()> {
             params![name, enabled, value, ts],
         )?;
     }
+    Ok(())
+}
+
+fn enable_fast_dns_for_default_section(conn: &Connection) -> Result<()> {
+    let ts = util::now();
+    conn.execute(
+        "UPDATE config_sections
+         SET enabled=1, value=?1, updated_at=?2
+         WHERE name='dns'
+           AND enabled=0
+           AND replace(value, ' ', '')='{\"servers\":[]}'",
+        params![r#"{"servers":["1.1.1.1","8.8.8.8"]}"#, ts],
+    )?;
     Ok(())
 }
 
@@ -623,6 +637,27 @@ mod tests {
         assert_eq!(inbound.settings, "");
         assert_eq!(count(&conn, "outbounds").unwrap(), 1);
         assert_eq!(count(&conn, "config_sections").unwrap(), 10);
+        let dns = load_section_map(&conn).unwrap().remove("dns").unwrap();
+        assert!(dns.enabled);
+        assert_eq!(dns.value, r#"{"servers":["1.1.1.1","8.8.8.8"]}"#);
+    }
+
+    #[test]
+    fn custom_dns_section_is_not_overwritten_on_init() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn, Path::new("/tmp/black-ui-db-custom-dns-test")).unwrap();
+        let ts = util::now();
+        conn.execute(
+            "UPDATE config_sections SET enabled=1, value=?1, updated_at=?2 WHERE name='dns'",
+            params![r#"{"servers":["9.9.9.9"]}"#, ts],
+        )
+        .unwrap();
+
+        init(&conn, Path::new("/tmp/black-ui-db-custom-dns-test")).unwrap();
+
+        let dns = load_section_map(&conn).unwrap().remove("dns").unwrap();
+        assert!(dns.enabled);
+        assert_eq!(dns.value, r#"{"servers":["9.9.9.9"]}"#);
     }
 
     #[test]

@@ -185,6 +185,14 @@ api_config_section() {
 JSON
 }
 
+dns_config_section() {
+    cat <<JSON
+  "dns": {
+    "servers": ["1.1.1.1", "8.8.8.8"]
+  },
+JSON
+}
+
 resolve_socket_addr() {
     value="$1"
     name="$2"
@@ -271,6 +279,7 @@ generate_server_config() {
     "json": false
   },
 $(api_config_section)
+$(dns_config_section)
   "inbounds": [
     {
       "tag": "vless-in",
@@ -330,6 +339,7 @@ INFO
     "json": false
   },
 $(api_config_section)
+$(dns_config_section)
   "inbounds": [
     {
       "tag": "vless-reality-in",
@@ -402,6 +412,7 @@ INFO
     "json": false
   },
 $(api_config_section)
+$(dns_config_section)
   "inbounds": [
     {
       "tag": "vless-ws-in",
@@ -472,6 +483,7 @@ INFO
     "json": false
   },
 $(api_config_section)
+$(dns_config_section)
   "inbounds": [
     {
       "tag": "trojan-tls-in",

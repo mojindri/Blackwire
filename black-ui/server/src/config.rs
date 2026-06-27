@@ -815,6 +815,7 @@ mod tests {
         }
         let value = build_value(&state).unwrap();
         validate_value(&value).unwrap();
+        assert_eq!(value["dns"]["servers"], json!(["1.1.1.1", "8.8.8.8"]));
     }
 
     #[test]

@@ -360,7 +360,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "black-ui-server"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -420,7 +420,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-api"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-app"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-benches"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "blackwire-common",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-common"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "aes-gcm",
  "aws-lc-rs",
@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-config"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-connmgr"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "dashmap",
  "metrics",
@@ -537,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-core"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-protocol"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-tls"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "bytes",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-transport"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2263,7 +2263,7 @@ dependencies = [
 
 [[package]]
 name = "integration-tests"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "aes-gcm",
  "anyhow",

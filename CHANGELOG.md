@@ -8,6 +8,22 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.13 - 2026-06-27
+
+### Fixed
+
+- Installer-generated public server configs now enable explicit DNS upstreams
+  (`1.1.1.1`, `8.8.8.8`) so outbound `freedom` traffic does not inherit slow or
+  broken VPS provider resolvers. This prevents client delay-test probes from
+  timing out while real browsing still works.
+- Black UI now enables the same DNS defaults for new databases and migrates only
+  the old empty default DNS section, while preserving custom operator DNS
+  settings.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.13`.
+
 ## 0.1.12 - 2026-06-27
 
 ### Fixed
