@@ -274,6 +274,32 @@ protect_tls_material_for_service() {
     fi
 }
 
+stage_tls_material_for_service() {
+    label="$1"
+    [ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ] || die "TLS material is not prepared"
+    [ -f "$TLS_CERT_FILE" ] || die "TLS_CERT_FILE does not exist: $TLS_CERT_FILE"
+    [ -f "$TLS_KEY_FILE" ] || die "TLS_KEY_FILE does not exist: $TLS_KEY_FILE"
+
+    group="$(config_group)"
+    if ! getent group "$group" >/dev/null 2>&1; then
+        if command -v groupadd >/dev/null 2>&1; then
+            sudo_cmd groupadd --system "$group" || die "failed to create service group '$group'"
+        else
+            die "service group '$group' is missing; create it before installing"
+        fi
+    fi
+
+    cert_dir="$CONFIG_DIR/certs"
+    staged_cert="$cert_dir/${label}.crt"
+    staged_key="$cert_dir/${label}.key"
+    sudo_cmd install -d -m 0770 -o root -g "$group" "$cert_dir"
+    sudo_cmd install -m 0640 -o root -g "$group" "$TLS_CERT_FILE" "$staged_cert"
+    sudo_cmd install -m 0640 -o root -g "$group" "$TLS_KEY_FILE" "$staged_key"
+    TLS_CERT_FILE="$staged_cert"
+    TLS_KEY_FILE="$staged_key"
+    log "staged TLS material in $cert_dir for service group '$group'"
+}
+
 prepare_runtime_dirs() {
     ensure_black_ui_group
     ensure_service_identity
@@ -505,6 +531,7 @@ INFO
             ;;
         trojan-tls)
             prepare_tls_certificate
+            stage_tls_material_for_service "trojan-tls"
             if [ "$SERVICE_USER" = "nobody" ] && [ "$SERVICE_GROUP" = "" ]; then
                 SERVICE_USER="root"
                 SERVICE_GROUP="root"
@@ -575,6 +602,7 @@ INFO
             ;;
         hysteria2)
             prepare_tls_certificate
+            stage_tls_material_for_service "hysteria2"
             if [ "$SERVICE_USER" = "nobody" ] && [ "$SERVICE_GROUP" = "" ]; then
                 SERVICE_USER="root"
                 SERVICE_GROUP="root"
