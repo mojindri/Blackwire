@@ -8,6 +8,8 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.22 - 2026-06-27
+
 ### Fixed
 
 - Black UI startup now migrates localhost/default public link settings to
@@ -18,6 +20,10 @@ This project is pre-1.0. The support contract is owned by
   path hints.
 - Black UI now validates duplicate inbound tags before insert/update so users
   see a clear validation error instead of a raw SQLite constraint failure.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.22`.
 
 ## 0.1.21 - 2026-06-27
 
