@@ -970,7 +970,15 @@ async fn apply_user_change(
     let mut failures = Vec::new();
     if let Some((tag, email)) = remove {
         if let Err(e) = runtime::remove_user(&settings.grpc_address, &tag, &email).await {
-            if let Err(sync_error) = runtime::sync_config(state, &settings.grpc_address).await {
+            if runtime::is_not_found_error(&e) {
+                tracing::debug!(
+                    inbound = %tag,
+                    email = %email,
+                    "live remove skipped because user is already absent"
+                );
+            } else if let Err(sync_error) =
+                runtime::sync_config(state, &settings.grpc_address).await
+            {
                 failures.push(format!(
                     "remove {email}: {e}; full sync failed: {sync_error}"
                 ));

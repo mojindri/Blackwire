@@ -977,6 +977,7 @@ WorkingDirectory=${BLACK_UI_DATA_DIR}
 Environment=BLACK_UI_DATA_DIR=${BLACK_UI_DATA_DIR}
 Environment=BLACK_UI_LISTEN=${BLACK_UI_LISTEN}
 Environment=BLACK_UI_STATIC_DIR=${BLACK_UI_STATIC_DIR}
+Environment=BLACK_UI_CONFIG_PATH=${CONFIG_DIR}/config.json
 Environment=BLACK_UI_COOKIE_SECURE=${cookie_secure}
 Environment=BLACK_UI_PUBLIC_BASE_URL=${black_ui_public_base_url}
 Environment=BLACK_UI_SUBSCRIPTION_HOST=${black_ui_subscription_host}

@@ -1,9 +1,9 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
 use validator::{Validate, ValidationError, ValidationErrors};
 
-use super::{Protocol, SniffingConfig, StreamSettingsConfig};
+use super::{Protocol, SecurityType, SniffingConfig, StreamSettingsConfig};
 
 fn reject_shadowtls_protocol(protocol: &Protocol) -> Result<(), ValidationError> {
     if *protocol == Protocol::ShadowTls {
@@ -19,20 +19,18 @@ fn reject_shadowtls_protocol(protocol: &Protocol) -> Result<(), ValidationError>
 }
 
 /// An inbound handler: a port and protocol the proxy listens on.
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboundConfig {
     /// Unique name used in routing rules and logs.
     pub tag: String,
 
     /// Proxy protocol: "socks", "http", "vless", and so on.
-    #[validate(custom(function = "reject_shadowtls_protocol"))]
     pub protocol: Protocol,
 
     /// IP address to listen on.
     pub listen: IpAddr,
 
     /// Port to listen on. Must be between 1 and 65535.
-    #[validate(range(min = 1, max = 65535))]
     pub port: u16,
 
     /// Protocol-specific settings. Shape depends on `protocol`.
@@ -55,6 +53,55 @@ pub struct InboundConfig {
     /// Sniffing settings for detecting inner protocol.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sniffing: Option<SniffingConfig>,
+}
+
+impl Validate for InboundConfig {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let mut errors = ValidationErrors::new();
+
+        if let Err(error) = reject_shadowtls_protocol(&self.protocol) {
+            errors.add("protocol", error);
+        }
+
+        if self.port == 0 {
+            let mut error = ValidationError::new("range");
+            error.message = Some("inbound port must be between 1 and 65535".into());
+            errors.add("port", error);
+        }
+
+        if let Some(stream) = &self.stream_settings {
+            if stream.security == SecurityType::Reality {
+                match stream.reality_settings.as_ref() {
+                    Some(reality) if reality.dest.trim().is_empty() => {
+                        let mut error = ValidationError::new("required");
+                        error.message =
+                            Some("REALITY inbound requires realitySettings.dest".into());
+                        errors.add("streamSettings.realitySettings.dest", error);
+                    }
+                    Some(reality) if reality.dest.parse::<SocketAddr>().is_err() => {
+                        let mut error = ValidationError::new("socket_address");
+                        error.message = Some(
+                            "REALITY inbound realitySettings.dest must be an IP socket address like 93.184.216.34:443".into(),
+                        );
+                        errors.add("streamSettings.realitySettings.dest", error);
+                    }
+                    Some(_) => {}
+                    None => {
+                        let mut error = ValidationError::new("required");
+                        error.message =
+                            Some("REALITY inbound requires streamSettings.realitySettings".into());
+                        errors.add("streamSettings.realitySettings", error);
+                    }
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 /// An outbound handler: a protocol used to forward traffic to the destination.

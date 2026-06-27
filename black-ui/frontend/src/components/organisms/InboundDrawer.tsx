@@ -153,6 +153,7 @@ export function InboundDrawer({
         realityPublicKey: selected.publicKey,
         realityShortId: selected.shortId,
         realityServerName: selected.serverName,
+        realityDest: selected.dest ?? state.realityDest,
         security: "reality",
         network: "tcp"
       });
@@ -442,6 +443,9 @@ export function InboundDrawer({
                   </Field>
                   <Field label="Short ID" hint="Must exactly match one server shortIds value; changing one character breaks REALITY auth.">
                     <Input value={state.realityShortId} onChange={(e) => updateStructured({ realityShortId: e.target.value })} placeholder="6ba85179e30d4fc2" />
+                  </Field>
+                  <Field label="Fallback destination" hint="Server-side fallback socket address used when REALITY auth fails. Use an IP:port, not a domain.">
+                    <Input value={state.realityDest} onChange={(e) => updateStructured({ realityDest: e.target.value })} placeholder="93.184.216.34:443" />
                   </Field>
                   <Field label="Fingerprint">
                     <Input value={state.realityFingerprint} onChange={(e) => updateStructured({ realityFingerprint: e.target.value })} placeholder="chrome" />

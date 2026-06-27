@@ -88,8 +88,13 @@ pub fn init(conn: &Connection, data_dir: &Path) -> Result<()> {
         "#,
     )?;
     migrate_existing_schema(conn)?;
-    let config_path = data_dir.join("config.json").to_string_lossy().to_string();
+    let panel_default_config_path = data_dir.join("config.json").to_string_lossy().to_string();
+    let config_path = std::env::var("BLACK_UI_CONFIG_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| panel_default_config_path.clone());
     set_default(conn, "configPath", &config_path)?;
+    migrate_panel_default_config_path(conn, &panel_default_config_path, &config_path)?;
     set_default(conn, "grpcEnabled", "true")?;
     set_default(conn, "grpcAddress", "127.0.0.1:62789")?;
     set_default(conn, "firewallAutoOpen", "false")?;
@@ -113,6 +118,21 @@ pub fn init(conn: &Connection, data_dir: &Path) -> Result<()> {
     seed_default_outbound(conn)?;
     seed_default_sections(conn)?;
     enable_fast_dns_for_default_section(conn)?;
+    Ok(())
+}
+
+fn migrate_panel_default_config_path(
+    conn: &Connection,
+    panel_default_config_path: &str,
+    configured_config_path: &str,
+) -> Result<()> {
+    if panel_default_config_path == configured_config_path {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE settings SET value=?1 WHERE key='configPath' AND value=?2",
+        params![configured_config_path, panel_default_config_path],
+    )?;
     Ok(())
 }
 
@@ -666,6 +686,33 @@ mod tests {
         let dns = load_section_map(&conn).unwrap().remove("dns").unwrap();
         assert!(dns.enabled);
         assert_eq!(dns.value, r#"{"servers":["9.9.9.9"]}"#);
+    }
+
+    #[test]
+    fn init_uses_packaged_service_config_path_without_clobbering_custom_paths() {
+        let conn = Connection::open_in_memory().unwrap();
+        let data_dir = Path::new("/tmp/black-ui-db-config-path-test");
+        let panel_default = data_dir.join("config.json").to_string_lossy().to_string();
+
+        init(&conn, data_dir).unwrap();
+        migrate_panel_default_config_path(&conn, &panel_default, "/etc/blackwire/config.json")
+            .unwrap();
+        assert_eq!(
+            load_settings(&conn).unwrap().config_path,
+            "/etc/blackwire/config.json"
+        );
+
+        conn.execute(
+            "UPDATE settings SET value=?1 WHERE key='configPath'",
+            params!["/srv/custom/blackwire.json"],
+        )
+        .unwrap();
+        migrate_panel_default_config_path(&conn, &panel_default, "/etc/blackwire/config.json")
+            .unwrap();
+        assert_eq!(
+            load_settings(&conn).unwrap().config_path,
+            "/srv/custom/blackwire.json"
+        );
     }
 
     #[test]

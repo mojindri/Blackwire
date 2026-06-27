@@ -126,6 +126,7 @@ fn parse_client_info(text: &str, source: &str) -> Option<RealityClientValues> {
     let public_key = labeled_value(text, "REALITY public key")?;
     let short_id = labeled_value(text, "REALITY short ID")?;
     let server_name = labeled_value(text, "REALITY server name")?;
+    let dest = labeled_value(text, "REALITY destination");
 
     Some(RealityClientValues {
         source: source.into(),
@@ -137,6 +138,7 @@ fn parse_client_info(text: &str, source: &str) -> Option<RealityClientValues> {
         public_key,
         short_id,
         server_name,
+        dest,
     })
 }
 
@@ -196,6 +198,11 @@ fn parse_config_inbound(inbound: &Value, source: &str) -> Option<RealityClientVa
         .and_then(Value::as_str)
         .map(ToString::to_string)
         .or_else(|| first_string(reality.get("serverNames")))?;
+    let dest = reality
+        .get("dest")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string);
 
     Some(RealityClientValues {
         source: source.into(),
@@ -213,6 +220,7 @@ fn parse_config_inbound(inbound: &Value, source: &str) -> Option<RealityClientVa
         public_key,
         short_id,
         server_name,
+        dest,
     })
 }
 
@@ -343,6 +351,7 @@ Security: reality
 REALITY public key: 250d08c08b9f82143595ea1734015b612ef6bc314c18955b5517bd868ee40b10
 REALITY short ID: 0ca1ce9df12b31e5
 REALITY server name: www.microsoft.com
+REALITY destination: 93.184.216.34:443
 "#,
             "/tmp/client-info.txt",
         )
@@ -361,6 +370,7 @@ REALITY server name: www.microsoft.com
         );
         assert_eq!(parsed.short_id, "0ca1ce9df12b31e5");
         assert_eq!(parsed.server_name, "www.microsoft.com");
+        assert_eq!(parsed.dest.as_deref(), Some("93.184.216.34:443"));
     }
 
     #[test]
@@ -376,6 +386,7 @@ REALITY server name: www.microsoft.com
                     "streamSettings": {
                         "security": "reality",
                         "realitySettings": {
+                            "dest": "93.184.216.34:443",
                             "privateKey": "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
                             "shortIds": ["0ca1ce9df12b31e5"],
                             "serverNames": ["www.microsoft.com"]
@@ -403,6 +414,7 @@ REALITY server name: www.microsoft.com
         );
         assert_eq!(values[0].short_id, "0ca1ce9df12b31e5");
         assert_eq!(values[0].server_name, "www.microsoft.com");
+        assert_eq!(values[0].dest.as_deref(), Some("93.184.216.34:443"));
     }
 
     #[test]

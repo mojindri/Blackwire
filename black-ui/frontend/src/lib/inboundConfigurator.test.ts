@@ -153,7 +153,8 @@ describe("inboundConfigurator", () => {
       realityServerName: "www.microsoft.com",
       realityPrivateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
       realityPublicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
-      realityShortId: "feedbeef"
+      realityShortId: "feedbeef",
+      realityDest: "93.184.216.34:443"
     });
 
     expect(validIssues).toEqual([]);
@@ -168,7 +169,8 @@ describe("inboundConfigurator", () => {
       realityServerName: "",
       realityPrivateKey: "",
       realityPublicKey: "",
-      realityShortId: ""
+      realityShortId: "",
+      realityDest: ""
     });
     const malformedIssues = validateInboundState({
       ...createInboundEditorState(),
@@ -177,19 +179,22 @@ describe("inboundConfigurator", () => {
       realityServerName: "www.microsoft.com",
       realityPrivateKey: "random-private-key",
       realityPublicKey: "random-public-key",
-      realityShortId: "xyz"
+      realityShortId: "xyz",
+      realityDest: "www.microsoft.com:443"
     });
 
     expect(missingIssues.map((issue) => issue.field)).toEqual([
       "realityServerName",
       "realityPrivateKey",
       "realityPublicKey",
-      "realityShortId"
+      "realityShortId",
+      "realityDest"
     ]);
     expect(malformedIssues.map((issue) => issue.field)).toEqual([
       "realityPrivateKey",
       "realityPublicKey",
-      "realityShortId"
+      "realityShortId",
+      "realityDest"
     ]);
   });
 
@@ -239,6 +244,7 @@ describe("inboundConfigurator", () => {
       realityPrivateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
       realityPublicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
       realityShortId: "feedbeef",
+      realityDest: "93.184.216.34:443",
       realityFingerprint: "chrome",
       realitySpiderX: "/"
     });
@@ -254,6 +260,7 @@ describe("inboundConfigurator", () => {
     expect(streamSettings.realitySettings.shortIds).toEqual(["feedbeef"]);
     expect(streamSettings.realitySettings.serverName).toBe("www.microsoft.com");
     expect(streamSettings.realitySettings.serverNames).toEqual(["www.microsoft.com"]);
+    expect(streamSettings.realitySettings.dest).toBe("93.184.216.34:443");
     expect(streamSettings.realitySettings.maxTimeDiffSeconds).toBe(60);
     expect(streamSettings.realitySettings.maxTimeDiff).toBeUndefined();
     expect(streamSettings.realitySettings.fingerprint).toBe("chrome");
@@ -274,6 +281,7 @@ describe("inboundConfigurator", () => {
         network: "tcp",
         security: "reality",
         realitySettings: {
+          dest: "93.184.216.34:443",
           serverNames: ["www.microsoft.com"],
           maxTimeDiffSeconds: 60
         }
@@ -287,6 +295,7 @@ describe("inboundConfigurator", () => {
     const state = createInboundEditorState(inbound);
 
     expect(state.realityServerName).toBe("www.microsoft.com");
+    expect(state.realityDest).toBe("93.184.216.34:443");
   });
 
   it("serializes websocket and TLS fields for common VLESS structured setups", () => {
