@@ -10,6 +10,17 @@ This project is pre-1.0. The support contract is owned by
 
 No release-facing changes yet.
 
+## 0.1.20 - 2026-06-27
+
+### Fixed
+
+- Black UI subscription copy buttons now copy the base64 subscription body from
+  `/sub/{token}` instead of the raw single-link URI from `/sub/{token}/raw`.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.20`.
+
 ## 0.1.19 - 2026-06-27
 
 ### Fixed
