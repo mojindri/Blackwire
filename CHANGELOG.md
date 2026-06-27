@@ -10,6 +10,19 @@ This project is pre-1.0. The support contract is owned by
 
 No release-facing changes yet.
 
+## 0.1.16 - 2026-06-27
+
+### Fixed
+
+- Installer upgrades now re-own existing Black UI data files under
+  `BLACK_UI_DATA_DIR` when the service user/group changes, preventing SQLite
+  `attempt to write a readonly database` crash loops after migration from older
+  `nobody:nogroup` installs.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.16`.
+
 ## 0.1.15 - 2026-06-27
 
 ### Fixed
