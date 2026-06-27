@@ -34,6 +34,23 @@ pub fn build_value(state: &AppState) -> Result<Value> {
         let mut settings_json = object_or_empty(&inbound.settings)?;
         if inbound.protocol == "tuic" {
             settings_json["users"] = Value::Array(clients);
+        } else if inbound.protocol == "hysteria2" {
+            settings_json["clients"] = Value::Array(clients);
+            if settings_json
+                .get("auth")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                if let Some(auth) = hysteria2_auth_from_clients(
+                    settings_json
+                        .get("clients")
+                        .and_then(Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]),
+                ) {
+                    settings_json["auth"] = json!(auth);
+                }
+            }
         } else if protocol_uses_clients(&inbound.protocol) {
             settings_json["clients"] = Value::Array(clients);
         }
@@ -656,6 +673,17 @@ fn client_entry(protocol: &str, user: &ManagedUser) -> Value {
     Value::Object(entry)
 }
 
+fn hysteria2_auth_from_clients(clients: &[Value]) -> Option<String> {
+    clients.iter().find_map(|client| {
+        client
+            .get("auth")
+            .or_else(|| client.get("password"))
+            .and_then(Value::as_str)
+            .filter(|auth| !auth.trim().is_empty())
+            .map(|auth| auth.trim().to_string())
+    })
+}
+
 fn protocol_uses_clients(protocol: &str) -> bool {
     matches!(
         protocol,
@@ -884,6 +912,44 @@ mod tests {
         assert_eq!(
             value["inbounds"][0]["settings"]["clients"][0]["email"],
             "alice@example.test"
+        );
+    }
+
+    #[test]
+    fn generated_hysteria2_config_promotes_first_client_auth() {
+        let state = test_state();
+        {
+            let conn = state.lock_db().unwrap();
+            let ts = util::now();
+            conn.execute(
+                "INSERT INTO inbounds (tag, listen, port, protocol, enabled, transport, settings, stream_settings, sniffing, limits, created_at, updated_at)
+                 VALUES ('hy2', '127.0.0.1', 18002, 'hysteria2', 1, 'quic', '{}', ?1, '', '', ?2, ?2)",
+                params![
+                    r#"{"network":"quic","security":"tls","tlsSettings":{"certificateFile":"/etc/blackwire/certs/hy2.crt","keyFile":"/etc/blackwire/certs/hy2.key"}}"#,
+                    ts
+                ],
+            )
+            .unwrap();
+            let inbound_id = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO users (inbound_id, email, uuid, flow, credential_json, note, enabled, traffic_limit_bytes, expiry_at, sub_token, enforcement_status, created_at, updated_at)
+                 VALUES (?1, 'hy2@example.test', '00000000-0000-4000-8000-000000000002', '', ?2, '', 1, NULL, NULL, 'hy2-token', 'active', ?3, ?3)",
+                params![inbound_id, r#"{"auth":"hy2-secret"}"#, util::now()],
+            )
+            .unwrap();
+        }
+
+        let value = build_value(&state).unwrap();
+
+        assert_eq!(value["inbounds"][0]["protocol"], "hysteria2");
+        assert_eq!(value["inbounds"][0]["settings"]["auth"], "hy2-secret");
+        assert_eq!(
+            value["inbounds"][0]["settings"]["clients"][0]["auth"],
+            "hy2-secret"
+        );
+        assert_eq!(
+            value["inbounds"][0]["settings"]["clients"][0]["email"],
+            "hy2@example.test"
         );
     }
 
