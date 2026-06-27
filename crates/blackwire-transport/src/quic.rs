@@ -31,6 +31,8 @@ use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 
 const DEFAULT_MAX_CONCURRENT_BIDI_STREAMS: u32 = 1024;
 const DEFAULT_MAX_CONCURRENT_UNI_STREAMS: u32 = 64;
+const HYSTERIA2_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
+const HYSTERIA2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Tuning knobs applied when opening a QUIC UDP socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,10 +206,7 @@ pub fn build_hysteria2_server_endpoint_with_congestion_and_socket(
     let mut server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
 
     let mut transport = TransportConfig::default();
-    let idle_timeout = Duration::from_secs(30)
-        .try_into()
-        .expect("constant 30s idle timeout fits in quinn IdleTimeout");
-    transport.max_idle_timeout(Some(idle_timeout));
+    apply_hysteria2_liveness(&mut transport);
     apply_default_stream_limits(&mut transport);
     transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
     transport.datagram_send_buffer_size(2 * 1024 * 1024);
@@ -351,6 +350,14 @@ fn apply_default_stream_limits(transport: &mut TransportConfig) {
     transport
         .max_concurrent_bidi_streams(DEFAULT_MAX_CONCURRENT_BIDI_STREAMS.into())
         .max_concurrent_uni_streams(DEFAULT_MAX_CONCURRENT_UNI_STREAMS.into());
+}
+
+pub(crate) fn apply_hysteria2_liveness(transport: &mut TransportConfig) {
+    let idle_timeout = HYSTERIA2_IDLE_TIMEOUT
+        .try_into()
+        .expect("constant Hysteria2 idle timeout fits in quinn IdleTimeout");
+    transport.max_idle_timeout(Some(idle_timeout));
+    transport.keep_alive_interval(Some(HYSTERIA2_KEEP_ALIVE_INTERVAL));
 }
 
 /// Generate a throwaway self-signed certificate and key for testing.

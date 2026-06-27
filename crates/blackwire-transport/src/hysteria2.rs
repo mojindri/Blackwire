@@ -434,6 +434,7 @@ impl Hysteria2Client {
 
     fn transport_config(&self) -> quinn::TransportConfig {
         let mut transport_config = quinn::TransportConfig::default();
+        crate::quic::apply_hysteria2_liveness(&mut transport_config);
         configure_congestion(&mut transport_config, &self.config.congestion);
         crate::quic::badnet::record_mode(self.config.congestion.mode);
         crate::quic::badnet::record_endpoint_shards(self.config.endpoint_shards.max(1));
@@ -882,6 +883,7 @@ impl Hysteria2UdpSession {
     pub async fn connect(config: &Hysteria2ClientConfig) -> Result<Self, ProxyError> {
         let rx_bps = config.down_mbps.saturating_mul(1_000_000 / 8);
         let mut transport_config = quinn::TransportConfig::default();
+        crate::quic::apply_hysteria2_liveness(&mut transport_config);
         configure_congestion(&mut transport_config, &config.congestion);
         crate::quic::badnet::record_mode(config.congestion.mode);
         crate::quic::badnet::record_endpoint_shards(config.endpoint_shards.max(1));
