@@ -852,7 +852,11 @@ impl Instance {
                     .stream_settings
                     .as_ref()
                     .and_then(|s| s.reality_settings.as_ref())
-                    .map(|r| r.server_name.as_str())
+                    .and_then(|r| {
+                        r.server_names.first().map(String::as_str).or_else(|| {
+                            (!r.server_name.is_empty()).then_some(r.server_name.as_str())
+                        })
+                    })
                     .unwrap_or("localhost");
                 RealityConnectionHandler::new(
                     reality,

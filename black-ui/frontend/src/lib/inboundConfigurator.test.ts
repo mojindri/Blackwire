@@ -185,8 +185,40 @@ describe("inboundConfigurator", () => {
     expect(streamSettings.realitySettings.shortId).toBe("feedbeef");
     expect(streamSettings.realitySettings.shortIds).toEqual(["feedbeef"]);
     expect(streamSettings.realitySettings.serverName).toBe("www.microsoft.com");
+    expect(streamSettings.realitySettings.serverNames).toEqual(["www.microsoft.com"]);
+    expect(streamSettings.realitySettings.maxTimeDiffSeconds).toBe(60);
+    expect(streamSettings.realitySettings.maxTimeDiff).toBeUndefined();
     expect(streamSettings.realitySettings.fingerprint).toBe("chrome");
     expect(streamSettings.realitySettings.spiderX).toBe("/");
+  });
+
+  it("loads REALITY server name from the allow-list when legacy serverName is absent", () => {
+    const inbound: Inbound = {
+      id: 1,
+      tag: "vless-reality",
+      listen: "0.0.0.0",
+      port: 443,
+      protocol: "vless",
+      enabled: true,
+      transport: "reality",
+      settings: "{}",
+      streamSettings: JSON.stringify({
+        network: "tcp",
+        security: "reality",
+        realitySettings: {
+          serverNames: ["www.microsoft.com"],
+          maxTimeDiffSeconds: 60
+        }
+      }),
+      sniffing: "{}",
+      limits: "{}",
+      createdAt: "",
+      updatedAt: ""
+    };
+
+    const state = createInboundEditorState(inbound);
+
+    expect(state.realityServerName).toBe("www.microsoft.com");
   });
 
   it("serializes websocket and TLS fields for common VLESS structured setups", () => {

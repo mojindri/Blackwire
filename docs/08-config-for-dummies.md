@@ -445,7 +445,8 @@ Server-side shape:
     "privateKey": "...",
     "shortIds": ["0123456789abcdef"],
     "serverName": "www.example.com",
-    "maxTimeDiff": 120
+    "serverNames": ["www.example.com"],
+    "maxTimeDiffSeconds": 60
   }
 }
 ```
@@ -453,6 +454,7 @@ Server-side shape:
 Meaning:
 
 - validate REALITY clients with this private key and short IDs
+- only accept ClientHello SNI values listed in `serverNames`
 - send failures to fallback `dest`
 
 ## `routing.rules`
@@ -606,7 +608,7 @@ In the schema, `listen` is an IP address.
 Client and server use different REALITY fields:
 
 - client uses `publicKey`, `shortId`, `serverName`, `fingerprint`
-- server uses `privateKey`, `shortIds`, `dest`, `maxTimeDiff`
+- server uses `privateKey`, `shortIds`, `dest`, `serverNames`, `maxTimeDiffSeconds`
 
 ## Mistake 5: skipping `routing`
 

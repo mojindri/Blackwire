@@ -8,6 +8,48 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+No release-facing changes yet.
+
+## 0.1.14 - 2026-06-27
+
+### Added
+
+- REALITY server inbounds now support explicit `serverNames` / `server_names`
+  SNI allow-lists and reject wildcard or missing public SNI configuration.
+- REALITY config now supports explicit `maxTimeDiffSeconds` /
+  `max_time_diff_seconds` to avoid Xray-style millisecond/second ambiguity.
+- Added an offline ClientHello fingerprint summary tool for lab captures and
+  fixtures.
+- Added static installer hardening assertions for config permissions and
+  generated REALITY defaults.
+
+### Changed
+
+- VLESS inbound config validation now fails closed for misleading unsupported
+  security-looking settings such as non-`none` `decryption`, Xray
+  `settings.fallbacks`, and padding/encryption fields Blackwire does not
+  implement.
+- VLESS wrong UUID, malformed headers, and wrong flow now share the same
+  fallback behavior when a fallback backend is configured.
+- Installer-generated REALITY configs include conservative connection limits,
+  per-inbound handshake limits, explicit REALITY `serverNames`, and neutral
+  nginx fallback pages.
+
+### Fixed
+
+- Installer config permissions no longer fall back to world-readable
+  `/etc/blackwire/config.json` when the service group is missing.
+- Normal REALITY debug logs no longer include short IDs, auth-key prefixes, or
+  session/random prefixes.
+- Expired REALITY timestamps now have explicit fallback coverage.
+- Black UI now emits REALITY `serverNames` and explicit
+  `maxTimeDiffSeconds`, and subscription links use `serverNames` as the fallback
+  source for `sni`.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.14`.
+
 ## 0.1.13 - 2026-06-27
 
 ### Fixed

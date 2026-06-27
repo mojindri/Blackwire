@@ -168,8 +168,10 @@ Never use `security = none` on a publicly reachable port. This is a loopback-onl
         "realitySettings": {
           "dest": "<reality-dest>:443",
           "serverName": "<sni>",
+          "serverNames": ["<sni>"],
           "privateKey": "<private-key>",
-          "shortIds": ["<short-id>"]
+          "shortIds": ["<short-id>"],
+          "maxTimeDiffSeconds": 60
         }
       }
     }

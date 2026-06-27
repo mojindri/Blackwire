@@ -160,7 +160,7 @@ impl InboundHandler for VlessInbound {
                                 user_flow = %user.flow,
                                 "VLESS flow mismatch — rejecting"
                             );
-                            return Ok(());
+                            return self.reject_or_fallback(stream, header_buf).await;
                         }
 
                         debug!(
@@ -229,13 +229,7 @@ impl InboundHandler for VlessInbound {
                     }
                     None => {
                         warn!(source = %source, "VLESS auth failed");
-                        if let Some(fallback_addr) = self.fallback {
-                            warn!(fallback = %fallback_addr, "forwarding to fallback");
-                            self.do_fallback(stream, header_buf).await
-                        } else {
-                            // Fail closed when no fallback (lab negative-auth cases).
-                            Ok(())
-                        }
+                        self.reject_or_fallback(stream, header_buf).await
                     }
                 }
             }
@@ -251,6 +245,20 @@ impl InboundHandler for VlessInbound {
 }
 
 impl VlessInbound {
+    async fn reject_or_fallback(
+        &self,
+        stream: BoxedStream,
+        header_bytes: Vec<u8>,
+    ) -> Result<(), ProxyError> {
+        if let Some(fallback_addr) = self.fallback {
+            warn!(fallback = %fallback_addr, "forwarding to fallback");
+            self.do_fallback(stream, header_bytes).await
+        } else {
+            // Fail closed when no fallback is configured.
+            Ok(())
+        }
+    }
+
     /// Forward a connection to the fallback backend.
     ///
     /// We prepend the already-read header bytes to the stream so the fallback

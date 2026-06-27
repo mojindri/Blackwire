@@ -110,7 +110,10 @@ export function createInboundEditorState(inbound?: Inbound | null): InboundEdito
     tlsAlpn: arrayOfStrings(objectValue(streamSettings.value.tlsSettings)?.alpn).join(", "),
     tlsCertificateFile: stringValue(objectValue(streamSettings.value.tlsSettings)?.certificateFile) ?? "",
     tlsKeyFile: stringValue(objectValue(streamSettings.value.tlsSettings)?.keyFile) ?? "",
-    realityServerName: stringValue(objectValue(streamSettings.value.realitySettings)?.serverName) ?? "",
+    realityServerName:
+      stringValue(objectValue(streamSettings.value.realitySettings)?.serverName) ??
+      arrayOfStrings(objectValue(streamSettings.value.realitySettings)?.serverNames)[0] ??
+      "",
     realityPublicKey: stringValue(objectValue(streamSettings.value.realitySettings)?.publicKey) ?? "",
     realityShortId:
       stringValue(objectValue(streamSettings.value.realitySettings)?.shortId) ??
@@ -232,7 +235,17 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
 
   if (state.security === "reality") {
     const realitySettings = cloneObject(objectValue(streamSettings.realitySettings));
-    applyStringField(realitySettings, "serverName", state.realityServerName);
+    const realityServerName = state.realityServerName.trim();
+    applyStringField(realitySettings, "serverName", realityServerName);
+    if (realityServerName) {
+      realitySettings.serverNames = [realityServerName];
+      realitySettings.maxTimeDiffSeconds = 60;
+      delete realitySettings.maxTimeDiff;
+    } else {
+      delete realitySettings.serverNames;
+      delete realitySettings.maxTimeDiffSeconds;
+      delete realitySettings.maxTimeDiff;
+    }
     applyStringField(realitySettings, "publicKey", state.realityPublicKey);
     applyStringField(realitySettings, "fingerprint", state.realityFingerprint);
     applyStringField(realitySettings, "spiderX", state.realitySpiderX);

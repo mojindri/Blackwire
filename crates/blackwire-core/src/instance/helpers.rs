@@ -406,6 +406,8 @@ pub(crate) fn build_vless_inbound(
     dns: Option<Arc<DnsModule>>,
     user_limiter: Option<Arc<UserConnectionLimiter>>,
 ) -> Result<Arc<dyn InboundHandler>> {
+    validate_vless_inbound_settings(cfg)?;
+
     #[allow(clippy::unwrap_or_default)]
     let registry = registries
         .entry(cfg.tag.clone())
@@ -425,6 +427,48 @@ pub(crate) fn build_vless_inbound(
         dns,
         user_limiter,
     ))
+}
+
+fn validate_vless_inbound_settings(cfg: &blackwire_config::schema::InboundConfig) -> Result<()> {
+    let settings = cfg.settings.as_object().ok_or_else(|| {
+        anyhow::anyhow!("VLESS inbound '{}' settings must be a JSON object", cfg.tag)
+    })?;
+
+    if let Some(decryption) = settings.get("decryption") {
+        if decryption.as_str() != Some("none") {
+            anyhow::bail!(
+                "VLESS inbound '{}' supports only settings.decryption = \"none\"",
+                cfg.tag
+            );
+        }
+    }
+
+    if settings.contains_key("fallbacks") {
+        anyhow::bail!(
+            "VLESS inbound '{}' does not support Xray settings.fallbacks; \
+             use settings.fallback.dest for the single supported fallback",
+            cfg.tag
+        );
+    }
+
+    for key in [
+        "encryption",
+        "encryptionSettings",
+        "padding",
+        "paddingSettings",
+        "packetEncoding",
+        "packet_encoding",
+        "xudpEncryption",
+    ] {
+        if settings.contains_key(key) {
+            anyhow::bail!(
+                "VLESS inbound '{}' contains unsupported security-looking field settings.{key}",
+                cfg.tag
+            );
+        }
+    }
+
+    Ok(())
 }
 
 pub(crate) fn populate_vless_registry(
