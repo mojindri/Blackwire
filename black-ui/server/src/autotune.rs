@@ -8,15 +8,22 @@ use tracing::warn;
 
 use crate::{config, db, runtime, state::AppState, util};
 
+const ADAPTIVE_TUNING_ENABLED: bool = false;
 const MIN_HYSTERIA2_MBPS: u64 = 100;
 const ACTIVE_TRAFFIC_BYTES: i64 = 5 * 1024 * 1024;
 const HEADROOM_TRAFFIC_BYTES: i64 = 20 * 1024 * 1024;
 
 pub(crate) async fn run_startup_once(state: &AppState) -> Result<()> {
+    if !ADAPTIVE_TUNING_ENABLED {
+        return Ok(());
+    }
     run_once(state, true).await
 }
 
 pub fn spawn(state: AppState) {
+    if !ADAPTIVE_TUNING_ENABLED {
+        return;
+    }
     tokio::spawn(async move {
         loop {
             let interval = match state.db.lock() {

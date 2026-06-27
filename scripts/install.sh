@@ -627,9 +627,7 @@ $(dns_config_section)
       "listen": "$SERVER_LISTEN",
       "port": $SERVER_PORT,
       "settings": {
-        "auth": "$auth",
-        "upMbps": 100,
-        "downMbps": 100
+        "auth": "$auth"
       },
       "streamSettings": {
         "network": "quic",

@@ -8,6 +8,18 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.25 - 2026-06-27
+
+### Changed
+
+- Bandwidth shaping and adaptive Mbps tuning are disabled: Black UI no longer
+  exposes per-user Mbps fields or adaptive Hysteria2 tuning controls, the
+  adaptive tuning worker is hard-gated off, and generated Hysteria2 configs no
+  longer include default `upMbps` / `downMbps` values.
+- Legacy per-user `upMbps` / `downMbps` fields are ignored by the runtime and
+  dropped by Black UI when user credentials are saved.
+- Release metadata and install examples now reference `v0.1.25`.
+
 ## 0.1.24 - 2026-06-27
 
 ### Fixed

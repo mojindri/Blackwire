@@ -201,7 +201,7 @@ export function UserDrawer({
           <div className="section-editor-head">
             <div>
               <h3>Limits</h3>
-              <p>Quota is edited in GB; bandwidth caps are saved as per-user Mbps policies.</p>
+              <p>Quota is edited in GB. Blackwire does not throttle per-user transfer speed.</p>
             </div>
           </div>
           <div className="configurator-grid">
@@ -218,30 +218,8 @@ export function UserDrawer({
             <Field label="Expiry">
               <Input type="datetime-local" value={state.expiryLocal} onChange={(e) => updateStructured({ expiryLocal: e.target.value })} />
             </Field>
-            <Field label="Upload Mbps" hint="Leave empty for unlimited upload.">
-              <Input
-                type="number"
-                min={0}
-                step="1"
-                value={state.upMbps}
-                onChange={(e) => updateStructured({ upMbps: e.target.value })}
-                placeholder="50"
-              />
-            </Field>
-            <Field label="Download Mbps" hint="Leave empty for unlimited download.">
-              <Input
-                type="number"
-                min={0}
-                step="1"
-                value={state.downMbps}
-                onChange={(e) => updateStructured({ downMbps: e.target.value })}
-                placeholder="100"
-              />
-            </Field>
           </div>
           {issuesByField.get("trafficLimitGB") ? <div className="field-error">{issuesByField.get("trafficLimitGB")}</div> : null}
-          {issuesByField.get("upMbps") ? <div className="field-error">{issuesByField.get("upMbps")}</div> : null}
-          {issuesByField.get("downMbps") ? <div className="field-error">{issuesByField.get("downMbps")}</div> : null}
         </section>
 
         <section className="drawer-card configurator-section">

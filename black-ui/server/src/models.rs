@@ -46,7 +46,7 @@ impl Default for Settings {
 }
 
 fn default_adaptive_tuning_mode() -> String {
-    "recommend".into()
+    "off".into()
 }
 
 fn default_adaptive_tuning_interval_seconds() -> u64 {

@@ -99,17 +99,15 @@ describe("userConfigurator", () => {
       {
         ...createUserEditorState(user, inbounds),
         password: "new-secret",
-        trafficLimitGB: "12.5",
-        upMbps: "25",
-        downMbps: "100"
+        trafficLimitGB: "12.5"
       },
       protocol
     );
     const built = buildUserInput(state, protocol);
 
     expect(built.credential?.password).toBe("new-secret");
-    expect(built.credential?.upMbps).toBe(25);
-    expect(built.credential?.downMbps).toBe(100);
+    expect(built.credential?.upMbps).toBeUndefined();
+    expect(built.credential?.downMbps).toBeUndefined();
     expect(built.credential?.customKey).toBe("keep-me");
     expect(built.trafficLimitBytes).toBe(Math.round(12.5 * 1024 * 1024 * 1024));
   });
@@ -157,8 +155,7 @@ describe("userConfigurator", () => {
         email: "alice@example.com",
         uuid: "not-a-uuid",
         password: "",
-        trafficLimitGB: "0",
-        upMbps: "-1"
+        trafficLimitGB: "0"
       },
       "trojan",
       inbounds
@@ -175,7 +172,7 @@ describe("userConfigurator", () => {
       inbounds
     );
 
-    expect(trojanIssues.map((issue) => issue.field)).toEqual(["uuid", "password", "trafficLimitGB", "upMbps"]);
+    expect(trojanIssues.map((issue) => issue.field)).toEqual(["uuid", "password", "trafficLimitGB"]);
     expect(hy2Issues.map((issue) => issue.field)).toContain("auth");
   });
 
@@ -239,7 +236,7 @@ describe("userConfigurator", () => {
     expect(validateUserState(state, "hysteria2", inbounds)).toEqual([]);
   });
 
-  it("round-trips per-user bandwidth aliases into canonical Mbps fields", () => {
+  it("drops legacy per-user bandwidth aliases", () => {
     const user: ManagedUser = {
       id: 12,
       inboundId: 1,
@@ -259,20 +256,15 @@ describe("userConfigurator", () => {
       updatedAt: ""
     };
     const state = syncCredentialFromFields(
-      {
-        ...createUserEditorState(user, inbounds),
-        upMbps: "20"
-      },
+      createUserEditorState(user, inbounds),
       "vless"
     );
     const built = buildUserInput(state, "vless");
 
-    expect(createUserEditorState(user, inbounds).upMbps).toBe("15");
-    expect(createUserEditorState(user, inbounds).downMbps).toBe("80");
     expect(built.credential?.upload_mbps).toBeUndefined();
     expect(built.credential?.downloadMbps).toBeUndefined();
-    expect(built.credential?.upMbps).toBe(20);
-    expect(built.credential?.downMbps).toBe(80);
+    expect(built.credential?.upMbps).toBeUndefined();
+    expect(built.credential?.downMbps).toBeUndefined();
     expect(built.credential?.customKey).toBe("keep-me");
   });
 });

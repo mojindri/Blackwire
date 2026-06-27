@@ -112,7 +112,8 @@ pub fn init(conn: &Connection, data_dir: &Path) -> Result<()> {
     migrate_local_public_settings(conn, &public_base_url, &subscription_host)?;
     set_default(conn, "enforcementIntervalSeconds", "30")?;
     set_default(conn, "adaptiveRoutingEnabled", "false")?;
-    set_default(conn, "adaptiveTuningMode", "recommend")?;
+    set_default(conn, "adaptiveTuningMode", "off")?;
+    migrate_adaptive_tuning_disabled_default(conn)?;
     set_default(conn, "adaptiveTuningIntervalSeconds", "600")?;
     set_default(conn, "adaptiveTuningCooldownSeconds", "600")?;
     set_default(conn, "adaptiveTuningMaxHysteria2Mbps", "1000")?;
@@ -370,7 +371,7 @@ pub fn load_settings(conn: &Connection) -> Result<Settings> {
         adaptive_tuning_mode: map
             .get("adaptiveTuningMode")
             .cloned()
-            .unwrap_or_else(|| "recommend".into()),
+            .unwrap_or_else(|| "off".into()),
         adaptive_tuning_interval_seconds: map
             .get("adaptiveTuningIntervalSeconds")
             .and_then(|v| v.parse().ok())
@@ -388,6 +389,14 @@ pub fn load_settings(conn: &Connection) -> Result<Settings> {
             .and_then(|v| serde_json::from_str(v).ok())
             .unwrap_or_else(|| serde_json::json!({})),
     })
+}
+
+fn migrate_adaptive_tuning_disabled_default(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "UPDATE settings SET value='off' WHERE key='adaptiveTuningMode' AND value IN ('recommend', 'auto')",
+        [],
+    )?;
+    Ok(())
 }
 
 pub fn save_settings(conn: &Connection, settings: &Settings) -> Result<()> {
@@ -860,6 +869,22 @@ mod tests {
         let preserved = load_settings(&conn).unwrap();
         assert_eq!(preserved.public_base_url, "https://panel.example.com");
         assert_eq!(preserved.subscription_host, "sub.example.com");
+    }
+
+    #[test]
+    fn init_migrates_adaptive_tuning_to_off() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn, Path::new("/tmp/black-ui-db-adaptive-off-test")).unwrap();
+        assert_eq!(load_settings(&conn).unwrap().adaptive_tuning_mode, "off");
+
+        conn.execute(
+            "UPDATE settings SET value=?1 WHERE key='adaptiveTuningMode'",
+            params!["auto"],
+        )
+        .unwrap();
+
+        init(&conn, Path::new("/tmp/black-ui-db-adaptive-off-test")).unwrap();
+        assert_eq!(load_settings(&conn).unwrap().adaptive_tuning_mode, "off");
     }
 
     #[test]
