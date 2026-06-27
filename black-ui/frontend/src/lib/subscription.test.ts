@@ -9,16 +9,16 @@ describe("fetchSubscriptionContent", () => {
   it("returns the fetched subscription body", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      text: async () => "vless://example"
+      text: async () => "dmxlc3M6Ly9leGFtcGxl"
     });
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(fetchSubscriptionContent("http://panel/sub/token")).resolves.toEqual({
       ok: true,
-      content: "vless://example",
+      content: "dmxlc3M6Ly9leGFtcGxl",
       message: "Copied"
     });
-    expect(fetchMock).toHaveBeenCalledWith("http://panel/sub/token/raw", { cache: "no-store" });
+    expect(fetchMock).toHaveBeenCalledWith("http://panel/sub/token", { cache: "no-store" });
   });
 
   it("rejects empty subscription bodies", async () => {
