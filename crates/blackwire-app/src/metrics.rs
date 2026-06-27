@@ -548,6 +548,16 @@ fn describe_metrics() {
         metrics::Unit::Count,
         "QUIC DATAGRAM fallback events by reason"
     );
+    metrics::describe_counter!(
+        "blackwire_tuic_udp_events_total",
+        metrics::Unit::Count,
+        "TUIC UDP datagram events, drops, timeout, and session pressure by event"
+    );
+    metrics::describe_gauge!(
+        "blackwire_tuic_udp_sessions_active",
+        metrics::Unit::Count,
+        "Active TUIC UDP association sockets per process"
+    );
     metrics::describe_histogram!(
         "blackwire_innerflow_queue_delay_ms",
         metrics::Unit::Milliseconds,

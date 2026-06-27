@@ -157,7 +157,8 @@ describe("inboundConfigurator", () => {
   });
 
   it("surfaces non-blocking compatibility notices for client-sensitive inbounds", () => {
-    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "tuic" })?.tone).toBe("warning");
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "tuic" })?.tone).toBe("info");
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "tuic" })?.message).toContain("TUIC v5 is supported");
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "vmess", network: "quic" })?.message).toContain("VMess over QUIC");
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "hysteria2" })?.tone).toBe("info");
     expect(inboundCompatibilityNotice(createInboundEditorState())).toBeNull();

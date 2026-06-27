@@ -358,9 +358,9 @@ export function inboundCompatibilityNotice(
 
   if (protocol === "tuic") {
     return {
-      tone: "warning",
+      tone: "info",
       message:
-        "TUIC remains available, but fragmented UDP and some client routing modes are client-sensitive. Test it outside global/TUN mode before using it as the main profile."
+        "TUIC v5 is supported for QUIC TCP proxying and native UDP relay. Throughput and UDP behavior still depend on the client, firewall, NAT, and network path."
     };
   }
   if (network === "quic") {
