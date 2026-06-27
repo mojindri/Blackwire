@@ -1,5 +1,5 @@
 import { AlertCircle, Copy, KeyRound, RotateCcw, Save, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Inbound, ManagedUser, Settings, UserInput } from "../../lib/types";
 import { formatBytes } from "../../lib/format";
 import { copySubscriptionContent, subscriptionUrl } from "../../lib/subscription";
@@ -46,11 +46,14 @@ export function UserDrawer({
   busy: boolean;
 }) {
   const [state, setState] = useState<UserEditorState>(() => createUserEditorState(user, inbounds));
+  const stateRef = useRef(state);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState("");
 
   useEffect(() => {
-    setState(createUserEditorState(user, inbounds));
+    const next = createUserEditorState(user, inbounds);
+    stateRef.current = next;
+    setState(next);
     setAdvancedOpen(false);
     setCopyFeedback("");
   }, [inbounds, user]);
@@ -68,15 +71,23 @@ export function UserDrawer({
   if (!open) return null;
 
   const updateStructured = (patch: Partial<UserEditorState>) => {
-    setState((current) => {
-      const next = { ...current, ...patch };
-      return syncCredentialFromFields(next, activeUserProtocol(inbounds, next.inboundId));
-    });
+    const next = { ...stateRef.current, ...patch };
+    const synced = syncCredentialFromFields(next, activeUserProtocol(inbounds, next.inboundId));
+    stateRef.current = synced;
+    setState(synced);
+  };
+
+  const updateCredentialJson = (text: string) => {
+    const next = replaceCredentialJson(stateRef.current, text);
+    stateRef.current = next;
+    setState(next);
   };
 
   const submit = () => {
-    if (saveDisabled) return;
-    onSubmit(user?.id ?? null, buildUserInput(state, protocol));
+    const latest = stateRef.current;
+    const latestProtocol = activeUserProtocol(inbounds, latest.inboundId);
+    if (busy || inbounds.length === 0 || validateUserState(latest, latestProtocol, inbounds).length > 0) return;
+    onSubmit(user?.id ?? null, buildUserInput(latest, latestProtocol));
   };
 
   const copySubscription = async () => {
@@ -247,7 +258,7 @@ export function UserDrawer({
           {advancedOpen ? (
             <Field label="Credential JSON" hint='Examples: {"password":"..."} for Trojan or {"auth":"..."} for Hysteria2. Unknown keys are preserved.'>
               <div className="advanced-slice">
-                <Textarea rows={7} value={state.credentialText} onChange={(e) => setState((current) => replaceCredentialJson(current, e.target.value))} />
+                <Textarea rows={7} value={state.credentialText} onChange={(e) => updateCredentialJson(e.target.value)} />
                 {state.credentialError ? <div className="field-error">{state.credentialError}</div> : null}
               </div>
             </Field>

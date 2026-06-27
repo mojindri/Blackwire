@@ -8,6 +8,15 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.27 - 2026-06-27
+
+### Fixed
+
+- Black UI save actions now use the latest field values in Inbounds, Outbounds,
+  Users, Settings, and Advanced Config, preventing quick Save clicks from
+  dropping recently changed structured fields such as Hysteria2 performance
+  mode.
+
 ## 0.1.26 - 2026-06-27
 
 ### Added
