@@ -8,6 +8,15 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.26 - 2026-06-27
+
+### Added
+
+- Black UI inbound and outbound editors now expose Hysteria2 auth and a simple
+  performance-mode selector, with lower-level congestion, QUIC socket, datagram,
+  and FEC fields shown only for custom tuning instead of requiring manual
+  Settings JSON edits.
+
 ## 0.1.25 - 2026-06-27
 
 ### Changed

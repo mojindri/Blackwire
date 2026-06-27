@@ -171,6 +171,14 @@ describe("outboundConfigurator", () => {
   });
 
   it("round-trips hysteria2 settings without leaking unrelated structured fields", () => {
+    const defaultState = createOutboundEditorState(null);
+    expect(defaultState.hysteria2EndpointShards).toBe("1");
+    expect(defaultState.hysteria2CongestionMode).toBe("standard");
+    expect(defaultState.hysteria2MinAckRate).toBe("0.8");
+    expect(defaultState.hysteria2QuicEndpoints).toBe("1");
+    expect(defaultState.hysteria2DatagramPolicy).toBe("standard");
+    expect(defaultState.hysteria2FecMode).toBe("off");
+
     const outbound: Outbound = {
       id: 2,
       tag: "hy2-main",
@@ -179,6 +187,25 @@ describe("outboundConfigurator", () => {
       settings: JSON.stringify({
         server: "127.0.0.1:443",
         auth: "shared-secret",
+        serverName: "old.example.com",
+        skipCertVerify: true,
+        endpointShards: 2,
+        congestion: {
+          mode: "brutal-compatible",
+          minAckRate: 0.75
+        },
+        quic: {
+          reusePort: true,
+          recvBufferBytes: 16777216
+        },
+        datagram: {
+          enabled: true,
+          policy: "h2-plus"
+        },
+        fec: {
+          mode: "auto",
+          maxOverheadPercent: 20
+        },
         customSetting: "keep-me"
       }),
       streamSettings: JSON.stringify({
@@ -193,6 +220,24 @@ describe("outboundConfigurator", () => {
     const state = syncOutboundAfterStructuredChange({
       ...createOutboundEditorState(outbound),
       server: "127.0.0.2:8443",
+      hysteria2Auth: "next-secret",
+      hysteria2ServerName: "hy2.example.com",
+      hysteria2SkipCertVerify: false,
+      hysteria2EndpointShards: "4",
+      hysteria2CongestionMode: "badnet-throughput",
+      hysteria2MinAckRate: "0.6",
+      hysteria2MaxQueueDelayMs: "100",
+      hysteria2PacingGain: "1.5",
+      hysteria2LossCompensation: false,
+      hysteria2QuicReusePort: false,
+      hysteria2QuicEndpoints: "cpu",
+      hysteria2QuicRecvBufferBytes: "33554432",
+      hysteria2QuicSendBufferBytes: "16777216",
+      hysteria2DatagramEnabled: true,
+      hysteria2DatagramUdpOverDatagram: false,
+      hysteria2DatagramPolicy: "standard",
+      hysteria2FecMode: "xor1-of-n",
+      hysteria2FecMaxOverheadPercent: "15",
       tlsServerName: "new.example.com",
       address: "127.0.0.9",
       port: "9000"
@@ -202,12 +247,91 @@ describe("outboundConfigurator", () => {
     const streamSettings = parseObject(built.streamSettings);
 
     expect(settings.server).toBe("127.0.0.2:8443");
-    expect(settings.auth).toBe("shared-secret");
+    expect(settings.auth).toBe("next-secret");
+    expect(settings.serverName).toBe("hy2.example.com");
+    expect(settings.skipCertVerify).toBeUndefined();
+    expect(settings.endpointShards).toBe(4);
+    expect(settings.congestion).toMatchObject({
+      mode: "badnet-throughput",
+      minAckRate: 0.6,
+      maxQueueDelayMs: 100,
+      pacingGain: 1.5,
+      lossCompensation: false
+    });
+    expect(settings.quic).toMatchObject({
+      endpoints: "cpu",
+      recvBufferBytes: 33554432,
+      sendBufferBytes: 16777216
+    });
+    expect(settings.quic.reusePort).toBeUndefined();
+    expect(settings.datagram).toMatchObject({
+      enabled: true,
+      udpOverDatagram: false
+    });
+    expect(settings.datagram.policy).toBeUndefined();
+    expect(settings.fec).toMatchObject({
+      mode: "xor1-of-n",
+      maxOverheadPercent: 15
+    });
     expect(settings.customSetting).toBe("keep-me");
     expect(settings.address).toBeUndefined();
     expect(settings.port).toBeUndefined();
     expect(streamSettings.tlsSettings.serverName).toBe("new.example.com");
     expect(streamSettings.tlsSettings.customTls).toBe("keep-tls");
+  });
+
+  it("serializes simple hysteria2 performance modes like the save button output", () => {
+    const common = {
+      ...createOutboundEditorState(),
+      protocol: "hysteria2",
+      server: "203.0.113.10:443",
+      hysteria2Auth: "shared-secret",
+      hysteria2ServerName: "hy2.example.com"
+    };
+
+    const balanced = parseObject(
+      buildOutboundInput(
+        syncOutboundAfterStructuredChange({
+          ...common,
+          hysteria2CongestionMode: "standard"
+        })
+      ).settings
+    );
+    expect(balanced).toEqual({
+      server: "203.0.113.10:443",
+      auth: "shared-secret",
+      serverName: "hy2.example.com"
+    });
+
+    const throughput = parseObject(
+      buildOutboundInput(
+        syncOutboundAfterStructuredChange({
+          ...common,
+          hysteria2CongestionMode: "brutal-compatible"
+        })
+      ).settings
+    );
+    expect(throughput).toEqual({
+      server: "203.0.113.10:443",
+      auth: "shared-secret",
+      serverName: "hy2.example.com",
+      congestion: { mode: "brutal-compatible" }
+    });
+
+    const lowLatency = parseObject(
+      buildOutboundInput(
+        syncOutboundAfterStructuredChange({
+          ...common,
+          hysteria2CongestionMode: "badnet-low-latency"
+        })
+      ).settings
+    );
+    expect(lowLatency).toEqual({
+      server: "203.0.113.10:443",
+      auth: "shared-secret",
+      serverName: "hy2.example.com",
+      congestion: { mode: "badnet-low-latency" }
+    });
   });
 
   it("serializes KCP tuning and preserves QUIC network selection", () => {
