@@ -52,7 +52,7 @@ use blackwire_common::{
     set_outbound_interface_name,
 };
 use blackwire_config::schema::{Config, FastPoolPolicy, ProfileMode, Protocol};
-use blackwire_protocol::freedom::{FreedomOutbound, PoolConfig};
+use blackwire_protocol::freedom::{FreedomIpStrategy, FreedomOutbound, PoolConfig};
 use blackwire_protocol::socks::Socks5Inbound;
 use blackwire_transport::mkcp_accept_sessions;
 use blackwire_transport::{
@@ -183,6 +183,41 @@ fn freedom_deny_loopback(settings: &serde_json::Value) -> bool {
         .or_else(|| settings.get("deny_loopback"))
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
+}
+
+fn freedom_reject_ipv6_literal(settings: &serde_json::Value) -> bool {
+    settings
+        .get("rejectIpv6Literal")
+        .or_else(|| settings.get("reject_ipv6_literal"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+fn freedom_ip_strategy(settings: &serde_json::Value) -> FreedomIpStrategy {
+    let Some(raw) = settings
+        .get("domainStrategy")
+        .or_else(|| settings.get("domain_strategy"))
+        .or_else(|| settings.get("ipStrategy"))
+        .or_else(|| settings.get("ip_strategy"))
+        .and_then(|value| value.as_str())
+    else {
+        return FreedomIpStrategy::Auto;
+    };
+
+    match raw
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['_', '-', ' '], "")
+        .as_str()
+    {
+        "" | "auto" | "asis" => FreedomIpStrategy::Auto,
+        "useip" | "ip" => FreedomIpStrategy::UseIp,
+        "preferipv4" | "preferip4" => FreedomIpStrategy::PreferIpv4,
+        "preferipv6" | "preferip6" => FreedomIpStrategy::PreferIpv6,
+        "useipv4" | "useip4" | "ipv4" | "ip4" => FreedomIpStrategy::UseIpv4,
+        "useipv6" | "useip6" | "ipv6" | "ip6" => FreedomIpStrategy::UseIpv6,
+        _ => FreedomIpStrategy::Auto,
+    }
 }
 
 fn freedom_pool_config(config: &Config, settings: &serde_json::Value) -> Option<PoolConfig> {
@@ -376,6 +411,8 @@ impl Instance {
             let handler: Arc<dyn OutboundHandler> = match out_cfg.protocol {
                 Protocol::Freedom => {
                     let deny_loopback = freedom_deny_loopback(&out_cfg.settings);
+                    let ip_strategy = freedom_ip_strategy(&out_cfg.settings);
+                    let reject_ipv6_literal = freedom_reject_ipv6_literal(&out_cfg.settings);
                     let pool_cfg = freedom_pool_config(config.as_ref(), &out_cfg.settings);
                     let outbound = if let Some(cfg) = pool_cfg {
                         match &dns {
@@ -394,7 +431,10 @@ impl Instance {
                             None => FreedomOutbound::new(&out_cfg.tag),
                         }
                     };
-                    outbound.with_deny_loopback(deny_loopback)
+                    outbound
+                        .with_deny_loopback(deny_loopback)
+                        .with_ip_strategy(ip_strategy)
+                        .with_reject_ipv6_literal(reject_ipv6_literal)
                 }
                 Protocol::Vless => build_vless_outbound(out_cfg)
                     .with_context(|| format!("building VLESS outbound '{}'", out_cfg.tag))?,

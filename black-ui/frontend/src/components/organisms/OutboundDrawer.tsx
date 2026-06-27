@@ -248,7 +248,28 @@ export function OutboundDrawer({
 
         {activeTab === "protocol" ? (
           <section className="drawer-card configurator-section">
-            {state.protocol === "freedom" ? <p className="field-hint">Freedom is the direct outbound. It usually needs no protocol-level settings.</p> : null}
+            {state.protocol === "freedom" ? (
+              <>
+                <div className="configurator-grid">
+                  <Field label="IP strategy" hint="Prefer IPv4 keeps IPv6 fallback. IPv4 only blocks IPv6 domain results for VPSes with broken IPv6 egress.">
+                    <Select value={state.freedomIpStrategy} onChange={(e) => updateStructured({ freedomIpStrategy: e.target.value })}>
+                      <option value="auto">Auto</option>
+                      <option value="UseIP">Use IP</option>
+                      <option value="PreferIPv4">Prefer IPv4</option>
+                      <option value="PreferIPv6">Prefer IPv6</option>
+                      <option value="UseIPv4">IPv4 only</option>
+                      <option value="UseIPv6">IPv6 only</option>
+                    </Select>
+                  </Field>
+                  <Switch
+                    checked={state.freedomRejectIpv6Literal}
+                    onChange={(freedomRejectIpv6Literal) => updateStructured({ freedomRejectIpv6Literal })}
+                    label="Reject IPv6 literal destinations"
+                  />
+                </div>
+                <p className="field-hint">Use Prefer IPv4 first. If this VPS still times out on literal IPv6 destinations, enable the IPv6 literal guard.</p>
+              </>
+            ) : null}
 
             {["vless", "vmess", "trojan", "shadowsocks"].includes(state.protocol) ? (
               <div className="configurator-grid">

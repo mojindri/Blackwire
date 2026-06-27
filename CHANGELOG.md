@@ -8,6 +8,16 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.28 - 2026-06-27
+
+### Added
+
+- Freedom outbounds now support `domainStrategy` / `ipStrategy` values
+  `Auto`, `UseIP`, `PreferIPv4`, `PreferIPv6`, `UseIPv4`, and `UseIPv6`, plus
+  `rejectIpv6Literal` for VPSes with broken outbound IPv6 paths.
+- Black UI now exposes Freedom IP strategy as a dropdown and the IPv6 literal
+  guard as a toggle in the outbound editor.
+
 ## 0.1.27 - 2026-06-27
 
 ### Fixed
