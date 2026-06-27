@@ -402,6 +402,11 @@ export function validateInboundState(state: InboundEditorState): InboundValidati
     issues.push({ field: "listen", message: "Listen host is required." });
   } else if (!isIpAddress(state.listen.trim())) {
     issues.push({ field: "listen", message: "Listen host should be an IPv4 or IPv6 address." });
+  } else if (state.enabled && isPublicClientInbound(state) && isLocalListenHost(state.listen.trim())) {
+    issues.push({
+      field: "listen",
+      message: `${state.protocol} over ${state.network} must use a public bind address such as 0.0.0.0 or ::. 127.0.0.1 is local-only.`
+    });
   }
   if (!Number.isInteger(state.port) || state.port < 1 || state.port > 65535) {
     issues.push({ field: "port", message: "Port must be between 1 and 65535." });
@@ -636,6 +641,15 @@ function applyNumberField(target: JsonObject, key: string, value: string) {
 
 function isIpAddress(value: string): boolean {
   return isValidIpv4(value) || isLikelyIpv6(value);
+}
+
+function isLocalListenHost(value: string): boolean {
+  const normalized = value.trim().replace(/^\[|\]$/g, "").toLowerCase();
+  return normalized === "localhost" || normalized === "::1" || normalized.startsWith("127.");
+}
+
+function isPublicClientInbound(state: Pick<InboundEditorState, "protocol">): boolean {
+  return ["vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic"].includes(state.protocol);
 }
 
 function isValidIpv4(value: string): boolean {

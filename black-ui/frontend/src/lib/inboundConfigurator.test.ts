@@ -573,6 +573,47 @@ describe("inboundConfigurator", () => {
     }
   });
 
+  it("rejects loopback listen hosts for public client inbounds", () => {
+    const issues = validateInboundState({
+      ...createInboundEditorState(),
+      protocol: "hysteria2",
+      network: "quic",
+      listen: "127.0.0.1"
+    });
+
+    expect(issues).toContainEqual({
+      field: "listen",
+      message: "hysteria2 over quic must use a public bind address such as 0.0.0.0 or ::. 127.0.0.1 is local-only."
+    });
+
+    expect(
+      validateInboundState({
+        ...createInboundEditorState(),
+        protocol: "hysteria2",
+        network: "quic",
+        listen: "0.0.0.0"
+      }).some((issue) => issue.field === "listen")
+    ).toBe(false);
+
+    expect(
+      validateInboundState({
+        ...createInboundEditorState(),
+        protocol: "vless",
+        network: "tcp",
+        listen: "127.0.0.1"
+      }).some((issue) => issue.field === "listen")
+    ).toBe(true);
+
+    expect(
+      validateInboundState({
+        ...createInboundEditorState(),
+        protocol: "socks",
+        network: "tcp",
+        listen: "127.0.0.1"
+      }).some((issue) => issue.field === "listen")
+    ).toBe(false);
+  });
+
   it("serializes sniffing and limits while clearing them when no longer needed", () => {
     const enabledState = syncAfterStructuredChange({
       ...createInboundEditorState(),
