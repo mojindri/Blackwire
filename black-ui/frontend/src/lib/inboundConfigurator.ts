@@ -41,6 +41,7 @@ export interface InboundEditorState {
   realityPrivateKey: string;
   realityPublicKey: string;
   realityShortId: string;
+  realityDest: string;
   realityFingerprint: string;
   realitySpiderX: string;
   sniffingEnabled: boolean;
@@ -121,6 +122,7 @@ export function createInboundEditorState(inbound?: Inbound | null): InboundEdito
       stringValue(objectValue(streamSettings.value.realitySettings)?.shortId) ??
       arrayOfStrings(objectValue(streamSettings.value.realitySettings)?.shortIds)[0] ??
       "",
+    realityDest: stringValue(objectValue(streamSettings.value.realitySettings)?.dest) ?? "",
     realityFingerprint: stringValue(objectValue(streamSettings.value.realitySettings)?.fingerprint) ?? "chrome",
     realitySpiderX: stringValue(objectValue(streamSettings.value.realitySettings)?.spiderX) ?? "/",
     sniffingEnabled: boolValue(sniffing.value.enabled) ?? false,
@@ -250,6 +252,7 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
     }
     applyStringField(realitySettings, "privateKey", state.realityPrivateKey);
     applyStringField(realitySettings, "publicKey", state.realityPublicKey);
+    applyStringField(realitySettings, "dest", state.realityDest);
     applyStringField(realitySettings, "fingerprint", state.realityFingerprint);
     applyStringField(realitySettings, "spiderX", state.realitySpiderX);
     if (state.realityShortId.trim()) {
@@ -435,6 +438,11 @@ export function validateInboundState(state: InboundEditorState): InboundValidati
     } else if (!isRealityShortId(state.realityShortId.trim())) {
       issues.push({ field: "realityShortId", message: "REALITY short ID must be even-length hex, up to 16 characters." });
     }
+    if (!state.realityDest.trim()) {
+      issues.push({ field: "realityDest", message: "REALITY fallback destination is required." });
+    } else if (!isRealityDest(state.realityDest.trim())) {
+      issues.push({ field: "realityDest", message: "REALITY fallback destination must be an IP socket address like 93.184.216.34:443." });
+    }
   }
   return issues;
 }
@@ -481,6 +489,7 @@ function syncStructuredFields(state: InboundEditorState): InboundEditorState {
     realityPrivateKey: next.realityPrivateKey,
     realityPublicKey: next.realityPublicKey,
     realityShortId: next.realityShortId,
+    realityDest: next.realityDest,
     realityFingerprint: next.realityFingerprint,
     realitySpiderX: next.realitySpiderX,
     sniffingEnabled: next.sniffingEnabled,
@@ -659,4 +668,16 @@ function isRealityPrivateKey(value: string): boolean {
 
 function isRealityShortId(value: string): boolean {
   return value.length > 0 && value.length <= 16 && value.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(value);
+}
+
+function isRealityDest(value: string): boolean {
+  if (/^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$/.test(value)) {
+    const [host, port] = value.split(":");
+    const portNumber = Number(port);
+    return isValidIpv4(host) && Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535;
+  }
+  const match = value.match(/^\[([0-9a-fA-F:]+)\]:(\d{1,5})$/);
+  if (!match) return false;
+  const portNumber = Number(match[2]);
+  return isLikelyIpv6(match[1]) && Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535;
 }

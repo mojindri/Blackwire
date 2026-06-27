@@ -39,6 +39,7 @@ export interface RealityClientValues {
   publicKey: string;
   shortId: string;
   serverName: string;
+  dest: string | null;
 }
 
 export interface RealityGeneratedValues {

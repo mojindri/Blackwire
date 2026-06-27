@@ -10,6 +10,23 @@ This project is pre-1.0. The support contract is owned by
 
 No release-facing changes yet.
 
+## 0.1.19 - 2026-06-27
+
+### Fixed
+
+- Packaged Black UI installs now use `/etc/blackwire/config.json` by default,
+  preventing the panel from saving a different config than the running service.
+- Black UI live user removal now treats an already-absent runtime user as a
+  successful idempotent remove instead of surfacing a false failure.
+- REALITY inbound validation now rejects missing or non-socket
+  `realitySettings.dest` before runtime restart.
+- The structured REALITY editor now exposes fallback destination and carries it
+  through server-value loading and QA fixtures.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.19`.
+
 ## 0.1.18 - 2026-06-27
 
 ### Added

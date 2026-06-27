@@ -894,6 +894,59 @@ mod tests {
     }
 
     #[test]
+    fn reality_inbound_requires_socket_destination_at_config_validation() {
+        let json = r#"{
+            "inbounds": [{
+                "tag": "reality",
+                "protocol": "vless",
+                "listen": "127.0.0.1",
+                "port": 443,
+                "streamSettings": {
+                    "network": "tcp",
+                    "security": "reality",
+                    "realitySettings": {
+                        "privateKey": "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+                        "shortIds": ["feedbeef"],
+                        "serverNames": ["www.microsoft.com"]
+                    }
+                }
+            }],
+            "outbounds": [{"tag": "d", "protocol": "freedom"}]
+        }"#;
+
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("realitySettings.dest"));
+    }
+
+    #[test]
+    fn reality_inbound_rejects_domain_destination_at_config_validation() {
+        let json = r#"{
+            "inbounds": [{
+                "tag": "reality",
+                "protocol": "vless",
+                "listen": "127.0.0.1",
+                "port": 443,
+                "streamSettings": {
+                    "network": "tcp",
+                    "security": "reality",
+                    "realitySettings": {
+                        "dest": "www.microsoft.com:443",
+                        "privateKey": "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+                        "shortIds": ["feedbeef"],
+                        "serverNames": ["www.microsoft.com"]
+                    }
+                }
+            }],
+            "outbounds": [{"tag": "d", "protocol": "freedom"}]
+        }"#;
+
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        let err = cfg.validate().unwrap_err();
+        assert!(format!("{err:?}").contains("socket_address"));
+    }
+
+    #[test]
     fn empty_inbounds_fails_validation() {
         let json = r#"{
             "inbounds": [],

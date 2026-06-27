@@ -12,7 +12,7 @@ use blackwire_api::{
     vless_account_proto::Account,
 };
 use prost::Message;
-use tonic::transport::Channel;
+use tonic::{transport::Channel, Code, Status};
 use tracing::warn;
 
 use crate::{
@@ -210,6 +210,12 @@ pub async fn remove_user(addr: &str, inbound_tag: &str, email: &str) -> Result<(
         })
         .await?;
     Ok(())
+}
+
+pub fn is_not_found_error(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<Status>()
+        .is_some_and(|status| status.code() == Code::NotFound)
 }
 
 pub async fn fetch_traffic(addr: &str) -> Result<TrafficSnapshot> {
@@ -459,6 +465,15 @@ mod tests {
         assert!(operations.contains(&"remove-outbound:stale-outbound".into()));
         assert!(!operations.contains(&"alter-outbound:freedom".into()));
         assert!(!operations.contains(&"add-outbound:freedom".into()));
+    }
+
+    #[test]
+    fn detects_tonic_not_found_errors_without_matching_message_text() {
+        let not_found = anyhow::Error::new(Status::not_found("different upstream wording"));
+        let unavailable = anyhow::Error::new(Status::unavailable("transport down"));
+
+        assert!(is_not_found_error(&not_found));
+        assert!(!is_not_found_error(&unavailable));
     }
 
     fn unused_port() -> u16 {

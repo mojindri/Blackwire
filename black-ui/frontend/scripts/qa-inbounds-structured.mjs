@@ -336,6 +336,7 @@ const cases = [
       privateKey: "6f4850ca51ced64b4acfd90c73fd60392c0c2f92744933b28b1bc0f7b8683d79",
       publicKey: "loYSsUliNDpTJ_ISdh6Q3A3fMc7TnaQfuDlpS-K46Wo",
       shortId: "aabbccdd00000001",
+      dest: "93.184.216.34:443",
       fingerprint: "chrome",
       spiderX: "/"
     },
@@ -352,6 +353,7 @@ const cases = [
           publicKey: "loYSsUliNDpTJ_ISdh6Q3A3fMc7TnaQfuDlpS-K46Wo",
           shortId: "aabbccdd00000001",
           shortIds: ["aabbccdd00000001"],
+          dest: "93.184.216.34:443",
           fingerprint: "chrome",
           spiderX: "/"
         }
@@ -973,6 +975,7 @@ async function fillSecurityFields(page, security, values) {
     await fillField(page, "Private key", values.privateKey ?? "");
     await fillField(page, "Public key", values.publicKey ?? "r3Yc3...");
     await fillField(page, "Short ID", values.shortId ?? "6ba85179e30d4fc2");
+    await fillField(page, "Fallback destination", values.dest ?? "93.184.216.34:443");
     await fillField(page, "Fingerprint", values.fingerprint ?? "chrome");
     await fillField(page, "Spider X", values.spiderX ?? "/");
   }

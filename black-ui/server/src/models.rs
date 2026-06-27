@@ -88,6 +88,7 @@ pub struct RealityClientValues {
     pub public_key: String,
     pub short_id: String,
     pub server_name: String,
+    pub dest: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
