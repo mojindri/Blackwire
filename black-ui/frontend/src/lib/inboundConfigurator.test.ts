@@ -158,7 +158,7 @@ describe("inboundConfigurator", () => {
     });
 
     expect(validIssues).toEqual([]);
-    expect(invalidIssues.map((issue) => issue.field)).toEqual(["listen", "port", "security"]);
+    expect(invalidIssues.map((issue) => issue.field)).toEqual(["listen", "port"]);
   });
 
   it("validates REALITY credentials before generated links can be saved", () => {
@@ -231,6 +231,9 @@ describe("inboundConfigurator", () => {
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "tuic" })?.message).toContain("TUIC v5 is supported");
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "vmess", network: "quic" })?.message).toContain("VMess over QUIC");
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "hysteria2" })?.tone).toBe("info");
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), network: "ws", security: "reality" })?.message).toContain(
+      "REALITY is best on TCP-compatible transport paths"
+    );
     expect(inboundCompatibilityNotice(createInboundEditorState())).toBeNull();
   });
 
@@ -418,47 +421,71 @@ describe("inboundConfigurator", () => {
   });
 
   it("covers the structured inbound transport and security matrix", () => {
-    const cases = [
+    const networks = [
+      { network: "tcp", settings: {}, extras: {} },
+      { network: "ws", settings: { wsSettings: { path: "/ws", headers: { Host: "ws.example.com" } } }, extras: { wsPath: "/ws", wsHost: "ws.example.com" } },
+      { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
+      { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
+      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
+      { network: "kcp", settings: { kcpSettings: { header: "srtp", mtu: 1350 } }, extras: { kcpHeader: "srtp", kcpMtu: "1350" } },
+      { network: "quic", settings: {}, extras: {} }
+    ] as const;
+
+    const securities = [
+      { security: "none", patch: {}, settings: {} },
+      { security: "tls", patch: { tlsServerName: "tls.example.com" }, settings: { tlsSettings: { serverName: "tls.example.com" } } },
       {
-        label: "tcp-none",
-        patch: { network: "tcp", security: "none" },
-        expected: { network: "tcp", security: "none" }
-      },
-      {
-        label: "ws-none",
-        patch: { network: "ws", security: "none", wsPath: "/ws", wsHost: "ws.example.com" },
-        expected: { network: "ws", security: "none", wsSettings: { path: "/ws", headers: { Host: "ws.example.com" } } }
-      },
-      {
-        label: "grpc-none",
-        patch: { network: "grpc", security: "none", grpcServiceName: "GunService" },
-        expected: { network: "grpc", security: "none", grpcSettings: { serviceName: "GunService" } }
-      },
-      {
-        label: "httpupgrade-none",
-        patch: { network: "httpupgrade", security: "none", httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" },
-        expected: { network: "httpupgrade", security: "none", httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }
-      },
-      {
-        label: "splithttp-none",
-        patch: { network: "splithttp", security: "none", splitHttpPath: "/packet" },
-        expected: { network: "splithttp", security: "none", splithttpSettings: { path: "/packet" } }
-      },
-      {
-        label: "kcp-none",
-        patch: { network: "kcp", security: "none", kcpHeader: "srtp", kcpMtu: "1350" },
-        expected: { network: "kcp", security: "none", kcpSettings: { header: "srtp", mtu: 1350 } }
-      },
-      {
-        label: "quic-tls",
-        patch: { network: "quic", security: "tls", tlsServerName: "quic.example.com" },
-        expected: { network: "quic", security: "tls", tlsSettings: { serverName: "quic.example.com" } }
+        security: "reality",
+        patch: {
+          realityServerName: "www.microsoft.com",
+          realityPrivateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+          realityPublicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
+          realityShortId: "feedbeef",
+          realityDest: "93.184.216.34:443"
+        },
+        settings: {
+          realitySettings: {
+            serverName: "www.microsoft.com",
+            shortId: "feedbeef",
+            shortIds: ["feedbeef"],
+            serverNames: ["www.microsoft.com"],
+            privateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+            publicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142"
+          }
+        }
       }
     ] as const;
 
-    for (const testCase of cases) {
-      const built = buildInboundInput(syncAfterStructuredChange({ ...createInboundEditorState(), ...testCase.patch }));
-      expect(parseObject(built.streamSettings), testCase.label).toMatchObject(testCase.expected);
+    for (const network of networks) {
+      for (const security of securities) {
+        const label = `${network.network}-${security.security}`;
+        const built = buildInboundInput(
+          syncAfterStructuredChange({
+            ...createInboundEditorState(),
+            ...network.extras,
+            ...security.patch,
+            network: network.network,
+            security: security.security
+          })
+        );
+        const streamSettings = parseObject(built.streamSettings);
+
+        expect(streamSettings, label).toMatchObject({
+          network: network.network,
+          security: security.security,
+          ...network.settings,
+          ...security.settings
+        });
+
+        if (security.security === "none") {
+          expect(streamSettings.tlsSettings).toBeUndefined();
+          expect(streamSettings.realitySettings).toBeUndefined();
+        } else if (security.security === "tls") {
+          expect(streamSettings.realitySettings).toBeUndefined();
+        } else {
+          expect(streamSettings.tlsSettings).toBeUndefined();
+        }
+      }
     }
   });
 
