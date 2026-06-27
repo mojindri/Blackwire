@@ -90,7 +90,11 @@ pub fn build_value(state: &AppState) -> Result<Value> {
         outbound_json.push(entry);
     }
     if outbound_json.is_empty() {
-        outbound_json.push(json!({ "tag": "freedom", "protocol": "freedom" }));
+        outbound_json.push(json!({
+            "tag": "freedom",
+            "protocol": "freedom",
+            "settings": default_freedom_settings()
+        }));
     }
 
     let mut root = json!({
@@ -124,6 +128,14 @@ pub fn build_value(state: &AppState) -> Result<Value> {
     }
 
     Ok(root)
+}
+
+fn default_freedom_settings() -> Value {
+    json!({
+        "denyLoopback": true,
+        "domainStrategy": "PreferIPv4",
+        "rejectIpv6Literal": true
+    })
 }
 
 fn adaptive_routing_section(outbounds: &[Outbound]) -> Value {
@@ -1051,6 +1063,12 @@ mod tests {
         validate_value(&value).unwrap();
         assert!(value["routing"].get("balancers").is_none());
         assert_eq!(value["routing"]["rules"][0]["outboundTag"], "freedom");
+        assert_eq!(value["outbounds"][0]["settings"]["denyLoopback"], true);
+        assert_eq!(
+            value["outbounds"][0]["settings"]["domainStrategy"],
+            "PreferIPv4"
+        );
+        assert_eq!(value["outbounds"][0]["settings"]["rejectIpv6Literal"], true);
 
         {
             let conn = state.lock_db().unwrap();
