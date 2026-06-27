@@ -352,7 +352,9 @@ $(dns_config_section)
       "tag": "freedom",
       "protocol": "freedom",
       "settings": {
-        "denyLoopback": true
+        "denyLoopback": true,
+        "domainStrategy": "PreferIPv4",
+        "rejectIpv6Literal": true
       }
     }
   ],
@@ -434,7 +436,9 @@ $(dns_config_section)
       "tag": "freedom",
       "protocol": "freedom",
       "settings": {
-        "denyLoopback": true
+        "denyLoopback": true,
+        "domainStrategy": "PreferIPv4",
+        "rejectIpv6Literal": true
       }
     }
   ],
@@ -502,7 +506,9 @@ $(dns_config_section)
       "tag": "freedom",
       "protocol": "freedom",
       "settings": {
-        "denyLoopback": true
+        "denyLoopback": true,
+        "domainStrategy": "PreferIPv4",
+        "rejectIpv6Literal": true
       }
     }
   ],
@@ -574,7 +580,9 @@ $(dns_config_section)
       "tag": "freedom",
       "protocol": "freedom",
       "settings": {
-        "denyLoopback": true
+        "denyLoopback": true,
+        "domainStrategy": "PreferIPv4",
+        "rejectIpv6Literal": true
       }
     }
   ],
@@ -645,7 +653,9 @@ $(dns_config_section)
       "tag": "freedom",
       "protocol": "freedom",
       "settings": {
-        "denyLoopback": true
+        "denyLoopback": true,
+        "domainStrategy": "PreferIPv4",
+        "rejectIpv6Literal": true
       }
     }
   ],
