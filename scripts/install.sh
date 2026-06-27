@@ -999,6 +999,9 @@ install_black_ui() {
     group="$(config_group)"
     sudo_cmd install -d -m 0755 "$PREFIX/bin" "$BLACK_UI_STATIC_DIR"
     sudo_cmd install -d -m 0750 -o "$SERVICE_USER" -g "$group" "$BLACK_UI_DATA_DIR"
+    sudo_cmd chown -R "$SERVICE_USER:$group" "$BLACK_UI_DATA_DIR"
+    sudo_cmd find "$BLACK_UI_DATA_DIR" -type d -exec chmod 0750 {} +
+    sudo_cmd find "$BLACK_UI_DATA_DIR" -type f -exec chmod 0640 {} +
     sudo_cmd install -m 0755 "$ui_binary" "$PREFIX/bin/black-ui"
     ui_dist="$(find "$ui_workdir" -type d -path '*/frontend/dist' | head -n 1)"
     if [ -n "$ui_dist" ]; then
