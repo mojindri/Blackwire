@@ -3,6 +3,7 @@ import {
   activeUserProtocol,
   buildUserInput,
   createUserEditorState,
+  generateCredentialSecret,
   replaceCredentialJson,
   syncCredentialFromFields,
   validateUserState
@@ -211,6 +212,31 @@ describe("userConfigurator", () => {
     expect(built.credential?.password).toBe("new-tuic-secret");
     expect(built.credential?.customKey).toBe("keep-me");
     expect(validateUserState(state, protocol, inbounds)).toEqual([]);
+  });
+
+  it("generates URL-safe Hysteria2 auth secrets", () => {
+    const secret = generateCredentialSecret();
+
+    expect(secret).toHaveLength(32);
+    expect(secret).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it("stores generated Hysteria2 auth in structured credentials", () => {
+    const auth = generateCredentialSecret();
+    const state = syncCredentialFromFields(
+      {
+        ...createUserEditorState(null, inbounds),
+        inboundId: 3,
+        email: "hy2@example.com",
+        uuid: "459dc0c8-d891-4768-9234-faf11fd26b5d",
+        auth
+      },
+      "hysteria2"
+    );
+    const built = buildUserInput(state, "hysteria2");
+
+    expect(built.credential?.auth).toBe(auth);
+    expect(validateUserState(state, "hysteria2", inbounds)).toEqual([]);
   });
 
   it("round-trips per-user bandwidth aliases into canonical Mbps fields", () => {

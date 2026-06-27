@@ -7,6 +7,7 @@ import {
   activeUserProtocol,
   buildUserInput,
   createUserEditorState,
+  generateCredentialSecret,
   protocolLabel,
   replaceCredentialJson,
   syncCredentialFromFields,
@@ -174,7 +175,12 @@ export function UserDrawer({
 
             {protocol === "hysteria2" ? (
               <Field label="Auth">
-                <Input value={state.auth} onChange={(e) => updateStructured({ auth: e.target.value })} placeholder="hy2-auth-token" />
+                <div className="inline-field">
+                  <Input value={state.auth} onChange={(e) => updateStructured({ auth: e.target.value })} placeholder="hy2-auth-token" />
+                  <IconButton label="Generate auth" onClick={() => updateStructured({ auth: generateCredentialSecret() })} disabled={busy}>
+                    <KeyRound size={17} />
+                  </IconButton>
+                </div>
               </Field>
             ) : null}
 
