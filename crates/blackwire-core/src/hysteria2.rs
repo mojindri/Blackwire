@@ -25,6 +25,8 @@ use tokio::sync::Semaphore;
 
 use crate::net::listen_socket_addr;
 
+const HYSTERIA2_UNTHROTTLED_WINDOW_MBPS: u64 = 10_000;
+
 /// Build and launch a Hysteria2 server inbound, returning a join handle for
 /// the server task.
 ///
@@ -103,8 +105,8 @@ fn parse_server_config(
         .clone();
     auth.replace(password.clone(), user);
 
-    let up_mbps = s["upMbps"].as_u64().unwrap_or(100);
-    let down_mbps = s["downMbps"].as_u64().unwrap_or(100);
+    let up_mbps = HYSTERIA2_UNTHROTTLED_WINDOW_MBPS;
+    let down_mbps = HYSTERIA2_UNTHROTTLED_WINDOW_MBPS;
     let congestion = parse_congestion_config(s, up_mbps, down_mbps)?;
 
     // Read TLS cert+key from stream_settings.tlsSettings.
@@ -198,8 +200,8 @@ fn parse_client_config(
 
     let password = s["auth"].as_str().unwrap_or_default().to_string();
 
-    let up_mbps = s["upMbps"].as_u64().unwrap_or(100);
-    let down_mbps = s["downMbps"].as_u64().unwrap_or(100);
+    let up_mbps = HYSTERIA2_UNTHROTTLED_WINDOW_MBPS;
+    let down_mbps = HYSTERIA2_UNTHROTTLED_WINDOW_MBPS;
     let skip_cert_verify = s["skipCertVerify"].as_bool().unwrap_or(false);
     let congestion = parse_congestion_config(s, up_mbps, down_mbps)?;
     let endpoint_shards = s["endpointShards"]
@@ -465,7 +467,7 @@ fn parse_congestion_config(
     let mode = congestion
         .get("mode")
         .and_then(|v| v.as_str())
-        .unwrap_or("brutal-compatible")
+        .unwrap_or("standard")
         .parse::<CongestionMode>()
         .map_err(anyhow::Error::msg)?;
     let min_ack_rate = congestion

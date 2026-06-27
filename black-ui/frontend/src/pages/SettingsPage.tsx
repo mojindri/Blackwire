@@ -42,44 +42,6 @@ export function SettingsPage({
           onChange={(adaptiveRoutingEnabled) => setForm({ ...form, adaptiveRoutingEnabled })}
           label="Auto adaptive routing for enabled outbounds"
         />
-        <Field label="Adaptive tuning">
-          <select
-            className="input"
-            value={form.adaptiveTuningMode}
-            onChange={(e) => setForm({ ...form, adaptiveTuningMode: e.target.value })}
-          >
-            <option value="off">Off</option>
-            <option value="recommend">Recommend</option>
-            <option value="auto">Auto</option>
-          </select>
-        </Field>
-        <Field label="Adaptive check interval seconds">
-          <Input
-            type="number"
-            min={60}
-            value={form.adaptiveTuningIntervalSeconds}
-            onChange={(e) => setForm({ ...form, adaptiveTuningIntervalSeconds: Number(e.target.value) })}
-          />
-        </Field>
-        <Field label="Adaptive apply cooldown seconds">
-          <Input
-            type="number"
-            min={60}
-            value={form.adaptiveTuningCooldownSeconds}
-            onChange={(e) => setForm({ ...form, adaptiveTuningCooldownSeconds: Number(e.target.value) })}
-          />
-        </Field>
-        <Field label="Max Hysteria2 Mbps">
-          <Input
-            type="number"
-            min={100}
-            value={form.adaptiveTuningMaxHysteria2Mbps}
-            onChange={(e) => setForm({ ...form, adaptiveTuningMaxHysteria2Mbps: Number(e.target.value) })}
-          />
-        </Field>
-        <Field label="Last adaptive decision">
-          <pre className="config-code">{JSON.stringify(form.adaptiveTuningState ?? {}, null, 2)}</pre>
-        </Field>
         <Field label="Public base URL">
           <Input value={form.publicBaseUrl} onChange={(e) => setForm({ ...form, publicBaseUrl: e.target.value })} />
         </Field>
