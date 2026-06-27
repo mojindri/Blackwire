@@ -8,6 +8,8 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.23 - 2026-06-27
+
 ### Added
 
 - Installer `INIT_SERVER=hysteria2` now generates a TLS Hysteria2 server config
@@ -18,6 +20,12 @@ This project is pre-1.0. The support contract is owned by
 - Installer-generated Trojan TLS and Hysteria2 configs now stage certificate
   and key files under `/etc/blackwire/certs` with service-readable permissions
   before config validation and service restart.
+- Black UI generated Hysteria2 configs now promote the first active user's auth
+  secret into top-level `settings.auth`, matching the runtime requirement.
+
+### Changed
+
+- Release metadata and install examples now reference `v0.1.23`.
 
 ## 0.1.22 - 2026-06-27
 
