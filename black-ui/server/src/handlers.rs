@@ -6,7 +6,7 @@ use axum::{
 };
 use base64::{engine::general_purpose, Engine as _};
 use chrono::DateTime;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use uuid::Uuid;
@@ -262,6 +262,7 @@ pub async fn create_inbound(
     validate_inbound(&input)?;
     {
         let conn = state.lock_db()?;
+        ensure_unique_inbound_tag(&conn, input.tag.trim(), None)?;
         let ts = util::now();
         conn.execute(
             "INSERT INTO inbounds (tag, listen, port, protocol, enabled, transport, settings, stream_settings, sniffing, limits, created_at, updated_at)
@@ -295,6 +296,7 @@ pub async fn update_inbound(
     validate_inbound(&input)?;
     {
         let conn = state.lock_db()?;
+        ensure_unique_inbound_tag(&conn, input.tag.trim(), Some(id))?;
         conn.execute(
             "UPDATE inbounds SET tag=?1, listen=?2, port=?3, protocol=?4, enabled=?5, transport=?6, settings=?7, stream_settings=?8, sniffing=?9, limits=?10, updated_at=?11 WHERE id=?12",
             params![
@@ -1125,6 +1127,38 @@ fn validate_inbound(input: &InboundInput) -> Result<(), AppError> {
     Ok(())
 }
 
+fn ensure_unique_inbound_tag(
+    conn: &rusqlite::Connection,
+    tag: &str,
+    except_id: Option<i64>,
+) -> Result<(), AppError> {
+    let existing_id = match except_id {
+        Some(id) => conn
+            .query_row(
+                "SELECT id FROM inbounds WHERE tag=?1 AND id<>?2 LIMIT 1",
+                params![tag, id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional(),
+        None => conn
+            .query_row(
+                "SELECT id FROM inbounds WHERE tag=?1 LIMIT 1",
+                params![tag],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional(),
+    }
+    .map_err(|e| AppError::internal(e.into()))?;
+
+    if existing_id.is_some() {
+        return Err(AppError::bad_request(format!(
+            "inbound tag '{tag}' already exists"
+        )));
+    }
+
+    Ok(())
+}
+
 fn validate_outbound(input: &OutboundInput) -> Result<(), AppError> {
     if input.tag.trim().is_empty() {
         return Err(AppError::bad_request("tag is required"));
@@ -1282,6 +1316,18 @@ fn validate_user(input: &UserInput) -> Result<(), AppError> {
 mod tests {
     use super::*;
 
+    fn inbound_tag_conn() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory database");
+        conn.execute(
+            "CREATE TABLE inbounds (id INTEGER PRIMARY KEY AUTOINCREMENT, tag TEXT NOT NULL UNIQUE)",
+            [],
+        )
+        .expect("create inbounds table");
+        conn.execute("INSERT INTO inbounds (tag) VALUES (?1)", params!["main"])
+            .expect("insert inbound");
+        conn
+    }
+
     fn outbound(protocol: &str, settings: &str, enabled: bool) -> OutboundInput {
         OutboundInput {
             tag: format!("{protocol}-out"),
@@ -1326,5 +1372,29 @@ mod tests {
             true
         ))
         .is_ok());
+    }
+
+    #[test]
+    fn inbound_tag_uniqueness_reports_clear_error() {
+        let conn = inbound_tag_conn();
+
+        let err = ensure_unique_inbound_tag(&conn, "main", None).unwrap_err();
+        assert_eq!(err.to_string(), "inbound tag 'main' already exists");
+        assert!(ensure_unique_inbound_tag(&conn, "secondary", None).is_ok());
+    }
+
+    #[test]
+    fn inbound_tag_uniqueness_allows_same_row_on_update() {
+        let conn = inbound_tag_conn();
+
+        assert!(ensure_unique_inbound_tag(&conn, "main", Some(1)).is_ok());
+
+        conn.execute(
+            "INSERT INTO inbounds (tag) VALUES (?1)",
+            params!["secondary"],
+        )
+        .expect("insert second inbound");
+        let err = ensure_unique_inbound_tag(&conn, "main", Some(2)).unwrap_err();
+        assert_eq!(err.to_string(), "inbound tag 'main' already exists");
     }
 }

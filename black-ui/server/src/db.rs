@@ -95,6 +95,7 @@ pub fn init(conn: &Connection, data_dir: &Path) -> Result<()> {
         .unwrap_or_else(|| panel_default_config_path.clone());
     set_default(conn, "configPath", &config_path)?;
     migrate_panel_default_config_path(conn, &panel_default_config_path, &config_path)?;
+    migrate_ephemeral_config_path(conn, &config_path)?;
     set_default(conn, "grpcEnabled", "true")?;
     set_default(conn, "grpcAddress", "127.0.0.1:62789")?;
     set_default(conn, "firewallAutoOpen", "false")?;
@@ -108,6 +109,7 @@ pub fn init(conn: &Connection, data_dir: &Path) -> Result<()> {
         .unwrap_or_else(|| "127.0.0.1".into());
     set_default(conn, "publicBaseUrl", &public_base_url)?;
     set_default(conn, "subscriptionHost", &subscription_host)?;
+    migrate_local_public_settings(conn, &public_base_url, &subscription_host)?;
     set_default(conn, "enforcementIntervalSeconds", "30")?;
     set_default(conn, "adaptiveRoutingEnabled", "false")?;
     set_default(conn, "adaptiveTuningMode", "recommend")?;
@@ -134,6 +136,38 @@ fn migrate_panel_default_config_path(
         params![configured_config_path, panel_default_config_path],
     )?;
     Ok(())
+}
+
+fn migrate_ephemeral_config_path(conn: &Connection, configured_config_path: &str) -> Result<()> {
+    if is_ephemeral_config_path(configured_config_path) {
+        return Ok(());
+    }
+    let current = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key='configPath'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if current
+        .as_deref()
+        .map(is_ephemeral_config_path)
+        .unwrap_or(false)
+    {
+        conn.execute(
+            "UPDATE settings SET value=?1 WHERE key='configPath'",
+            params![configured_config_path],
+        )?;
+    }
+    Ok(())
+}
+
+fn is_ephemeral_config_path(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with("/tmp/blackwire-qa")
+        || value.starts_with("/var/tmp/blackwire-qa")
+        || value.starts_with("/private/tmp/blackwire-qa")
+        || value.contains("/black-ui-qa-")
 }
 
 fn migrate_existing_schema(conn: &Connection) -> Result<()> {
@@ -235,6 +269,56 @@ fn set_default(conn: &Connection, key: &str, value: &str) -> Result<()> {
         params![key, value],
     )?;
     Ok(())
+}
+
+fn migrate_local_public_settings(
+    conn: &Connection,
+    public_base_url: &str,
+    subscription_host: &str,
+) -> Result<()> {
+    migrate_local_setting(conn, "publicBaseUrl", public_base_url)?;
+    migrate_local_setting(conn, "subscriptionHost", subscription_host)?;
+    Ok(())
+}
+
+fn migrate_local_setting(conn: &Connection, key: &str, env_value: &str) -> Result<()> {
+    let env_value = env_value.trim();
+    if env_value.is_empty() || is_local_public_setting(env_value) {
+        return Ok(());
+    }
+    let current = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key=?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if current
+        .as_deref()
+        .map(is_local_public_setting)
+        .unwrap_or(true)
+    {
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, env_value],
+        )?;
+    }
+    Ok(())
+}
+
+fn is_local_public_setting(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.is_empty()
+        || value == "127.0.0.1"
+        || value == "localhost"
+        || value == "0.0.0.0"
+        || value.starts_with("http://127.0.0.1")
+        || value.starts_with("https://127.0.0.1")
+        || value.starts_with("http://localhost")
+        || value.starts_with("https://localhost")
+        || value.starts_with("http://0.0.0.0")
+        || value.starts_with("https://0.0.0.0")
 }
 
 pub fn count(conn: &Connection, table: &str) -> Result<i64> {
@@ -713,6 +797,69 @@ mod tests {
             load_settings(&conn).unwrap().config_path,
             "/srv/custom/blackwire.json"
         );
+    }
+
+    #[test]
+    fn init_migrates_ephemeral_qa_config_path_to_packaged_path() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn, Path::new("/tmp/black-ui-db-qa-config-path-test")).unwrap();
+        conn.execute(
+            "UPDATE settings SET value=?1 WHERE key='configPath'",
+            params!["/tmp/blackwire-qa-config.json"],
+        )
+        .unwrap();
+
+        migrate_ephemeral_config_path(&conn, "/etc/blackwire/config.json").unwrap();
+
+        assert_eq!(
+            load_settings(&conn).unwrap().config_path,
+            "/etc/blackwire/config.json"
+        );
+    }
+
+    #[test]
+    fn init_preserves_custom_config_path_during_ephemeral_migration() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn, Path::new("/tmp/black-ui-db-custom-config-path-test")).unwrap();
+        conn.execute(
+            "UPDATE settings SET value=?1 WHERE key='configPath'",
+            params!["/srv/custom/blackwire.json"],
+        )
+        .unwrap();
+
+        migrate_ephemeral_config_path(&conn, "/etc/blackwire/config.json").unwrap();
+
+        assert_eq!(
+            load_settings(&conn).unwrap().config_path,
+            "/srv/custom/blackwire.json"
+        );
+    }
+
+    #[test]
+    fn public_link_env_migration_replaces_local_defaults_only() {
+        let conn = Connection::open_in_memory().unwrap();
+        init(&conn, Path::new("/tmp/black-ui-db-public-link-test")).unwrap();
+
+        migrate_local_public_settings(&conn, "http://203.0.113.10:18080", "203.0.113.10")
+            .unwrap();
+        let migrated = load_settings(&conn).unwrap();
+        assert_eq!(migrated.public_base_url, "http://203.0.113.10:18080");
+        assert_eq!(migrated.subscription_host, "203.0.113.10");
+
+        conn.execute(
+            "UPDATE settings SET value=?1 WHERE key='publicBaseUrl'",
+            params!["https://panel.example.com"],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE settings SET value=?1 WHERE key='subscriptionHost'",
+            params!["sub.example.com"],
+        )
+        .unwrap();
+        migrate_local_public_settings(&conn, "http://203.0.113.10:18080", "203.0.113.10").unwrap();
+        let preserved = load_settings(&conn).unwrap();
+        assert_eq!(preserved.public_base_url, "https://panel.example.com");
+        assert_eq!(preserved.subscription_host, "sub.example.com");
     }
 
     #[test]

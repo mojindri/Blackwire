@@ -6,6 +6,19 @@ This project is pre-1.0. The support contract is owned by
 [docs/release.md](docs/release.md), and detailed feature evidence is owned by
 [docs/feature-matrix.md](docs/feature-matrix.md).
 
+## Unreleased
+
+### Fixed
+
+- Black UI startup now migrates localhost/default public link settings to
+  `BLACK_UI_PUBLIC_BASE_URL` and `BLACK_UI_SUBSCRIPTION_HOST` when those
+  environment values are provided, while preserving explicit custom settings.
+- Black UI startup now migrates stale QA/temp config paths back to the packaged
+  `BLACK_UI_CONFIG_PATH`, and config writes now report clear permission/read-only
+  path hints.
+- Black UI now validates duplicate inbound tags before insert/update so users
+  see a clear validation error instead of a raw SQLite constraint failure.
+
 ## 0.1.21 - 2026-06-27
 
 ### Added

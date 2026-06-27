@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{io::ErrorKind, path::Path};
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -185,10 +185,30 @@ pub fn write_if_generated_inbounds(state: &AppState) -> Result<bool> {
 
 fn write_value(settings: &Settings, value: &Value) -> Result<()> {
     if let Some(parent) = Path::new(&settings.config_path).parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(|err| {
+            config_path_error(
+                "create config directory",
+                parent.to_string_lossy().as_ref(),
+                err,
+            )
+        })?;
     }
-    std::fs::write(&settings.config_path, serde_json::to_vec_pretty(&value)?)?;
+    std::fs::write(&settings.config_path, serde_json::to_vec_pretty(&value)?)
+        .map_err(|err| config_path_error("write config", &settings.config_path, err))?;
     Ok(())
+}
+
+fn config_path_error(action: &str, path: &str, error: std::io::Error) -> anyhow::Error {
+    let hint = match error.kind() {
+        ErrorKind::PermissionDenied => {
+            "check config ownership/group permissions or choose a path allowed by black-ui.service ReadWritePaths"
+        }
+        ErrorKind::ReadOnlyFilesystem => {
+            "the target is on a read-only filesystem; choose /etc/blackwire/config.json or another writable service path"
+        }
+        _ => "check the configured Blackwire config path",
+    };
+    anyhow!("{action} failed for '{path}': {error}. {hint}")
 }
 
 pub fn stream_settings(inbound: &Inbound) -> Result<Option<Value>> {
