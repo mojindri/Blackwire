@@ -32,7 +32,7 @@ REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-www.microsoft.com}"
 PUBLIC_HOST="${PUBLIC_HOST:-<server-ip-or-domain>}"
 OPEN_FIREWALL="${OPEN_FIREWALL:-0}"
 BLACKWIRE_API_LISTEN="${BLACKWIRE_API_LISTEN:-127.0.0.1:62789}"
-SERVICE_USER="${SERVICE_USER:-nobody}"
+SERVICE_USER="${SERVICE_USER:-blackwire}"
 SERVICE_GROUP="${SERVICE_GROUP:-}"
 INSTALL_BLACK_UI="${INSTALL_BLACK_UI:-0}"
 BLACK_UI_LISTEN="${BLACK_UI_LISTEN:-127.0.0.1:18080}"
@@ -154,10 +154,10 @@ short_id() {
 service_group() {
     if [ -n "$SERVICE_GROUP" ]; then
         echo "$SERVICE_GROUP"
-    elif getent group nobody >/dev/null 2>&1; then
-        echo "nobody"
+    elif getent group "$SERVICE_USER" >/dev/null 2>&1; then
+        echo "$SERVICE_USER"
     else
-        echo "nogroup"
+        echo "$SERVICE_USER"
     fi
 }
 
@@ -173,6 +173,25 @@ ensure_black_ui_group() {
     [ "$INSTALL_BLACK_UI" = "1" ] || return 0
     if ! getent group "$BLACK_UI_GROUP" >/dev/null 2>&1; then
         sudo_cmd groupadd --system "$BLACK_UI_GROUP"
+    fi
+}
+
+ensure_service_identity() {
+    group="$(config_group)"
+    if ! getent group "$group" >/dev/null 2>&1; then
+        sudo_cmd groupadd --system "$group" || die "failed to create service group '$group'"
+    fi
+
+    if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
+        home="$STATE_DIR"
+        shell="/usr/sbin/nologin"
+        [ -x "$shell" ] || shell="/sbin/nologin"
+        if command -v useradd >/dev/null 2>&1; then
+            sudo_cmd useradd --system --home-dir "$home" --no-create-home --shell "$shell" --gid "$group" "$SERVICE_USER" \
+                || die "failed to create service user '$SERVICE_USER'"
+        else
+            die "service user '$SERVICE_USER' is missing; create it before installing"
+        fi
     fi
 }
 
@@ -255,6 +274,7 @@ protect_tls_material_for_service() {
 
 prepare_runtime_dirs() {
     ensure_black_ui_group
+    ensure_service_identity
     group="$(config_group)"
     sudo_cmd install -d -m 0755 "$PREFIX/bin"
     if [ "$INSTALL_BLACK_UI" = "1" ]; then
@@ -889,8 +909,14 @@ UNIT
     log "installed systemd unit: $unit_path"
 
     if [ "$START_SERVICE" = "1" ]; then
-        sudo_cmd systemctl enable --now blackwire
-        log "enabled and started blackwire.service"
+        sudo_cmd systemctl enable blackwire >/dev/null
+        if sudo_cmd systemctl is-active --quiet blackwire; then
+            sudo_cmd systemctl restart blackwire
+            log "enabled and restarted blackwire.service"
+        else
+            sudo_cmd systemctl start blackwire
+            log "enabled and started blackwire.service"
+        fi
     elif [ -f "$CONFIG_DIR/config.json" ]; then
         log "service not started; run: systemctl enable --now blackwire"
     else
@@ -944,8 +970,14 @@ UNIT
     sudo_cmd install -m 0644 "$tmp_unit" "$unit_path"
     rm -f "$tmp_unit"
     sudo_cmd systemctl daemon-reload
-    sudo_cmd systemctl enable --now black-ui
-    log "installed and started black-ui.service at ${BLACK_UI_LISTEN}"
+    sudo_cmd systemctl enable black-ui >/dev/null
+    if sudo_cmd systemctl is-active --quiet black-ui; then
+        sudo_cmd systemctl restart black-ui
+        log "installed and restarted black-ui.service at ${BLACK_UI_LISTEN}"
+    else
+        sudo_cmd systemctl start black-ui
+        log "installed and started black-ui.service at ${BLACK_UI_LISTEN}"
+    fi
 }
 
 install_black_ui() {
