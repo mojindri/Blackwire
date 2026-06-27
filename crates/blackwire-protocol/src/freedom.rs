@@ -28,6 +28,7 @@ use blackwire_common::{
 };
 
 const UDP_ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(3);
+const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(250);
 
 // ── Adaptive connection pool ─────────────────────────────────────────────────
 
@@ -661,6 +662,38 @@ impl FreedomOutbound {
         Ok(Box::new(stream))
     }
 
+    async fn connect_happy_eyeballs_pair(
+        &self,
+        dest: &Address,
+        first: SocketAddr,
+        second: SocketAddr,
+    ) -> Result<BoxedStream, ProxyError> {
+        let first_connect = self.connect_resolved(dest, first);
+        let second_connect = async {
+            tokio::time::sleep(HAPPY_EYEBALLS_DELAY).await;
+            self.connect_resolved(dest, second).await
+        };
+        tokio::pin!(first_connect);
+        tokio::pin!(second_connect);
+
+        tokio::select! {
+            first = &mut first_connect => match first {
+                Ok(stream) => Ok(stream),
+                Err(first_err) => match second_connect.await {
+                    Ok(stream) => Ok(stream),
+                    Err(_) => Err(first_err),
+                },
+            },
+            second = &mut second_connect => match second {
+                Ok(stream) => Ok(stream),
+                Err(second_err) => match first_connect.await {
+                    Ok(stream) => Ok(stream),
+                    Err(_) => Err(second_err),
+                },
+            },
+        }
+    }
+
     async fn udp_roundtrip_resolved(
         &self,
         dest: &Address,
@@ -702,6 +735,26 @@ impl OutboundHandler for FreedomOutbound {
     async fn connect(&self, _ctx: &Context, dest: &Address) -> Result<BoxedStream, ProxyError> {
         let mut addrs = self.resolve_all(dest).await?;
         addrs.sort_by_key(|addr| addr.is_ipv6());
+        if let Some(v4_index) = addrs.iter().position(SocketAddr::is_ipv4) {
+            if let Some(v6_index) = addrs.iter().position(SocketAddr::is_ipv6) {
+                let v4 = addrs.remove(v4_index);
+                let v6_index = if v6_index > v4_index {
+                    v6_index - 1
+                } else {
+                    v6_index
+                };
+                let v6 = addrs.remove(v6_index);
+                match self.connect_happy_eyeballs_pair(dest, v4, v6).await {
+                    Ok(stream) => return Ok(stream),
+                    Err(err) => debug!(
+                        dest = %dest,
+                        error = %err,
+                        "freedom: happy-eyeballs pair failed; trying remaining addresses"
+                    ),
+                }
+            }
+        }
+
         let mut last_err = None;
 
         for addr in addrs {
