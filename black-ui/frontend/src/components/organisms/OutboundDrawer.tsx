@@ -19,6 +19,7 @@ import { Field } from "../molecules/Field";
 
 type TabKey = "basic" | "protocol" | "transport" | "security" | "advanced";
 
+const hysteria2SimpleModes = new Set(["standard", "brutal-compatible", "badnet-low-latency"]);
 const tabOrder: Array<{ key: TabKey; label: string }> = [
   { key: "basic", label: "Basic" },
   { key: "protocol", label: "Protocol" },
@@ -26,6 +27,26 @@ const tabOrder: Array<{ key: TabKey; label: string }> = [
   { key: "security", label: "Security" },
   { key: "advanced", label: "Advanced" }
 ];
+
+function hysteria2HasCustomTuning(state: OutboundEditorState): boolean {
+  return (
+    !hysteria2SimpleModes.has(state.hysteria2CongestionMode) ||
+    state.hysteria2MinAckRate !== "0.8" ||
+    state.hysteria2MaxQueueDelayMs !== "80" ||
+    state.hysteria2PacingGain !== "1.25" ||
+    !state.hysteria2LossCompensation ||
+    state.hysteria2EndpointShards !== "1" ||
+    state.hysteria2QuicReusePort ||
+    state.hysteria2QuicEndpoints !== "1" ||
+    state.hysteria2QuicRecvBufferBytes !== "8388608" ||
+    state.hysteria2QuicSendBufferBytes !== "8388608" ||
+    state.hysteria2DatagramEnabled ||
+    !state.hysteria2DatagramUdpOverDatagram ||
+    state.hysteria2DatagramPolicy !== "standard" ||
+    state.hysteria2FecMode !== "off" ||
+    state.hysteria2FecMaxOverheadPercent.trim() !== ""
+  );
+}
 
 export function OutboundDrawer({
   editing,
@@ -105,6 +126,7 @@ export function OutboundDrawer({
   const jsonErrors = [state.settings, state.streamSettings].filter((slice) => slice.error);
   const validationIssues = validateOutboundState(state);
   const saveDisabled = busy || jsonErrors.length > 0 || validationIssues.length > 0;
+  const hysteria2CustomTuning = state.protocol === "hysteria2" && hysteria2HasCustomTuning(state);
 
   const updateStructured = (patch: Partial<OutboundEditorState>) => {
     setState((current) => syncOutboundAfterStructuredChange({ ...current, ...patch }));
@@ -112,6 +134,34 @@ export function OutboundDrawer({
 
   const updateSlice = (key: OutboundSliceKey, text: string) => {
     setState((current) => replaceOutboundSlice(current, key, text));
+  };
+
+  const updateHysteria2PerformanceMode = (value: string) => {
+    if (value === "custom") {
+      updateStructured({
+        hysteria2CongestionMode: hysteria2SimpleModes.has(state.hysteria2CongestionMode)
+          ? "badnet-throughput"
+          : state.hysteria2CongestionMode
+      });
+      return;
+    }
+    updateStructured({
+      hysteria2CongestionMode: value,
+      hysteria2EndpointShards: "1",
+      hysteria2MinAckRate: "0.8",
+      hysteria2MaxQueueDelayMs: "80",
+      hysteria2PacingGain: "1.25",
+      hysteria2LossCompensation: true,
+      hysteria2QuicReusePort: false,
+      hysteria2QuicEndpoints: "1",
+      hysteria2QuicRecvBufferBytes: "8388608",
+      hysteria2QuicSendBufferBytes: "8388608",
+      hysteria2DatagramEnabled: false,
+      hysteria2DatagramUdpOverDatagram: true,
+      hysteria2DatagramPolicy: "standard",
+      hysteria2FecMode: "off",
+      hysteria2FecMaxOverheadPercent: ""
+    });
   };
 
   const submit = () => {
@@ -224,6 +274,58 @@ export function OutboundDrawer({
               </Field>
             ) : null}
 
+            {state.protocol === "hysteria2" ? (
+              <>
+                <div className="configurator-grid">
+                  <Field label="Auth">
+                    <Input value={state.hysteria2Auth} onChange={(e) => updateStructured({ hysteria2Auth: e.target.value })} placeholder="shared-secret" />
+                  </Field>
+                  <Field label="Server name" hint="SNI for the Hysteria2 TLS/QUIC connection.">
+                    <Input value={state.hysteria2ServerName} onChange={(e) => updateStructured({ hysteria2ServerName: e.target.value })} placeholder="example.com" />
+                  </Field>
+                  <Switch checked={state.hysteria2SkipCertVerify} onChange={(hysteria2SkipCertVerify) => updateStructured({ hysteria2SkipCertVerify })} label="Skip certificate verification" />
+                  <Field label="Performance mode" hint="Throughput restores the aggressive Hysteria2-style behavior; Balanced is conservative.">
+                    <Select
+                      value={hysteria2CustomTuning ? "custom" : state.hysteria2CongestionMode}
+                      onChange={(e) => updateHysteria2PerformanceMode(e.target.value)}
+                    >
+                      <option value="standard">Balanced</option>
+                      <option value="brutal-compatible">Throughput</option>
+                      <option value="badnet-low-latency">Low latency</option>
+                      <option value="custom">Custom</option>
+                    </Select>
+                  </Field>
+                </div>
+                {hysteria2CustomTuning ? (
+                  <div className="configurator-grid">
+                    <Field label="Congestion mode">
+                      <Select value={state.hysteria2CongestionMode} onChange={(e) => updateStructured({ hysteria2CongestionMode: e.target.value })}>
+                        <option value="standard">standard</option>
+                        <option value="brutal-compatible">brutal-compatible</option>
+                        <option value="badnet-throughput">badnet-throughput</option>
+                        <option value="badnet-low-latency">badnet-low-latency</option>
+                        <option value="nova-cc">nova-cc</option>
+                        <option value="auto-probe">auto-probe</option>
+                      </Select>
+                    </Field>
+                  <Field label="Endpoint shards" hint="Optional parallel QUIC endpoints, 1-64.">
+                    <Input value={state.hysteria2EndpointShards} onChange={(e) => updateStructured({ hysteria2EndpointShards: e.target.value })} placeholder="1" />
+                  </Field>
+                  <Field label="Min ACK rate">
+                    <Input value={state.hysteria2MinAckRate} onChange={(e) => updateStructured({ hysteria2MinAckRate: e.target.value })} placeholder="0.8" />
+                  </Field>
+                  <Field label="Max queue delay ms">
+                    <Input value={state.hysteria2MaxQueueDelayMs} onChange={(e) => updateStructured({ hysteria2MaxQueueDelayMs: e.target.value })} placeholder="80" />
+                  </Field>
+                  <Field label="Pacing gain">
+                    <Input value={state.hysteria2PacingGain} onChange={(e) => updateStructured({ hysteria2PacingGain: e.target.value })} placeholder="1.25" />
+                  </Field>
+                  <Switch checked={state.hysteria2LossCompensation} onChange={(hysteria2LossCompensation) => updateStructured({ hysteria2LossCompensation })} label="Loss compensation" />
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+
             {state.protocol === "tuic" ? (
               <div className="configurator-grid">
                 <Field label="UUID" hint="Maps to settings.uuid for TUIC v5 authentication.">
@@ -314,6 +416,46 @@ export function OutboundDrawer({
 
             {state.network === "quic" ? (
               <p className="field-hint">QUIC is covered here as an outbound network choice. Any top-level QUIC socket tuning still belongs in Advanced Config.</p>
+            ) : null}
+
+            {hysteria2CustomTuning ? (
+              <>
+                <p className="field-hint">Custom Hysteria2 transport tuning is active for this outbound.</p>
+                <div className="configurator-grid">
+                  <Switch checked={state.hysteria2QuicReusePort} onChange={(hysteria2QuicReusePort) => updateStructured({ hysteria2QuicReusePort })} label="QUIC reuse port" />
+                  <Field label="QUIC endpoints" hint="Number or cpu. Leave empty for default.">
+                    <Input value={state.hysteria2QuicEndpoints} onChange={(e) => updateStructured({ hysteria2QuicEndpoints: e.target.value })} placeholder="1" />
+                  </Field>
+                  <Field label="Receive buffer bytes">
+                    <Input value={state.hysteria2QuicRecvBufferBytes} onChange={(e) => updateStructured({ hysteria2QuicRecvBufferBytes: e.target.value })} placeholder="16777216" />
+                  </Field>
+                  <Field label="Send buffer bytes">
+                    <Input value={state.hysteria2QuicSendBufferBytes} onChange={(e) => updateStructured({ hysteria2QuicSendBufferBytes: e.target.value })} placeholder="16777216" />
+                  </Field>
+                </div>
+                <div className="configurator-grid">
+                  <Switch checked={state.hysteria2DatagramEnabled} onChange={(hysteria2DatagramEnabled) => updateStructured({ hysteria2DatagramEnabled })} label="Enable datagram UDP relay" />
+                  <Switch checked={state.hysteria2DatagramUdpOverDatagram} onChange={(hysteria2DatagramUdpOverDatagram) => updateStructured({ hysteria2DatagramUdpOverDatagram })} label="UDP over datagram" />
+                  <Field label="Datagram policy">
+                    <Select value={state.hysteria2DatagramPolicy} onChange={(e) => updateStructured({ hysteria2DatagramPolicy: e.target.value })}>
+                      <option value="standard">standard</option>
+                      <option value="h2-plus">h2-plus</option>
+                    </Select>
+                  </Field>
+                  <Field label="FEC mode">
+                    <Select value={state.hysteria2FecMode} onChange={(e) => updateStructured({ hysteria2FecMode: e.target.value })}>
+                      <option value="off">off</option>
+                      <option value="auto">auto</option>
+                      <option value="xor1-of-n">xor1-of-n</option>
+                      <option value="reed-solomon">reed-solomon</option>
+                      <option value="raptor-like">raptor-like</option>
+                    </Select>
+                  </Field>
+                  <Field label="FEC overhead percent">
+                    <Input value={state.hysteria2FecMaxOverheadPercent} onChange={(e) => updateStructured({ hysteria2FecMaxOverheadPercent: e.target.value })} placeholder="20" />
+                  </Field>
+                </div>
+              </>
             ) : null}
           </section>
         ) : null}

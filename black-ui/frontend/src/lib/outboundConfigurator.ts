@@ -21,6 +21,24 @@ export interface OutboundEditorState {
   password: string;
   method: string;
   server: string;
+  hysteria2Auth: string;
+  hysteria2ServerName: string;
+  hysteria2SkipCertVerify: boolean;
+  hysteria2EndpointShards: string;
+  hysteria2CongestionMode: string;
+  hysteria2MinAckRate: string;
+  hysteria2MaxQueueDelayMs: string;
+  hysteria2PacingGain: string;
+  hysteria2LossCompensation: boolean;
+  hysteria2QuicReusePort: boolean;
+  hysteria2QuicEndpoints: string;
+  hysteria2QuicRecvBufferBytes: string;
+  hysteria2QuicSendBufferBytes: string;
+  hysteria2DatagramEnabled: boolean;
+  hysteria2DatagramUdpOverDatagram: boolean;
+  hysteria2DatagramPolicy: string;
+  hysteria2FecMode: string;
+  hysteria2FecMaxOverheadPercent: string;
   wsPath: string;
   wsHost: string;
   grpcServiceName: string;
@@ -56,6 +74,15 @@ export interface OutboundValidationIssue {
 const DEFAULT_PROTOCOL = "freedom";
 const DEFAULT_NETWORK = "tcp";
 const DEFAULT_SECURITY = "none";
+const DEFAULT_HYSTERIA2_CONGESTION_MODE = "standard";
+const DEFAULT_HYSTERIA2_MIN_ACK_RATE = "0.8";
+const DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS = "80";
+const DEFAULT_HYSTERIA2_PACING_GAIN = "1.25";
+const DEFAULT_HYSTERIA2_ENDPOINT_SHARDS = "1";
+const DEFAULT_HYSTERIA2_QUIC_ENDPOINTS = "1";
+const DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES = "8388608";
+const DEFAULT_HYSTERIA2_DATAGRAM_POLICY = "standard";
+const DEFAULT_HYSTERIA2_FEC_MODE = "off";
 
 export function createOutboundEditorState(outbound?: Outbound | null): OutboundEditorState {
   const settings = createSliceState(outbound?.settings);
@@ -76,6 +103,24 @@ export function createOutboundEditorState(outbound?: Outbound | null): OutboundE
     password: stringValue(settings.value.password) ?? "",
     method: stringValue(settings.value.method) ?? "",
     server: stringValue(settings.value.server) ?? "",
+    hysteria2Auth: stringValue(settings.value.auth) ?? "",
+    hysteria2ServerName: stringValue(settings.value.serverName) ?? "",
+    hysteria2SkipCertVerify: boolValue(settings.value.skipCertVerify) ?? false,
+    hysteria2EndpointShards: numberString(settings.value.endpointShards) || DEFAULT_HYSTERIA2_ENDPOINT_SHARDS,
+    hysteria2CongestionMode: stringValue(objectValue(settings.value.congestion)?.mode) ?? DEFAULT_HYSTERIA2_CONGESTION_MODE,
+    hysteria2MinAckRate: numberString(objectValue(settings.value.congestion)?.minAckRate) || DEFAULT_HYSTERIA2_MIN_ACK_RATE,
+    hysteria2MaxQueueDelayMs: numberString(objectValue(settings.value.congestion)?.maxQueueDelayMs) || DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS,
+    hysteria2PacingGain: numberString(objectValue(settings.value.congestion)?.pacingGain) || DEFAULT_HYSTERIA2_PACING_GAIN,
+    hysteria2LossCompensation: boolValue(objectValue(settings.value.congestion)?.lossCompensation) ?? true,
+    hysteria2QuicReusePort: boolValue(objectValue(settings.value.quic)?.reusePort) ?? false,
+    hysteria2QuicEndpoints: stringOrNumberString(objectValue(settings.value.quic)?.endpoints) || DEFAULT_HYSTERIA2_QUIC_ENDPOINTS,
+    hysteria2QuicRecvBufferBytes: numberString(objectValue(settings.value.quic)?.recvBufferBytes) || DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES,
+    hysteria2QuicSendBufferBytes: numberString(objectValue(settings.value.quic)?.sendBufferBytes) || DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES,
+    hysteria2DatagramEnabled: boolValue(objectValue(settings.value.datagram)?.enabled) ?? false,
+    hysteria2DatagramUdpOverDatagram: boolValue(objectValue(settings.value.datagram)?.udpOverDatagram) ?? true,
+    hysteria2DatagramPolicy: stringValue(objectValue(settings.value.datagram)?.policy) ?? DEFAULT_HYSTERIA2_DATAGRAM_POLICY,
+    hysteria2FecMode: stringValue(objectValue(settings.value.fec)?.mode) ?? DEFAULT_HYSTERIA2_FEC_MODE,
+    hysteria2FecMaxOverheadPercent: numberString(objectValue(settings.value.fec)?.maxOverheadPercent),
     wsPath: stringValue(objectValue(streamSettings.value.wsSettings)?.path) ?? "",
     wsHost: stringValue(objectValue(objectValue(streamSettings.value.wsSettings)?.headers)?.Host) ?? "",
     grpcServiceName: stringValue(objectValue(streamSettings.value.grpcSettings)?.serviceName) ?? "",
@@ -153,6 +198,37 @@ export function buildOutboundInput(state: OutboundEditorState): OutboundInput {
     delete settings.port;
   } else {
     delete settings.server;
+  }
+
+  if (state.protocol === "hysteria2") {
+    applyStringField(settings, "auth", state.hysteria2Auth);
+    applyStringField(settings, "serverName", state.hysteria2ServerName);
+    if (state.hysteria2SkipCertVerify) settings.skipCertVerify = true;
+    else delete settings.skipCertVerify;
+    applyDefaultedNumberField(settings, "endpointShards", state.hysteria2EndpointShards, DEFAULT_HYSTERIA2_ENDPOINT_SHARDS);
+    applyNestedStringField(settings, "congestion", "mode", state.hysteria2CongestionMode, DEFAULT_HYSTERIA2_CONGESTION_MODE);
+    applyNestedNumberField(settings, "congestion", "minAckRate", state.hysteria2MinAckRate, DEFAULT_HYSTERIA2_MIN_ACK_RATE);
+    applyNestedNumberField(settings, "congestion", "maxQueueDelayMs", state.hysteria2MaxQueueDelayMs, DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS);
+    applyNestedNumberField(settings, "congestion", "pacingGain", state.hysteria2PacingGain, DEFAULT_HYSTERIA2_PACING_GAIN);
+    applyNestedBoolField(settings, "congestion", "lossCompensation", state.hysteria2LossCompensation, true);
+    applyNestedBoolField(settings, "quic", "reusePort", state.hysteria2QuicReusePort, false);
+    applyNestedStringOrNumberField(settings, "quic", "endpoints", state.hysteria2QuicEndpoints, DEFAULT_HYSTERIA2_QUIC_ENDPOINTS);
+    applyNestedNumberField(settings, "quic", "recvBufferBytes", state.hysteria2QuicRecvBufferBytes, DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES);
+    applyNestedNumberField(settings, "quic", "sendBufferBytes", state.hysteria2QuicSendBufferBytes, DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES);
+    applyNestedBoolField(settings, "datagram", "enabled", state.hysteria2DatagramEnabled, false);
+    applyNestedBoolField(settings, "datagram", "udpOverDatagram", state.hysteria2DatagramUdpOverDatagram, true);
+    applyNestedStringField(settings, "datagram", "policy", state.hysteria2DatagramPolicy, DEFAULT_HYSTERIA2_DATAGRAM_POLICY);
+    applyNestedStringField(settings, "fec", "mode", state.hysteria2FecMode, DEFAULT_HYSTERIA2_FEC_MODE);
+    applyNestedNumberField(settings, "fec", "maxOverheadPercent", state.hysteria2FecMaxOverheadPercent);
+  } else {
+    delete settings.auth;
+    delete settings.serverName;
+    delete settings.skipCertVerify;
+    delete settings.endpointShards;
+    delete settings.congestion;
+    delete settings.quic;
+    delete settings.datagram;
+    delete settings.fec;
   }
 
   if (state.protocol === "tuic") {
@@ -376,6 +452,24 @@ function syncStructuredFields(state: OutboundEditorState): OutboundEditorState {
     password: next.password,
     method: next.method,
     server: next.server,
+    hysteria2Auth: next.hysteria2Auth,
+    hysteria2ServerName: next.hysteria2ServerName,
+    hysteria2SkipCertVerify: next.hysteria2SkipCertVerify,
+    hysteria2EndpointShards: next.hysteria2EndpointShards,
+    hysteria2CongestionMode: next.hysteria2CongestionMode,
+    hysteria2MinAckRate: next.hysteria2MinAckRate,
+    hysteria2MaxQueueDelayMs: next.hysteria2MaxQueueDelayMs,
+    hysteria2PacingGain: next.hysteria2PacingGain,
+    hysteria2LossCompensation: next.hysteria2LossCompensation,
+    hysteria2QuicReusePort: next.hysteria2QuicReusePort,
+    hysteria2QuicEndpoints: next.hysteria2QuicEndpoints,
+    hysteria2QuicRecvBufferBytes: next.hysteria2QuicRecvBufferBytes,
+    hysteria2QuicSendBufferBytes: next.hysteria2QuicSendBufferBytes,
+    hysteria2DatagramEnabled: next.hysteria2DatagramEnabled,
+    hysteria2DatagramUdpOverDatagram: next.hysteria2DatagramUdpOverDatagram,
+    hysteria2DatagramPolicy: next.hysteria2DatagramPolicy,
+    hysteria2FecMode: next.hysteria2FecMode,
+    hysteria2FecMaxOverheadPercent: next.hysteria2FecMaxOverheadPercent,
     wsPath: next.wsPath,
     wsHost: next.wsHost,
     grpcServiceName: next.grpcServiceName,
@@ -495,6 +589,11 @@ function numberString(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
 }
 
+function stringOrNumberString(value: unknown): string {
+  if (typeof value === "string") return value;
+  return numberString(value);
+}
+
 function arrayOfStrings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
@@ -522,6 +621,54 @@ function applyNumberField(target: JsonObject, key: string, value: string) {
   }
   const parsed = Number(trimmed);
   if (Number.isFinite(parsed)) target[key] = parsed;
+}
+
+function applyDefaultedNumberField(target: JsonObject, key: string, value: string, defaultValue: string) {
+  if (value.trim() === defaultValue) delete target[key];
+  else applyNumberField(target, key, value);
+}
+
+function applyNestedStringField(target: JsonObject, objectKey: string, key: string, value: string, defaultValue = "") {
+  const child = cloneObject(objectValue(target[objectKey]));
+  if (value.trim() === defaultValue) delete child[key];
+  else applyStringField(child, key, value);
+  setNestedObject(target, objectKey, child);
+}
+
+function applyNestedNumberField(target: JsonObject, objectKey: string, key: string, value: string, defaultValue = "") {
+  const child = cloneObject(objectValue(target[objectKey]));
+  if (value.trim() === defaultValue) delete child[key];
+  else applyNumberField(child, key, value);
+  setNestedObject(target, objectKey, child);
+}
+
+function applyNestedStringOrNumberField(target: JsonObject, objectKey: string, key: string, value: string, defaultValue = "") {
+  const child = cloneObject(objectValue(target[objectKey]));
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === defaultValue) {
+    delete child[key];
+  } else if (/^\d+$/.test(trimmed)) {
+    child[key] = Number(trimmed);
+  } else {
+    child[key] = trimmed;
+  }
+  setNestedObject(target, objectKey, child);
+}
+
+function applyNestedBoolField(target: JsonObject, objectKey: string, key: string, value: boolean, defaultValue: boolean) {
+  const child = cloneObject(objectValue(target[objectKey]));
+  if (value === defaultValue) {
+    delete child[key];
+  } else {
+    child[key] = value;
+  }
+  setNestedObject(target, objectKey, child);
+}
+
+function setNestedObject(target: JsonObject, key: string, value: JsonObject) {
+  const pruned = pruneEmpty(value);
+  if (Object.keys(pruned).length > 0) target[key] = pruned;
+  else delete target[key];
 }
 
 function validateAddressPort(issues: OutboundValidationIssue[], state: OutboundEditorState, label: string) {

@@ -142,6 +142,104 @@ describe("inboundConfigurator", () => {
     expect(state.streamSettings.text).toBe("{invalid");
   });
 
+  it("round-trips structured hysteria2 tuning settings", () => {
+    const defaultState = createInboundEditorState(null);
+    expect(defaultState.hysteria2CongestionMode).toBe("standard");
+    expect(defaultState.hysteria2MinAckRate).toBe("0.8");
+    expect(defaultState.hysteria2QuicEndpoints).toBe("1");
+    expect(defaultState.hysteria2DatagramPolicy).toBe("standard");
+    expect(defaultState.hysteria2FecMode).toBe("off");
+
+    const state = syncAfterStructuredChange({
+      ...createInboundEditorState(),
+      protocol: "hysteria2",
+      hysteria2Auth: "shared-secret",
+      hysteria2CongestionMode: "brutal-compatible",
+      hysteria2MinAckRate: "0.7",
+      hysteria2MaxQueueDelayMs: "120",
+      hysteria2PacingGain: "1.4",
+      hysteria2LossCompensation: false,
+      hysteria2QuicReusePort: true,
+      hysteria2QuicEndpoints: "cpu",
+      hysteria2QuicRecvBufferBytes: "16777216",
+      hysteria2QuicSendBufferBytes: "16777216",
+      hysteria2DatagramEnabled: true,
+      hysteria2DatagramUdpOverDatagram: false,
+      hysteria2DatagramPolicy: "h2-plus",
+      hysteria2FecMode: "auto",
+      hysteria2FecMaxOverheadPercent: "20"
+    });
+    const settings = parseObject(buildInboundInput(state).settings);
+
+    expect(settings.auth).toBe("shared-secret");
+    expect(settings.congestion).toMatchObject({
+      mode: "brutal-compatible",
+      minAckRate: 0.7,
+      maxQueueDelayMs: 120,
+      pacingGain: 1.4,
+      lossCompensation: false
+    });
+    expect(settings.quic).toMatchObject({
+      reusePort: true,
+      endpoints: "cpu",
+      recvBufferBytes: 16777216,
+      sendBufferBytes: 16777216
+    });
+    expect(settings.datagram).toMatchObject({
+      enabled: true,
+      udpOverDatagram: false,
+      policy: "h2-plus"
+    });
+    expect(settings.fec).toMatchObject({
+      mode: "auto",
+      maxOverheadPercent: 20
+    });
+  });
+
+  it("serializes simple hysteria2 performance modes like the save button output", () => {
+    const balanced = parseObject(
+      buildInboundInput(
+        syncAfterStructuredChange({
+          ...createInboundEditorState(),
+          protocol: "hysteria2",
+          hysteria2Auth: "shared-secret",
+          hysteria2CongestionMode: "standard"
+        })
+      ).settings
+    );
+    expect(balanced).toEqual({ auth: "shared-secret" });
+
+    const throughput = parseObject(
+      buildInboundInput(
+        syncAfterStructuredChange({
+          ...createInboundEditorState(),
+          protocol: "hysteria2",
+          hysteria2Auth: "shared-secret",
+          hysteria2CongestionMode: "brutal-compatible"
+        })
+      ).settings
+    );
+    expect(throughput).toEqual({
+      auth: "shared-secret",
+      congestion: { mode: "brutal-compatible" }
+    });
+
+    const lowLatency = parseObject(
+      buildInboundInput(
+        syncAfterStructuredChange({
+          ...createInboundEditorState(),
+          protocol: "hysteria2",
+          hysteria2Auth: "shared-secret",
+          hysteria2CongestionMode: "badnet-low-latency"
+        })
+      ).settings
+    );
+    expect(lowLatency).toEqual({
+      auth: "shared-secret",
+      congestion: { mode: "badnet-low-latency" }
+    });
+  });
+
   it("validates core inbound compatibility rules", () => {
     const validIssues = validateInboundState(createInboundEditorState());
     const invalidIssues = validateInboundState({
