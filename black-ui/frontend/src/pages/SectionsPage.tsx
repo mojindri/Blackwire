@@ -1,5 +1,5 @@
 import { Plus, Save, Trash2, Wand2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "../components/atoms/Badge";
 import { Button } from "../components/atoms/Button";
 import { Input, Select, Textarea } from "../components/atoms/Input";
@@ -44,6 +44,7 @@ export function SectionsPage({
 }) {
   const [selectedName, setSelectedName] = useState("");
   const [editor, setEditor] = useState<AdvancedConfigEditorState | null>(null);
+  const editorRef = useRef(editor);
   const notes = new Map((capabilities?.config ?? []).map((item) => [item.key, item]));
   const selectedSection = sections.find((section) => section.name === selectedName) ?? null;
 
@@ -55,18 +56,41 @@ export function SectionsPage({
   }, [sections, selectedName]);
 
   useEffect(() => {
-    setEditor(createSectionEditorState(selectedSection));
+    const next = createSectionEditorState(selectedSection);
+    editorRef.current = next;
+    setEditor(next);
   }, [selectedSection]);
 
   const validationIssues = useMemo(() => (editor ? validateSectionState(editor) : []), [editor]);
   const adaptiveTemplateAvailable = selectedName === "routing" && outbounds.filter((outbound) => outbound.enabled).length >= 2;
   const saveDisabled = busy || !editor || validationIssues.length > 0;
 
-  const updateEditor = (next: AdvancedConfigEditorState) => setEditor(syncSectionState(next));
+  const updateEditor = (next: AdvancedConfigEditorState) => {
+    const synced = syncSectionState(next);
+    editorRef.current = synced;
+    setEditor(synced);
+  };
+
+  const updateEditorWith = (updater: (current: AdvancedConfigEditorState) => AdvancedConfigEditorState) => {
+    const current = editorRef.current;
+    if (!current) return;
+    const next = updater(current);
+    editorRef.current = next;
+    setEditor(next);
+  };
+
+  const updateSyncedEditorWith = (updater: (current: AdvancedConfigEditorState) => AdvancedConfigEditorState) => {
+    const current = editorRef.current;
+    if (!current) return;
+    const next = syncSectionState(updater(current));
+    editorRef.current = next;
+    setEditor(next);
+  };
 
   const save = () => {
-    if (!editor || saveDisabled) return;
-    onSave(editor.name, editor.enabled, buildSectionValue(editor));
+    const latest = editorRef.current;
+    if (!latest || busy || validateSectionState(latest).length > 0) return;
+    onSave(latest.name, latest.enabled, buildSectionValue(latest));
   };
 
   return (
@@ -110,7 +134,7 @@ export function SectionsPage({
                   </p>
                 </div>
                 {editor.name === "routing" ? (
-                  <Button variant="secondary" icon={<Wand2 size={16} />} onClick={() => setEditor((current) => (current ? applyAdaptiveRoutingTemplate(current, outbounds) : current))} disabled={busy || !adaptiveTemplateAvailable}>
+                  <Button variant="secondary" icon={<Wand2 size={16} />} onClick={() => updateEditorWith((current) => applyAdaptiveRoutingTemplate(current, outbounds))} disabled={busy || !adaptiveTemplateAvailable}>
                     Adaptive Template
                   </Button>
                 ) : null}
@@ -122,7 +146,7 @@ export function SectionsPage({
                     <strong>{editor.name}</strong>
                     <span>{isStructuredSection(editor.name) ? "Structured editor with advanced fallback" : "Raw JSON editor"}</span>
                   </div>
-                  <Switch checked={editor.enabled} onChange={(enabled) => setEditor((current) => (current ? syncSectionState({ ...current, enabled }) : current))} label={editor.enabled ? "Enabled" : "Disabled"} />
+                  <Switch checked={editor.enabled} onChange={(enabled) => updateSyncedEditorWith((current) => ({ ...current, enabled }))} label={editor.enabled ? "Enabled" : "Disabled"} />
                 </div>
                 <div className="summary-badges">
                   <span className="summary-chip">{isStructuredSection(editor.name) ? "Structured" : "Raw JSON"}</span>
@@ -136,7 +160,7 @@ export function SectionsPage({
                 <section className="drawer-card">
                   <Field label="Section JSON">
                     <div className="advanced-slice">
-                      <Textarea rows={18} value={editor.rawText} onChange={(e) => setEditor((current) => (current ? replaceSectionJson(current, e.target.value) : current))} />
+                      <Textarea rows={18} value={editor.rawText} onChange={(e) => updateEditorWith((current) => replaceSectionJson(current, e.target.value))} />
                       {editor.rawError ? <div className="field-error">{editor.rawError}</div> : null}
                     </div>
                   </Field>
@@ -150,14 +174,14 @@ export function SectionsPage({
                       <h3>Advanced JSON</h3>
                       <p>Unknown keys are preserved. Use this only for section fields that do not have a dedicated control yet.</p>
                     </div>
-                    <Button variant="ghost" onClick={() => setEditor((current) => (current ? { ...current, advancedOpen: !current.advancedOpen } : current))}>
+                    <Button variant="ghost" onClick={() => updateEditorWith((current) => ({ ...current, advancedOpen: !current.advancedOpen }))}>
                       {editor.advancedOpen ? "Hide JSON" : "Show JSON"}
                     </Button>
                   </div>
                   {editor.advancedOpen ? (
                     <Field label="Section JSON">
                       <div className="advanced-slice">
-                        <Textarea rows={14} value={editor.rawText} onChange={(e) => setEditor((current) => (current ? replaceSectionJson(current, e.target.value) : current))} />
+                        <Textarea rows={14} value={editor.rawText} onChange={(e) => updateEditorWith((current) => replaceSectionJson(current, e.target.value))} />
                         {editor.rawError ? <div className="field-error">{editor.rawError}</div> : null}
                       </div>
                     </Field>

@@ -1,5 +1,5 @@
 import { AlertCircle, KeyRound, Save, Terminal, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import type { CapabilityMap, Inbound, InboundInput } from "../../lib/types";
 import {
@@ -78,6 +78,7 @@ export function InboundDrawer({
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>("basic");
   const [state, setState] = useState<InboundEditorState>(() => createInboundEditorState(editing));
+  const stateRef = useRef(state);
   const [realityImportMessage, setRealityImportMessage] = useState("");
   const [realityImportBusy, setRealityImportBusy] = useState(false);
   const [realityGenerateBusy, setRealityGenerateBusy] = useState(false);
@@ -87,7 +88,9 @@ export function InboundDrawer({
   const [tlsSelfSignedMessage, setTlsSelfSignedMessage] = useState("");
 
   useEffect(() => {
-    setState(createInboundEditorState(editing));
+    const next = createInboundEditorState(editing);
+    stateRef.current = next;
+    setState(next);
     setRealityImportMessage("");
     setRealityGenerateBusy(false);
     setTlsSelfSignedOpen(false);
@@ -156,19 +159,24 @@ export function InboundDrawer({
   const hysteria2CustomTuning = state.protocol === "hysteria2" && hysteria2HasCustomTuning(state);
 
   const updateStructured = (patch: Partial<InboundEditorState>) => {
-    setState((current) => syncAfterStructuredChange({ ...current, ...patch }));
+    const next = syncAfterStructuredChange({ ...stateRef.current, ...patch });
+    stateRef.current = next;
+    setState(next);
   };
 
   const updateSlice = (key: SliceKey, text: string) => {
-    setState((current) => replaceSlice(current, key, text));
+    const next = replaceSlice(stateRef.current, key, text);
+    stateRef.current = next;
+    setState(next);
   };
 
   const updateHysteria2PerformanceMode = (value: string) => {
     if (value === "custom") {
+      const current = stateRef.current;
       updateStructured({
-        hysteria2CongestionMode: hysteria2SimpleModes.has(state.hysteria2CongestionMode)
+        hysteria2CongestionMode: hysteria2SimpleModes.has(current.hysteria2CongestionMode)
           ? "badnet-throughput"
-          : state.hysteria2CongestionMode
+          : current.hysteria2CongestionMode
       });
       return;
     }
@@ -191,7 +199,10 @@ export function InboundDrawer({
   };
 
   const submit = () => {
-    const input = buildInboundInput(state);
+    const latest = stateRef.current;
+    const latestJsonErrors = [latest.settings, latest.streamSettings, latest.sniffing, latest.limits].filter((slice) => slice.error);
+    if (busy || latestJsonErrors.length > 0 || validateInboundState(latest).length > 0) return;
+    const input = buildInboundInput(latest);
     if (editing) {
       onUpdate(editing.id, input);
     } else {
@@ -205,17 +216,18 @@ export function InboundDrawer({
     setRealityImportMessage("");
     try {
       const values = await api.realityClientValues();
-      const selected = values.find((item) => item.tag === state.tag) ?? values[0];
+      const current = stateRef.current;
+      const selected = values.find((item) => item.tag === current.tag) ?? values[0];
       if (!selected) {
         setRealityImportMessage("No server-generated REALITY values found.");
         return;
       }
       updateStructured({
-        realityPrivateKey: selected.privateKey ?? state.realityPrivateKey,
+        realityPrivateKey: selected.privateKey ?? current.realityPrivateKey,
         realityPublicKey: selected.publicKey,
         realityShortId: selected.shortId,
         realityServerName: selected.serverName,
-        realityDest: selected.dest ?? state.realityDest,
+        realityDest: selected.dest ?? current.realityDest,
         security: "reality",
         network: "tcp"
       });
@@ -249,7 +261,7 @@ export function InboundDrawer({
   };
 
   const openTlsSelfSignedDialog = () => {
-    setTlsSelfSigned(defaultTlsSelfSignedValues(state.tlsServerName));
+    setTlsSelfSigned(defaultTlsSelfSignedValues(stateRef.current.tlsServerName));
     setTlsSelfSignedMessage("");
     setTlsSelfSignedOpen(true);
   };

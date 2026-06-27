@@ -1,5 +1,5 @@
 import { AlertCircle, Save, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CapabilityMap, Outbound, OutboundInput } from "../../lib/types";
 import {
   buildOutboundInput,
@@ -67,9 +67,12 @@ export function OutboundDrawer({
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>("basic");
   const [state, setState] = useState<OutboundEditorState>(() => createOutboundEditorState(editing));
+  const stateRef = useRef(state);
 
   useEffect(() => {
-    setState(createOutboundEditorState(editing));
+    const next = createOutboundEditorState(editing);
+    stateRef.current = next;
+    setState(next);
     setActiveTab("basic");
   }, [editing]);
 
@@ -129,19 +132,24 @@ export function OutboundDrawer({
   const hysteria2CustomTuning = state.protocol === "hysteria2" && hysteria2HasCustomTuning(state);
 
   const updateStructured = (patch: Partial<OutboundEditorState>) => {
-    setState((current) => syncOutboundAfterStructuredChange({ ...current, ...patch }));
+    const next = syncOutboundAfterStructuredChange({ ...stateRef.current, ...patch });
+    stateRef.current = next;
+    setState(next);
   };
 
   const updateSlice = (key: OutboundSliceKey, text: string) => {
-    setState((current) => replaceOutboundSlice(current, key, text));
+    const next = replaceOutboundSlice(stateRef.current, key, text);
+    stateRef.current = next;
+    setState(next);
   };
 
   const updateHysteria2PerformanceMode = (value: string) => {
     if (value === "custom") {
+      const current = stateRef.current;
       updateStructured({
-        hysteria2CongestionMode: hysteria2SimpleModes.has(state.hysteria2CongestionMode)
+        hysteria2CongestionMode: hysteria2SimpleModes.has(current.hysteria2CongestionMode)
           ? "badnet-throughput"
-          : state.hysteria2CongestionMode
+          : current.hysteria2CongestionMode
       });
       return;
     }
@@ -165,7 +173,10 @@ export function OutboundDrawer({
   };
 
   const submit = () => {
-    const input = buildOutboundInput(state);
+    const latest = stateRef.current;
+    const latestJsonErrors = [latest.settings, latest.streamSettings].filter((slice) => slice.error);
+    if (busy || latestJsonErrors.length > 0 || validateOutboundState(latest).length > 0) return;
+    const input = buildOutboundInput(latest);
     if (editing) onUpdate(editing.id, input);
     else onCreate(input);
     onClose();
