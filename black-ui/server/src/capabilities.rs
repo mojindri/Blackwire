@@ -54,8 +54,8 @@ pub fn blackwire_capabilities() -> CapabilityMap {
             item(
                 "tuic",
                 "TUIC v5",
-                "experimental",
-                "QUIC v5 TCP proxy and native UDP relay; fragmented UDP is client-sensitive",
+                "supported",
+                "QUIC v5 TCP proxy and native UDP relay; UDP behavior depends on client and network path",
             ),
         ],
         transports: vec![
@@ -212,7 +212,7 @@ mod tests {
     use super::blackwire_capabilities;
 
     #[test]
-    fn tuic_v5_is_reported_as_experimental() {
+    fn tuic_v5_is_reported_as_supported() {
         let capabilities = blackwire_capabilities();
         let tuic = capabilities
             .protocols
@@ -220,8 +220,9 @@ mod tests {
             .find(|item| item.key == "tuic")
             .expect("TUIC v5 capability should be visible to Black UI");
 
-        assert_eq!(tuic.status, "experimental");
-        assert!(tuic.notes.contains("fragmented UDP"));
+        assert_eq!(tuic.status, "supported");
+        assert!(tuic.notes.contains("native UDP relay"));
+        assert!(tuic.notes.contains("network path"));
     }
 
     #[test]

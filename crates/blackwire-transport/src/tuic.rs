@@ -58,6 +58,23 @@ const MAX_UDP_SESSIONS_PER_CONN: usize = 512;
 const MAX_UDP_WORKERS_PER_CONN: usize = 256;
 const MAX_PACKET_SIZE: usize = 64 * 1024;
 
+const TUIC_UDP_RX: &str = "rx";
+const TUIC_UDP_TX: &str = "tx";
+const TUIC_UDP_REPLY_RX: &str = "reply_rx";
+const TUIC_UDP_DECODE_FAILED: &str = "decode_failed";
+const TUIC_UDP_WORKER_LIMIT_DROP: &str = "worker_limit_drop";
+const TUIC_UDP_SESSIONS_EVICTED: &str = "sessions_evicted";
+const TUIC_UDP_SESSION_CREATED: &str = "session_created";
+const TUIC_UDP_SESSION_REUSED: &str = "session_reused";
+const TUIC_UDP_RESOLVE_FAILED: &str = "resolve_failed";
+const TUIC_UDP_SOCKET_BIND_FAILED: &str = "socket_bind_failed";
+const TUIC_UDP_SEND_FAILED: &str = "send_failed";
+const TUIC_UDP_REPLY_SEND_FAILED: &str = "reply_send_failed";
+const TUIC_UDP_REPLY_ENCODE_FAILED: &str = "reply_encode_failed";
+const TUIC_UDP_RECV_FAILED: &str = "recv_failed";
+const TUIC_UDP_RECV_TIMEOUT: &str = "recv_timeout";
+const TUIC_UDP_READ_CLOSED: &str = "read_closed";
+
 /// TUIC v5 user credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TuicUser {
@@ -745,26 +762,56 @@ struct UdpSession {
 
 type UdpSessionKey = (u16, bool);
 
+fn record_tuic_udp_event(event: &'static str) {
+    metrics::counter!("blackwire_tuic_udp_events_total", "event" => event).increment(1);
+}
+
+fn record_tuic_udp_sessions(active: usize) {
+    metrics::gauge!("blackwire_tuic_udp_sessions_active").set(active as f64);
+}
+
+fn cleanup_stale_udp_sessions(
+    sessions: &DashMap<UdpSessionKey, UdpSession>,
+    now: Instant,
+) -> usize {
+    let before = sessions.len();
+    let cutoff = now - UDP_SESSION_IDLE;
+    sessions.retain(|_, session| session.last_used > cutoff);
+    before.saturating_sub(sessions.len())
+}
+
 async fn serve_udp_datagrams(conn: Connection, user: Option<Arc<str>>, inbound_tag: Arc<str>) {
     let sessions: Arc<DashMap<UdpSessionKey, UdpSession>> = Arc::new(DashMap::new());
     let workers = Arc::new(Semaphore::new(MAX_UDP_WORKERS_PER_CONN));
     loop {
         let raw = match conn.read_datagram().await {
-            Ok(raw) => raw,
-            Err(_) => break,
+            Ok(raw) => {
+                record_tuic_udp_event(TUIC_UDP_RX);
+                raw
+            }
+            Err(_) => {
+                record_tuic_udp_event(TUIC_UDP_READ_CLOSED);
+                break;
+            }
         };
         let packet = match decode_udp_packet(raw) {
             Ok(packet) => packet,
             Err(e) => {
-                warn!("TUIC UDP decode failed: {e}");
+                record_tuic_udp_event(TUIC_UDP_DECODE_FAILED);
+                debug!("TUIC UDP decode failed: {e}");
                 continue;
             }
         };
         if sessions.len() > MAX_UDP_SESSIONS_PER_CONN {
-            let cutoff = Instant::now() - UDP_SESSION_IDLE;
-            sessions.retain(|_, session| session.last_used > cutoff);
+            let removed = cleanup_stale_udp_sessions(&sessions, Instant::now());
+            if removed > 0 {
+                metrics::counter!("blackwire_tuic_udp_events_total", "event" => TUIC_UDP_SESSIONS_EVICTED)
+                    .increment(removed as u64);
+                record_tuic_udp_sessions(sessions.len());
+            }
         }
         let Ok(permit) = Arc::clone(&workers).try_acquire_owned() else {
+            record_tuic_udp_event(TUIC_UDP_WORKER_LIMIT_DROP);
             warn!("TUIC UDP worker limit reached; dropping datagram");
             continue;
         };
@@ -789,6 +836,7 @@ async fn handle_udp_packet(
     let dest = match resolve_address(&packet.addr).await {
         Ok(dest) => dest,
         Err(e) => {
+            record_tuic_udp_event(TUIC_UDP_RESOLVE_FAILED);
             warn!("TUIC UDP destination resolve failed: {e}");
             return;
         }
@@ -796,6 +844,7 @@ async fn handle_udp_packet(
     let session_key = (packet.assoc_id, dest.is_ipv6());
     let socket = if let Some(mut session) = sessions.get_mut(&session_key) {
         session.last_used = Instant::now();
+        record_tuic_udp_event(TUIC_UDP_SESSION_REUSED);
         Arc::clone(&session.socket)
     } else {
         let bind_addr = if dest.is_ipv6() {
@@ -806,6 +855,7 @@ async fn handle_udp_packet(
         match UdpSocket::bind(bind_addr).await {
             Ok(socket) => {
                 let socket = Arc::new(socket);
+                record_tuic_udp_event(TUIC_UDP_SESSION_CREATED);
                 sessions.insert(
                     session_key,
                     UdpSession {
@@ -813,9 +863,11 @@ async fn handle_udp_packet(
                         last_used: Instant::now(),
                     },
                 );
+                record_tuic_udp_sessions(sessions.len());
                 socket
             }
             Err(e) => {
+                record_tuic_udp_event(TUIC_UDP_SOCKET_BIND_FAILED);
                 warn!("TUIC UDP socket bind failed: {e}");
                 return;
             }
@@ -828,9 +880,11 @@ async fn handle_udp_packet(
     )
     .await;
     if let Err(e) = socket.send_to(&packet.data, dest).await {
+        record_tuic_udp_event(TUIC_UDP_SEND_FAILED);
         warn!("TUIC UDP send failed: {e}");
         return;
     }
+    record_tuic_udp_event(TUIC_UDP_TX);
     runtime_stats::record_relay_traffic(
         inbound_tag.as_ref(),
         user.as_deref(),
@@ -840,6 +894,7 @@ async fn handle_udp_packet(
     let mut buf = vec![0u8; MAX_PACKET_SIZE];
     match timeout(UDP_REPLY_TIMEOUT, socket.recv_from(&mut buf)).await {
         Ok(Ok((n, src))) => {
+            record_tuic_udp_event(TUIC_UDP_REPLY_RX);
             let reply = TuicUdpPacket {
                 assoc_id: packet.assoc_id,
                 pkt_id: packet.pkt_id,
@@ -855,6 +910,7 @@ async fn handle_udp_packet(
                     )
                     .await;
                     if let Err(e) = conn.send_datagram(raw) {
+                        record_tuic_udp_event(TUIC_UDP_REPLY_SEND_FAILED);
                         warn!("TUIC UDP reply send_datagram failed: {e}");
                     } else {
                         runtime_stats::record_relay_traffic(
@@ -865,11 +921,20 @@ async fn handle_udp_packet(
                         );
                     }
                 }
-                Err(e) => warn!("TUIC UDP reply encode failed: {e}"),
+                Err(e) => {
+                    record_tuic_udp_event(TUIC_UDP_REPLY_ENCODE_FAILED);
+                    warn!("TUIC UDP reply encode failed: {e}");
+                }
             }
         }
-        Ok(Err(e)) => warn!("TUIC UDP recv failed: {e}"),
-        Err(_) => debug!("TUIC UDP recv timed out"),
+        Ok(Err(e)) => {
+            record_tuic_udp_event(TUIC_UDP_RECV_FAILED);
+            warn!("TUIC UDP recv failed: {e}");
+        }
+        Err(_) => {
+            record_tuic_udp_event(TUIC_UDP_RECV_TIMEOUT);
+            debug!("TUIC UDP recv timed out");
+        }
     }
 }
 
@@ -1009,5 +1074,32 @@ mod tests {
 
         assert_eq!(prefer_ipv4([v6, v4]), Some(v4));
         assert_eq!(prefer_ipv4([v6]), Some(v6));
+    }
+
+    #[tokio::test]
+    async fn udp_cleanup_removes_only_idle_sessions() {
+        let sessions = DashMap::new();
+        let now = Instant::now();
+        let fresh_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let stale_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+
+        sessions.insert(
+            (1, false),
+            UdpSession {
+                socket: fresh_socket,
+                last_used: now,
+            },
+        );
+        sessions.insert(
+            (2, false),
+            UdpSession {
+                socket: stale_socket,
+                last_used: now - UDP_SESSION_IDLE - Duration::from_millis(1),
+            },
+        );
+
+        assert_eq!(cleanup_stale_udp_sessions(&sessions, now), 1);
+        assert!(sessions.contains_key(&(1, false)));
+        assert!(!sessions.contains_key(&(2, false)));
     }
 }
