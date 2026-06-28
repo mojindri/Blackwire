@@ -25,7 +25,8 @@ use tokio::sync::Semaphore;
 
 use crate::net::listen_socket_addr;
 
-const HYSTERIA2_UNTHROTTLED_WINDOW_MBPS: u64 = 10_000;
+const HYSTERIA2_DEFAULT_STABLE_MBPS: u64 = 100;
+const HYSTERIA2_DEFAULT_THROUGHPUT_MBPS: u64 = 300;
 
 /// Build and launch a Hysteria2 server inbound, returning a join handle for
 /// the server task.
@@ -105,9 +106,9 @@ fn parse_server_config(
         .clone();
     auth.replace(password.clone(), user);
 
-    let up_mbps = HYSTERIA2_UNTHROTTLED_WINDOW_MBPS;
-    let down_mbps = HYSTERIA2_UNTHROTTLED_WINDOW_MBPS;
-    let congestion = parse_congestion_config(s, up_mbps, down_mbps)?;
+    let congestion = parse_congestion_config(s)?;
+    let up_mbps = congestion.up_mbps;
+    let down_mbps = congestion.down_mbps;
 
     // Read TLS cert+key from stream_settings.tlsSettings.
     let stream = cfg.stream_settings.as_ref().ok_or_else(|| {
@@ -200,10 +201,10 @@ fn parse_client_config(
 
     let password = s["auth"].as_str().unwrap_or_default().to_string();
 
-    let up_mbps = HYSTERIA2_UNTHROTTLED_WINDOW_MBPS;
-    let down_mbps = HYSTERIA2_UNTHROTTLED_WINDOW_MBPS;
     let skip_cert_verify = s["skipCertVerify"].as_bool().unwrap_or(false);
-    let congestion = parse_congestion_config(s, up_mbps, down_mbps)?;
+    let congestion = parse_congestion_config(s)?;
+    let up_mbps = congestion.up_mbps;
+    let down_mbps = congestion.down_mbps;
     let endpoint_shards = s["endpointShards"]
         .as_u64()
         .map(|v| v.clamp(1, 64) as usize)
@@ -457,11 +458,7 @@ fn map_fec_mode(mode: ConfigFecMode) -> blackwire_transport::FecMode {
     }
 }
 
-fn parse_congestion_config(
-    settings: &serde_json::Value,
-    up_mbps: u64,
-    down_mbps: u64,
-) -> Result<CongestionConfig> {
+fn parse_congestion_config(settings: &serde_json::Value) -> Result<CongestionConfig> {
     let congestion = settings
         .get("congestion")
         .unwrap_or(&serde_json::Value::Null);
@@ -471,6 +468,14 @@ fn parse_congestion_config(
         .unwrap_or("standard")
         .parse::<CongestionMode>()
         .map_err(anyhow::Error::msg)?;
+    let default_mbps = match mode {
+        CongestionMode::BrutalCompatible | CongestionMode::BadNetThroughput => {
+            HYSTERIA2_DEFAULT_THROUGHPUT_MBPS
+        }
+        _ => HYSTERIA2_DEFAULT_STABLE_MBPS,
+    };
+    let up_mbps = parse_mbps_field(settings, "upMbps", "up_mbps").unwrap_or(default_mbps);
+    let down_mbps = parse_mbps_field(settings, "downMbps", "down_mbps").unwrap_or(default_mbps);
     let min_ack_rate = congestion
         .get("minAckRate")
         .and_then(|v| v.as_f64())
@@ -502,6 +507,18 @@ fn parse_congestion_config(
     })
 }
 
+fn parse_mbps_field(settings: &serde_json::Value, camel: &str, snake: &str) -> Option<u64> {
+    settings
+        .get(camel)
+        .or_else(|| settings.get(snake))
+        .and_then(|value| match value {
+            serde_json::Value::Number(n) => n.as_u64(),
+            serde_json::Value::String(s) => s.trim().parse::<u64>().ok(),
+            _ => None,
+        })
+        .map(|value| value.clamp(1, 10_000))
+}
+
 fn require_field<'a>(value: &'a str, field: &str) -> Result<&'a str> {
     if value.is_empty() {
         anyhow::bail!("{field} must not be empty");
@@ -523,7 +540,9 @@ mod tests {
     use blackwire_config::schema::DatagramConfig;
     use serde_json::json;
 
-    use super::{datagram_enabled, hysteria2_user_label, require_hysteria2_auth};
+    use super::{
+        datagram_enabled, hysteria2_user_label, parse_congestion_config, require_hysteria2_auth,
+    };
 
     #[test]
     fn hysteria2_user_label_matches_auth_client() {
@@ -582,6 +601,41 @@ mod tests {
             require_hysteria2_auth(&settings, "h2-public").unwrap(),
             "secret"
         );
+    }
+
+    #[test]
+    fn hysteria2_standard_defaults_to_stable_windows_without_fixed_rate_auth() {
+        let cfg = parse_congestion_config(&json!({})).unwrap();
+
+        assert_eq!(cfg.mode, blackwire_transport::CongestionMode::StandardQuic);
+        assert_eq!(cfg.up_mbps, 100);
+        assert_eq!(cfg.down_mbps, 100);
+        assert_eq!(cfg.auth_rx_bps(), 0);
+    }
+
+    #[test]
+    fn hysteria2_throughput_mode_uses_explicit_or_throughput_defaults() {
+        let cfg = parse_congestion_config(&json!({
+            "congestion": { "mode": "brutal-compatible" }
+        }))
+        .unwrap();
+
+        assert_eq!(cfg.up_mbps, 300);
+        assert_eq!(cfg.down_mbps, 300);
+        assert!(cfg.auth_rx_bps() > 0);
+    }
+
+    #[test]
+    fn hysteria2_bandwidth_fields_are_honored_and_clamped() {
+        let cfg = parse_congestion_config(&json!({
+            "upMbps": "250",
+            "down_mbps": 50_000,
+            "congestion": { "mode": "badnet-throughput" }
+        }))
+        .unwrap();
+
+        assert_eq!(cfg.up_mbps, 250);
+        assert_eq!(cfg.down_mbps, 10_000);
     }
 
     #[test]

@@ -135,6 +135,9 @@ impl CongestionConfig {
 
     /// Hysteria2 auth `hysteria-cc-rx` value for server receive direction.
     pub fn auth_rx_bps(&self) -> u64 {
+        if matches!(self.mode, CongestionMode::StandardQuic) {
+            return 0;
+        }
         self.fixed_rate_bps_for(CongestionDirection::ClientUpload)
             .unwrap_or(0)
     }
@@ -142,6 +145,12 @@ impl CongestionConfig {
     /// Returns the QUIC flow-control window profile appropriate for this congestion mode.
     pub fn window_profile(&self) -> WindowProfile {
         match self.mode {
+            CongestionMode::StandardQuic => WindowProfile {
+                bdp_rtt: Duration::from_millis(500),
+                min_window_bytes: 4 * 1024 * 1024,
+                max_window_bytes: 32 * 1024 * 1024,
+                conn_window_multiplier: 3,
+            },
             CongestionMode::BadNetLowLatency => WindowProfile {
                 bdp_rtt: Duration::from_millis(150),
                 min_window_bytes: 1024 * 1024,

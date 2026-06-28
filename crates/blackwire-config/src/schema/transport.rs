@@ -341,9 +341,10 @@ pub struct SniffingConfig {
 
 /// Hysteria2 protocol configuration.
 ///
-/// Hysteria2 uses QUIC with the Brutal congestion controller to achieve high
-/// throughput on high-latency, lossy links. This struct is used both for
-/// server inbound and client outbound configuration.
+/// Hysteria2 uses QUIC/HTTP3. Standard QUIC congestion is the safe default;
+/// Brutal/bad-network modes are available for deployments that explicitly opt
+/// into more aggressive pacing. This struct is used both for server inbound and
+/// client outbound configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Hysteria2Config {
     /// Authentication password (both client and server must use the same value).
@@ -352,12 +353,15 @@ pub struct Hysteria2Config {
 
     /// Target upstream bandwidth in Mbps (client → server direction).
     ///
-    /// Used to tune the Brutal CC window size. Higher values allow more in-flight
-    /// bytes on high-bandwidth links.
+    /// Used to size QUIC flow-control windows and, for non-standard congestion
+    /// modes, pacing targets. Standard mode does not advertise a fixed Hysteria2
+    /// auth bandwidth cap.
     #[serde(default = "default_mbps", rename = "upMbps")]
     pub up_mbps: u64,
 
     /// Target downstream bandwidth in Mbps (server → client direction).
+    ///
+    /// Used to size QUIC flow-control windows and non-standard pacing targets.
     #[serde(default = "default_mbps", rename = "downMbps")]
     pub down_mbps: u64,
 
@@ -374,8 +378,8 @@ pub struct Hysteria2Config {
     #[serde(default, rename = "skipCertVerify")]
     pub skip_cert_verify: bool,
 
-    /// Optional bad-network congestion policy. Omitted configs keep the
-    /// existing Hysteria-compatible behavior.
+    /// Optional bad-network congestion policy. Omitted configs use standard
+    /// QUIC congestion for safer client compatibility.
     #[serde(default)]
     pub congestion: Hysteria2CongestionConfig,
 

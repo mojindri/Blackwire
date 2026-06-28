@@ -1035,6 +1035,7 @@ mod tests {
     #[test]
     fn standard_quic_keeps_pacing_disabled_for_control_rows() {
         let cfg = congestion(CongestionMode::StandardQuic);
+        assert_eq!(cfg.auth_rx_bps(), 0);
         assert!(pacer_for_config(&cfg, CongestionDirection::ClientUpload, "test").is_none());
     }
 
@@ -1080,9 +1081,11 @@ mod tests {
 
     #[test]
     fn badnet_low_latency_window_profile_is_smaller_than_throughput() {
+        let standard = congestion(CongestionMode::StandardQuic).window_profile();
         let low = congestion(CongestionMode::BadNetLowLatency).window_profile();
         let throughput = congestion(CongestionMode::BadNetThroughput).window_profile();
 
+        assert_eq!(standard.max_window_bytes, 32 * 1024 * 1024);
         assert_eq!(low.bdp_rtt, Duration::from_millis(150));
         assert_eq!(low.min_window_bytes, 1024 * 1024);
         assert_eq!(low.max_window_bytes, 32 * 1024 * 1024);
