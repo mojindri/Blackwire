@@ -291,8 +291,9 @@ fn parse_endpoint_count(value: &serde_json::Value) -> Option<usize> {
 }
 
 fn datagram_enabled(settings: &serde_json::Value, datagram: Option<&DatagramConfig>) -> bool {
-    let mut enabled = datagram.cloned().unwrap_or_default().enabled
-        && datagram.cloned().unwrap_or_default().udp_over_datagram;
+    let mut enabled = datagram
+        .map(|cfg| cfg.enabled && cfg.udp_over_datagram)
+        .unwrap_or(false);
     if let Some(overrides) = settings.get("datagram") {
         if let Some(value) = overrides
             .get("enabled")
@@ -519,9 +520,10 @@ fn require_hysteria2_auth<'a>(settings: &'a serde_json::Value, tag: &str) -> Res
 
 #[cfg(test)]
 mod tests {
+    use blackwire_config::schema::DatagramConfig;
     use serde_json::json;
 
-    use super::{hysteria2_user_label, require_hysteria2_auth};
+    use super::{datagram_enabled, hysteria2_user_label, require_hysteria2_auth};
 
     #[test]
     fn hysteria2_user_label_matches_auth_client() {
@@ -580,5 +582,29 @@ mod tests {
             require_hysteria2_auth(&settings, "h2-public").unwrap(),
             "secret"
         );
+    }
+
+    #[test]
+    fn datagram_defaults_to_disabled_without_explicit_policy() {
+        assert!(!datagram_enabled(&json!({}), None));
+    }
+
+    #[test]
+    fn datagram_can_be_enabled_explicitly_per_inbound() {
+        assert!(datagram_enabled(
+            &json!({ "datagram": { "enabled": true, "udpOverDatagram": true } }),
+            None
+        ));
+    }
+
+    #[test]
+    fn datagram_respects_top_level_policy_when_present() {
+        let cfg = DatagramConfig {
+            enabled: true,
+            udp_over_datagram: true,
+            ..DatagramConfig::default()
+        };
+
+        assert!(datagram_enabled(&json!({}), Some(&cfg)));
     }
 }
