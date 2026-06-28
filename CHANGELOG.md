@@ -8,7 +8,7 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
-## 0.1.37 - 2026-06-28
+## 0.1.38 - 2026-06-28
 
 ### Added
 

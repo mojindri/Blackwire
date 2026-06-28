@@ -36,11 +36,17 @@ const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(250);
 /// and TCP uses Happy Eyeballs when both IPv4 and IPv6 are available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FreedomIpStrategy {
+    /// Use all resolved addresses and race IPv6/IPv4 with Happy Eyeballs.
     Auto,
+    /// Use the resolved IP order without applying an address-family preference.
     UseIp,
+    /// Prefer IPv4 while still allowing IPv6 fallback.
     PreferIpv4,
+    /// Prefer IPv6 while still allowing IPv4 fallback.
     PreferIpv6,
+    /// Use only IPv4 addresses.
     UseIpv4,
+    /// Use only IPv6 addresses.
     UseIpv6,
 }
 
