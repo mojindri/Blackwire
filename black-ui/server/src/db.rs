@@ -209,7 +209,7 @@ fn seed_default_outbound(conn: &Connection) -> Result<()> {
     let ts = util::now();
     conn.execute(
         "INSERT OR IGNORE INTO outbounds (tag, protocol, enabled, settings, stream_settings, created_at, updated_at)
-         VALUES ('freedom', 'freedom', 1, '{\"denyLoopback\":true,\"domainStrategy\":\"PreferIPv4\",\"rejectIpv6Literal\":true}', '', ?1, ?1)",
+         VALUES ('freedom', 'freedom', 1, '{\"denyLoopback\":true,\"domainStrategy\":\"PreferIPv4\",\"rejectIpv6Literal\":false}', '', ?1, ?1)",
         params![ts],
     )?;
     Ok(())
@@ -761,7 +761,7 @@ mod tests {
         let settings: serde_json::Value = serde_json::from_str(&outbound.settings).unwrap();
         assert_eq!(settings["denyLoopback"], true);
         assert_eq!(settings["domainStrategy"], "PreferIPv4");
-        assert_eq!(settings["rejectIpv6Literal"], true);
+        assert_eq!(settings["rejectIpv6Literal"], false);
         assert_eq!(count(&conn, "config_sections").unwrap(), 10);
         let dns = load_section_map(&conn).unwrap().remove("dns").unwrap();
         assert!(dns.enabled);

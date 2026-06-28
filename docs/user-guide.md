@@ -21,8 +21,8 @@ Linux release assets currently support:
 Basic install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.29/scripts/install.sh \
-  | VERSION=v0.1.29 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
+  | VERSION=v0.1.30 bash
 ```
 
 The service is not started by default. Blackwire needs a valid config before it
@@ -31,22 +31,22 @@ can run.
 Install with an existing config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.29/scripts/install.sh \
-  | VERSION=v0.1.29 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
+  | VERSION=v0.1.30 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
 ```
 
 Generate a VLESS REALITY VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.29/scripts/install.sh \
-  | VERSION=v0.1.29 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
+  | VERSION=v0.1.30 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
 ```
 
 Generate a domain + nginx + TLS setup:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.29/scripts/install.sh \
-  | VERSION=v0.1.29 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
+  | VERSION=v0.1.30 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 For domain setup, point DNS at the VPS first and open `tcp/80` and `tcp/443` in
@@ -71,15 +71,15 @@ testing. Do not expose it directly to the public internet.
 Install the panel:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.29/scripts/install.sh \
-  | VERSION=v0.1.29 INSTALL_BLACK_UI=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
+  | VERSION=v0.1.30 INSTALL_BLACK_UI=1 bash
 ```
 
 Install Blackwire with domain setup and Black UI:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.29/scripts/install.sh \
-  | VERSION=v0.1.29 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
+  | VERSION=v0.1.30 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
 ```
 
 Defaults:
@@ -150,21 +150,21 @@ sudo journalctl -u nginx -n 100 --no-pager
 Upgrade:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.29/scripts/install.sh \
-  | VERSION=v0.1.29 ACTION=upgrade bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
+  | VERSION=v0.1.30 ACTION=upgrade bash
 ```
 
 Uninstall but keep config and state:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.29/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
   | ACTION=uninstall bash
 ```
 
 Remove config and state too:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.29/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
   | ACTION=uninstall REMOVE_CONFIG=1 bash
 ```
 
@@ -235,15 +235,16 @@ Freedom outbounds can control how direct destinations are resolved and dialed:
   "settings": {
     "denyLoopback": true,
     "domainStrategy": "PreferIPv4",
-    "rejectIpv6Literal": true
+    "rejectIpv6Literal": false
   }
 }
 ```
 
 `PreferIPv4` keeps IPv6 as a fallback for domain destinations. `UseIPv4` is
-stricter and removes IPv6 domain results. `rejectIpv6Literal` rejects literal
-IPv6 destinations before dialing, which helps when a VPS advertises IPv6 but
-outbound IPv6 connections time out.
+stricter and removes IPv6 domain results. Keep `rejectIpv6Literal` disabled for
+normal clients because DNS stacks may send already-resolved IPv6 literal
+destinations. Enable it only when you intentionally want to fail those literal
+IPv6 dials before touching the network.
 
 For detailed field explanations, read [08-config-for-dummies.md](08-config-for-dummies.md).
 For support labels, read [release.md](release.md) and
@@ -306,8 +307,8 @@ Users cannot connect:
 If GitHub downloads fail, try IPv4:
 
 ```sh
-curl -4 -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.29/scripts/install.sh \
-  | VERSION=v0.1.29 bash
+curl -4 -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
+  | VERSION=v0.1.30 bash
 ```
 
 ## Advanced

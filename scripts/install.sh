@@ -354,7 +354,7 @@ $(dns_config_section)
       "settings": {
         "denyLoopback": true,
         "domainStrategy": "PreferIPv4",
-        "rejectIpv6Literal": true
+        "rejectIpv6Literal": false
       }
     }
   ],
@@ -438,7 +438,7 @@ $(dns_config_section)
       "settings": {
         "denyLoopback": true,
         "domainStrategy": "PreferIPv4",
-        "rejectIpv6Literal": true
+        "rejectIpv6Literal": false
       }
     }
   ],
@@ -508,7 +508,7 @@ $(dns_config_section)
       "settings": {
         "denyLoopback": true,
         "domainStrategy": "PreferIPv4",
-        "rejectIpv6Literal": true
+        "rejectIpv6Literal": false
       }
     }
   ],
@@ -582,7 +582,7 @@ $(dns_config_section)
       "settings": {
         "denyLoopback": true,
         "domainStrategy": "PreferIPv4",
-        "rejectIpv6Literal": true
+        "rejectIpv6Literal": false
       }
     }
   ],
@@ -655,7 +655,7 @@ $(dns_config_section)
       "settings": {
         "denyLoopback": true,
         "domainStrategy": "PreferIPv4",
-        "rejectIpv6Literal": true
+        "rejectIpv6Literal": false
       }
     }
   ],

@@ -134,7 +134,7 @@ fn default_freedom_settings() -> Value {
     json!({
         "denyLoopback": true,
         "domainStrategy": "PreferIPv4",
-        "rejectIpv6Literal": true
+        "rejectIpv6Literal": false
     })
 }
 
@@ -1068,7 +1068,10 @@ mod tests {
             value["outbounds"][0]["settings"]["domainStrategy"],
             "PreferIPv4"
         );
-        assert_eq!(value["outbounds"][0]["settings"]["rejectIpv6Literal"], true);
+        assert_eq!(
+            value["outbounds"][0]["settings"]["rejectIpv6Literal"],
+            false
+        );
 
         {
             let conn = state.lock_db().unwrap();
