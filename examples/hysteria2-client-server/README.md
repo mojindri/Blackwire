@@ -34,6 +34,12 @@ The test starts both proxy instances plus a TCP echo server, sends
 `HELLO PHASE3 HYSTERIA2` through the SOCKS5 listener, and verifies the same
 bytes come back from the echo server.
 
+When testing with third-party clients, separate server behavior from client
+global/TUN behavior. Hysteria2 over a SOCKS/system-proxy profile should stay
+stable first. If only global/TUN mode stalls, lower the client TUN MTU to `1500`
+or `1280` and disable FakeIP DNS mode when the client reports unsupported PTR or
+HTTPS fake-IP queries.
+
 You can validate the example config files with:
 
 ```sh

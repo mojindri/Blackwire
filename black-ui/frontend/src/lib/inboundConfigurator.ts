@@ -442,7 +442,7 @@ export function inboundCompatibilityNotice(
     return {
       tone: "info",
       message:
-        "Hysteria2 is available, but throughput depends heavily on UDP path, CPU, and bandwidth tuning. Validate with a dedicated speed test before switching system-wide."
+        "Hysteria2 is available, but client TUN/FakeIP mode can reset streams on some systems. If it works briefly then stalls, test non-TUN mode first and use a 1500 or 1280 client TUN MTU."
     };
   }
   if (security === "reality" && network !== "tcp") {

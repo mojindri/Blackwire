@@ -14,7 +14,8 @@ use http::{Response, StatusCode};
 use quinn::Connection;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::time::timeout;
-use tracing::warn;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, warn};
 
 use crate::innerflow::{record_queue_delay, InnerFlowPacket, InnerFlowScheduler};
 
@@ -139,51 +140,61 @@ pub async fn serve_connection(
         .await;
     });
 
+    let stream_shutdown = CancellationToken::new();
     loop {
-        let (mut send, mut recv) = conn
-            .accept_bi()
-            .await
-            .context("accept Hysteria2 TCP stream")?;
+        let (mut send, mut recv) = match conn.accept_bi().await {
+            Ok(stream) => stream,
+            Err(e) => {
+                stream_shutdown.cancel();
+                return Err(e).context("accept Hysteria2 TCP stream");
+            }
+        };
 
         let dispatcher = Arc::clone(&dispatcher);
         let tag = inbound_tag.clone();
         let user = user.clone();
         let congestion = config.congestion.clone();
+        let stream_shutdown = stream_shutdown.child_token();
         tokio::spawn(async move {
-            let dest = match timeout(TCP_REQUEST_TIMEOUT, tcp::server_read_request(&mut recv)).await
-            {
-                Ok(Ok(d)) => d,
-                Ok(Err(e)) => {
-                    warn!("Hysteria2 bad TCP request: {e}");
-                    let _ = tcp::server_write_response(&mut send, false, &e.to_string()).await;
-                    return;
-                }
-                Err(_) => {
-                    warn!("Hysteria2 TCP request read timed out");
-                    let _ = tcp::server_write_response(&mut send, false, "request timeout").await;
-                    return;
-                }
-            };
+            tokio::select! {
+                _ = stream_shutdown.cancelled() => {},
+                _ = async move {
+                    let dest = match timeout(TCP_REQUEST_TIMEOUT, tcp::server_read_request(&mut recv)).await
+                    {
+                        Ok(Ok(d)) => d,
+                        Ok(Err(e)) => {
+                            warn!("Hysteria2 bad TCP request: {e}");
+                            let _ = tcp::server_write_response(&mut send, false, &e.to_string()).await;
+                            return;
+                        }
+                        Err(_) => {
+                            debug!("Hysteria2 TCP request read timed out");
+                            let _ = tcp::server_write_response(&mut send, false, "request timeout").await;
+                            return;
+                        }
+                    };
 
-            if let Err(e) = tcp::server_write_response(&mut send, true, "").await {
-                warn!("Hysteria2 TCP response write failed: {e}");
-                return;
-            }
+                    if let Err(e) = tcp::server_write_response(&mut send, true, "").await {
+                        debug!("Hysteria2 TCP response write failed: {e}");
+                        return;
+                    }
 
-            let stream = ReunionStream::new(recv, send);
-            let stream: BoxedStream =
-                Box::new(PacedStream::new(stream, server_download_pacer(&congestion)));
-            let ctx = Context {
-                sniffed_domain: None,
-                source: None,
-                inbound_tag: tag.into(),
-                user: user.map(Into::into),
-                sniffed_protocol: None,
-                vision_flow: false,
-            };
+                    let stream = ReunionStream::new(recv, send);
+                    let stream: BoxedStream =
+                        Box::new(PacedStream::new(stream, server_download_pacer(&congestion)));
+                    let ctx = Context {
+                        sniffed_domain: None,
+                        source: None,
+                        inbound_tag: tag.into(),
+                        user: user.map(Into::into),
+                        sniffed_protocol: None,
+                        vision_flow: false,
+                    };
 
-            if let Err(e) = dispatcher.dispatch(ctx, dest, stream).await {
-                warn!("Hysteria2 dispatch error: {e}");
+                    if let Err(e) = dispatcher.dispatch(ctx, dest, stream).await {
+                        warn!("Hysteria2 dispatch error: {e}");
+                    }
+                } => {},
             }
         });
     }
