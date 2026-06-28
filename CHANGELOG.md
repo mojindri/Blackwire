@@ -8,6 +8,14 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.40 - 2026-06-28
+
+### Fixed
+
+- Hysteria2 now treats clean peer QUIC close code `0` as normal session drain,
+  logging the active stream count without bubbling the accept-loop close as a
+  connection task error.
+
 ## 0.1.39 - 2026-06-28
 
 ### Fixed
