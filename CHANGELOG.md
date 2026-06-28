@@ -8,6 +8,13 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.37 - 2026-06-28
+
+### Added
+
+- Hysteria2 now logs structured QUIC close diagnostics, including close kind,
+  error code, frame type, reason text, and where the close was observed.
+
 ## 0.1.36 - 2026-06-28
 
 ### Fixed
