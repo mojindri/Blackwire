@@ -86,7 +86,7 @@ async fn grpc_large_data_frame_roundtrips_without_corruption() {
 }
 
 #[test]
-fn hysteria2_udp_domain_length_overflow_does_not_decode_as_original_domain() {
+fn hysteria2_udp_official_format_roundtrips_long_domain_without_truncation() {
     let long = "x".repeat(300);
     let dg = UdpDatagram {
         session_id: 1,
@@ -100,10 +100,9 @@ fn hysteria2_udp_domain_length_overflow_does_not_decode_as_original_domain() {
     let decoded = decode_udp_datagram(&wire).expect("decode");
     match decoded.dest {
         Destination::Domain(name, _) => {
-            assert_ne!(
-                name.len(),
-                long.len(),
-                "overflowed domain length must not silently preserve oversized value"
+            assert_eq!(
+                name, long,
+                "official Hysteria2 UDP address format must round-trip oversized domains without truncation"
             );
         }
         _ => panic!("expected domain destination"),

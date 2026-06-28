@@ -384,32 +384,40 @@ fn is_dns_like(dest: &Destination) -> bool {
     }
 }
 
-fn destination_encoded_len(dest: &Destination) -> usize {
+fn destination_encoded_len(dest: &Destination) -> Option<usize> {
     match dest {
-        Destination::V4(_, _) => 1 + 4 + 2,
-        Destination::V6(_, _) => 1 + 16 + 2,
-        Destination::Domain(name, _) => 1 + 1 + name.len() + 2,
+        Destination::V4(_, _) => Some(1 + 4 + 2),
+        Destination::V6(_, _) => Some(1 + 16 + 2),
+        Destination::Domain(name, _) => {
+            (name.len() <= u8::MAX as usize).then_some(1 + 1 + name.len() + 2)
+        }
     }
 }
 
-fn encode_destination(dest: &Destination, buf: &mut BytesMut) {
+fn encode_destination(dest: &Destination, buf: &mut BytesMut) -> bool {
     match dest {
         Destination::V4(ip, port) => {
             buf.put_u8(0x01);
             buf.put_slice(&ip.octets());
             buf.put_u16(*port);
+            true
         }
         Destination::V6(ip, port) => {
             buf.put_u8(0x02);
             buf.put_slice(&ip.octets());
             buf.put_u16(*port);
+            true
         }
         Destination::Domain(name, port) => {
             let name_bytes = name.as_bytes();
+            if name_bytes.len() > u8::MAX as usize {
+                return false;
+            }
             buf.put_u8(0x03);
             buf.put_u8(name_bytes.len() as u8);
             buf.put_slice(name_bytes);
             buf.put_u16(*port);
+            true
         }
     }
 }
@@ -568,7 +576,7 @@ impl FecPolicy {
             let parity_len = estimate_parity_datagram_len(
                 payload_len,
                 group_size,
-                Some(destination_encoded_len(dest)),
+                destination_encoded_len(dest),
                 true,
             )
             .min(estimate_parity_datagram_len(
@@ -880,7 +888,8 @@ fn build_parity(
     slots: &[Option<Bytes>],
 ) -> Option<Bytes> {
     let mode = mode.effective(100);
-    let compact = compact_payload_slots(slots);
+    let compact = compact_payload_slots(slots)
+        .and_then(|(dest, slots)| destination_encoded_len(&dest).map(|_| (dest, slots)));
     let parity_slots;
     let (source_slots, compact_dest) = if let Some((dest, slots)) = compact {
         parity_slots = slots;
@@ -899,7 +908,7 @@ fn build_parity(
     };
     let dest_len = compact_dest
         .as_ref()
-        .map(destination_encoded_len)
+        .and_then(destination_encoded_len)
         .unwrap_or_default();
     let fixed_lengths = compact_dest.is_some() && lengths.iter().all(|len| *len == max_len);
     let length_bytes = if fixed_lengths { 2 } else { lengths.len() * 2 };
@@ -930,7 +939,7 @@ fn build_parity(
         }
     }
     if let Some(dest) = &compact_dest {
-        encode_destination(dest, &mut payload);
+        debug_assert!(encode_destination(dest, &mut payload));
     }
     payload.put_slice(&parity);
 
@@ -1255,6 +1264,14 @@ mod tests {
         let encoded = encode_legacy_udp_datagram(&dg);
         let decoded = decode_udp_datagram(&encoded).unwrap();
         assert_eq!(dg, decoded);
+    }
+
+    #[test]
+    fn compact_destination_rejects_oversized_domain() {
+        let mut buf = BytesMut::new();
+        let encoded = encode_destination(&Destination::Domain("x".repeat(300), 53), &mut buf);
+        assert!(!encoded);
+        assert!(buf.is_empty());
     }
 
     #[test]
