@@ -8,6 +8,16 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.32 - 2026-06-28
+
+### Added
+
+- Hysteria2 server diagnostics now record QUIC connection lifecycle,
+  authentication outcomes, TCP stream results, UDP datagram scheduler failures,
+  and per-connection debug summaries without logging auth secrets.
+- Hysteria2 server metrics now expose connection, TCP stream, and UDP event
+  counters labeled by inbound and result/event for production debugging.
+
 ## 0.1.28 - 2026-06-27
 
 ### Added
