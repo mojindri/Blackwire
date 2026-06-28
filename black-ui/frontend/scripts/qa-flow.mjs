@@ -117,13 +117,18 @@ async function addInbound(page, tag, port) {
   await page.getByRole("button", { name: "New Inbound", exact: true }).click();
   // Basic tab (default) — fill core fields
   await page.getByLabel("Tag", { exact: true }).fill(tag);
-  await page.getByLabel("Listen host", { exact: true }).fill("127.0.0.1");
+  await page.getByLabel("Listen host", { exact: true }).fill("0.0.0.0");
   await page.getByLabel("Port", { exact: true }).fill(port);
   // Transport tab — pick network type
   await page.getByRole("button", { name: "Transport", exact: true }).click();
   await page.getByLabel("Network", { exact: true }).selectOption("ws");
   await page.getByLabel("Path", { exact: true }).fill(`/${tag}`);
-  await page.getByRole("button", { name: "Save Inbound", exact: true }).click();
+  const saveButton = page.getByRole("button", { name: "Save Inbound", exact: true });
+  if (await saveButton.isDisabled()) {
+    const inlineErrors = await page.locator(".inline-error, .field-error").allTextContents();
+    throw new Error(`Save Inbound is disabled for ${tag}: ${inlineErrors.join(" | ") || "no validation message found"}`);
+  }
+  await saveButton.click();
   await page.getByRole("button", { name: tag, exact: true }).waitFor();
 }
 
