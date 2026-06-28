@@ -368,14 +368,22 @@ pub async fn serve_connection(
                 if let Some(reason) = close_reason.as_ref() {
                     log_quic_close(conn_id, &inbound_tag, peer, "tcp_accept_closed", reason);
                 }
+                let active_streams = conn_stats.tcp_streams_active.load(Ordering::Relaxed);
                 debug!(
                     conn_id,
                     tag = %inbound_tag,
                     peer = %peer,
                     error = %e,
                     close_kind = close_reason.as_ref().map(quic_close_kind).unwrap_or("unknown"),
+                    active_streams,
                     "Hysteria2 TCP accept loop ended"
                 );
+                if close_reason
+                    .as_ref()
+                    .is_some_and(is_clean_hysteria2_connection_close)
+                {
+                    return Ok(());
+                }
                 return Err(e).context("accept Hysteria2 TCP stream");
             }
         };
@@ -530,6 +538,15 @@ fn quic_close_kind(reason: &ConnectionError) -> &'static str {
         ConnectionError::TimedOut => "idle_timeout",
         ConnectionError::LocallyClosed => "locally_closed",
         ConnectionError::CidsExhausted => "cids_exhausted",
+    }
+}
+
+fn is_clean_hysteria2_connection_close(reason: &ConnectionError) -> bool {
+    match reason {
+        ConnectionError::ApplicationClosed(close) => close.error_code.into_inner() == 0,
+        ConnectionError::ConnectionClosed(close) => u64::from(close.error_code) == 0,
+        ConnectionError::LocallyClosed => true,
+        _ => false,
     }
 }
 
