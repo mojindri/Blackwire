@@ -8,6 +8,15 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.34 - 2026-06-28
+
+### Fixed
+
+- Hysteria2 no longer advertises UDP datagram relay by default when no explicit
+  datagram policy is configured, matching Black UI defaults and avoiding
+  unstable client UDP/TUN sessions until stateful UDP association relay is
+  promoted.
+
 ## 0.1.33 - 2026-06-28
 
 ### Fixed
