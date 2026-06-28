@@ -13,7 +13,7 @@ use blackwire_app::{wait_for_user_write_budget, UserBandwidthDirection};
 use blackwire_common::{BoxedStream, ReunionStream};
 use h3_quinn::Connection as H3QuinnConnection;
 use http::{Response, StatusCode};
-use quinn::Connection;
+use quinn::{Connection, ConnectionError};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -287,8 +287,11 @@ pub async fn serve_connection(
     // Tie this guard task to QUIC connection closure so `h3_conn` is dropped and
     // the task exits when the client disconnects.
     let h3_guard_conn = conn.clone();
+    let close_log_conn = conn.clone();
+    let close_log_tag = config.tag.clone();
     tokio::spawn(async move {
-        h3_guard_conn.closed().await;
+        let reason = h3_guard_conn.closed().await;
+        log_quic_close(conn_id, &close_log_tag, peer, "h3_guard_closed", &reason);
         drop(h3_conn);
     });
 
@@ -361,11 +364,16 @@ pub async fn serve_connection(
             Err(e) => {
                 stream_shutdown.cancel();
                 record_hysteria2_connection(&inbound_tag, "tcp_accept_closed");
+                let close_reason = close_log_conn.close_reason();
+                if let Some(reason) = close_reason.as_ref() {
+                    log_quic_close(conn_id, &inbound_tag, peer, "tcp_accept_closed", reason);
+                }
                 debug!(
                     conn_id,
                     tag = %inbound_tag,
                     peer = %peer,
                     error = %e,
+                    close_kind = close_reason.as_ref().map(quic_close_kind).unwrap_or("unknown"),
                     "Hysteria2 TCP accept loop ended"
                 );
                 return Err(e).context("accept Hysteria2 TCP stream");
@@ -509,6 +517,84 @@ async fn acquire_tcp_stream_permit(
             }
         }
         Err(TryAcquireError::Closed) => anyhow::bail!("Hysteria2 TCP stream limiter closed"),
+    }
+}
+
+fn quic_close_kind(reason: &ConnectionError) -> &'static str {
+    match reason {
+        ConnectionError::VersionMismatch => "version_mismatch",
+        ConnectionError::TransportError(_) => "transport_error",
+        ConnectionError::ConnectionClosed(_) => "peer_transport_close",
+        ConnectionError::ApplicationClosed(_) => "peer_application_close",
+        ConnectionError::Reset => "peer_reset",
+        ConnectionError::TimedOut => "idle_timeout",
+        ConnectionError::LocallyClosed => "locally_closed",
+        ConnectionError::CidsExhausted => "cids_exhausted",
+    }
+}
+
+fn log_quic_close(
+    conn_id: u64,
+    inbound_tag: &str,
+    peer: SocketAddr,
+    observed_at: &'static str,
+    reason: &ConnectionError,
+) {
+    match reason {
+        ConnectionError::TransportError(error) => {
+            debug!(
+                conn_id,
+                tag = %inbound_tag,
+                peer = %peer,
+                observed_at,
+                close_kind = quic_close_kind(reason),
+                error_code = u64::from(error.code),
+                error_code_debug = ?error.code,
+                frame_type = ?error.frame,
+                close_reason = %error.reason,
+                error = %reason,
+                "Hysteria2 QUIC connection closed"
+            );
+        }
+        ConnectionError::ConnectionClosed(close) => {
+            debug!(
+                conn_id,
+                tag = %inbound_tag,
+                peer = %peer,
+                observed_at,
+                close_kind = quic_close_kind(reason),
+                error_code = u64::from(close.error_code),
+                error_code_debug = ?close.error_code,
+                frame_type = ?close.frame_type,
+                close_reason = %String::from_utf8_lossy(&close.reason),
+                error = %reason,
+                "Hysteria2 QUIC connection closed"
+            );
+        }
+        ConnectionError::ApplicationClosed(close) => {
+            debug!(
+                conn_id,
+                tag = %inbound_tag,
+                peer = %peer,
+                observed_at,
+                close_kind = quic_close_kind(reason),
+                error_code = close.error_code.into_inner(),
+                close_reason = %String::from_utf8_lossy(&close.reason),
+                error = %reason,
+                "Hysteria2 QUIC connection closed"
+            );
+        }
+        _ => {
+            debug!(
+                conn_id,
+                tag = %inbound_tag,
+                peer = %peer,
+                observed_at,
+                close_kind = quic_close_kind(reason),
+                error = %reason,
+                "Hysteria2 QUIC connection closed"
+            );
+        }
     }
 }
 
