@@ -8,6 +8,16 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.39 - 2026-06-28
+
+### Fixed
+
+- Hysteria2 now treats Blackwire's synthetic unbounded bandwidth value as a
+  QUIC window-sizing hint instead of a fixed-rate Brutal congestion target.
+- Hysteria2 auth no longer advertises fake high `hysteria-cc-rx` values when no
+  explicit bandwidth cap is configured, improving stability with Hiddify/sing-box
+  during interrupted browser speed tests.
+
 ## 0.1.38 - 2026-06-28
 
 ### Added

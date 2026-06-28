@@ -214,9 +214,12 @@ pub fn build_hysteria2_server_endpoint_with_congestion_and_socket(
         match cfg.mode {
             CongestionMode::StandardQuic => {}
             CongestionMode::BrutalCompatible => {
-                transport.congestion_controller_factory(Arc::new(BrutalCCFactory::new(
-                    cfg.target_bps_for(CongestionDirection::ServerDownload),
-                )));
+                if let Some(target_bps) =
+                    cfg.fixed_rate_bps_for(CongestionDirection::ServerDownload)
+                {
+                    transport
+                        .congestion_controller_factory(Arc::new(BrutalCCFactory::new(target_bps)));
+                }
             }
             CongestionMode::NovaCc
             | CongestionMode::BadNetLowLatency

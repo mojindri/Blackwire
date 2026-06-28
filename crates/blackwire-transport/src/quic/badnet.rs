@@ -16,6 +16,13 @@ const DEFAULT_INITIAL_RTT: Duration = Duration::from_millis(100);
 const LOSS_WINDOW_SECS: usize = 5;
 const IDLE_RESET_AFTER: Duration = Duration::from_secs(2);
 
+/// Mbps value used by core config as an "unbounded" sizing hint.
+///
+/// Keep this out of fixed-rate Brutal/pacing decisions. It exists to size QUIC
+/// flow-control windows generously, not to advertise or enforce a 10 Gbit/s
+/// Hysteria2 congestion target.
+pub const UNBOUNDED_TARGET_MBPS: u64 = 10_000;
+
 /// Which direction a congestion controller manages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CongestionDirection {
@@ -105,6 +112,31 @@ impl CongestionConfig {
             CongestionDirection::ServerDownload => self.down_mbps,
         };
         mbps.saturating_mul(1_000_000 / 8)
+    }
+
+    /// Returns true when the configured Mbps value is Blackwire's unbounded
+    /// window-sizing sentinel rather than an explicit fixed-rate target.
+    pub fn uses_unbounded_target(&self, direction: CongestionDirection) -> bool {
+        let mbps = match direction {
+            CongestionDirection::ClientUpload => self.up_mbps,
+            CongestionDirection::ServerDownload => self.down_mbps,
+        };
+        mbps >= UNBOUNDED_TARGET_MBPS
+    }
+
+    /// Returns a fixed-rate target only when one should actually be applied.
+    pub fn fixed_rate_bps_for(&self, direction: CongestionDirection) -> Option<u64> {
+        if self.uses_unbounded_target(direction) {
+            return None;
+        }
+        let target = self.target_bps_for(direction);
+        (target > 0).then_some(target)
+    }
+
+    /// Hysteria2 auth `hysteria-cc-rx` value for server receive direction.
+    pub fn auth_rx_bps(&self) -> u64 {
+        self.fixed_rate_bps_for(CongestionDirection::ClientUpload)
+            .unwrap_or(0)
     }
 
     /// Returns the QUIC flow-control window profile appropriate for this congestion mode.
