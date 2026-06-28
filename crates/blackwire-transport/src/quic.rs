@@ -31,7 +31,7 @@ use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 
 const DEFAULT_MAX_CONCURRENT_BIDI_STREAMS: u32 = 1024;
 const DEFAULT_MAX_CONCURRENT_UNI_STREAMS: u32 = 64;
-const HYSTERIA2_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
+const HYSTERIA2_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const HYSTERIA2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Tuning knobs applied when opening a QUIC UDP socket.
