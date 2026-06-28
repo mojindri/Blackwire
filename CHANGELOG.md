@@ -8,6 +8,14 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.35 - 2026-06-28
+
+### Fixed
+
+- Hysteria2 now applies per-QUIC-connection TCP stream backpressure with an
+  active-stream cap and logs peak/backpressure counters in connection summaries,
+  preventing speedtest-style stream fan-out from spawning unbounded relay tasks.
+
 ## 0.1.34 - 2026-06-28
 
 ### Fixed

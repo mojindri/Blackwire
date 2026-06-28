@@ -14,7 +14,7 @@ use blackwire_common::{BoxedStream, ReunionStream};
 use h3_quinn::Connection as H3QuinnConnection;
 use http::{Response, StatusCode};
 use quinn::Connection;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -33,6 +33,7 @@ use super::{server_download_pacer, Hysteria2ServerConfig, PacedStream};
 const H3_AUTH_ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
 const H3_AUTH_HANDLE_TIMEOUT: Duration = Duration::from_secs(5);
 const TCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_TCP_STREAMS_PER_CONN: usize = 96;
 const MAX_UDP_WORKERS_PER_CONN: usize = 256;
 /// Bound on the scheduled-datagram channel; backpressure instead of unbounded growth.
 const SCHEDULED_UDP_CHANNEL_CAP: usize = 1024;
@@ -49,6 +50,9 @@ struct Hysteria2ConnectionStats {
     tcp_streams_request_timeout: AtomicU64,
     tcp_streams_response_write_failed: AtomicU64,
     tcp_streams_dispatch_error: AtomicU64,
+    tcp_streams_active: AtomicU64,
+    tcp_streams_active_peak: AtomicU64,
+    tcp_streams_backpressure_waits: AtomicU64,
     udp_datagrams_rx: AtomicU64,
     udp_datagrams_decoded_empty: AtomicU64,
     udp_datagrams_worker_drops: AtomicU64,
@@ -86,6 +90,31 @@ impl Hysteria2ConnectionStats {
 
     fn inc_tcp_dispatch_error(&self) {
         self.tcp_streams_dispatch_error
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_tcp_active(&self) {
+        let active = self.tcp_streams_active.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut peak = self.tcp_streams_active_peak.load(Ordering::Relaxed);
+        while active > peak {
+            match self.tcp_streams_active_peak.compare_exchange_weak(
+                peak,
+                active,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => peak = current,
+            }
+        }
+    }
+
+    fn dec_tcp_active(&self) {
+        self.tcp_streams_active.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    fn inc_tcp_backpressure_wait(&self) {
+        self.tcp_streams_backpressure_waits
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -143,6 +172,9 @@ impl Drop for Hysteria2ConnectionSummary {
             tcp_request_timeout = self.stats.tcp_streams_request_timeout.load(Ordering::Relaxed),
             tcp_response_write_failed = self.stats.tcp_streams_response_write_failed.load(Ordering::Relaxed),
             tcp_dispatch_error = self.stats.tcp_streams_dispatch_error.load(Ordering::Relaxed),
+            tcp_active = self.stats.tcp_streams_active.load(Ordering::Relaxed),
+            tcp_active_peak = self.stats.tcp_streams_active_peak.load(Ordering::Relaxed),
+            tcp_backpressure_waits = self.stats.tcp_streams_backpressure_waits.load(Ordering::Relaxed),
             udp_rx = self.stats.udp_datagrams_rx.load(Ordering::Relaxed),
             udp_decoded_empty = self.stats.udp_datagrams_decoded_empty.load(Ordering::Relaxed),
             udp_worker_drops = self.stats.udp_datagrams_worker_drops.load(Ordering::Relaxed),
@@ -151,6 +183,16 @@ impl Drop for Hysteria2ConnectionSummary {
             udp_send_failed = self.stats.udp_datagrams_send_failed.load(Ordering::Relaxed),
             "Hysteria2 connection summary"
         );
+    }
+}
+
+struct ActiveTcpStreamGuard {
+    stats: Arc<Hysteria2ConnectionStats>,
+}
+
+impl Drop for ActiveTcpStreamGuard {
+    fn drop(&mut self) {
+        self.stats.dec_tcp_active();
     }
 }
 
@@ -310,6 +352,7 @@ pub async fn serve_connection(
     });
 
     let stream_shutdown = CancellationToken::new();
+    let tcp_stream_limiter = Arc::new(Semaphore::new(MAX_TCP_STREAMS_PER_CONN));
     loop {
         let (mut send, mut recv) = match conn.accept_bi().await {
             Ok(stream) => stream,
@@ -327,8 +370,24 @@ pub async fn serve_connection(
             }
         };
 
+        let active_permit = match acquire_tcp_stream_permit(
+            &tcp_stream_limiter,
+            &conn,
+            &conn_stats,
+            conn_id,
+            &inbound_tag,
+        )
+        .await
+        {
+            Ok(permit) => permit,
+            Err(e) => {
+                stream_shutdown.cancel();
+                return Err(e).context("acquire Hysteria2 TCP stream permit");
+            }
+        };
         let stream_id = NEXT_HYSTERIA2_STREAM_ID.fetch_add(1, Ordering::Relaxed);
         conn_stats.inc_tcp_opened();
+        conn_stats.inc_tcp_active();
         record_hysteria2_tcp_stream(&inbound_tag, "opened");
         let dispatcher = Arc::clone(&dispatcher);
         let tag = inbound_tag.clone();
@@ -339,6 +398,10 @@ pub async fn serve_connection(
         let cancel_tag = tag.clone();
         let cancel_stats = Arc::clone(&stats);
         tokio::spawn(async move {
+            let _active_permit = active_permit;
+            let _active_guard = ActiveTcpStreamGuard {
+                stats: Arc::clone(&stats),
+            };
             tokio::select! {
                 _ = stream_shutdown.cancelled() => {
                     cancel_stats.inc_tcp_canceled();
@@ -413,6 +476,37 @@ pub async fn serve_connection(
                 } => {},
             }
         });
+    }
+}
+
+async fn acquire_tcp_stream_permit(
+    limiter: &Arc<Semaphore>,
+    conn: &Connection,
+    stats: &Arc<Hysteria2ConnectionStats>,
+    conn_id: u64,
+    inbound_tag: &str,
+) -> Result<OwnedSemaphorePermit> {
+    match Arc::clone(limiter).try_acquire_owned() {
+        Ok(permit) => Ok(permit),
+        Err(TryAcquireError::NoPermits) => {
+            stats.inc_tcp_backpressure_wait();
+            record_hysteria2_tcp_stream(inbound_tag, "backpressure_wait");
+            debug!(
+                conn_id,
+                tag = %inbound_tag,
+                max_active_streams = MAX_TCP_STREAMS_PER_CONN,
+                "Hysteria2 TCP stream backpressure engaged"
+            );
+            tokio::select! {
+                permit = Arc::clone(limiter).acquire_owned() => {
+                    permit.map_err(|_| anyhow::anyhow!("Hysteria2 TCP stream limiter closed"))
+                }
+                _ = conn.closed() => {
+                    anyhow::bail!("Hysteria2 QUIC connection closed while waiting for stream capacity");
+                }
+            }
+        }
+        Err(TryAcquireError::Closed) => anyhow::bail!("Hysteria2 TCP stream limiter closed"),
     }
 }
 
