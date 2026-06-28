@@ -240,6 +240,39 @@ describe("inboundConfigurator", () => {
     });
   });
 
+  it("keeps simple hysteria2 modes free of hidden caps and custom transport tuning", () => {
+    const settings = parseObject(
+      buildInboundInput(
+        syncAfterStructuredChange({
+          ...createInboundEditorState(),
+          protocol: "hysteria2",
+          hysteria2Auth: "shared-secret",
+          hysteria2CongestionMode: "brutal-compatible"
+        })
+      ).settings
+    );
+
+    expect(settings.up_mbps).toBeUndefined();
+    expect(settings.down_mbps).toBeUndefined();
+    expect(settings.upMbps).toBeUndefined();
+    expect(settings.downMbps).toBeUndefined();
+    expect(settings.quic).toBeUndefined();
+    expect(settings.datagram).toBeUndefined();
+    expect(settings.fec).toBeUndefined();
+  });
+
+  it("warns hysteria2 users about client TUN and FakeIP instability", () => {
+    const notice = inboundCompatibilityNotice({
+      ...createInboundEditorState(),
+      protocol: "hysteria2"
+    });
+
+    expect(notice?.tone).toBe("info");
+    expect(notice?.message).toContain("TUN/FakeIP");
+    expect(notice?.message).toContain("1500");
+    expect(notice?.message).toContain("1280");
+  });
+
   it("validates core inbound compatibility rules", () => {
     const validIssues = validateInboundState(createInboundEditorState());
     const invalidIssues = validateInboundState({

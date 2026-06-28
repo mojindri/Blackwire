@@ -21,8 +21,8 @@ Linux release assets currently support:
 Basic install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
-  | VERSION=v0.1.30 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.31/scripts/install.sh \
+  | VERSION=v0.1.31 bash
 ```
 
 The service is not started by default. Blackwire needs a valid config before it
@@ -31,22 +31,22 @@ can run.
 Install with an existing config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
-  | VERSION=v0.1.30 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.31/scripts/install.sh \
+  | VERSION=v0.1.31 CONFIG_PATH=/path/to/config.json START_SERVICE=1 bash
 ```
 
 Generate a VLESS REALITY VPS config:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
-  | VERSION=v0.1.30 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.31/scripts/install.sh \
+  | VERSION=v0.1.31 SETUP=reality PUBLIC_HOST=example.com START_SERVICE=1 bash
 ```
 
 Generate a domain + nginx + TLS setup:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
-  | VERSION=v0.1.30 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.31/scripts/install.sh \
+  | VERSION=v0.1.31 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 START_SERVICE=1 bash
 ```
 
 For domain setup, point DNS at the VPS first and open `tcp/80` and `tcp/443` in
@@ -71,15 +71,15 @@ testing. Do not expose it directly to the public internet.
 Install the panel:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
-  | VERSION=v0.1.30 INSTALL_BLACK_UI=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.31/scripts/install.sh \
+  | VERSION=v0.1.31 INSTALL_BLACK_UI=1 bash
 ```
 
 Install Blackwire with domain setup and Black UI:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
-  | VERSION=v0.1.30 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.31/scripts/install.sh \
+  | VERSION=v0.1.31 SETUP=domain DOMAIN=proxy.example.com PROXY_PATH=/secret-path INSTALL_NGINX=1 INSTALL_CERTBOT=1 INSTALL_BLACK_UI=1 START_SERVICE=1 bash
 ```
 
 Defaults:
@@ -150,21 +150,21 @@ sudo journalctl -u nginx -n 100 --no-pager
 Upgrade:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
-  | VERSION=v0.1.30 ACTION=upgrade bash
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.31/scripts/install.sh \
+  | VERSION=v0.1.31 ACTION=upgrade bash
 ```
 
 Uninstall but keep config and state:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.31/scripts/install.sh \
   | ACTION=uninstall bash
 ```
 
 Remove config and state too:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.31/scripts/install.sh \
   | ACTION=uninstall REMOVE_CONFIG=1 bash
 ```
 
@@ -261,6 +261,13 @@ Useful examples:
 
 ## Troubleshooting
 
+Hysteria2 works best when the client UDP path is stable. If a third-party client
+works for a few minutes and then stalls in global/TUN mode, first isolate the
+server with a SOCKS/system-proxy style profile. If that path is stable, check
+the client TUN/FakeIP settings: avoid a jumbo TUN MTU such as `9000`, try `1500`
+or `1280`, and disable FakeIP DNS mode if the client logs show FakeIP rejecting
+PTR or HTTPS queries.
+
 Service does not start:
 
 ```sh
@@ -307,8 +314,8 @@ Users cannot connect:
 If GitHub downloads fail, try IPv4:
 
 ```sh
-curl -4 -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.30/scripts/install.sh \
-  | VERSION=v0.1.30 bash
+curl -4 -fsSL https://raw.githubusercontent.com/mojindri/Blackwire/v0.1.31/scripts/install.sh \
+  | VERSION=v0.1.31 bash
 ```
 
 ## Advanced
