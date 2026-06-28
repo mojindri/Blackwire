@@ -8,6 +8,14 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.33 - 2026-06-28
+
+### Fixed
+
+- Hysteria2 UDP relay now uses the official `host:port` QUIC datagram address
+  format expected by Hiddify/sing-box clients, while still accepting older
+  Blackwire compact datagrams for backward compatibility.
+
 ## 0.1.32 - 2026-06-28
 
 ### Added
