@@ -458,8 +458,10 @@ fn configure_congestion(transport_config: &mut quinn::TransportConfig, cfg: &Con
     match cfg.mode {
         CongestionMode::StandardQuic => {}
         CongestionMode::BrutalCompatible => {
-            transport_config
-                .congestion_controller_factory(Arc::new(BrutalCCFactory::new(cfg.target_bps())));
+            if let Some(target_bps) = cfg.fixed_rate_bps_for(CongestionDirection::ClientUpload) {
+                transport_config
+                    .congestion_controller_factory(Arc::new(BrutalCCFactory::new(target_bps)));
+            }
         }
         CongestionMode::NovaCc
         | CongestionMode::BadNetLowLatency
@@ -650,7 +652,7 @@ fn pacer_for_config(
         return None;
     }
 
-    let target = cfg.target_bps_for(direction);
+    let target = cfg.fixed_rate_bps_for(direction)?;
     if target == 0 {
         return None;
     }
@@ -1063,6 +1065,17 @@ mod tests {
         let pacer = server_download_pacer(&cfg).expect("nova enables pacing");
 
         assert_eq!(pacer.rate_bps, 15_625_000);
+    }
+
+    #[test]
+    fn unbounded_hysteria2_target_does_not_enable_fixed_rate_pacing() {
+        let mut cfg = congestion(CongestionMode::BrutalCompatible);
+        cfg.up_mbps = crate::quic::badnet::UNBOUNDED_TARGET_MBPS;
+        cfg.down_mbps = crate::quic::badnet::UNBOUNDED_TARGET_MBPS;
+
+        assert_eq!(cfg.auth_rx_bps(), 0);
+        assert!(pacer_for_config(&cfg, CongestionDirection::ClientUpload, "test").is_none());
+        assert!(server_download_pacer(&cfg).is_none());
     }
 
     #[test]

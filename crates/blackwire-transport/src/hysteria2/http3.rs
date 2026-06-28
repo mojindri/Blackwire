@@ -249,7 +249,7 @@ pub async fn serve_connection(
         "Hysteria2 QUIC connection accepted"
     );
 
-    let server_rx_bps = config.up_mbps.saturating_mul(1_000_000 / 8);
+    let server_rx_bps = config.congestion.auth_rx_bps();
     let auth = config
         .auth
         .load()
