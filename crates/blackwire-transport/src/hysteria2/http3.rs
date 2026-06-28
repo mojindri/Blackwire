@@ -1,7 +1,9 @@
 //! HTTP/3 front door for Hysteria2 — authentication then raw QUIC TCP streams and UDP datagrams.
 
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context as _, Result};
 use blackwire_app::context::Context;
@@ -35,6 +37,137 @@ const MAX_UDP_WORKERS_PER_CONN: usize = 256;
 /// Bound on the scheduled-datagram channel; backpressure instead of unbounded growth.
 const SCHEDULED_UDP_CHANNEL_CAP: usize = 1024;
 
+static NEXT_HYSTERIA2_CONN_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_HYSTERIA2_STREAM_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Default)]
+struct Hysteria2ConnectionStats {
+    tcp_streams_opened: AtomicU64,
+    tcp_streams_completed: AtomicU64,
+    tcp_streams_canceled: AtomicU64,
+    tcp_streams_bad_request: AtomicU64,
+    tcp_streams_request_timeout: AtomicU64,
+    tcp_streams_response_write_failed: AtomicU64,
+    tcp_streams_dispatch_error: AtomicU64,
+    udp_datagrams_rx: AtomicU64,
+    udp_datagrams_decoded_empty: AtomicU64,
+    udp_datagrams_worker_drops: AtomicU64,
+    udp_datagrams_tx: AtomicU64,
+    udp_datagrams_schedule_closed: AtomicU64,
+    udp_datagrams_send_failed: AtomicU64,
+}
+
+impl Hysteria2ConnectionStats {
+    fn inc_tcp_opened(&self) {
+        self.tcp_streams_opened.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_tcp_completed(&self) {
+        self.tcp_streams_completed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_tcp_canceled(&self) {
+        self.tcp_streams_canceled.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_tcp_bad_request(&self) {
+        self.tcp_streams_bad_request.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_tcp_request_timeout(&self) {
+        self.tcp_streams_request_timeout
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_tcp_response_write_failed(&self) {
+        self.tcp_streams_response_write_failed
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_tcp_dispatch_error(&self) {
+        self.tcp_streams_dispatch_error
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_udp_rx(&self) {
+        self.udp_datagrams_rx.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_udp_decoded_empty(&self) {
+        self.udp_datagrams_decoded_empty
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_udp_worker_drop(&self) {
+        self.udp_datagrams_worker_drops
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_udp_tx(&self) {
+        self.udp_datagrams_tx.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_udp_schedule_closed(&self) {
+        self.udp_datagrams_schedule_closed
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_udp_send_failed(&self) {
+        self.udp_datagrams_send_failed
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+struct Hysteria2ConnectionSummary {
+    conn_id: u64,
+    inbound_tag: String,
+    peer: SocketAddr,
+    user: Option<String>,
+    started_at: Instant,
+    stats: Arc<Hysteria2ConnectionStats>,
+}
+
+impl Drop for Hysteria2ConnectionSummary {
+    fn drop(&mut self) {
+        let elapsed_ms = self.started_at.elapsed().as_millis();
+        debug!(
+            conn_id = self.conn_id,
+            tag = %self.inbound_tag,
+            peer = %self.peer,
+            user = self.user.as_deref().unwrap_or("<none>"),
+            elapsed_ms,
+            tcp_opened = self.stats.tcp_streams_opened.load(Ordering::Relaxed),
+            tcp_completed = self.stats.tcp_streams_completed.load(Ordering::Relaxed),
+            tcp_canceled = self.stats.tcp_streams_canceled.load(Ordering::Relaxed),
+            tcp_bad_request = self.stats.tcp_streams_bad_request.load(Ordering::Relaxed),
+            tcp_request_timeout = self.stats.tcp_streams_request_timeout.load(Ordering::Relaxed),
+            tcp_response_write_failed = self.stats.tcp_streams_response_write_failed.load(Ordering::Relaxed),
+            tcp_dispatch_error = self.stats.tcp_streams_dispatch_error.load(Ordering::Relaxed),
+            udp_rx = self.stats.udp_datagrams_rx.load(Ordering::Relaxed),
+            udp_decoded_empty = self.stats.udp_datagrams_decoded_empty.load(Ordering::Relaxed),
+            udp_worker_drops = self.stats.udp_datagrams_worker_drops.load(Ordering::Relaxed),
+            udp_tx = self.stats.udp_datagrams_tx.load(Ordering::Relaxed),
+            udp_schedule_closed = self.stats.udp_datagrams_schedule_closed.load(Ordering::Relaxed),
+            udp_send_failed = self.stats.udp_datagrams_send_failed.load(Ordering::Relaxed),
+            "Hysteria2 connection summary"
+        );
+    }
+}
+
+#[derive(Clone)]
+struct Hysteria2Diagnostics {
+    conn_id: u64,
+    stats: Arc<Hysteria2ConnectionStats>,
+}
+
+#[derive(Clone)]
+struct Hysteria2UdpServeState {
+    inbound_tag: String,
+    user: Option<String>,
+    dispatcher: Arc<dyn Dispatcher>,
+    diagnostics: Hysteria2Diagnostics,
+}
+
 struct ScheduledUdpDatagram {
     packet: InnerFlowPacket,
 }
@@ -61,6 +194,17 @@ pub async fn serve_connection(
     config: Hysteria2ServerConfig,
     dispatcher: Arc<dyn Dispatcher>,
 ) -> Result<()> {
+    let conn_id = NEXT_HYSTERIA2_CONN_ID.fetch_add(1, Ordering::Relaxed);
+    let peer = conn.remote_address();
+    let conn_stats = Arc::new(Hysteria2ConnectionStats::default());
+    record_hysteria2_connection(&config.tag, "accepted");
+    debug!(
+        conn_id,
+        tag = %config.tag,
+        peer = %peer,
+        "Hysteria2 QUIC connection accepted"
+    );
+
     let server_rx_bps = config.up_mbps.saturating_mul(1_000_000 / 8);
     let auth = config
         .auth
@@ -86,6 +230,8 @@ pub async fn serve_connection(
     .await
     .context("handle HTTP/3 auth timed out")??;
     if !authenticated {
+        record_hysteria2_connection(&config.tag, "auth_rejected");
+        debug!(conn_id, tag = %config.tag, peer = %peer, "Hysteria2 auth rejected");
         bail!("Hysteria2 HTTP/3 authentication rejected");
     }
     // Keep the HTTP/3 server state alive for the QUIC session without calling
@@ -104,11 +250,37 @@ pub async fn serve_connection(
 
     let inbound_tag = config.tag.clone();
     let user = auth.user.clone();
+    let _conn_summary = Hysteria2ConnectionSummary {
+        conn_id,
+        inbound_tag: inbound_tag.clone(),
+        peer,
+        user: user.clone(),
+        started_at: Instant::now(),
+        stats: Arc::clone(&conn_stats),
+    };
+    record_hysteria2_connection(&inbound_tag, "authenticated");
+    debug!(
+        conn_id,
+        tag = %inbound_tag,
+        peer = %peer,
+        user = user.as_deref().unwrap_or("<none>"),
+        udp_enabled = config.datagram_enabled,
+        "Hysteria2 auth accepted"
+    );
     let _user_permit = if let (Some(limiter), Some(user)) = (&config.user_limiter, &user) {
         let user: Arc<str> = user.clone().into();
         match limiter.try_acquire(Some(&user)) {
             Some(permit) => Some(permit),
             None => {
+                record_hysteria2_connection(&inbound_tag, "user_limit");
+                debug!(
+                    conn_id,
+                    tag = %inbound_tag,
+                    peer = %peer,
+                    user = %user,
+                    max = limiter.max_connections_per_user(),
+                    "Hysteria2 per-user connection limit reached"
+                );
                 bail!(
                     "per-user Hysteria2 connection limit reached for '{user}' (max {})",
                     limiter.max_connections_per_user()
@@ -121,23 +293,20 @@ pub async fn serve_connection(
 
     // Spawn the UDP datagram relay concurrently with the TCP stream accept loop.
     let udp_conn = conn.clone();
-    let udp_tag = inbound_tag.clone();
     let datagram_enabled = config.datagram_enabled;
     let datagram_policy = config.datagram_policy;
     let fec = config.fec;
-    let udp_user = user.clone();
-    let udp_dispatcher = Arc::clone(&dispatcher);
+    let udp_state = Hysteria2UdpServeState {
+        inbound_tag: inbound_tag.clone(),
+        user: user.clone(),
+        dispatcher: Arc::clone(&dispatcher),
+        diagnostics: Hysteria2Diagnostics {
+            conn_id,
+            stats: Arc::clone(&conn_stats),
+        },
+    };
     tokio::spawn(async move {
-        serve_udp_sessions(
-            udp_conn,
-            udp_tag,
-            udp_user,
-            datagram_enabled,
-            fec,
-            datagram_policy,
-            udp_dispatcher,
-        )
-        .await;
+        serve_udp_sessions(udp_conn, udp_state, datagram_enabled, fec, datagram_policy).await;
     });
 
     let stream_shutdown = CancellationToken::new();
@@ -146,35 +315,71 @@ pub async fn serve_connection(
             Ok(stream) => stream,
             Err(e) => {
                 stream_shutdown.cancel();
+                record_hysteria2_connection(&inbound_tag, "tcp_accept_closed");
+                debug!(
+                    conn_id,
+                    tag = %inbound_tag,
+                    peer = %peer,
+                    error = %e,
+                    "Hysteria2 TCP accept loop ended"
+                );
                 return Err(e).context("accept Hysteria2 TCP stream");
             }
         };
 
+        let stream_id = NEXT_HYSTERIA2_STREAM_ID.fetch_add(1, Ordering::Relaxed);
+        conn_stats.inc_tcp_opened();
+        record_hysteria2_tcp_stream(&inbound_tag, "opened");
         let dispatcher = Arc::clone(&dispatcher);
         let tag = inbound_tag.clone();
         let user = user.clone();
         let congestion = config.congestion.clone();
         let stream_shutdown = stream_shutdown.child_token();
+        let stats = Arc::clone(&conn_stats);
+        let cancel_tag = tag.clone();
+        let cancel_stats = Arc::clone(&stats);
         tokio::spawn(async move {
             tokio::select! {
-                _ = stream_shutdown.cancelled() => {},
+                _ = stream_shutdown.cancelled() => {
+                    cancel_stats.inc_tcp_canceled();
+                    record_hysteria2_tcp_stream(&cancel_tag, "canceled");
+                    debug!(
+                        conn_id,
+                        stream_id,
+                        tag = %cancel_tag,
+                        "Hysteria2 TCP stream canceled after QUIC close"
+                    );
+                },
                 _ = async move {
                     let dest = match timeout(TCP_REQUEST_TIMEOUT, tcp::server_read_request(&mut recv)).await
                     {
                         Ok(Ok(d)) => d,
                         Ok(Err(e)) => {
+                            stats.inc_tcp_bad_request();
+                            record_hysteria2_tcp_stream(&tag, "bad_request");
                             warn!("Hysteria2 bad TCP request: {e}");
                             let _ = tcp::server_write_response(&mut send, false, &e.to_string()).await;
                             return;
                         }
                         Err(_) => {
+                            stats.inc_tcp_request_timeout();
+                            record_hysteria2_tcp_stream(&tag, "request_timeout");
                             debug!("Hysteria2 TCP request read timed out");
                             let _ = tcp::server_write_response(&mut send, false, "request timeout").await;
                             return;
                         }
                     };
+                    debug!(
+                        conn_id,
+                        stream_id,
+                        tag = %tag,
+                        dest = ?dest,
+                        "Hysteria2 TCP stream request accepted"
+                    );
 
                     if let Err(e) = tcp::server_write_response(&mut send, true, "").await {
+                        stats.inc_tcp_response_write_failed();
+                        record_hysteria2_tcp_stream(&tag, "response_write_failed");
                         debug!("Hysteria2 TCP response write failed: {e}");
                         return;
                     }
@@ -185,14 +390,25 @@ pub async fn serve_connection(
                     let ctx = Context {
                         sniffed_domain: None,
                         source: None,
-                        inbound_tag: tag.into(),
+                        inbound_tag: tag.clone().into(),
                         user: user.map(Into::into),
                         sniffed_protocol: None,
                         vision_flow: false,
                     };
 
                     if let Err(e) = dispatcher.dispatch(ctx, dest, stream).await {
+                        stats.inc_tcp_dispatch_error();
+                        record_hysteria2_tcp_stream(&tag, "dispatch_error");
                         warn!("Hysteria2 dispatch error: {e}");
+                    } else {
+                        stats.inc_tcp_completed();
+                        record_hysteria2_tcp_stream(&tag, "completed");
+                        debug!(
+                            conn_id,
+                            stream_id,
+                            tag = %tag,
+                            "Hysteria2 TCP stream completed"
+                        );
                     }
                 } => {},
             }
@@ -207,61 +423,77 @@ pub async fn serve_connection(
 /// Responses are encoded and sent back as QUIC datagrams.
 async fn serve_udp_sessions(
     conn: Connection,
-    inbound_tag: String,
-    user: Option<String>,
+    state: Hysteria2UdpServeState,
     datagram_enabled: bool,
     fec: super::udp::FecPolicy,
     datagram_policy: super::udp::DatagramPolicy,
-    dispatcher: Arc<dyn Dispatcher>,
 ) {
     if !datagram_enabled {
         super::udp::record_datagram_fallback("disabled");
+        record_hysteria2_udp_event(&state.inbound_tag, "disabled");
+        debug!(
+            conn_id = state.diagnostics.conn_id,
+            tag = %state.inbound_tag,
+            "Hysteria2 UDP datagrams disabled for connection"
+        );
         return;
     }
     let worker_limiter = Arc::new(Semaphore::new(MAX_UDP_WORKERS_PER_CONN));
     let mut fec_decoder = FecDecoder::new(fec);
     let fec_encoder = Arc::new(std::sync::Mutex::new(FecEncoder::new(fec)));
     let (scheduled_tx, scheduled_rx) = mpsc::channel(SCHEDULED_UDP_CHANNEL_CAP);
-    tokio::spawn(send_scheduled_udp_datagrams(conn.clone(), scheduled_rx));
+    tokio::spawn(send_scheduled_udp_datagrams(
+        conn.clone(),
+        state.inbound_tag.clone(),
+        state.diagnostics.clone(),
+        scheduled_rx,
+    ));
 
     loop {
         let raw: bytes::Bytes = match conn.read_datagram().await {
             Ok(b) => b,
-            Err(_) => break,
+            Err(e) => {
+                record_hysteria2_udp_event(&state.inbound_tag, "read_closed");
+                debug!(
+                    conn_id = state.diagnostics.conn_id,
+                    tag = %state.inbound_tag,
+                    error = %e,
+                    "Hysteria2 UDP datagram read loop ended"
+                );
+                break;
+            }
         };
 
+        state.diagnostics.stats.inc_udp_rx();
         let datagrams = fec_decoder.decode(raw);
         if datagrams.is_empty() {
+            state.diagnostics.stats.inc_udp_decoded_empty();
+            record_hysteria2_udp_event(&state.inbound_tag, "decoded_empty");
             continue;
         }
         for dg in datagrams {
             let lane = datagram_policy.lane_for(&dg.dest, dg.data.len());
             record_datagram_packet(lane.class(), "rx");
             handle_udp_datagram(
-                inbound_tag.clone(),
-                user.clone(),
                 Arc::clone(&worker_limiter),
                 Arc::clone(&fec_encoder),
                 scheduled_tx.clone(),
                 dg,
                 datagram_policy,
-                Arc::clone(&dispatcher),
+                state.clone(),
             )
             .await;
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_udp_datagram(
-    inbound_tag: String,
-    user: Option<String>,
     worker_limiter: Arc<Semaphore>,
     fec_encoder: Arc<std::sync::Mutex<FecEncoder>>,
     scheduled_tx: mpsc::Sender<ScheduledUdpDatagram>,
     dg: UdpDatagram,
     datagram_policy: super::udp::DatagramPolicy,
-    dispatcher: Arc<dyn Dispatcher>,
+    state: Hysteria2UdpServeState,
 ) {
     let session_id = dg.session_id;
     let packet_id = dg.packet_id;
@@ -271,8 +503,10 @@ async fn handle_udp_datagram(
     let permit = match Arc::clone(&worker_limiter).try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
+            state.diagnostics.stats.inc_udp_worker_drop();
+            record_hysteria2_udp_event(&state.inbound_tag, "worker_limit_drop");
             warn!(
-                tag = %inbound_tag,
+                tag = %state.inbound_tag,
                 max = MAX_UDP_WORKERS_PER_CONN,
                 "Hysteria2 UDP worker limit reached; dropping datagram"
             );
@@ -283,11 +517,11 @@ async fn handle_udp_datagram(
     tokio::spawn(async move {
         let _permit = permit;
         let address = destination_to_address(&dest);
-        let user_arc = user.as_deref().map(Arc::<str>::from);
+        let user_arc = state.user.as_deref().map(Arc::<str>::from);
         let ctx = Context {
             sniffed_domain: None,
             source: None,
-            inbound_tag: Arc::from(inbound_tag.clone()),
+            inbound_tag: Arc::from(state.inbound_tag.clone()),
             user: user_arc.clone(),
             sniffed_protocol: None,
             vision_flow: false,
@@ -300,18 +534,20 @@ async fn handle_udp_datagram(
             upload_len,
         )
         .await;
-        let response = match dispatcher
+        let response = match state
+            .dispatcher
             .dispatch_udp_datagram(ctx, address, payload)
             .await
         {
             Ok(response) => response,
             Err(e) => {
-                warn!(tag = %inbound_tag, dest = ?dest, error = %e, "Hysteria2 UDP dispatch failed");
+                warn!(tag = %state.inbound_tag, dest = ?dest, error = %e, "Hysteria2 UDP dispatch failed");
+                record_hysteria2_udp_event(&state.inbound_tag, "dispatch_error");
                 return;
             }
         };
         runtime_stats::record_relay_traffic(
-            &inbound_tag,
+            &state.inbound_tag,
             user_arc.as_deref(),
             upload_len as u64,
             0,
@@ -327,7 +563,7 @@ async fn handle_udp_datagram(
         )
         .await;
         runtime_stats::record_relay_traffic(
-            &inbound_tag,
+            &state.inbound_tag,
             user_arc.as_deref(),
             0,
             response.data.len() as u64,
@@ -350,6 +586,7 @@ async fn handle_udp_datagram(
             }
         });
         record_datagram_packet(tx_lane.class(), "tx");
+        state.diagnostics.stats.inc_udp_tx();
         let class = super::udp::packet_class_for(&dest, response_dg.data.len());
         let flow = super::udp::flow_key_for(&dest, session_id);
         let mut packet = InnerFlowPacket::new(class, flow, encoded);
@@ -361,13 +598,21 @@ async fn handle_udp_datagram(
             .await
             .is_err()
         {
-            warn!("Hysteria2 UDP: scheduled datagram channel closed");
+            state.diagnostics.stats.inc_udp_schedule_closed();
+            record_hysteria2_udp_event(&state.inbound_tag, "schedule_closed");
+            warn!(
+                conn_id = state.diagnostics.conn_id,
+                tag = %state.inbound_tag,
+                "Hysteria2 UDP: scheduled datagram channel closed"
+            );
         }
     });
 }
 
 async fn send_scheduled_udp_datagrams(
     conn: Connection,
+    inbound_tag: String,
+    diagnostics: Hysteria2Diagnostics,
     mut rx: mpsc::Receiver<ScheduledUdpDatagram>,
 ) {
     let mut scheduler = InnerFlowScheduler::default();
@@ -380,15 +625,56 @@ async fn send_scheduled_udp_datagrams(
             record_queue_delay(packet.class, packet.enqueued_at);
             let followups = packet.followups;
             if let Err(e) = conn.send_datagram(packet.payload) {
-                warn!("Hysteria2 UDP: scheduled send_datagram failed: {e}");
+                diagnostics.stats.inc_udp_send_failed();
+                record_hysteria2_udp_event(&inbound_tag, "send_failed");
+                warn!(
+                    conn_id = diagnostics.conn_id,
+                    tag = %inbound_tag,
+                    error = %e,
+                    "Hysteria2 UDP: scheduled send_datagram failed"
+                );
             }
             for followup in followups {
                 if let Err(e) = conn.send_datagram(followup) {
-                    warn!("Hysteria2 UDP: scheduled follow-up datagram failed: {e}");
+                    diagnostics.stats.inc_udp_send_failed();
+                    record_hysteria2_udp_event(&inbound_tag, "followup_send_failed");
+                    warn!(
+                        conn_id = diagnostics.conn_id,
+                        tag = %inbound_tag,
+                        error = %e,
+                        "Hysteria2 UDP: scheduled follow-up datagram failed"
+                    );
                 }
             }
         }
     }
+}
+
+fn record_hysteria2_connection(inbound_tag: &str, result: &'static str) {
+    metrics::counter!(
+        "blackwire_hysteria2_connections_total",
+        "inbound" => inbound_tag.to_owned(),
+        "result" => result
+    )
+    .increment(1);
+}
+
+fn record_hysteria2_tcp_stream(inbound_tag: &str, result: &'static str) {
+    metrics::counter!(
+        "blackwire_hysteria2_tcp_streams_total",
+        "inbound" => inbound_tag.to_owned(),
+        "result" => result
+    )
+    .increment(1);
+}
+
+fn record_hysteria2_udp_event(inbound_tag: &str, event: &'static str) {
+    metrics::counter!(
+        "blackwire_hysteria2_udp_events_total",
+        "inbound" => inbound_tag.to_owned(),
+        "event" => event
+    )
+    .increment(1);
 }
 
 async fn handle_h3_auth_request(
