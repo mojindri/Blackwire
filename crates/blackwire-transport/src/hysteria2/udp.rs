@@ -13,23 +13,29 @@
 //!
 //! # Datagram wire format
 //!
+//! Hysteria2's public wire format carries the destination as a QUIC-varint
+//! length plus a `host:port` string. Blackwire also accepts its older internal
+//! compact address format for backward compatibility with pre-0.1.33 peers.
+//!
 //! ```text
 //! [session_id: 4 bytes BE]   — identifies the UDP "flow"
 //! [packet_id: 2 bytes BE]    — sequence number within session
 //! [frag_id: 1 byte]          — which fragment this is (0-indexed)
 //! [frag_num: 1 byte]         — total number of fragments (1 = not fragmented)
-//! [addr_type: 1 byte]        — 0x01=IPv4, 0x02=IPv6, 0x03=domain
-//! [addr + port]              — destination
+//! [addr_len: QUIC varint]    — bytes in destination string
+//! [addr: host:port]          — destination
 //! [data: remaining bytes]    — UDP payload fragment
 //! ```
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 
+use super::varint::write_varint;
 use crate::innerflow::{InnerFlowKey, PacketClass};
 
 /// Destination inside a UDP datagram using Hysteria2's compact binary address layout.
@@ -62,33 +68,17 @@ pub struct UdpDatagram {
 
 /// Encode a `UdpDatagram` into a byte buffer suitable for a QUIC datagram.
 pub fn encode_udp_datagram(dg: &UdpDatagram) -> Bytes {
-    let mut buf = BytesMut::with_capacity(256 + dg.data.len());
+    let addr = destination_to_hysteria(&dg.dest);
+    let mut prefix = Vec::with_capacity(16 + addr.len());
+    prefix.extend_from_slice(&dg.session_id.to_be_bytes());
+    prefix.extend_from_slice(&dg.packet_id.to_be_bytes());
+    prefix.push(dg.frag_id);
+    prefix.push(dg.frag_num);
+    write_varint(&mut prefix, addr.len() as u64).expect("address length is a valid QUIC varint");
+    prefix.extend_from_slice(addr.as_bytes());
 
-    buf.put_u32(dg.session_id);
-    buf.put_u16(dg.packet_id);
-    buf.put_u8(dg.frag_id);
-    buf.put_u8(dg.frag_num);
-
-    match &dg.dest {
-        Destination::V4(ip, port) => {
-            buf.put_u8(0x01);
-            buf.put_slice(&ip.octets());
-            buf.put_u16(*port);
-        }
-        Destination::V6(ip, port) => {
-            buf.put_u8(0x02);
-            buf.put_slice(&ip.octets());
-            buf.put_u16(*port);
-        }
-        Destination::Domain(name, port) => {
-            let name_bytes = name.as_bytes();
-            buf.put_u8(0x03);
-            buf.put_u8(name_bytes.len() as u8);
-            buf.put_slice(name_bytes);
-            buf.put_u16(*port);
-        }
-    }
-
+    let mut buf = BytesMut::with_capacity(prefix.len() + dg.data.len());
+    buf.put_slice(&prefix);
     buf.put_slice(&dg.data);
     buf.freeze()
 }
@@ -99,7 +89,6 @@ pub fn encode_udp_datagram(dg: &UdpDatagram) -> Bytes {
 ///
 /// Returns an error if the slice is too short or contains invalid data.
 pub fn decode_udp_datagram(mut data: &[u8]) -> Result<UdpDatagram> {
-    // Each field below consumes bytes from `data` via the `Buf` trait.
     anyhow::ensure!(data.len() >= 9, "datagram too short (< 9 bytes)");
 
     let session_id = data.get_u32();
@@ -107,6 +96,40 @@ pub fn decode_udp_datagram(mut data: &[u8]) -> Result<UdpDatagram> {
     let frag_id = data.get_u8();
     let frag_num = data.get_u8();
 
+    let (dest, remaining) = match decode_hysteria_destination(data) {
+        Ok(decoded) => decoded,
+        Err(official_err) => match decode_legacy_destination(data) {
+            Ok(decoded) => decoded,
+            Err(legacy_err) => {
+                anyhow::bail!("bad UDP destination: hysteria2={official_err}; legacy={legacy_err}");
+            }
+        },
+    };
+
+    Ok(UdpDatagram {
+        session_id,
+        packet_id,
+        frag_id,
+        frag_num,
+        dest,
+        data: Bytes::copy_from_slice(remaining),
+    })
+}
+
+fn decode_hysteria_destination(data: &[u8]) -> Result<(Destination, &[u8])> {
+    let (addr_len, varint_len) = read_varint_from_slice(data).context("reading address length")?;
+    anyhow::ensure!(
+        addr_len > 0 && addr_len <= 2048,
+        "invalid address length: {addr_len}"
+    );
+    let start = varint_len;
+    let end = start + addr_len as usize;
+    anyhow::ensure!(data.len() >= end, "truncated address string");
+    let addr = std::str::from_utf8(&data[start..end]).context("address is not valid UTF-8")?;
+    Ok((hysteria_to_destination(addr)?, &data[end..]))
+}
+
+fn decode_legacy_destination(mut data: &[u8]) -> Result<(Destination, &[u8])> {
     let addr_type = data.get_u8();
     let dest = match addr_type {
         0x01 => {
@@ -139,16 +162,102 @@ pub fn decode_udp_datagram(mut data: &[u8]) -> Result<UdpDatagram> {
         t => anyhow::bail!("unknown UDP address type: 0x{t:02X}"),
     };
 
-    let payload = Bytes::copy_from_slice(data);
+    Ok((dest, data))
+}
 
-    Ok(UdpDatagram {
-        session_id,
-        packet_id,
-        frag_id,
-        frag_num,
-        dest,
-        data: payload,
-    })
+fn destination_to_hysteria(dest: &Destination) -> String {
+    match dest {
+        Destination::V4(ip, port) => format!("{ip}:{port}"),
+        Destination::V6(ip, port) => format!("[{ip}]:{port}"),
+        Destination::Domain(name, port) => format!("{name}:{port}"),
+    }
+}
+
+fn hysteria_to_destination(addr: &str) -> Result<Destination> {
+    if let Some(inner) = addr.strip_prefix('[') {
+        let (host, rest) = inner
+            .split_once(']')
+            .ok_or_else(|| anyhow::anyhow!("bad IPv6 address: {addr}"))?;
+        let port = rest
+            .strip_prefix(':')
+            .ok_or_else(|| anyhow::anyhow!("bad IPv6 address: {addr}"))?
+            .parse::<u16>()
+            .with_context(|| format!("bad port in address: {addr}"))?;
+        let ip = host
+            .parse::<Ipv6Addr>()
+            .with_context(|| format!("bad IPv6 host: {host}"))?;
+        return Ok(Destination::V6(ip, port));
+    }
+
+    let (host, port_str) = addr
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow::anyhow!("bad address: {addr}"))?;
+    let port = port_str
+        .parse::<u16>()
+        .with_context(|| format!("bad port in address: {addr}"))?;
+
+    if let Ok(ip) = host.parse::<Ipv4Addr>() {
+        Ok(Destination::V4(ip, port))
+    } else {
+        Ok(Destination::Domain(host.to_string(), port))
+    }
+}
+
+fn read_varint_from_slice(data: &[u8]) -> io::Result<(u64, usize)> {
+    let Some(first) = data.first().copied() else {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "missing varint",
+        ));
+    };
+    let len = 1usize << (first >> 6);
+    if data.len() < len {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "truncated varint",
+        ));
+    }
+    if len == 1 {
+        return Ok((u64::from(first & 0x3f), 1));
+    }
+    let mut value = u64::from(first & 0x3f);
+    for b in &data[1..len] {
+        value = (value << 8) | u64::from(*b);
+    }
+    Ok((value, len))
+}
+
+#[cfg(test)]
+fn encode_legacy_udp_datagram(dg: &UdpDatagram) -> Bytes {
+    let mut buf = BytesMut::with_capacity(256 + dg.data.len());
+
+    buf.put_u32(dg.session_id);
+    buf.put_u16(dg.packet_id);
+    buf.put_u8(dg.frag_id);
+    buf.put_u8(dg.frag_num);
+
+    match &dg.dest {
+        Destination::V4(ip, port) => {
+            buf.put_u8(0x01);
+            buf.put_slice(&ip.octets());
+            buf.put_u16(*port);
+        }
+        Destination::V6(ip, port) => {
+            buf.put_u8(0x02);
+            buf.put_slice(&ip.octets());
+            buf.put_u16(*port);
+        }
+        Destination::Domain(name, port) => {
+            let name_bytes = name.as_bytes();
+            buf.put_u8(0x03);
+            buf.put_u8(name_bytes.len() as u8);
+            buf.put_slice(name_bytes);
+            buf.put_u16(*port);
+        }
+    }
+
+    buf.put_slice(&dg.data);
+    buf.freeze()
 }
 
 const FEC_MARKER_DOMAIN: &str = "__blackwire_fec_v1__";
@@ -1115,6 +1224,16 @@ mod tests {
     }
 
     #[test]
+    fn udp_datagram_uses_hysteria2_address_string_format() {
+        let dg = make_dg(Destination::Domain("dns.google".to_string(), 53));
+        let encoded = encode_udp_datagram(&dg);
+
+        assert_eq!(&encoded[..8], &[0x12, 0x34, 0x56, 0x78, 0, 42, 0, 1]);
+        assert_eq!(encoded[8] as usize, "dns.google:53".len());
+        assert_eq!(&encoded[9..9 + "dns.google:53".len()], b"dns.google:53");
+    }
+
+    #[test]
     fn udp_datagram_ipv6_roundtrip() {
         let dg = make_dg(Destination::V6("::1".parse().unwrap(), 5353));
         let encoded = encode_udp_datagram(&dg);
@@ -1126,6 +1245,14 @@ mod tests {
     fn udp_datagram_domain_roundtrip() {
         let dg = make_dg(Destination::Domain("dns.google".to_string(), 53));
         let encoded = encode_udp_datagram(&dg);
+        let decoded = decode_udp_datagram(&encoded).unwrap();
+        assert_eq!(dg, decoded);
+    }
+
+    #[test]
+    fn udp_datagram_legacy_compact_format_still_decodes() {
+        let dg = make_dg(Destination::Domain("dns.google".to_string(), 53));
+        let encoded = encode_legacy_udp_datagram(&dg);
         let decoded = decode_udp_datagram(&encoded).unwrap();
         assert_eq!(dg, decoded);
     }
@@ -1359,6 +1486,7 @@ mod tests {
         let mut encoder = FecEncoder::new(policy);
         let mut parity = None;
         let mut emitted_after = 0usize;
+        let mut emitted_wire_bytes = 0usize;
         for packet_id in 0..u8::MAX as u16 {
             let dg = UdpDatagram {
                 session_id: 13,
@@ -1369,6 +1497,7 @@ mod tests {
                 data: Bytes::from(vec![packet_id as u8; 64]),
             };
             let encoded = encode_udp_datagram(&dg);
+            emitted_wire_bytes += encoded.len();
             if let Some(repair) = encoder.protect(&dg, &encoded) {
                 emitted_after = packet_id as usize + 1;
                 parity = Some(repair);
@@ -1378,6 +1507,6 @@ mod tests {
 
         let parity = parity.expect("parity datagram");
         assert!(emitted_after > 5);
-        assert!(parity.len() * 100 <= emitted_after * 64 * 20);
+        assert!(parity.len() * 100 <= emitted_wire_bytes * 20);
     }
 }
