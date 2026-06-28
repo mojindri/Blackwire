@@ -17,7 +17,7 @@ use quinn::{Connection, ConnectionError};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use crate::innerflow::{record_queue_delay, InnerFlowPacket, InnerFlowScheduler};
 
@@ -424,7 +424,7 @@ pub async fn serve_connection(
                 _ = stream_shutdown.cancelled() => {
                     cancel_stats.inc_tcp_canceled();
                     record_hysteria2_tcp_stream(&cancel_tag, "canceled");
-                    debug!(
+                    trace!(
                         conn_id,
                         stream_id,
                         tag = %cancel_tag,
@@ -445,12 +445,12 @@ pub async fn serve_connection(
                         Err(_) => {
                             stats.inc_tcp_request_timeout();
                             record_hysteria2_tcp_stream(&tag, "request_timeout");
-                            debug!("Hysteria2 TCP request read timed out");
+                            trace!("Hysteria2 TCP request read timed out");
                             let _ = tcp::server_write_response(&mut send, false, "request timeout").await;
                             return;
                         }
                     };
-                    debug!(
+                    trace!(
                         conn_id,
                         stream_id,
                         tag = %tag,
@@ -461,7 +461,7 @@ pub async fn serve_connection(
                     if let Err(e) = tcp::server_write_response(&mut send, true, "").await {
                         stats.inc_tcp_response_write_failed();
                         record_hysteria2_tcp_stream(&tag, "response_write_failed");
-                        debug!("Hysteria2 TCP response write failed: {e}");
+                        trace!("Hysteria2 TCP response write failed: {e}");
                         return;
                     }
 
@@ -484,7 +484,7 @@ pub async fn serve_connection(
                     } else {
                         stats.inc_tcp_completed();
                         record_hysteria2_tcp_stream(&tag, "completed");
-                        debug!(
+                        trace!(
                             conn_id,
                             stream_id,
                             tag = %tag,
@@ -509,7 +509,7 @@ async fn acquire_tcp_stream_permit(
         Err(TryAcquireError::NoPermits) => {
             stats.inc_tcp_backpressure_wait();
             record_hysteria2_tcp_stream(inbound_tag, "backpressure_wait");
-            debug!(
+            trace!(
                 conn_id,
                 tag = %inbound_tag,
                 max_active_streams = MAX_TCP_STREAMS_PER_CONN,
@@ -630,7 +630,7 @@ async fn serve_udp_sessions(
     if !datagram_enabled {
         super::udp::record_datagram_fallback("disabled");
         record_hysteria2_udp_event(&state.inbound_tag, "disabled");
-        debug!(
+        trace!(
             conn_id = state.diagnostics.conn_id,
             tag = %state.inbound_tag,
             "Hysteria2 UDP datagrams disabled for connection"
@@ -653,7 +653,7 @@ async fn serve_udp_sessions(
             Ok(b) => b,
             Err(e) => {
                 record_hysteria2_udp_event(&state.inbound_tag, "read_closed");
-                debug!(
+                trace!(
                     conn_id = state.diagnostics.conn_id,
                     tag = %state.inbound_tag,
                     error = %e,
@@ -799,7 +799,7 @@ async fn handle_udp_datagram(
         {
             state.diagnostics.stats.inc_udp_schedule_closed();
             record_hysteria2_udp_event(&state.inbound_tag, "schedule_closed");
-            warn!(
+            trace!(
                 conn_id = state.diagnostics.conn_id,
                 tag = %state.inbound_tag,
                 "Hysteria2 UDP: scheduled datagram channel closed"
@@ -826,7 +826,7 @@ async fn send_scheduled_udp_datagrams(
             if let Err(e) = conn.send_datagram(packet.payload) {
                 diagnostics.stats.inc_udp_send_failed();
                 record_hysteria2_udp_event(&inbound_tag, "send_failed");
-                warn!(
+                trace!(
                     conn_id = diagnostics.conn_id,
                     tag = %inbound_tag,
                     error = %e,
@@ -837,7 +837,7 @@ async fn send_scheduled_udp_datagrams(
                 if let Err(e) = conn.send_datagram(followup) {
                     diagnostics.stats.inc_udp_send_failed();
                     record_hysteria2_udp_event(&inbound_tag, "followup_send_failed");
-                    warn!(
+                    trace!(
                         conn_id = diagnostics.conn_id,
                         tag = %inbound_tag,
                         error = %e,
