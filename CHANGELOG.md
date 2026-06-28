@@ -8,13 +8,14 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
-## 0.1.35 - 2026-06-28
+## 0.1.36 - 2026-06-28
 
 ### Fixed
 
-- Hysteria2 now applies per-QUIC-connection TCP stream backpressure with an
-  active-stream cap and logs peak/backpressure counters in connection summaries,
-  preventing speedtest-style stream fan-out from spawning unbounded relay tasks.
+- Hysteria2 now aligns its per-connection stream guard and QUIC idle cleanup
+  with the reference Hysteria2 behavior: up to 1024 incoming TCP streams per
+  QUIC connection and 30-second idle session cleanup, with summary counters for
+  active stream peaks and backpressure.
 
 ## 0.1.34 - 2026-06-28
 

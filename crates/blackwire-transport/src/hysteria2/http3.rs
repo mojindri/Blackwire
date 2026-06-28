@@ -33,7 +33,9 @@ use super::{server_download_pacer, Hysteria2ServerConfig, PacedStream};
 const H3_AUTH_ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
 const H3_AUTH_HANDLE_TIMEOUT: Duration = Duration::from_secs(5);
 const TCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_TCP_STREAMS_PER_CONN: usize = 96;
+// Match the reference Hysteria2/quic-go default for incoming streams. This is
+// a guardrail only; normal flow control is handled by QUIC itself.
+const MAX_TCP_STREAMS_PER_CONN: usize = 1024;
 const MAX_UDP_WORKERS_PER_CONN: usize = 256;
 /// Bound on the scheduled-datagram channel; backpressure instead of unbounded growth.
 const SCHEDULED_UDP_CHANNEL_CAP: usize = 1024;
