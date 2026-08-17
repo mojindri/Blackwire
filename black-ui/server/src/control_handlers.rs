@@ -104,6 +104,8 @@ pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
         .list_users(config.desired_revision)
         .await
         .map_err(store_error)?;
+    let runtime_reachable = state.store.runtime_healthy().await.map_err(store_error)?;
+    let last_reconciliation = config.updated_at.to_rfc3339();
     Ok(Json(Status {
         setup_required,
         database_connected: true,
@@ -113,7 +115,8 @@ pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
         pending_maintenance_revision: config.pending_maintenance_revision,
         activation_state: config.activation_state,
         last_activation_error: config.last_error,
-        grpc_reachable: false,
+        runtime_reachable,
+        last_reconciliation,
         inbounds: inbounds.len(),
         outbounds: outbounds.len(),
         users: users.len(),
@@ -435,9 +438,24 @@ pub async fn runtime_traffic(
     headers: HeaderMap,
 ) -> ApiResult<TrafficSnapshot> {
     auth::require(&headers, &state).await?;
+    let (users, inbounds) = state.store.traffic_snapshot().await.map_err(store_error)?;
     Ok(Json(TrafficSnapshot {
-        users: Vec::new(),
-        inbounds: Vec::new(),
+        users: users
+            .into_iter()
+            .map(|row| crate::models::UserTraffic {
+                email: row.email,
+                upload_bytes: row.upload_bytes.min(i64::MAX as u64) as i64,
+                download_bytes: row.download_bytes.min(i64::MAX as u64) as i64,
+            })
+            .collect(),
+        inbounds: inbounds
+            .into_iter()
+            .map(|row| crate::models::InboundTraffic {
+                tag: row.tag,
+                upload_bytes: row.upload_bytes.min(i64::MAX as u64) as i64,
+                download_bytes: row.download_bytes.min(i64::MAX as u64) as i64,
+            })
+            .collect(),
     }))
 }
 

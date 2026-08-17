@@ -20,7 +20,7 @@ export function DashboardPage({ data }: { data: AppData }) {
         <Metric icon={<Users />} label="Active users" value={`${data.status?.activeUsers ?? 0}`} sub={`${data.status?.users ?? 0} total`} />
         <Metric icon={<CircleGauge />} label="Traffic" value={formatBytes(totalUpload + totalDownload)} sub={`${formatBytes(totalUpload)} up · ${formatBytes(totalDownload)} down`} />
         <Metric icon={<Database />} label="Revision" value={`${data.status?.activeRevision ?? "—"}`} sub={`desired ${data.status?.desiredRevision ?? "—"}`} />
-        <Metric icon={<Activity />} label="Runtime" value={data.status?.grpcReachable ? "Live" : "Offline"} sub={data.status?.activationState ?? "loading"} />
+        <Metric icon={<Activity />} label="Runtime" value={data.status?.runtimeReachable ? "Live" : "Offline"} sub={data.status?.activationState ?? "loading"} />
       </div>
       <section className="work-panel split-panel">
         <div>
@@ -41,6 +41,7 @@ export function DashboardPage({ data }: { data: AppData }) {
             <div><span>MySQL</span><strong>{data.status?.databaseConnected ? "Connected" : "Unavailable"}</strong></div>
             <div><span>Schema</span><strong>v{data.status?.schemaVersion ?? "—"}</strong></div>
             <div><span>Activation</span><strong>{data.status?.activationState ?? "Loading"}</strong></div>
+            <div><span>Last reconciliation</span><strong>{data.status?.lastReconciliation ? new Date(data.status.lastReconciliation).toLocaleString() : "—"}</strong></div>
           </div>
         </div>
       </section>

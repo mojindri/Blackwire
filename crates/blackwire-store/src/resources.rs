@@ -45,6 +45,9 @@ pub struct UserRecord {
     pub credential_kind: String,
     pub uuid: Option<String>,
     pub method: Option<String>,
+    pub upload_bytes: u64,
+    pub download_bytes: u64,
+    pub enforcement_status: String,
 }
 
 #[derive(Debug, Clone)]
@@ -115,7 +118,7 @@ impl Database {
     ) -> StoreResult<Option<SubscriptionRecord>> {
         let revision = self.state().await?.desired_revision;
         let row = sqlx::query(
-            "SELECT u.email,u.enabled,u.expiry_at,u.flow,c.uuid_value,c.password_value,c.method,c.auth_value,i.protocol,i.listen_port,COALESCE(s.network,'tcp') network,COALESCE(s.security,'none') security FROM users u JOIN user_credentials c ON c.revision_id=u.revision_id AND c.user_id=u.user_id JOIN inbounds i ON i.revision_id=u.revision_id AND i.inbound_id=u.inbound_id LEFT JOIN stream_settings s ON s.revision_id=i.revision_id AND s.endpoint_kind='inbound' AND s.endpoint_id=i.inbound_id WHERE u.revision_id=? AND u.subscription_token=? AND u.enabled=TRUE AND i.enabled=TRUE LIMIT 1",
+            "SELECT u.email,u.enabled,u.expiry_at,u.flow,c.uuid_value,c.password_value,c.method,c.auth_value,i.protocol,i.listen_port,COALESCE(s.network,'tcp') network,COALESCE(s.security,'none') security FROM users u JOIN user_credentials c ON c.revision_id=u.revision_id AND c.user_id=u.user_id JOIN inbounds i ON i.revision_id=u.revision_id AND i.inbound_id=u.inbound_id LEFT JOIN stream_settings s ON s.revision_id=i.revision_id AND s.endpoint_kind='inbound' AND s.endpoint_id=i.inbound_id LEFT JOIN user_traffic t ON t.user_id=u.user_id WHERE u.revision_id=? AND u.subscription_token=? AND u.enabled=TRUE AND i.enabled=TRUE AND (u.traffic_limit_bytes IS NULL OR COALESCE(t.upload_bytes,0)+COALESCE(t.download_bytes,0)<u.traffic_limit_bytes) LIMIT 1",
         )
         .bind(revision)
         .bind(token)
@@ -207,7 +210,7 @@ impl Database {
 
     pub async fn list_users(&self, revision: i64) -> StoreResult<Vec<UserRecord>> {
         let rows = sqlx::query(
-            "SELECT u.user_id, u.inbound_id, u.email, u.enabled, u.flow, u.note, u.traffic_limit_bytes, u.expiry_at, u.subscription_token, c.credential_kind, c.uuid_value, c.method FROM users u JOIN user_credentials c ON c.revision_id=u.revision_id AND c.user_id=u.user_id WHERE u.revision_id=? ORDER BY u.user_id",
+            "SELECT u.user_id, u.inbound_id, u.email, u.enabled, u.flow, u.note, u.traffic_limit_bytes, u.expiry_at, u.subscription_token, c.credential_kind, c.uuid_value, c.method, COALESCE(t.upload_bytes,0) upload_bytes, COALESCE(t.download_bytes,0) download_bytes, COALESCE(e.status,CASE WHEN NOT u.enabled THEN 'disabled' WHEN u.expiry_at IS NOT NULL AND u.expiry_at<=UTC_TIMESTAMP(6) THEN 'expired' ELSE 'current' END) enforcement_status FROM users u JOIN user_credentials c ON c.revision_id=u.revision_id AND c.user_id=u.user_id LEFT JOIN user_traffic t ON t.user_id=u.user_id LEFT JOIN enforcement_state e ON e.user_id=u.user_id WHERE u.revision_id=? ORDER BY u.user_id",
         )
         .bind(revision)
         .fetch_all(self.pool())
@@ -227,6 +230,9 @@ impl Database {
                     credential_kind: row.try_get("credential_kind")?,
                     uuid: row.try_get("uuid_value")?,
                     method: row.try_get("method")?,
+                    upload_bytes: row.try_get("upload_bytes")?,
+                    download_bytes: row.try_get("download_bytes")?,
+                    enforcement_status: row.try_get("enforcement_status")?,
                 })
             })
             .collect::<Result<_, sqlx::Error>>()
@@ -249,13 +255,10 @@ impl Database {
             )
             .await?;
         let id = input.id.unwrap_or(
-            sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT MAX(inbound_id) FROM inbounds WHERE revision_id=?",
-            )
-            .bind(revision)
-            .fetch_one(&mut *tx)
-            .await?
-            .unwrap_or(0)
+            sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(inbound_id) FROM inbounds")
+                .fetch_one(&mut *tx)
+                .await?
+                .unwrap_or(0)
                 + 1,
         );
         let position = if input.id.is_some() {
@@ -324,13 +327,10 @@ impl Database {
             .fork_revision(state.desired_revision, actor, "Save outbound", class)
             .await?;
         let id = input.id.unwrap_or(
-            sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT MAX(outbound_id) FROM outbounds WHERE revision_id=?",
-            )
-            .bind(revision)
-            .fetch_one(&mut *tx)
-            .await?
-            .unwrap_or(0)
+            sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(outbound_id) FROM outbounds")
+                .fetch_one(&mut *tx)
+                .await?
+                .unwrap_or(0)
                 + 1,
         );
         let position = if input.id.is_some() {
@@ -395,13 +395,10 @@ impl Database {
             .fork_revision(state.desired_revision, actor, "Save user", class)
             .await?;
         let id = input.id.unwrap_or(
-            sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT MAX(user_id) FROM users WHERE revision_id=?",
-            )
-            .bind(revision)
-            .fetch_one(&mut *tx)
-            .await?
-            .unwrap_or(0)
+            sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(user_id) FROM users")
+                .fetch_one(&mut *tx)
+                .await?
+                .unwrap_or(0)
                 + 1,
         );
         sqlx::query("INSERT INTO users (revision_id,user_id,inbound_id,email,enabled,flow,note,traffic_limit_bytes,expiry_at,subscription_token) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE inbound_id=VALUES(inbound_id),email=VALUES(email),enabled=VALUES(enabled),flow=VALUES(flow),note=VALUES(note),traffic_limit_bytes=VALUES(traffic_limit_bytes),expiry_at=VALUES(expiry_at),subscription_token=VALUES(subscription_token)")

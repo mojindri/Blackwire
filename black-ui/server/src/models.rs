@@ -1,5 +1,7 @@
+use blackwire_store::{
+    ActivationClass, ActivationState, InboundRecord, OutboundRecord, PanelSettings, UserRecord,
+};
 use serde::{Deserialize, Serialize};
-use blackwire_store::{ActivationClass, ActivationState, InboundRecord, OutboundRecord, PanelSettings, UserRecord};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -63,7 +65,8 @@ pub struct Status {
     pub pending_maintenance_revision: Option<i64>,
     pub activation_state: ActivationState,
     pub last_activation_error: Option<String>,
-    pub grpc_reachable: bool,
+    pub runtime_reachable: bool,
+    pub last_reconciliation: String,
     pub inbounds: usize,
     pub outbounds: usize,
     pub users: usize,
@@ -194,33 +197,96 @@ pub struct ApplyResult {
     pub message: String,
 }
 
-fn default_transport() -> String { "tcp".into() }
-fn default_security() -> String { "none".into() }
+fn default_transport() -> String {
+    "tcp".into()
+}
+fn default_security() -> String {
+    "none".into()
+}
 
 impl From<PanelSettings> for Settings {
     fn from(value: PanelSettings) -> Self {
-        Self { firewall_auto_open: value.firewall_auto_open, public_base_url: value.public_base_url, subscription_host: value.subscription_host, enforcement_interval_seconds: value.enforcement_interval_seconds, adaptive_routing_enabled: value.adaptive_routing_enabled, adaptive_tuning_mode: value.adaptive_tuning_mode, adaptive_tuning_interval_seconds: value.adaptive_tuning_interval_seconds, adaptive_tuning_cooldown_seconds: value.adaptive_tuning_cooldown_seconds, adaptive_tuning_max_hysteria2_mbps: value.adaptive_tuning_max_hysteria2_mbps }
+        Self {
+            firewall_auto_open: value.firewall_auto_open,
+            public_base_url: value.public_base_url,
+            subscription_host: value.subscription_host,
+            enforcement_interval_seconds: value.enforcement_interval_seconds,
+            adaptive_routing_enabled: value.adaptive_routing_enabled,
+            adaptive_tuning_mode: value.adaptive_tuning_mode,
+            adaptive_tuning_interval_seconds: value.adaptive_tuning_interval_seconds,
+            adaptive_tuning_cooldown_seconds: value.adaptive_tuning_cooldown_seconds,
+            adaptive_tuning_max_hysteria2_mbps: value.adaptive_tuning_max_hysteria2_mbps,
+        }
     }
 }
 
 impl From<Settings> for PanelSettings {
     fn from(value: Settings) -> Self {
-        Self { firewall_auto_open: value.firewall_auto_open, public_base_url: value.public_base_url, subscription_host: value.subscription_host, enforcement_interval_seconds: value.enforcement_interval_seconds, adaptive_routing_enabled: value.adaptive_routing_enabled, adaptive_tuning_mode: value.adaptive_tuning_mode, adaptive_tuning_interval_seconds: value.adaptive_tuning_interval_seconds, adaptive_tuning_cooldown_seconds: value.adaptive_tuning_cooldown_seconds, adaptive_tuning_max_hysteria2_mbps: value.adaptive_tuning_max_hysteria2_mbps }
+        Self {
+            firewall_auto_open: value.firewall_auto_open,
+            public_base_url: value.public_base_url,
+            subscription_host: value.subscription_host,
+            enforcement_interval_seconds: value.enforcement_interval_seconds,
+            adaptive_routing_enabled: value.adaptive_routing_enabled,
+            adaptive_tuning_mode: value.adaptive_tuning_mode,
+            adaptive_tuning_interval_seconds: value.adaptive_tuning_interval_seconds,
+            adaptive_tuning_cooldown_seconds: value.adaptive_tuning_cooldown_seconds,
+            adaptive_tuning_max_hysteria2_mbps: value.adaptive_tuning_max_hysteria2_mbps,
+        }
     }
 }
 
 impl From<InboundRecord> for Inbound {
-    fn from(value: InboundRecord) -> Self { Self { id: value.id, tag: value.tag, listen: value.listen, port: value.port, protocol: value.protocol, enabled: value.enabled, transport: value.transport, security: value.security } }
+    fn from(value: InboundRecord) -> Self {
+        Self {
+            id: value.id,
+            tag: value.tag,
+            listen: value.listen,
+            port: value.port,
+            protocol: value.protocol,
+            enabled: value.enabled,
+            transport: value.transport,
+            security: value.security,
+        }
+    }
 }
 
 impl From<OutboundRecord> for Outbound {
-    fn from(value: OutboundRecord) -> Self { Self { id: value.id, tag: value.tag, protocol: value.protocol, enabled: value.enabled, address: value.address, port: value.port, transport: value.transport, security: value.security } }
+    fn from(value: OutboundRecord) -> Self {
+        Self {
+            id: value.id,
+            tag: value.tag,
+            protocol: value.protocol,
+            enabled: value.enabled,
+            address: value.address,
+            port: value.port,
+            transport: value.transport,
+            security: value.security,
+        }
+    }
 }
 
 impl From<UserRecord> for ManagedUser {
     fn from(value: UserRecord) -> Self {
         let subscription_token = value.subscription_token;
-        Self { id: value.id, inbound_id: value.inbound_id, email: value.email, uuid: value.uuid.unwrap_or_default(), flow: value.flow, credential_kind: value.credential_kind, method: value.method, note: value.note, enabled: value.enabled, traffic_limit_bytes: value.traffic_limit_bytes, expiry_at: value.expiry_at.map(|time| time.to_rfc3339()), sub_token: subscription_token.clone(), subscription_token, upload_bytes: 0, download_bytes: 0, enforcement_status: "current".into() }
+        Self {
+            id: value.id,
+            inbound_id: value.inbound_id,
+            email: value.email,
+            uuid: value.uuid.unwrap_or_default(),
+            flow: value.flow,
+            credential_kind: value.credential_kind,
+            method: value.method,
+            note: value.note,
+            enabled: value.enabled,
+            traffic_limit_bytes: value.traffic_limit_bytes,
+            expiry_at: value.expiry_at.map(|time| time.to_rfc3339()),
+            sub_token: subscription_token.clone(),
+            subscription_token,
+            upload_bytes: value.upload_bytes.min(i64::MAX as u64) as i64,
+            download_bytes: value.download_bytes.min(i64::MAX as u64) as i64,
+            enforcement_status: value.enforcement_status,
+        }
     }
 }
 

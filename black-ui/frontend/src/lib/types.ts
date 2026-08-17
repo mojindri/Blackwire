@@ -22,7 +22,8 @@ export interface Status {
   pendingMaintenanceRevision: number | null;
   activationState: "active" | "activating" | "pendingMaintenance" | "failed";
   lastActivationError: string | null;
-  grpcReachable: boolean;
+  runtimeReachable: boolean;
+  lastReconciliation: string;
   inbounds: number;
   outbounds: number;
   users: number;
