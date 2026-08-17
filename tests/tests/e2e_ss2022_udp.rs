@@ -89,7 +89,7 @@ async fn ss2022_udp_relay_roundtrip() {
     assert!(
         plain.windows(payload.len()).any(|w| w == payload),
         "echo payload not found in decrypted reply: {:?}",
-        &plain
+        plain
     );
 
     drop(_server);
