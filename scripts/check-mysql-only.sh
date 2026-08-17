@@ -8,6 +8,9 @@ fail() {
     exit 1
 }
 
+command -v rg >/dev/null 2>&1 \
+    || fail "required command 'rg' is not installed"
+
 if rg -n -i 'rusqlite|libsqlite|sqlite[_-]' --glob 'Cargo.toml' --glob '*.rs' \
     Cargo.toml crates black-ui/server; then
     fail "SQLite code or a direct SQLite dependency remains"
