@@ -843,9 +843,11 @@ async fn subscription_link(
                 .as_deref()
                 .or(user.password.as_deref())
                 .unwrap_or(uuid);
-            let security = (user.security == "tls")
-                .then_some("")
-                .unwrap_or("?insecure=1");
+            let security = if user.security == "tls" {
+                ""
+            } else {
+                "?insecure=1"
+            };
             Ok(format!(
                 "hysteria2://{}@{}:{}{}#{}",
                 url_escape(auth),

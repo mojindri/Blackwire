@@ -142,17 +142,23 @@ pub struct Config {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+/// Controls whether runtime traffic statistics are collected.
 pub struct StatsConfig {
+    /// Enables statistics collection.
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Management API listener and authentication settings.
 pub struct ApiConfig {
+    /// Socket address on which the management API listens.
     pub listen: String,
+    /// Optional bearer token required by API clients.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// Management service names exposed by the API.
     #[serde(default)]
     pub services: Vec<String>,
 }
@@ -238,8 +244,11 @@ pub struct QuicConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
+/// Maximum QUIC datagram size expressed as bytes or a named policy.
 pub enum DatagramSize {
+    /// Fixed datagram size in bytes.
     Fixed(usize),
+    /// Named size policy such as `"auto"`.
     Named(String),
 }
 

@@ -5,6 +5,7 @@
 //! - `ListOutbounds` — returns outbound tags
 //! - `GetInboundUsersCount` — count of VLESS users on a named inbound
 //! - `GetInboundUsers` — list VLESS users on a named inbound
+//!
 //! Configuration mutations are rejected. MySQL revisions are the only
 //! configuration write path.
 
