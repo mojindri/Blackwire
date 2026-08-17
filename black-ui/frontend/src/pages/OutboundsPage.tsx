@@ -4,7 +4,6 @@ import { Badge } from "../components/atoms/Badge";
 import { Button } from "../components/atoms/Button";
 import { SearchBar } from "../components/molecules/SearchBar";
 import { OutboundDrawer } from "../components/organisms/OutboundDrawer";
-import { outboundSummary } from "../lib/outboundConfigurator";
 import type { CapabilityMap, Outbound, OutboundInput } from "../lib/types";
 
 export function OutboundsPage({
@@ -30,8 +29,7 @@ export function OutboundsPage({
     const needle = query.trim().toLowerCase();
     if (!needle) return outbounds;
     return outbounds.filter((outbound) => {
-      const summary = outboundSummary(outbound);
-      return [outbound.tag, outbound.protocol, summary.network, summary.security, summary.detail]
+      return [outbound.tag, outbound.protocol, outbound.transport, outbound.security, outbound.address ?? ""]
         .join(" ")
         .toLowerCase()
         .includes(needle);
@@ -71,23 +69,22 @@ export function OutboundsPage({
             </thead>
             <tbody>
               {filtered.map((outbound) => {
-                const summary = outboundSummary(outbound);
                 return (
                   <tr key={outbound.id}>
                     <td>
                       <button className="link-cell" onClick={() => openEditor(outbound)} type="button">
                         {outbound.tag}
                       </button>
-                      <small>{summary.detail || outbound.protocol}</small>
+                      <small>{outbound.address ? `${outbound.address}:${outbound.port ?? "—"}` : outbound.protocol}</small>
                     </td>
                     <td>{outbound.protocol}</td>
-                    <td>{summary.network}</td>
+                    <td>{outbound.transport}</td>
                     <td>
                       <div className="table-chips">
-                        <Badge tone={summary.security === "none" ? "gray" : "cyan"}>{summary.security}</Badge>
+                        <Badge tone={outbound.security === "none" ? "gray" : "cyan"}>{outbound.security}</Badge>
                       </div>
                     </td>
-                    <td>{summary.detail || "custom"}</td>
+                    <td>{outbound.address ? `${outbound.address}:${outbound.port ?? "—"}` : "direct"}</td>
                     <td>
                       <Badge tone={outbound.enabled ? "green" : "gray"}>{outbound.enabled ? "enabled" : "disabled"}</Badge>
                     </td>

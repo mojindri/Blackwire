@@ -36,7 +36,6 @@ static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemall
 static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -53,6 +52,7 @@ use blackwire_config::schema::{
 };
 use blackwire_config::ConfigManager;
 use blackwire_core::{inbound_listener_changes, requires_instance_restart, Instance};
+use blackwire_store::Database;
 
 struct RunningInstance {
     config: Arc<Config>,
@@ -84,29 +84,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Start the proxy with the given config file.
+    /// Start the proxy from the desired MySQL configuration revision.
     ///
-    /// The proxy runs until you press Ctrl-C or send SIGTERM/SIGINT.
-    /// If the config file changes on disk while running, the proxy
-    /// automatically reloads it without dropping any live connections.
+    /// The proxy runs until you press Ctrl-C or send SIGTERM/SIGINT and
+    /// reconciles desired MySQL revisions while it is running.
     Run(RunArgs),
 
-    /// Parse and validate a config file, then exit.
-    ///
-    /// Prints "Config OK" and exits 0 if the config is valid.
-    /// Prints a detailed error and exits 1 if anything is wrong.
-    Test(TestArgs),
+    /// Initialize, migrate, inspect, validate, seed, or roll back MySQL state.
+    #[command(subcommand)]
+    Db(DbCommand),
 
     /// Generate a new X25519 key pair for use with REALITY transport.
     ///
     /// Prints the private key and public key as hex strings.
-    /// Copy them into your config.json under `realitySettings`.
     X25519,
 
     /// Generate a new random UUID v4 for use as a VLESS user ID.
     ///
-    /// Prints the UUID in the standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
-    /// format. Copy it into your config.json under `clients[n].id`.
+    /// Prints the UUID in the standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` format.
     Uuid,
 
     /// Inspect or close active in-process connections.
@@ -128,45 +123,51 @@ enum Command {
 /// Arguments for the `run` subcommand.
 #[derive(clap::Args)]
 struct RunArgs {
-    /// Path to the JSON config file.
-    ///
-    /// Example: `blackwire run -c /etc/blackwire/config.json`
-    #[arg(short = 'c', long = "config", value_name = "PATH")]
-    config: PathBuf,
-
     /// Override the operating profile (`compat` or `fast`).
     ///
-    /// Overrides the `profile` field in the config file. `fast` enforces a
+    /// Overrides the profile stored in MySQL. `fast` enforces a
     /// latency-first subset: VLESS+TCP only, no sniffing, no FakeIP.
     ///
-    /// Example: `blackwire run -c config.json --profile fast`
+    /// Example: `blackwire run --profile fast`
     #[arg(long = "profile", value_name = "PROFILE")]
     profile: Option<ProfileMode>,
 }
 
-/// Arguments for the `test` subcommand.
-#[derive(clap::Args)]
-struct TestArgs {
-    /// Path to the JSON config file to validate.
-    ///
-    /// Example: `blackwire test -c /etc/blackwire/config.json`
-    #[arg(short = 'c', long = "config", value_name = "PATH")]
-    config: PathBuf,
-
-    /// Override the operating profile (`compat` or `fast`).
-    ///
-    /// Validates the config against the given profile's constraints.
-    #[arg(long = "profile", value_name = "PROFILE")]
-    profile: Option<ProfileMode>,
+#[derive(Subcommand)]
+enum DbCommand {
+    /// Create or migrate the MySQL schema and idle baseline revision.
+    Init,
+    /// Apply pending versioned schema migrations.
+    Migrate,
+    /// Validate the desired relational configuration revision.
+    Validate,
+    /// Print schema and desired/active revision status.
+    Status,
+    /// Print recent immutable configuration revisions.
+    History {
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    /// Create a new desired revision from a named relational preset.
+    Seed {
+        #[arg(value_name = "PRESET")]
+        preset: String,
+    },
+    /// Create a maintenance revision restoring a historical snapshot.
+    Rollback {
+        #[arg(value_name = "REVISION")]
+        revision: i64,
+    },
+    /// Confirm activation of the current pending-maintenance revision.
+    ActivateMaintenance {
+        #[arg(value_name = "REVISION")]
+        revision: i64,
+    },
 }
 
 /// Arguments for the `explain-cost` subcommand.
 #[derive(clap::Args)]
 struct ExplainCostArgs {
-    /// Path to the JSON config file to inspect.
-    #[arg(short = 'c', long = "config", value_name = "PATH")]
-    config: PathBuf,
-
     /// Override the operating profile before calculating cost.
     #[arg(long = "profile", value_name = "PROFILE")]
     profile: Option<ProfileMode>,
@@ -372,7 +373,7 @@ fn main() {
             }
         }
 
-        Command::Test(args) => {
+        Command::Db(command) => {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -384,11 +385,10 @@ fn main() {
                 }
             };
 
-            if let Err(e) = rt.block_on(test_config(args)) {
-                eprintln!("Config error: {e:#}");
+            if let Err(e) = rt.block_on(cmd_db(command)) {
+                eprintln!("Database error: {e:#}");
                 std::process::exit(1);
             }
-            println!("Config OK");
         }
 
         Command::X25519 => cmd_x25519(),
@@ -464,32 +464,65 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
-        config  = %args.config.display(),
-        "blackwire starting"
+        "blackwire starting from MySQL control plane"
     );
 
-    // Step 2: Load and validate the config.
-    // `ConfigManager::load()` reads the file, substitutes ${ENV} vars,
-    // parses JSON, and runs the validator rules.
-    let manager: Arc<ConfigManager> = ConfigManager::load(&args.config)
+    // Step 2: Load and validate the desired immutable database revision.
+    let database = Database::connect_from_env()
         .await
-        .with_context(|| format!("loading config from {}", args.config.display()))?;
+        .context("connecting to MySQL control plane")?;
+    database.verify_schema().await.context(
+        "checking MySQL schema; run `blackwire db init` or `blackwire db migrate`",
+    )?;
+    let stored = database
+        .load_desired_config()
+        .await
+        .context("loading desired configuration revision")?;
+    let initial_revision = stored.revision;
+    let manager: Arc<ConfigManager> = ConfigManager::from_config(stored.config);
 
     // Apply CLI profile override and run Fast Profile validation.
     let profile_override = args.profile;
     apply_profile_override_and_validate(&manager.get(), profile_override)?;
 
-    // Step 3: Start the file watcher for hot-reload.
-    // The watcher runs in a background Tokio task. When the config file
-    // changes on disk, `ConfigManager::watch()` parses the new version and
-    // atomically swaps it in. This does NOT restart any listeners — only
-    // config values that are consulted per-connection (like routing rules)
-    // change immediately.
+    // Step 3: Follow desired MySQL revisions. Polling is authoritative; an API
+    // notification may reduce latency later but is never required for safety.
     {
         let manager_clone = Arc::clone(&manager);
+        let database = database.clone();
         tokio::spawn(async move {
-            if let Err(e) = manager_clone.watch().await {
-                error!(error = %e, "config watcher failed");
+            let mut observed_revision = initial_revision;
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let state = match database.state().await {
+                    Ok(state) => state,
+                    Err(error) => {
+                        warn!(%error, "MySQL unavailable; retaining active in-memory revision");
+                        continue;
+                    }
+                };
+                if state.desired_revision == observed_revision
+                    || state.pending_maintenance_revision == Some(state.desired_revision)
+                {
+                    continue;
+                }
+                match database.load_config(state.desired_revision).await {
+                    Ok(stored) => match manager_clone.replace(stored.config) {
+                        Ok(()) => observed_revision = stored.revision,
+                        Err(error) => {
+                            let _ = database
+                                .record_activation_failure(state.desired_revision, &error.to_string())
+                                .await;
+                            error!(revision = state.desired_revision, %error, "database revision validation failed");
+                        }
+                    },
+                    Err(error) => {
+                        let _ = database
+                            .record_activation_failure(state.desired_revision, &error.to_string())
+                            .await;
+                        error!(revision = state.desired_revision, %error, "database revision load failed");
+                    }
+                }
             }
         });
     }
@@ -509,6 +542,10 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
             .await
             .context("building proxy instance from config")?,
     })));
+    database
+        .mark_active(initial_revision)
+        .await
+        .context("recording active MySQL revision")?;
 
     if let Some(api_config) = api_config {
         let management: blackwire_api::management::ManagementHandle = Arc::new(RuntimeControl {
@@ -908,22 +945,84 @@ impl InboundManagement for RuntimeControl {
     }
 }
 
-// ── `test` subcommand ─────────────────────────────────────────────────────────
-
-/// Parse and validate the config file; return Ok or an error.
-async fn test_config(args: TestArgs) -> Result<()> {
-    let manager = ConfigManager::load(&args.config)
+async fn cmd_db(command: DbCommand) -> Result<()> {
+    let database = Database::connect_from_env()
         .await
-        .with_context(|| format!("loading config from {}", args.config.display()))?;
-    apply_profile_override_and_validate(&manager.get(), args.profile)?;
+        .context("connecting to MySQL control plane")?;
+    match command {
+        DbCommand::Init | DbCommand::Migrate => {
+            database.migrate().await.context("applying MySQL migrations")?;
+            database.verify_schema().await?;
+            println!("MySQL schema is ready");
+        }
+        DbCommand::Validate => {
+            database.verify_schema().await?;
+            let stored = database.load_desired_config().await?;
+            stored
+                .config
+                .validate()
+                .map_err(|error| anyhow::anyhow!("configuration validation error: {error}"))?;
+            println!("Revision {} is valid", stored.revision);
+        }
+        DbCommand::Status => {
+            database.verify_schema().await?;
+            let state = database.state().await?;
+            println!("schema={}", blackwire_store::EXPECTED_SCHEMA_VERSION);
+            println!("desired_revision={}", state.desired_revision);
+            println!(
+                "active_revision={}",
+                state.active_revision.map_or_else(|| "none".into(), |v| v.to_string())
+            );
+            println!("state={:?}", state.activation_state);
+            if let Some(error) = state.last_error {
+                println!("last_error={error}");
+            }
+        }
+        DbCommand::History { limit } => {
+            database.verify_schema().await?;
+            for revision in database.history(limit).await? {
+                println!(
+                    "{}\t{}\t{:?}\t{}\t{}",
+                    revision.revision,
+                    revision.created_at.to_rfc3339(),
+                    revision.activation_class,
+                    revision.actor,
+                    revision.summary
+                );
+            }
+        }
+        DbCommand::Seed { preset } => {
+            database.verify_schema().await?;
+            match preset.as_str() {
+                "socks-local" => {
+                    let result = database.save_inbound("blackwire-cli", blackwire_store::InboundWrite {
+                        id: None, tag: "socks-local".into(), listen: "127.0.0.1".into(), port: 1080,
+                        protocol: "socks".into(), enabled: true, transport: "tcp".into(), security: "none".into(),
+                    }).await?;
+                    println!("created revision {} ({:?})", result.revision, result.state);
+                }
+                other => anyhow::bail!("unknown seed preset '{other}'; available: socks-local"),
+            }
+        }
+        DbCommand::Rollback { revision } => {
+            database.verify_schema().await?;
+            let result = database.rollback(revision, "blackwire-cli").await?;
+            println!("{}", result.message);
+        }
+        DbCommand::ActivateMaintenance { revision } => {
+            database.verify_schema().await?;
+            database.confirm_maintenance(revision).await?;
+            println!("revision {revision} released for maintenance activation");
+        }
+    }
     Ok(())
 }
 
 async fn cmd_explain_cost(args: ExplainCostArgs) -> Result<()> {
-    let manager = ConfigManager::load(&args.config)
-        .await
-        .with_context(|| format!("loading config from {}", args.config.display()))?;
-    let config = effective_config(manager.get(), args.profile);
+    let database = Database::connect_from_env().await?;
+    database.verify_schema().await?;
+    let stored = database.load_desired_config().await?;
+    let config = effective_config(Arc::new(stored.config), args.profile);
     let report = explain_cost(&config);
     print!("{}", report.render_text());
     Ok(())

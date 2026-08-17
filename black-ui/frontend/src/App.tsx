@@ -8,7 +8,6 @@ import { UsersPage } from "./pages/UsersPage";
 import { InboundsPage } from "./pages/InboundsPage";
 import { OutboundsPage } from "./pages/OutboundsPage";
 import { SectionsPage } from "./pages/SectionsPage";
-import { ConfigPage } from "./pages/ConfigPage";
 import { ServicePage } from "./pages/ServicePage";
 import { SettingsPage } from "./pages/SettingsPage";
 
@@ -17,7 +16,6 @@ const emptyData: AppData = {
   settings: null,
   inbounds: [],
   outbounds: [],
-  sections: [],
   users: [],
   traffic: { users: [], inbounds: [] },
   capabilities: null,
@@ -54,17 +52,16 @@ export default function App() {
       setData((current) => ({ ...current, status }));
       return;
     }
-    const [settings, inbounds, outbounds, sections, users, traffic, capabilities, service] = await Promise.all([
+    const [settings, inbounds, outbounds, users, traffic, capabilities, service] = await Promise.all([
       api.settings(),
       api.inbounds(),
       api.outbounds(),
-      api.sections(),
       api.users(),
       api.traffic().catch(() => ({ users: [], inbounds: [] })),
       api.capabilities(),
       api.serviceStatus().catch(() => null)
     ]);
-    setData({ status, settings, inbounds, outbounds, sections, users, traffic, capabilities, service });
+    setData({ status, settings, inbounds, outbounds, users, traffic, capabilities, service });
   }, []);
 
   useEffect(() => {
@@ -115,7 +112,7 @@ export default function App() {
     api.logout().catch(() => undefined);
     clearToken();
     setTokenState("");
-    setData((current) => ({ ...current, settings: null, inbounds: [], outbounds: [], sections: [], users: [] }));
+    setData((current) => ({ ...current, settings: null, inbounds: [], outbounds: [], users: [] }));
   };
 
   const actions = useMemo(
@@ -144,9 +141,6 @@ export default function App() {
       createOutbound: (input: OutboundInput) => run(() => api.createOutbound(input), "Outbound saved", "Creating outbound..."),
       updateOutbound: (id: number, input: OutboundInput) => run(() => api.updateOutbound(id, input), "Outbound saved", "Saving outbound..."),
       deleteOutbound: (id: number) => run(() => api.deleteOutbound(id), "Outbound deleted", "Deleting outbound..."),
-      saveSection: (name: string, enabled: boolean, value: string) =>
-        run(() => api.updateSection(name, { enabled, value }), "Advanced config saved", "Saving advanced config..."),
-      importConfig: (value: unknown) => run(() => api.configImport(value), "Config imported", "Importing config..."),
       restartBlackwire: () => run(api.serviceRestartBlackwire, "Blackwire restarted", "Restarting Blackwire..."),
       saveSettings: (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved", "Saving settings..."),
       uuid: async () => (await api.uuid()).uuid
@@ -166,7 +160,6 @@ export default function App() {
       busy={busy}
       onPage={setPage}
       onRefresh={() => run(refresh, "Refreshed", "Refreshing...")}
-      onApply={() => run(api.configApply, "Config applied", "Applying config...")}
       onLogout={logout}
     >
       {page === "dashboard" ? <DashboardPage data={data} /> : null}
@@ -205,22 +198,7 @@ export default function App() {
         />
       ) : null}
       {page === "sections" ? (
-        <SectionsPage
-          sections={data.sections}
-          capabilities={data.capabilities}
-          outbounds={data.outbounds}
-          busy={busy}
-          onSave={actions.saveSection}
-        />
-      ) : null}
-      {page === "config" ? (
-        <ConfigPage
-          busy={busy}
-          onValidate={() => run(api.configValidate, "Config valid", "Validating config...")}
-          onWrite={() => run(api.configWrite, "Config written", "Writing config...")}
-          onApply={() => run(api.configApply, "Config applied", "Applying config...")}
-          onImport={actions.importConfig}
-        />
+        <SectionsPage status={data.status} />
       ) : null}
       {page === "service" ? <ServicePage service={data.service} busy={busy} onRestart={actions.restartBlackwire} /> : null}
       {page === "settings" ? <SettingsPage settings={data.settings} busy={busy} onSave={actions.saveSettings} /> : null}

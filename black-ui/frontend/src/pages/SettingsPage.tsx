@@ -40,16 +40,9 @@ export function SettingsPage({
     <div className="page">
       <div className="page-title">
         <h1>Settings</h1>
-        <p>Local panel paths, runtime gRPC, and subscription host.</p>
+        <p>Public access, firewall automation, subscriptions, and enforcement.</p>
       </div>
       <section className="work-panel settings-panel">
-        <Field label="Config path">
-          <Input value={form.configPath} onChange={(e) => updateForm({ configPath: e.target.value })} />
-        </Field>
-        <Switch checked={form.grpcEnabled} onChange={(grpcEnabled) => updateForm({ grpcEnabled })} label="Use live gRPC apply and traffic" />
-        <Field label="gRPC address">
-          <Input value={form.grpcAddress} onChange={(e) => updateForm({ grpcAddress: e.target.value })} />
-        </Field>
         <Switch
           checked={form.firewallAutoOpen}
           onChange={(firewallAutoOpen) => updateForm({ firewallAutoOpen })}

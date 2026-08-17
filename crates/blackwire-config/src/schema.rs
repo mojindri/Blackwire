@@ -107,7 +107,8 @@ pub struct Config {
     pub limits: LimitsConfig,
 
     /// Ports and protocols the proxy listens on.
-    #[validate(length(min = 1, message = "at least one inbound is required"), nested)]
+    // Zero inbounds is a valid idle control-plane state.
+    #[validate(nested)]
     pub inbounds: Vec<InboundConfig>,
 
     /// Protocols used to forward traffic.
@@ -947,14 +948,14 @@ mod tests {
     }
 
     #[test]
-    fn empty_inbounds_fails_validation() {
+    fn empty_inbounds_is_valid_idle_control_plane() {
         let json = r#"{
             "inbounds": [],
             "outbounds": [{"tag": "d", "protocol": "freedom"}]
         }"#;
 
         let cfg: Config = serde_json::from_str(json).unwrap();
-        assert!(cfg.validate().is_err());
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]

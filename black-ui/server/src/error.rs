@@ -34,9 +34,9 @@ impl AppError {
         }
     }
 
-    pub fn too_many_requests(message: impl Into<String>) -> Self {
+    pub fn not_found(message: impl Into<String>) -> Self {
         Self {
-            status: StatusCode::TOO_MANY_REQUESTS,
+            status: StatusCode::NOT_FOUND,
             message: message.into(),
         }
     }

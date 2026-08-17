@@ -1,21 +1,15 @@
 import type {
   ApplyResult,
   CapabilityMap,
-  ConfigSection,
   Inbound,
   InboundInput,
   LoginResponse,
   ManagedUser,
   Outbound,
   OutboundInput,
-  RealityClientValues,
-  RealityGeneratedValues,
   ServiceStatus,
   Settings,
   Status,
-  TlsSelfSignedInput,
-  TlsSelfSignedResult,
-  TlsServerValues,
   TrafficSnapshot,
   UserInput
 } from "./types";
@@ -67,12 +61,6 @@ export const api = {
   updateSettings: (settings: Settings) =>
     request<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
   traffic: () => request<TrafficSnapshot>("/api/runtime/traffic"),
-  probe: () => request<{ reachable: boolean; address: string }>("/api/runtime/probe", { method: "POST" }),
-  realityClientValues: () => request<RealityClientValues[]>("/api/reality/client-values"),
-  realityGenerateValues: () => request<RealityGeneratedValues>("/api/reality/generate-values", { method: "POST" }),
-  tlsServerValues: () => request<TlsServerValues[]>("/api/tls/server-values"),
-  tlsGenerateSelfSigned: (input: TlsSelfSignedInput) =>
-    request<TlsSelfSignedResult>("/api/tls/generate-self-signed", body(input)),
   inbounds: () => request<Inbound[]>("/api/inbounds"),
   createInbound: (input: InboundInput) => request<ApplyResult>("/api/inbounds", body(input)),
   updateInbound: (id: number, input: InboundInput) =>
@@ -100,14 +88,6 @@ export const api = {
     expiryAt?: string | null;
   }) => request<ApplyResult>("/api/users/bulk", body(payload)),
   uuid: () => request<{ uuid: string }>("/api/uuid", { method: "POST" }),
-  sections: () => request<ConfigSection[]>("/api/config/sections"),
-  updateSection: (name: string, input: { enabled: boolean; value: string }) =>
-    request<ApplyResult>(`/api/config/sections/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(input) }),
-  configPreview: () => request<unknown>("/api/config/preview"),
-  configImport: (value: unknown) => request<ApplyResult>("/api/config/import", body(value)),
-  configValidate: () => request<{ valid: true }>("/api/config/validate", { method: "POST" }),
-  configWrite: () => request<ApplyResult>("/api/config/write", { method: "POST" }),
-  configApply: () => request<ApplyResult>("/api/config/apply", { method: "POST" }),
   serviceStatus: () => request<ServiceStatus>("/api/service/status"),
   serviceRestartBlackwire: () => request<ServiceStatus>("/api/service/restart-blackwire", { method: "POST" }),
   serviceLogs: () => request<string[]>("/api/service/logs")
