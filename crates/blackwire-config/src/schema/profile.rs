@@ -1171,7 +1171,7 @@ mod tests {
                 listen: "127.0.0.1".parse::<IpAddr>().unwrap(),
                 port: 443,
                 protocol: Protocol::Vless,
-                settings: serde_json::json!({}),
+                settings: Default::default(),
                 stream_settings: Some(StreamSettingsConfig {
                     security: SecurityType::Reality,
                     ..Default::default()
@@ -1182,7 +1182,7 @@ mod tests {
             outbounds: vec![OutboundConfig {
                 tag: "direct".into(),
                 protocol: Protocol::Freedom,
-                settings: serde_json::json!({}),
+                settings: Default::default(),
                 stream_settings: None,
             }],
             stats: None,

@@ -40,13 +40,12 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use serde_json::Value;
 use tracing::info;
 
 use blackwire_app::geo::{GeoIpMatcher, GeoSiteMatcher};
 use blackwire_app::router::LiveRouter;
-use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_app::set_user_bandwidth_policies;
+use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_config::schema::{Config, Protocol};
 use blackwire_protocol::ss2022::inbound::Ss2022AuthStore;
 use blackwire_protocol::trojan::inbound::TrojanAuthStore;
@@ -240,7 +239,7 @@ impl ReloadState {
                 Protocol::Hysteria2 => {
                     if let Some(auth) = self.hysteria2_auth_stores.get(&in_cfg.tag) {
                         let settings = &in_cfg.settings;
-                        let password = settings["auth"].as_str().unwrap_or_default().to_string();
+                        let password = settings.auth.clone().unwrap_or_default();
                         let user = crate::hysteria2::hysteria2_user_label(settings, &password);
                         auth.replace(password, user);
                         info!(tag = %in_cfg.tag, "Hysteria2 auth store refreshed");
@@ -470,84 +469,51 @@ pub fn requires_instance_restart(old: &Config, new: &Config) -> bool {
     false
 }
 
-fn normalized_limits_value(limits: &blackwire_config::schema::LimitsConfig) -> Value {
-    let mut value = serde_json::to_value(limits).unwrap_or(Value::Null);
-    if let Some(obj) = value.as_object_mut() {
-        obj.remove("maxConnectionsPerUser");
-        obj.remove("max_connections_per_user");
-    }
-    value
+fn normalized_limits_value(limits: &blackwire_config::schema::LimitsConfig) -> Vec<u8> {
+    let mut limits = limits.clone();
+    limits.max_connections_per_user = None;
+    serde_json::to_vec(&limits).unwrap_or_default()
 }
 
-fn normalized_inbound_value(inbound: &blackwire_config::schema::InboundConfig) -> Value {
-    let mut value = serde_json::to_value(inbound).unwrap_or(Value::Null);
-    let Some(obj) = value.as_object_mut() else {
-        return value;
-    };
-
+fn normalized_inbound_value(inbound: &blackwire_config::schema::InboundConfig) -> Vec<u8> {
+    let mut inbound = inbound.clone();
     // Sniffing is hot-swapped separately and supported inbound auth material is
     // refreshed in place.
-    obj.remove("sniffing");
-    if let Some(settings) = obj.get_mut("settings").and_then(|v| v.as_object_mut()) {
-        match inbound.protocol {
-            Protocol::Vless | Protocol::Vmess | Protocol::Trojan => {
-                settings.remove("clients");
-            }
-            Protocol::Shadowsocks => {
-                settings.remove("password");
-                settings.remove("email");
-                settings.remove("name");
-                settings.remove("clients");
-            }
-            Protocol::Hysteria2 => {
-                settings.remove("auth");
-                settings.remove("password");
-                settings.remove("clients");
-            }
-            Protocol::Tuic => {
-                settings.remove("users");
-                settings.remove("uuid");
-                settings.remove("id");
-                settings.remove("password");
-                settings.remove("email");
-                settings.remove("name");
-            }
-            _ => {}
+    inbound.sniffing = None;
+    match inbound.protocol {
+        Protocol::Vless | Protocol::Vmess | Protocol::Trojan => {
+            inbound.settings.clients.clear();
         }
-        if inbound.protocol != Protocol::Vless
-            && inbound.protocol != Protocol::Vmess
-            && inbound.protocol != Protocol::Trojan
-        {
-            strip_client_bandwidth_fields(settings.get_mut("clients"));
-            strip_client_bandwidth_fields(settings.get_mut("users"));
-        } else {
-            strip_client_bandwidth_fields(settings.get_mut("clients"));
+        Protocol::Shadowsocks => {
+            inbound.settings.password = None;
+            inbound.settings.email = None;
+            inbound.settings.name = None;
+            inbound.settings.clients.clear();
+        }
+        Protocol::Hysteria2 => {
+            inbound.settings.auth = None;
+            inbound.settings.password = None;
+            inbound.settings.clients.clear();
+        }
+        Protocol::Tuic => {
+            inbound.settings.users.clear();
+            inbound.settings.uuid = None;
+            inbound.settings.password = None;
+            inbound.settings.email = None;
+            inbound.settings.name = None;
+        }
+        _ => {
+            strip_client_bandwidth_fields(&mut inbound.settings.clients);
+            strip_client_bandwidth_fields(&mut inbound.settings.users);
         }
     }
-
-    value
+    serde_json::to_vec(&inbound).unwrap_or_default()
 }
 
-fn strip_client_bandwidth_fields(value: Option<&mut Value>) {
-    let Some(Value::Array(entries)) = value else {
-        return;
-    };
+fn strip_client_bandwidth_fields(entries: &mut [blackwire_config::schema::EndpointUser]) {
     for entry in entries {
-        let Some(obj) = entry.as_object_mut() else {
-            continue;
-        };
-        for key in [
-            "upMbps",
-            "up_mbps",
-            "uploadMbps",
-            "upload_mbps",
-            "downMbps",
-            "down_mbps",
-            "downloadMbps",
-            "download_mbps",
-        ] {
-            obj.remove(key);
-        }
+        entry.up_mbps = None;
+        entry.down_mbps = None;
     }
 }
 

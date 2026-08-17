@@ -172,24 +172,21 @@ fn x_padding_header(cfg: &SplitHttpConfig) -> Option<(String, String)> {
     Some((key, value))
 }
 
-fn x_padding_len(value: Option<&serde_json::Value>) -> Option<usize> {
+fn x_padding_len(value: Option<&blackwire_config::schema::PaddingBytes>) -> Option<usize> {
+    use blackwire_config::schema::PaddingBytes;
     let value = value?;
-    if let Some(n) = value.as_u64() {
-        return Some(n.min(4096) as usize);
+    if let PaddingBytes::Fixed(n) = value {
+        return Some((*n).min(4096));
     }
-    if let Some(s) = value.as_str() {
+    if let PaddingBytes::Range(s) = value {
         let first = s
             .split(['-', ','])
             .next()
             .and_then(|v| v.trim().parse::<usize>().ok())?;
         return Some(first.min(4096));
     }
-    if let Some(obj) = value.as_object() {
-        for key in ["from", "min", "Min", "minLength"] {
-            if let Some(n) = obj.get(key).and_then(|v| v.as_u64()) {
-                return Some(n.min(4096) as usize);
-            }
-        }
+    if let PaddingBytes::Bounds(bounds) = value {
+        return bounds.from.or(bounds.min).map(|n| n.min(4096));
     }
     None
 }
@@ -1721,7 +1718,7 @@ mod tests {
             splithttp_settings: Some(SplitHttpConfig {
                 path: "/split".into(),
                 mode: "stream-one".into(),
-                x_padding_bytes: Some(serde_json::Value::String("4-8".into())),
+                x_padding_bytes: Some(blackwire_config::schema::PaddingBytes::Range("4-8".into())),
                 x_padding_method: "repeat-x".into(),
                 x_padding_header: "X-Test-Padding".into(),
                 ..Default::default()

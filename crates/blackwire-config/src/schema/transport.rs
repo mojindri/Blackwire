@@ -229,14 +229,13 @@ pub struct SplitHttpConfig {
     #[serde(default)]
     pub headers: std::collections::HashMap<String, String>,
 
-    /// Xray xHTTP padding byte range. Accepted as native JSON so string/range
-    /// forms remain config-compatible.
+    /// Xray xHTTP padding byte count or range.
     #[serde(
         default,
         rename = "xPaddingBytes",
         skip_serializing_if = "Option::is_none"
     )]
-    pub x_padding_bytes: Option<serde_json::Value>,
+    pub x_padding_bytes: Option<PaddingBytes>,
 
     /// Xray xHTTP padding method (`repeat-x`, `tokenish`, etc.).
     #[serde(default, rename = "xPaddingMethod")]
@@ -286,18 +285,54 @@ pub struct SplitHttpConfig {
     #[serde(default, rename = "scMaxBufferedPosts")]
     pub sc_max_buffered_posts: usize,
 
-    /// Xray Xmux settings. The current implementation supports h2 packet-up
-    /// multi-session multiplexing; this field is retained for config parity.
+    /// Xray Xmux settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub xmux: Option<serde_json::Value>,
+    pub xmux: Option<XmuxConfig>,
 
-    /// Xray downloadSettings. Retained as native JSON for config parity.
+    /// Xray download-side transport selection.
     #[serde(
         default,
         rename = "downloadSettings",
         skip_serializing_if = "Option::is_none"
     )]
-    pub download_settings: Option<serde_json::Value>,
+    pub download_settings: Option<DownloadSettings>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PaddingBytes {
+    Fixed(usize),
+    Range(String),
+    Bounds(PaddingBounds),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PaddingBounds {
+    #[serde(alias = "Min", alias = "minLength")]
+    pub min: Option<usize>,
+    #[serde(alias = "Max", alias = "maxLength")]
+    pub max: Option<usize>,
+    pub from: Option<usize>,
+    pub to: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct XmuxConfig {
+    pub max_concurrency: Option<usize>,
+    pub max_connections: Option<usize>,
+    pub c_max_reuse_times: Option<usize>,
+    pub h_max_request_times: Option<usize>,
+    pub h_max_reusable_secs: Option<u64>,
+    pub h_keep_alive_period: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DownloadSettings {
+    pub network: Option<NetworkType>,
+    pub security: Option<SecurityType>,
 }
 
 fn default_splithttp_method() -> String {

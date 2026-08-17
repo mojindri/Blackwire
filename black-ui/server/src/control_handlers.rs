@@ -4,18 +4,18 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use base64::Engine as _;
 use blackwire_store::{InboundWrite, OutboundWrite, PanelSettings, UserWrite};
 use chrono::{DateTime, Utc};
-use serde_json::json;
 use serde::Deserialize;
+use serde_json::json;
 
 use crate::{
     capabilities,
     error::{ApiResult, AppError},
     models::{
-        ApplyResult, Inbound, InboundInput, LoginInput, LoginResponse, ManagedUser,
-        Outbound, OutboundInput, ServiceStatus, Settings, SetupInput, Status, TrafficSnapshot,
-        UserInput,
+        ApplyResult, Inbound, InboundInput, LoginInput, LoginResponse, ManagedUser, Outbound,
+        OutboundInput, ServiceStatus, Settings, SetupInput, Status, TrafficSnapshot, UserInput,
     },
     mysql_auth as auth,
     mysql_state::AppState,
@@ -30,7 +30,11 @@ pub async fn setup(
         return error.into_response();
     }
     match auth::create_admin_session(&state, &input.username, &input.password).await {
-        Ok((token, username)) => ([(header::SET_COOKIE, auth::session_cookie(&token))], Json(LoginResponse { token, username })).into_response(),
+        Ok((token, username)) => (
+            [(header::SET_COOKIE, auth::session_cookie(&token))],
+            Json(LoginResponse { token, username }),
+        )
+            .into_response(),
         Err(error) => error.into_response(),
     }
 }
@@ -85,9 +89,21 @@ pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
         auth::require(&headers, &state).await?;
     }
     let config = state.store.state().await.map_err(store_error)?;
-    let inbounds = state.store.list_inbounds(config.desired_revision).await.map_err(store_error)?;
-    let outbounds = state.store.list_outbounds(config.desired_revision).await.map_err(store_error)?;
-    let users = state.store.list_users(config.desired_revision).await.map_err(store_error)?;
+    let inbounds = state
+        .store
+        .list_inbounds(config.desired_revision)
+        .await
+        .map_err(store_error)?;
+    let outbounds = state
+        .store
+        .list_outbounds(config.desired_revision)
+        .await
+        .map_err(store_error)?;
+    let users = state
+        .store
+        .list_users(config.desired_revision)
+        .await
+        .map_err(store_error)?;
     Ok(Json(Status {
         setup_required,
         database_connected: true,
@@ -105,9 +121,19 @@ pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
     }))
 }
 
-pub async fn get_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Settings> {
+pub async fn get_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Settings> {
     auth::require(&headers, &state).await?;
-    Ok(Json(state.store.panel_settings().await.map_err(store_error)?.into()))
+    Ok(Json(
+        state
+            .store
+            .panel_settings()
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
 pub async fn update_settings(
@@ -117,177 +143,620 @@ pub async fn update_settings(
 ) -> ApiResult<Settings> {
     auth::require(&headers, &state).await?;
     let stored: PanelSettings = settings.into();
-    state.store.save_panel_settings(&stored).await.map_err(store_error)?;
+    state
+        .store
+        .save_panel_settings(&stored)
+        .await
+        .map_err(store_error)?;
     Ok(Json(stored.into()))
 }
 
-pub async fn list_inbounds(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Vec<Inbound>> {
+pub async fn list_inbounds(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<Inbound>> {
     auth::require(&headers, &state).await?;
-    let revision = state.store.state().await.map_err(store_error)?.desired_revision;
-    let records = state.store.list_inbounds(revision).await.map_err(store_error)?;
+    let revision = state
+        .store
+        .state()
+        .await
+        .map_err(store_error)?
+        .desired_revision;
+    let records = state
+        .store
+        .list_inbounds(revision)
+        .await
+        .map_err(store_error)?;
     Ok(Json(records.into_iter().map(Inbound::from).collect()))
 }
 
-pub async fn create_inbound(State(state): State<AppState>, headers: HeaderMap, Json(input): Json<InboundInput>) -> ApiResult<ApplyResult> {
+pub async fn create_inbound(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<InboundInput>,
+) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
     validate_inbound(&input)?;
-    Ok(Json(state.store.save_inbound("black-ui", inbound_write(None, input)).await.map_err(store_error)?.into()))
+    Ok(Json(
+        state
+            .store
+            .save_inbound("black-ui", inbound_write(None, input))
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
-pub async fn update_inbound(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>, Json(input): Json<InboundInput>) -> ApiResult<ApplyResult> {
+pub async fn update_inbound(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(input): Json<InboundInput>,
+) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
     validate_inbound(&input)?;
-    Ok(Json(state.store.save_inbound("black-ui", inbound_write(Some(id), input)).await.map_err(store_error)?.into()))
+    Ok(Json(
+        state
+            .store
+            .save_inbound("black-ui", inbound_write(Some(id), input))
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
-pub async fn delete_inbound(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>) -> ApiResult<ApplyResult> {
+pub async fn delete_inbound(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
-    Ok(Json(state.store.delete_inbound("black-ui", id).await.map_err(store_error)?.into()))
+    Ok(Json(
+        state
+            .store
+            .delete_inbound("black-ui", id)
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
-pub async fn list_outbounds(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Vec<Outbound>> {
+pub async fn list_outbounds(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<Outbound>> {
     auth::require(&headers, &state).await?;
-    let revision = state.store.state().await.map_err(store_error)?.desired_revision;
-    let records = state.store.list_outbounds(revision).await.map_err(store_error)?;
+    let revision = state
+        .store
+        .state()
+        .await
+        .map_err(store_error)?
+        .desired_revision;
+    let records = state
+        .store
+        .list_outbounds(revision)
+        .await
+        .map_err(store_error)?;
     Ok(Json(records.into_iter().map(Outbound::from).collect()))
 }
 
-pub async fn create_outbound(State(state): State<AppState>, headers: HeaderMap, Json(input): Json<OutboundInput>) -> ApiResult<ApplyResult> {
+pub async fn create_outbound(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<OutboundInput>,
+) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
     validate_tag(&input.tag)?;
-    Ok(Json(state.store.save_outbound("black-ui", outbound_write(None, input)).await.map_err(store_error)?.into()))
+    Ok(Json(
+        state
+            .store
+            .save_outbound("black-ui", outbound_write(None, input))
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
-pub async fn update_outbound(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>, Json(input): Json<OutboundInput>) -> ApiResult<ApplyResult> {
+pub async fn update_outbound(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(input): Json<OutboundInput>,
+) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
     validate_tag(&input.tag)?;
-    Ok(Json(state.store.save_outbound("black-ui", outbound_write(Some(id), input)).await.map_err(store_error)?.into()))
+    Ok(Json(
+        state
+            .store
+            .save_outbound("black-ui", outbound_write(Some(id), input))
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
-pub async fn delete_outbound(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>) -> ApiResult<ApplyResult> {
+pub async fn delete_outbound(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
-    Ok(Json(state.store.delete_outbound("black-ui", id).await.map_err(store_error)?.into()))
+    Ok(Json(
+        state
+            .store
+            .delete_outbound("black-ui", id)
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
-pub async fn list_users(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Vec<ManagedUser>> {
+pub async fn list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<ManagedUser>> {
     auth::require(&headers, &state).await?;
-    let revision = state.store.state().await.map_err(store_error)?.desired_revision;
-    let records = state.store.list_users(revision).await.map_err(store_error)?;
+    let revision = state
+        .store
+        .state()
+        .await
+        .map_err(store_error)?
+        .desired_revision;
+    let records = state
+        .store
+        .list_users(revision)
+        .await
+        .map_err(store_error)?;
     Ok(Json(records.into_iter().map(ManagedUser::from).collect()))
 }
 
-pub async fn create_user(State(state): State<AppState>, headers: HeaderMap, Json(input): Json<UserInput>) -> ApiResult<ApplyResult> {
+pub async fn create_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<UserInput>,
+) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
-    Ok(Json(state.store.save_user("black-ui", user_write(None, input)?).await.map_err(store_error)?.into()))
+    Ok(Json(
+        state
+            .store
+            .save_user("black-ui", user_write(None, input)?)
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
-pub async fn update_user(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>, Json(input): Json<UserInput>) -> ApiResult<ApplyResult> {
+pub async fn update_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(input): Json<UserInput>,
+) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
-    Ok(Json(state.store.save_user("black-ui", user_write(Some(id), input)?).await.map_err(store_error)?.into()))
+    Ok(Json(
+        state
+            .store
+            .save_user("black-ui", user_write(Some(id), input)?)
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
-pub async fn delete_user(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>) -> ApiResult<ApplyResult> {
+pub async fn delete_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
-    Ok(Json(state.store.delete_user("black-ui", id).await.map_err(store_error)?.into()))
+    Ok(Json(
+        state
+            .store
+            .delete_user("black-ui", id)
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
-pub async fn enable_user(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>) -> ApiResult<ApplyResult> {
+pub async fn enable_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<ApplyResult> {
     set_user_enabled(&state, &headers, id, true).await
 }
 
-pub async fn disable_user(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>) -> ApiResult<ApplyResult> {
+pub async fn disable_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<ApplyResult> {
     set_user_enabled(&state, &headers, id, false).await
 }
 
-async fn set_user_enabled(state: &AppState, headers: &HeaderMap, id: i64, enabled: bool) -> ApiResult<ApplyResult> {
+async fn set_user_enabled(
+    state: &AppState,
+    headers: &HeaderMap,
+    id: i64,
+    enabled: bool,
+) -> ApiResult<ApplyResult> {
     auth::require(headers, state).await?;
-    let revision = state.store.state().await.map_err(store_error)?.desired_revision;
-    let user = state.store.list_users(revision).await.map_err(store_error)?.into_iter().find(|user| user.id == id).ok_or_else(|| AppError::not_found("user not found"))?;
-    let input = UserWrite { id: Some(id), inbound_id: user.inbound_id, email: user.email, enabled, flow: user.flow, note: user.note, traffic_limit_bytes: user.traffic_limit_bytes, expiry_at: user.expiry_at, subscription_token: user.subscription_token, credential_kind: user.credential_kind, uuid: user.uuid, password: None, method: user.method, auth: None };
-    Ok(Json(state.store.save_user("black-ui", input).await.map_err(store_error)?.into()))
+    let revision = state
+        .store
+        .state()
+        .await
+        .map_err(store_error)?
+        .desired_revision;
+    let user = state
+        .store
+        .list_users(revision)
+        .await
+        .map_err(store_error)?
+        .into_iter()
+        .find(|user| user.id == id)
+        .ok_or_else(|| AppError::not_found("user not found"))?;
+    let input = UserWrite {
+        id: Some(id),
+        inbound_id: user.inbound_id,
+        email: user.email,
+        enabled,
+        flow: user.flow,
+        note: user.note,
+        traffic_limit_bytes: user.traffic_limit_bytes,
+        expiry_at: user.expiry_at,
+        subscription_token: user.subscription_token,
+        credential_kind: user.credential_kind,
+        uuid: user.uuid,
+        password: None,
+        method: user.method,
+        auth: None,
+    };
+    Ok(Json(
+        state
+            .store
+            .save_user("black-ui", input)
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
-pub async fn generate_uuid(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<serde_json::Value> {
+pub async fn generate_uuid(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<serde_json::Value> {
     auth::require(&headers, &state).await?;
     Ok(Json(json!({ "uuid": uuid::Uuid::new_v4().to_string() })))
 }
 
-pub async fn runtime_traffic(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<TrafficSnapshot> {
+pub async fn runtime_traffic(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<TrafficSnapshot> {
     auth::require(&headers, &state).await?;
-    Ok(Json(TrafficSnapshot { users: Vec::new(), inbounds: Vec::new() }))
+    Ok(Json(TrafficSnapshot {
+        users: Vec::new(),
+        inbounds: Vec::new(),
+    }))
 }
 
-pub async fn revision_history(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Vec<blackwire_store::RevisionSummary>> {
+pub async fn revision_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<blackwire_store::RevisionSummary>> {
     auth::require(&headers, &state).await?;
     Ok(Json(state.store.history(20).await.map_err(store_error)?))
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RevisionInput { revision: i64 }
-
-pub async fn rollback_revision(State(state): State<AppState>, headers: HeaderMap, Json(input): Json<RevisionInput>) -> ApiResult<ApplyResult> {
-    auth::require(&headers, &state).await?;
-    Ok(Json(state.store.rollback(input.revision, "black-ui").await.map_err(store_error)?.into()))
+pub struct RevisionInput {
+    revision: i64,
 }
 
-pub async fn activate_maintenance(State(state): State<AppState>, headers: HeaderMap, Json(input): Json<RevisionInput>) -> ApiResult<serde_json::Value> {
+pub async fn rollback_revision(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<RevisionInput>,
+) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
-    state.store.confirm_maintenance(input.revision).await.map_err(store_error)?;
-    Ok(Json(json!({ "revision": input.revision, "message": "Maintenance activation confirmed" })))
+    Ok(Json(
+        state
+            .store
+            .rollback(input.revision, "black-ui")
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
 }
 
-pub async fn service_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<ServiceStatus> {
+pub async fn activate_maintenance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<RevisionInput>,
+) -> ApiResult<serde_json::Value> {
+    auth::require(&headers, &state).await?;
+    state
+        .store
+        .confirm_maintenance(input.revision)
+        .await
+        .map_err(store_error)?;
+    Ok(Json(
+        json!({ "revision": input.revision, "message": "Maintenance activation confirmed" }),
+    ))
+}
+
+pub async fn service_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<ServiceStatus> {
     auth::require(&headers, &state).await?;
     Ok(Json(service::blackwire_status()))
 }
 
-pub async fn service_restart_blackwire(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<ServiceStatus> {
+pub async fn service_restart_blackwire(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<ServiceStatus> {
     auth::require(&headers, &state).await?;
-    Ok(Json(service::restart_blackwire().map_err(AppError::internal)?))
+    Ok(Json(
+        service::restart_blackwire().map_err(AppError::internal)?,
+    ))
 }
 
-pub async fn service_logs(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Vec<String>> {
+pub async fn service_logs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<String>> {
     auth::require(&headers, &state).await?;
     Ok(Json(service::recent_logs()))
 }
 
-pub async fn subscription_base64(Path(_token): Path<String>) -> Result<String, AppError> {
-    Err(AppError::not_found("subscription not found"))
+pub async fn subscription_base64(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+) -> Result<String, AppError> {
+    let link = subscription_link(&state, &token, &headers).await?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(link))
 }
 
-pub async fn subscription_raw(Path(_token): Path<String>) -> Result<String, AppError> {
-    Err(AppError::not_found("subscription not found"))
+pub async fn subscription_raw(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+) -> Result<String, AppError> {
+    subscription_link(&state, &token, &headers).await
+}
+
+async fn subscription_link(
+    state: &AppState,
+    token: &str,
+    headers: &HeaderMap,
+) -> Result<String, AppError> {
+    let user = state
+        .store
+        .subscription_by_token(token)
+        .await
+        .map_err(store_error)?
+        .ok_or_else(|| AppError::not_found("subscription not found"))?;
+    if !user.enabled || user.expiry_at.is_some_and(|expiry| expiry <= Utc::now()) {
+        return Err(AppError::not_found("subscription not found"));
+    }
+    let panel = state.store.panel_settings().await.map_err(store_error)?;
+    let host = public_subscription_host(&panel.subscription_host, headers);
+    let label = url_escape(&user.email);
+    let network = if user.transport == "splithttp" {
+        "xhttp"
+    } else {
+        &user.transport
+    };
+    let mut params = vec![format!("type={}", url_escape(network))];
+    if user.security != "none" {
+        params.push(format!("security={}", url_escape(&user.security)));
+    } else {
+        params.push("security=none".into());
+    }
+    if !user.flow.is_empty() {
+        params.push(format!("flow={}", url_escape(&user.flow)));
+    }
+    let uuid = user.uuid.as_deref().unwrap_or_default();
+    match user.protocol.as_str() {
+        "vless" => Ok(format!(
+            "vless://{}@{}:{}?encryption=none&{}#{}",
+            url_escape(uuid),
+            host,
+            user.port,
+            params.join("&"),
+            label
+        )),
+        "vmess" => {
+            let payload = json!({
+                "v": "2", "ps": user.email, "add": host, "port": user.port.to_string(),
+                "id": uuid, "aid": "0", "scy": "auto", "security": "auto",
+                "net": network, "type": if network == "grpc" { "gun" } else { "none" },
+                "host": "", "path": "", "tls": if user.security == "tls" { "tls" } else { "" },
+                "sni": "", "alpn": ""
+            });
+            Ok(format!(
+                "vmess://{}",
+                base64::engine::general_purpose::STANDARD
+                    .encode(serde_json::to_vec(&payload).unwrap_or_default())
+            ))
+        }
+        "trojan" => {
+            let password = user.password.as_deref().unwrap_or(uuid);
+            Ok(format!(
+                "trojan://{}@{}:{}?{}#{}",
+                url_escape(password),
+                host,
+                user.port,
+                params.join("&"),
+                label
+            ))
+        }
+        "shadowsocks" => {
+            let method = user.method.as_deref().unwrap_or("2022-blake3-aes-256-gcm");
+            let password = user.password.as_deref().unwrap_or(uuid);
+            let credentials = base64::engine::general_purpose::STANDARD_NO_PAD
+                .encode(format!("{method}:{password}"));
+            Ok(format!(
+                "ss://{}@{}:{}#{}",
+                credentials, host, user.port, label
+            ))
+        }
+        "hysteria2" => {
+            let auth = user
+                .auth
+                .as_deref()
+                .or(user.password.as_deref())
+                .unwrap_or(uuid);
+            let security = (user.security == "tls")
+                .then_some("")
+                .unwrap_or("?insecure=1");
+            Ok(format!(
+                "hysteria2://{}@{}:{}{}#{}",
+                url_escape(auth),
+                host,
+                user.port,
+                security,
+                label
+            ))
+        }
+        "tuic" => {
+            let password = user.password.as_deref().unwrap_or(uuid);
+            Ok(format!(
+                "tuic://{}:{}@{}:{}?uuid={}#{}",
+                url_escape(uuid),
+                url_escape(password),
+                host,
+                user.port,
+                url_escape(uuid),
+                label
+            ))
+        }
+        _ => Err(AppError::not_found(
+            "subscription not available for this protocol",
+        )),
+    }
+}
+
+fn public_subscription_host(configured: &str, headers: &HeaderMap) -> String {
+    if !matches!(configured.trim(), "" | "localhost" | "127.0.0.1" | "::1") {
+        return configured.trim().to_string();
+    }
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .strip_prefix('[')
+                .and_then(|rest| rest.split_once(']').map(|(host, _)| host.to_string()))
+                .or_else(|| value.split(':').next().map(str::to_string))
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| configured.trim().to_string())
+}
+
+fn url_escape(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![byte as char]
+            }
+            _ => format!("%{byte:02X}").chars().collect(),
+        })
+        .collect()
 }
 
 fn inbound_write(id: Option<i64>, input: InboundInput) -> InboundWrite {
-    InboundWrite { id, tag: input.tag, listen: input.listen, port: input.port, protocol: input.protocol, enabled: input.enabled, transport: input.transport, security: input.security }
+    InboundWrite {
+        id,
+        tag: input.tag,
+        listen: input.listen,
+        port: input.port,
+        protocol: input.protocol,
+        enabled: input.enabled,
+        transport: input.transport,
+        security: input.security,
+    }
 }
 
 fn outbound_write(id: Option<i64>, input: OutboundInput) -> OutboundWrite {
-    OutboundWrite { id, tag: input.tag, protocol: input.protocol, enabled: input.enabled, address: input.address, port: input.port, transport: input.transport, security: input.security }
+    OutboundWrite {
+        id,
+        tag: input.tag,
+        protocol: input.protocol,
+        enabled: input.enabled,
+        address: input.address,
+        port: input.port,
+        transport: input.transport,
+        security: input.security,
+    }
 }
 
 fn user_write(id: Option<i64>, input: UserInput) -> Result<UserWrite, AppError> {
-    if input.email.trim().is_empty() { return Err(AppError::bad_request("email is required")); }
-    let expiry_at = input.expiry_at.as_deref().map(DateTime::parse_from_rfc3339).transpose().map_err(|_| AppError::bad_request("expiry must be RFC 3339"))?.map(|value| value.with_timezone(&Utc));
-    Ok(UserWrite { id, inbound_id: input.inbound_id, email: input.email, enabled: input.enabled, flow: input.flow.unwrap_or_default(), note: input.note.unwrap_or_default(), traffic_limit_bytes: input.traffic_limit_bytes, expiry_at, subscription_token: input.subscription_token.unwrap_or_else(|| util::random_token(24)), credential_kind: input.credential_kind.unwrap_or_else(|| "uuid".into()), uuid: Some(input.uuid), password: input.password, method: input.method, auth: input.auth })
+    if input.email.trim().is_empty() {
+        return Err(AppError::bad_request("email is required"));
+    }
+    let expiry_at = input
+        .expiry_at
+        .as_deref()
+        .map(DateTime::parse_from_rfc3339)
+        .transpose()
+        .map_err(|_| AppError::bad_request("expiry must be RFC 3339"))?
+        .map(|value| value.with_timezone(&Utc));
+    Ok(UserWrite {
+        id,
+        inbound_id: input.inbound_id,
+        email: input.email,
+        enabled: input.enabled,
+        flow: input.flow.unwrap_or_default(),
+        note: input.note.unwrap_or_default(),
+        traffic_limit_bytes: input.traffic_limit_bytes,
+        expiry_at,
+        subscription_token: input
+            .subscription_token
+            .unwrap_or_else(|| util::random_token(24)),
+        credential_kind: input.credential_kind.unwrap_or_else(|| "uuid".into()),
+        uuid: Some(input.uuid),
+        password: input.password,
+        method: input.method,
+        auth: input.auth,
+    })
 }
 
 fn validate_inbound(input: &InboundInput) -> Result<(), AppError> {
     validate_tag(&input.tag)?;
-    if input.port == 0 { return Err(AppError::bad_request("port must be between 1 and 65535")); }
+    if input.port == 0 {
+        return Err(AppError::bad_request("port must be between 1 and 65535"));
+    }
     Ok(())
 }
 
 fn validate_tag(tag: &str) -> Result<(), AppError> {
-    if tag.trim().is_empty() { Err(AppError::bad_request("tag is required")) } else { Ok(()) }
+    if tag.trim().is_empty() {
+        Err(AppError::bad_request("tag is required"))
+    } else {
+        Ok(())
+    }
 }
 
-fn store_error(error: blackwire_store::StoreError) -> AppError { AppError::internal(error.into()) }
+fn store_error(error: blackwire_store::StoreError) -> AppError {
+    AppError::internal(error.into())
+}
 
 impl From<blackwire_store::MutationResult> for ApplyResult {
     fn from(value: blackwire_store::MutationResult) -> Self {
-        Self { revision: value.revision, parent_revision: value.parent_revision, active_revision: value.active_revision, state: value.state, activation_class: value.activation_class, message: value.message }
+        Self {
+            revision: value.revision,
+            parent_revision: value.parent_revision,
+            active_revision: value.active_revision,
+            state: value.state,
+            activation_class: value.activation_class,
+            message: value.message,
+        }
     }
 }

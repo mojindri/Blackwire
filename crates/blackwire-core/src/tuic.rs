@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::user_limits::UserConnectionLimiter;
-use blackwire_config::schema::{InboundConfig, OutboundConfig, QuicConfig};
+use blackwire_config::schema::{EndpointSettings, InboundConfig, OutboundConfig, QuicConfig};
 use blackwire_transport::{
     QuicSocketConfig, TuicAuthStore, TuicClientConfig, TuicOutboundHandler, TuicServer,
     TuicServerConfig, TuicUser,
@@ -116,21 +116,17 @@ fn parse_client_config(
     quic: Option<&QuicConfig>,
 ) -> Result<TuicClientConfig> {
     let s = &cfg.settings;
-    let server = if let Some(server) = s.get("server").and_then(serde_json::Value::as_str) {
+    let server = if let Some(server) = s.server.as_deref() {
         server
             .parse::<SocketAddr>()
             .with_context(|| format!("invalid TUIC server address '{server}'"))?
     } else {
-        let address = s
-            .get("address")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                anyhow::anyhow!("TUIC outbound '{}' missing 'server' or 'address'", cfg.tag)
-            })?;
+        let address = s.address.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("TUIC outbound '{}' missing 'server' or 'address'", cfg.tag)
+        })?;
         let port = s
-            .get("port")
-            .or_else(|| s.get("server_port"))
-            .and_then(serde_json::Value::as_u64)
+            .port
+            .map(u64::from)
             .ok_or_else(|| anyhow::anyhow!("TUIC outbound '{}' missing 'port'", cfg.tag))?;
         socket_addr_from_address_port(
             address,
@@ -139,34 +135,22 @@ fn parse_client_config(
         )?
     };
     let uuid = s
-        .get("uuid")
-        .or_else(|| s.get("id"))
-        .and_then(serde_json::Value::as_str)
+        .uuid
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("TUIC outbound '{}' missing 'uuid'", cfg.tag))?;
     let uuid = Uuid::parse_str(uuid).with_context(|| format!("invalid TUIC uuid '{uuid}'"))?;
     let password = s
-        .get("password")
-        .and_then(serde_json::Value::as_str)
+        .password
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("TUIC outbound '{}' missing 'password'", cfg.tag))?
         .to_string();
     let server_name = s
-        .get("serverName")
-        .or_else(|| s.get("server_name"))
-        .and_then(serde_json::Value::as_str)
+        .server_name
+        .as_deref()
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| server.ip().to_string());
-    let endpoint_shards = s
-        .get("endpointShards")
-        .or_else(|| s.get("endpoint_shards"))
-        .and_then(serde_json::Value::as_u64)
-        .map(|v| v.clamp(1, 64) as usize)
-        .unwrap_or(1);
-    let skip_cert_verify = s
-        .get("skipCertVerify")
-        .or_else(|| s.get("allowInsecure"))
-        .or_else(|| s.get("insecure"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
+    let endpoint_shards = s.endpoint_shards.map(|v| v.clamp(1, 64)).unwrap_or(1);
+    let skip_cert_verify = s.skip_cert_verify;
 
     Ok(TuicClientConfig {
         server,
@@ -180,113 +164,71 @@ fn parse_client_config(
     })
 }
 
-pub(crate) fn parse_users(settings: &serde_json::Value) -> Result<Vec<TuicUser>> {
-    let Some(users) = settings.get("users") else {
-        let uuid = settings
-            .get("uuid")
-            .or_else(|| settings.get("id"))
-            .and_then(serde_json::Value::as_str);
-        let password = settings.get("password").and_then(serde_json::Value::as_str);
+pub(crate) fn parse_users(settings: &EndpointSettings) -> Result<Vec<TuicUser>> {
+    if settings.users.is_empty() {
+        let uuid = settings.uuid.as_deref();
+        let password = settings.password.as_deref();
         return match (uuid, password) {
             (Some(uuid), Some(password)) => Ok(vec![TuicUser {
                 uuid: Uuid::parse_str(uuid)
                     .with_context(|| format!("invalid TUIC uuid '{uuid}'"))?,
                 password: password.to_string(),
-                label: Some(tuic_user_label(settings, uuid)),
+                label: Some(
+                    settings
+                        .email
+                        .as_deref()
+                        .or(settings.name.as_deref())
+                        .unwrap_or(uuid)
+                        .to_string(),
+                ),
             }]),
             _ => Ok(vec![]),
         };
-    };
-
-    if let Some(array) = users.as_array() {
-        return array
-            .iter()
-            .map(|user| {
-                let uuid = user
-                    .get("uuid")
-                    .or_else(|| user.get("id"))
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("TUIC user missing uuid"))?;
-                let password = user
-                    .get("password")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("TUIC user missing password"))?;
-                Ok(TuicUser {
-                    uuid: Uuid::parse_str(uuid)
-                        .with_context(|| format!("invalid TUIC uuid '{uuid}'"))?,
-                    password: password.to_string(),
-                    label: Some(tuic_user_label(user, uuid)),
-                })
-            })
-            .collect();
     }
 
-    if let Some(object) = users.as_object() {
-        return object
-            .iter()
-            .map(|(uuid, password)| {
-                let password = password.as_str().ok_or_else(|| {
-                    anyhow::anyhow!("TUIC user '{uuid}' password must be a string")
-                })?;
-                Ok(TuicUser {
-                    uuid: Uuid::parse_str(uuid)
-                        .with_context(|| format!("invalid TUIC uuid '{uuid}'"))?,
-                    password: password.to_string(),
-                    label: Some(uuid.clone()),
-                })
-            })
-            .collect();
-    }
-
-    anyhow::bail!("TUIC users must be an array or object")
-}
-
-fn tuic_user_label(settings: &serde_json::Value, uuid: &str) -> String {
     settings
-        .get("email")
-        .or_else(|| settings.get("name"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| uuid.to_string())
+        .users
+        .iter()
+        .map(|user| {
+            let uuid = user
+                .identifier()
+                .ok_or_else(|| anyhow::anyhow!("TUIC user missing uuid"))?;
+            let password = user
+                .password
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("TUIC user missing password"))?;
+            Ok(TuicUser {
+                uuid: Uuid::parse_str(uuid)
+                    .with_context(|| format!("invalid TUIC uuid '{uuid}'"))?,
+                password: password.to_string(),
+                label: Some(user.label().unwrap_or(uuid).to_string()),
+            })
+        })
+        .collect()
 }
 
-fn parse_socket_config(
-    settings: &serde_json::Value,
-    quic: Option<&QuicConfig>,
-) -> QuicSocketConfig {
+fn parse_socket_config(settings: &EndpointSettings, quic: Option<&QuicConfig>) -> QuicSocketConfig {
     let mut socket = socket_config_from_quic(quic);
-    let Some(overrides) = settings.get("quic") else {
+    let Some(overrides) = settings.quic.as_ref() else {
         return socket;
     };
-    if let Some(reuse_port) = overrides
-        .get("reusePort")
-        .and_then(serde_json::Value::as_bool)
-    {
+    if let Some(reuse_port) = overrides.reuse_port {
         socket.reuse_port = reuse_port;
     }
-    if let Some(endpoints) = overrides
-        .get("endpoints")
-        .and_then(serde_json::Value::as_u64)
-    {
-        socket.endpoint_count = endpoints.clamp(1, 64) as usize;
+    if let Some(endpoints) = overrides.endpoints.as_ref() {
+        socket.endpoint_count = endpoints.resolve();
     }
     socket
 }
 
-fn parse_duration_ms(settings: &serde_json::Value, key: &str, default_ms: u64) -> Duration {
-    Duration::from_millis(
-        settings
-            .get(key)
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(default_ms),
-    )
+fn parse_duration_ms(settings: &EndpointSettings, _key: &str, default_ms: u64) -> Duration {
+    Duration::from_millis(settings.auth_timeout_ms.unwrap_or(default_ms))
 }
 
-fn network_allows_udp(settings: &serde_json::Value) -> bool {
+fn network_allows_udp(settings: &EndpointSettings) -> bool {
     settings
-        .get("network")
-        .and_then(serde_json::Value::as_str)
+        .network
+        .as_deref()
         .map(|network| network.split(',').any(|part| part.trim() == "udp"))
         .unwrap_or(true)
 }
@@ -303,28 +245,30 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn settings(value: serde_json::Value) -> EndpointSettings {
+        serde_json::from_value(value).unwrap()
+    }
+
     #[test]
     fn parse_tuic_array_users_keeps_email_label() {
-        let settings = json!({
+        let settings = settings(json!({
             "users": [{
                 "uuid": "11111111-1111-4111-8111-111111111111",
                 "password": "secret",
                 "email": "tuic@example.local"
             }]
-        });
+        }));
 
         let users = parse_users(&settings).unwrap();
         assert_eq!(users[0].label.as_deref(), Some("tuic@example.local"));
     }
 
     #[test]
-    fn parse_tuic_object_users_uses_uuid_label() {
+    fn parse_tuic_users_use_name_when_email_is_absent() {
         let uuid = "11111111-1111-4111-8111-111111111111";
-        let settings = json!({
-            "users": {
-                "11111111-1111-4111-8111-111111111111": "secret"
-            }
-        });
+        let settings = settings(json!({
+            "users": [{ "uuid": uuid, "password": "secret", "name": uuid }]
+        }));
 
         let users = parse_users(&settings).unwrap();
         assert_eq!(users[0].label.as_deref(), Some(uuid));
