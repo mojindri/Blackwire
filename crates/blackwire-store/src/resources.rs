@@ -242,13 +242,14 @@ impl Database {
     pub async fn save_inbound(
         &self,
         actor: &str,
+        expected_revision: i64,
         input: InboundWrite,
     ) -> StoreResult<MutationResult> {
         validate_inbound(&input)?;
         let state = self.state().await?;
         let (mut tx, revision) = self
             .fork_revision(
-                state.desired_revision,
+                expected_revision,
                 actor,
                 "Save inbound",
                 ActivationClass::ListenerHandover,
@@ -290,11 +291,16 @@ impl Database {
         ))
     }
 
-    pub async fn delete_inbound(&self, actor: &str, id: i64) -> StoreResult<MutationResult> {
+    pub async fn delete_inbound(
+        &self,
+        actor: &str,
+        expected_revision: i64,
+        id: i64,
+    ) -> StoreResult<MutationResult> {
         let state = self.state().await?;
         let (mut tx, revision) = self
             .fork_revision(
-                state.desired_revision,
+                expected_revision,
                 actor,
                 "Delete inbound",
                 ActivationClass::ListenerHandover,
@@ -318,13 +324,14 @@ impl Database {
     pub async fn save_outbound(
         &self,
         actor: &str,
+        expected_revision: i64,
         input: OutboundWrite,
     ) -> StoreResult<MutationResult> {
         validate_outbound(&input)?;
         let state = self.state().await?;
         let class = ActivationClass::MaintenanceRequired;
         let (mut tx, revision) = self
-            .fork_revision(state.desired_revision, actor, "Save outbound", class)
+            .fork_revision(expected_revision, actor, "Save outbound", class)
             .await?;
         let id = input.id.unwrap_or(
             sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(outbound_id) FROM outbounds")
@@ -362,11 +369,16 @@ impl Database {
         ))
     }
 
-    pub async fn delete_outbound(&self, actor: &str, id: i64) -> StoreResult<MutationResult> {
+    pub async fn delete_outbound(
+        &self,
+        actor: &str,
+        expected_revision: i64,
+        id: i64,
+    ) -> StoreResult<MutationResult> {
         let state = self.state().await?;
         let class = ActivationClass::MaintenanceRequired;
         let (mut tx, revision) = self
-            .fork_revision(state.desired_revision, actor, "Delete outbound", class)
+            .fork_revision(expected_revision, actor, "Delete outbound", class)
             .await?;
         sqlx::query("DELETE FROM outbounds WHERE revision_id=? AND outbound_id=?")
             .bind(revision)
@@ -383,7 +395,12 @@ impl Database {
         ))
     }
 
-    pub async fn save_user(&self, actor: &str, input: UserWrite) -> StoreResult<MutationResult> {
+    pub async fn save_user(
+        &self,
+        actor: &str,
+        expected_revision: i64,
+        input: UserWrite,
+    ) -> StoreResult<MutationResult> {
         if input.email.trim().is_empty() || input.subscription_token.trim().is_empty() {
             return Err(StoreError::InvalidConfiguration(
                 "user email and subscription token are required".into(),
@@ -392,7 +409,7 @@ impl Database {
         let state = self.state().await?;
         let class = ActivationClass::HotSwap;
         let (mut tx, revision) = self
-            .fork_revision(state.desired_revision, actor, "Save user", class)
+            .fork_revision(expected_revision, actor, "Save user", class)
             .await?;
         let id = input.id.unwrap_or(
             sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(user_id) FROM users")
@@ -412,11 +429,16 @@ impl Database {
         Ok(mutation_result(&state, revision, class, "User saved"))
     }
 
-    pub async fn delete_user(&self, actor: &str, id: i64) -> StoreResult<MutationResult> {
+    pub async fn delete_user(
+        &self,
+        actor: &str,
+        expected_revision: i64,
+        id: i64,
+    ) -> StoreResult<MutationResult> {
         let state = self.state().await?;
         let class = ActivationClass::HotSwap;
         let (mut tx, revision) = self
-            .fork_revision(state.desired_revision, actor, "Delete user", class)
+            .fork_revision(expected_revision, actor, "Delete user", class)
             .await?;
         sqlx::query("DELETE FROM users WHERE revision_id=? AND user_id=?")
             .bind(revision)

@@ -17,6 +17,7 @@ import type {
 } from "./types";
 
 const SESSION_MARKER_KEY = "black-ui-session";
+let desiredRevision: number | null = null;
 
 export function getToken(): string {
   return sessionStorage.getItem(SESSION_MARKER_KEY) ?? "";
@@ -34,6 +35,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set("X-Black-UI-Request", "fetch");
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (options.method && options.method !== "GET" && desiredRevision !== null) {
+    headers.set("If-Match", `"${desiredRevision}"`);
+  }
 
   const res = await fetch(path, { ...options, credentials: "same-origin", headers });
   const contentType = res.headers.get("content-type") ?? "";
@@ -41,6 +45,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     const message = typeof payload === "object" && payload && "error" in payload ? String(payload.error) : String(payload);
     throw new Error(message || `${res.status} ${res.statusText}`);
+  }
+  if (typeof payload === "object" && payload) {
+    if ("desiredRevision" in payload && typeof payload.desiredRevision === "number") {
+      desiredRevision = payload.desiredRevision;
+    } else if ("revision" in payload && "parentRevision" in payload && typeof payload.revision === "number") {
+      desiredRevision = payload.revision;
+    }
   }
   return payload as T;
 }
