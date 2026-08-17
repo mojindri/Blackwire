@@ -181,10 +181,11 @@ pub async fn create_inbound(
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
     validate_inbound(&input)?;
+    let expected = expected_revision(&headers)?;
     Ok(Json(
         state
             .store
-            .save_inbound("black-ui", inbound_write(None, input))
+            .save_inbound("black-ui", expected, inbound_write(None, input))
             .await
             .map_err(store_error)?
             .into(),
@@ -199,10 +200,11 @@ pub async fn update_inbound(
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
     validate_inbound(&input)?;
+    let expected = expected_revision(&headers)?;
     Ok(Json(
         state
             .store
-            .save_inbound("black-ui", inbound_write(Some(id), input))
+            .save_inbound("black-ui", expected, inbound_write(Some(id), input))
             .await
             .map_err(store_error)?
             .into(),
@@ -215,10 +217,11 @@ pub async fn delete_inbound(
     Path(id): Path<i64>,
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
+    let expected = expected_revision(&headers)?;
     Ok(Json(
         state
             .store
-            .delete_inbound("black-ui", id)
+            .delete_inbound("black-ui", expected, id)
             .await
             .map_err(store_error)?
             .into(),
@@ -251,10 +254,11 @@ pub async fn create_outbound(
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
     validate_tag(&input.tag)?;
+    let expected = expected_revision(&headers)?;
     Ok(Json(
         state
             .store
-            .save_outbound("black-ui", outbound_write(None, input))
+            .save_outbound("black-ui", expected, outbound_write(None, input))
             .await
             .map_err(store_error)?
             .into(),
@@ -269,10 +273,11 @@ pub async fn update_outbound(
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
     validate_tag(&input.tag)?;
+    let expected = expected_revision(&headers)?;
     Ok(Json(
         state
             .store
-            .save_outbound("black-ui", outbound_write(Some(id), input))
+            .save_outbound("black-ui", expected, outbound_write(Some(id), input))
             .await
             .map_err(store_error)?
             .into(),
@@ -285,10 +290,11 @@ pub async fn delete_outbound(
     Path(id): Path<i64>,
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
+    let expected = expected_revision(&headers)?;
     Ok(Json(
         state
             .store
-            .delete_outbound("black-ui", id)
+            .delete_outbound("black-ui", expected, id)
             .await
             .map_err(store_error)?
             .into(),
@@ -320,10 +326,11 @@ pub async fn create_user(
     Json(input): Json<UserInput>,
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
+    let expected = expected_revision(&headers)?;
     Ok(Json(
         state
             .store
-            .save_user("black-ui", user_write(None, input)?)
+            .save_user("black-ui", expected, user_write(None, input)?)
             .await
             .map_err(store_error)?
             .into(),
@@ -337,10 +344,11 @@ pub async fn update_user(
     Json(input): Json<UserInput>,
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
+    let expected = expected_revision(&headers)?;
     Ok(Json(
         state
             .store
-            .save_user("black-ui", user_write(Some(id), input)?)
+            .save_user("black-ui", expected, user_write(Some(id), input)?)
             .await
             .map_err(store_error)?
             .into(),
@@ -353,10 +361,11 @@ pub async fn delete_user(
     Path(id): Path<i64>,
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
+    let expected = expected_revision(&headers)?;
     Ok(Json(
         state
             .store
-            .delete_user("black-ui", id)
+            .delete_user("black-ui", expected, id)
             .await
             .map_err(store_error)?
             .into(),
@@ -399,12 +408,13 @@ pub async fn rotate_user_uuid(
     Path(id): Path<i64>,
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
+    let expected = expected_revision(&headers)?;
     let mut write = record_to_write(load_user(&state, id).await?);
     write.uuid = Some(uuid::Uuid::new_v4().to_string());
     Ok(Json(
         state
             .store
-            .save_user("black-ui", write)
+            .save_user("black-ui", expected, write)
             .await
             .map_err(store_error)?
             .into(),
@@ -417,11 +427,12 @@ pub async fn rotate_user_token(
     Path(id): Path<i64>,
 ) -> ApiResult<ManagedUser> {
     auth::require(&headers, &state).await?;
+    let expected = expected_revision(&headers)?;
     let mut write = record_to_write(load_user(&state, id).await?);
     write.subscription_token = util::random_token(24);
     state
         .store
-        .save_user("black-ui", write)
+        .save_user("black-ui", expected, write)
         .await
         .map_err(store_error)?;
     Ok(Json(load_user(&state, id).await?.into()))
@@ -433,6 +444,7 @@ pub async fn bulk_users(
     Json(input): Json<BulkUserInput>,
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
+    let mut expected = expected_revision(&headers)?;
     if input.user_ids.is_empty() {
         return Err(AppError::bad_request("select at least one user"));
     }
@@ -474,10 +486,11 @@ pub async fn bulk_users(
         last = Some(
             state
                 .store
-                .save_user("black-ui", write)
+                .save_user("black-ui", expected, write)
                 .await
                 .map_err(store_error)?,
         );
+        expected = last.as_ref().expect("bulk result").revision;
     }
     Ok(Json(last.expect("non-empty bulk operation").into()))
 }
@@ -525,12 +538,7 @@ async fn set_user_enabled(
     enabled: bool,
 ) -> ApiResult<ApplyResult> {
     auth::require(headers, state).await?;
-    let revision = state
-        .store
-        .state()
-        .await
-        .map_err(store_error)?
-        .desired_revision;
+    let revision = expected_revision(headers)?;
     let user = state
         .store
         .list_users(revision)
@@ -558,7 +566,7 @@ async fn set_user_enabled(
     Ok(Json(
         state
             .store
-            .save_user("black-ui", input)
+            .save_user("black-ui", revision, input)
             .await
             .map_err(store_error)?
             .into(),
@@ -627,10 +635,11 @@ pub async fn update_routing_dns(
     Json(input): Json<blackwire_store::RoutingDnsWrite>,
 ) -> ApiResult<ApplyResult> {
     auth::require(&headers, &state).await?;
+    let expected = expected_revision(&headers)?;
     Ok(Json(
         state
             .store
-            .save_routing_dns("black-ui", input)
+            .save_routing_dns("black-ui", expected, input)
             .await
             .map_err(store_error)?
             .into(),
@@ -941,8 +950,25 @@ fn validate_tag(tag: &str) -> Result<(), AppError> {
     }
 }
 
+fn expected_revision(headers: &HeaderMap) -> Result<i64, AppError> {
+    headers
+        .get(header::IF_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().trim_matches('"'))
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| AppError::bad_request("configuration writes require the current revision"))
+}
+
 fn store_error(error: blackwire_store::StoreError) -> AppError {
-    AppError::internal(error.into())
+    match error {
+        blackwire_store::StoreError::RevisionConflict { expected, actual } => AppError::conflict(
+            format!("configuration revision conflict: expected {expected}, current desired revision is {actual}; refresh before saving this stale edit"),
+        ),
+        blackwire_store::StoreError::Sql(_) => AppError::service_unavailable(
+            "MySQL is unavailable; configuration remains read-only until it reconnects",
+        ),
+        other => AppError::internal(other.into()),
+    }
 }
 
 impl From<blackwire_store::MutationResult> for ApplyResult {

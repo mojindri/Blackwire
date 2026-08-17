@@ -84,6 +84,7 @@ impl Database {
     pub async fn save_routing_dns(
         &self,
         actor: &str,
+        expected_revision: i64,
         input: RoutingDnsWrite,
     ) -> StoreResult<MutationResult> {
         for server in &input.dns_servers {
@@ -96,7 +97,7 @@ impl Database {
         let state = self.state().await?;
         let class = ActivationClass::HotSwap;
         let (mut tx, revision) = self
-            .fork_revision(state.desired_revision, actor, "Save routing and DNS", class)
+            .fork_revision(expected_revision, actor, "Save routing and DNS", class)
             .await?;
         sqlx::query("DELETE FROM routing_config WHERE revision_id=?")
             .bind(revision)
