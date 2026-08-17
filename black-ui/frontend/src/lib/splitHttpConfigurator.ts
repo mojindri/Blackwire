@@ -20,8 +20,8 @@ export function readSplitHttp(value: unknown): SplitHttpEditorState {
     paddingKind, paddingFixed: typeof padding === "number" ? String(padding) : "", paddingRange: typeof padding === "string" ? padding : "", paddingMin: number(bounds.min), paddingMax: number(bounds.max), paddingFrom: number(bounds.from), paddingTo: number(bounds.to),
     paddingMethod: string(source.xPaddingMethod), paddingHeader: string(source.xPaddingHeader), paddingKey: string(source.xPaddingKey), paddingPlacement: string(source.xPaddingPlacement),
     sessionPlacement: string(source.sessionPlacement), sessionKey: string(source.sessionKey), seqPlacement: string(source.seqPlacement), seqKey: string(source.seqKey), uplinkDataPlacement: string(source.uplinkDataPlacement), uplinkDataKey: string(source.uplinkDataKey), uplinkChunkSize: number(source.uplinkChunkSize), scMaxBufferedPosts: number(source.scMaxBufferedPosts),
-    xmuxEnabled: Object.keys(xmux).length > 0, xmuxMaxConcurrency: number(xmux.maxConcurrency), xmuxMaxConnections: number(xmux.maxConnections), xmuxCMaxReuseTimes: number(xmux.cMaxReuseTimes), xmuxHMaxRequestTimes: number(xmux.hMaxRequestTimes), xmuxHMaxReusableSecs: number(xmux.hMaxReusableSecs), xmuxHKeepAlivePeriod: number(xmux.hKeepAlivePeriod),
-    downloadEnabled: Object.keys(download).length > 0, downloadNetwork: string(download.network), downloadSecurity: string(download.security)
+    xmuxEnabled: Object.prototype.hasOwnProperty.call(source, "xmux"), xmuxMaxConcurrency: number(xmux.maxConcurrency), xmuxMaxConnections: number(xmux.maxConnections), xmuxCMaxReuseTimes: number(xmux.cMaxReuseTimes), xmuxHMaxRequestTimes: number(xmux.hMaxRequestTimes), xmuxHMaxReusableSecs: number(xmux.hMaxReusableSecs), xmuxHKeepAlivePeriod: number(xmux.hKeepAlivePeriod),
+    downloadEnabled: Object.prototype.hasOwnProperty.call(source, "downloadSettings"), downloadNetwork: string(download.network), downloadSecurity: string(download.security)
   };
 }
 

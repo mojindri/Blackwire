@@ -19,4 +19,11 @@ describe("SplitHTTP typed controls", () => {
     expect(buildSplitHttp(readSplitHttp({ path: "/", xPaddingBytes: 512 }), {}).xPaddingBytes).toBe(512);
     expect(buildSplitHttp(readSplitHttp({ path: "/", xPaddingBytes: "100-900" }), {}).xPaddingBytes).toBe("100-900");
   });
+
+  it("preserves explicitly enabled empty Xmux and download settings", () => {
+    const state = readSplitHttp({ xmux: {}, downloadSettings: {} });
+    expect(state.xmuxEnabled).toBe(true);
+    expect(state.downloadEnabled).toBe(true);
+    expect(buildSplitHttp(state, {})).toMatchObject({ xmux: {}, downloadSettings: {} });
+  });
 });

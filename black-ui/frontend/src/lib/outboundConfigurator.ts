@@ -59,6 +59,7 @@ export interface OutboundEditorState {
   kcpWriteBufferSize: string;
   tlsServerName: string;
   tlsAlpn: string;
+  tlsAllowInsecure: boolean;
   tlsCertificateFile: string;
   tlsKeyFile: string;
   realityServerName: string;
@@ -153,6 +154,7 @@ export function createOutboundEditorState(outbound?: Outbound | null): OutboundE
     kcpWriteBufferSize: numberString(objectValue(streamSettings.value.kcpSettings)?.write_buffer_size),
     tlsServerName: stringValue(objectValue(streamSettings.value.tlsSettings)?.serverName) ?? "",
     tlsAlpn: arrayOfStrings(objectValue(streamSettings.value.tlsSettings)?.alpn).join(", "),
+    tlsAllowInsecure: boolValue(objectValue(streamSettings.value.tlsSettings)?.allowInsecure) ?? false,
     tlsCertificateFile: stringValue(objectValue(streamSettings.value.tlsSettings)?.certificateFile) ?? "",
     tlsKeyFile: stringValue(objectValue(streamSettings.value.tlsSettings)?.keyFile) ?? "",
     realityServerName: stringValue(objectValue(streamSettings.value.realitySettings)?.serverName) ?? "",
@@ -314,7 +316,10 @@ export function buildOutboundInput(state: OutboundEditorState): OutboundInput {
   }
 
   if (state.network === "splithttp") {
-    streamSettings.splithttpSettings = pruneEmpty(buildSplitHttp({ ...state.splitHttp, path: state.splitHttp.path || state.splitHttpPath }, streamSettings.splithttpSettings));
+    const splitHttp = pruneEmpty(buildSplitHttp({ ...state.splitHttp, path: state.splitHttp.path || state.splitHttpPath }, streamSettings.splithttpSettings));
+    if (state.splitHttp.xmuxEnabled && !("xmux" in splitHttp)) splitHttp.xmux = {};
+    if (state.splitHttp.downloadEnabled && !("downloadSettings" in splitHttp)) splitHttp.downloadSettings = {};
+    streamSettings.splithttpSettings = splitHttp;
   } else {
     delete streamSettings.splithttpSettings;
   }
@@ -342,6 +347,7 @@ export function buildOutboundInput(state: OutboundEditorState): OutboundInput {
     const tlsSettings = cloneObject(objectValue(streamSettings.tlsSettings));
     applyStringField(tlsSettings, "serverName", state.tlsServerName);
     applyStringArrayField(tlsSettings, "alpn", state.tlsAlpn);
+    tlsSettings.allowInsecure = state.tlsAllowInsecure;
     applyStringField(tlsSettings, "certificateFile", state.tlsCertificateFile);
     applyStringField(tlsSettings, "keyFile", state.tlsKeyFile);
     streamSettings.tlsSettings = pruneEmpty(tlsSettings);
@@ -378,6 +384,12 @@ export function buildOutboundInput(state: OutboundEditorState): OutboundInput {
 
   settings = pruneEmpty(settings);
   streamSettings = pruneEmpty(streamSettings);
+  if (state.network === "splithttp") {
+    const splitHttp = objectValue(streamSettings.splithttpSettings) ?? {};
+    if (state.splitHttp.xmuxEnabled) splitHttp.xmux = objectValue(splitHttp.xmux) ?? {};
+    if (state.splitHttp.downloadEnabled) splitHttp.downloadSettings = objectValue(splitHttp.downloadSettings) ?? {};
+    streamSettings.splithttpSettings = splitHttp;
+  }
 
   return {
     tag: state.tag.trim(),
@@ -540,6 +552,7 @@ function syncStructuredFields(state: OutboundEditorState): OutboundEditorState {
     kcpWriteBufferSize: next.kcpWriteBufferSize,
     tlsServerName: next.tlsServerName,
     tlsAlpn: next.tlsAlpn,
+    tlsAllowInsecure: next.tlsAllowInsecure,
     tlsCertificateFile: next.tlsCertificateFile,
     tlsKeyFile: next.tlsKeyFile,
     realityServerName: next.realityServerName,
