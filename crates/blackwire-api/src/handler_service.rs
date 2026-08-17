@@ -14,13 +14,12 @@ use tonic::{Request, Response, Status};
 use crate::handler_proto::handler_service_server::HandlerService;
 use crate::handler_proto::{
     AddInboundRequest, AddInboundResponse, AddOutboundRequest, AddOutboundResponse,
-    AlterInboundRequest, AlterInboundResponse, AlterOutboundRequest,
-    AlterOutboundResponse, CloseConnectionsRequest, CloseConnectionsResponse, ConnectionEntry,
-    GetInboundUserRequest, GetInboundUserResponse, GetInboundUsersCountResponse,
-    InboundHandlerConfig, ListConnectionsRequest, ListConnectionsResponse, ListInboundsRequest,
-    ListInboundsResponse, ListOutboundsRequest, ListOutboundsResponse, OutboundHandlerConfig,
-    RemoveInboundRequest, RemoveInboundResponse, RemoveOutboundRequest, RemoveOutboundResponse,
-    TypedMessage, User,
+    AlterInboundRequest, AlterInboundResponse, AlterOutboundRequest, AlterOutboundResponse,
+    CloseConnectionsRequest, CloseConnectionsResponse, ConnectionEntry, GetInboundUserRequest,
+    GetInboundUserResponse, GetInboundUsersCountResponse, InboundHandlerConfig,
+    ListConnectionsRequest, ListConnectionsResponse, ListInboundsRequest, ListInboundsResponse,
+    ListOutboundsRequest, ListOutboundsResponse, OutboundHandlerConfig, RemoveInboundRequest,
+    RemoveInboundResponse, RemoveOutboundRequest, RemoveOutboundResponse, TypedMessage, User,
 };
 use crate::management::ManagementHandle;
 use crate::vless_account_proto::Account;
@@ -107,7 +106,9 @@ impl HandlerService for HandlerServiceImpl {
         &self,
         _request: Request<AlterInboundRequest>,
     ) -> Result<Response<AlterInboundResponse>, Status> {
-        Err(Status::failed_precondition("configuration mutations must be committed as MySQL revisions"))
+        Err(Status::failed_precondition(
+            "configuration mutations must be committed as MySQL revisions",
+        ))
     }
 
     async fn list_outbounds(
@@ -134,35 +135,45 @@ impl HandlerService for HandlerServiceImpl {
         &self,
         _request: Request<AddInboundRequest>,
     ) -> Result<Response<AddInboundResponse>, Status> {
-        Err(Status::failed_precondition("configuration mutations must be committed as MySQL revisions"))
+        Err(Status::failed_precondition(
+            "configuration mutations must be committed as MySQL revisions",
+        ))
     }
 
     async fn remove_inbound(
         &self,
         _request: Request<RemoveInboundRequest>,
     ) -> Result<Response<RemoveInboundResponse>, Status> {
-        Err(Status::failed_precondition("configuration mutations must be committed as MySQL revisions"))
+        Err(Status::failed_precondition(
+            "configuration mutations must be committed as MySQL revisions",
+        ))
     }
 
     async fn add_outbound(
         &self,
         _request: Request<AddOutboundRequest>,
     ) -> Result<Response<AddOutboundResponse>, Status> {
-        Err(Status::failed_precondition("configuration mutations must be committed as MySQL revisions"))
+        Err(Status::failed_precondition(
+            "configuration mutations must be committed as MySQL revisions",
+        ))
     }
 
     async fn remove_outbound(
         &self,
         _request: Request<RemoveOutboundRequest>,
     ) -> Result<Response<RemoveOutboundResponse>, Status> {
-        Err(Status::failed_precondition("configuration mutations must be committed as MySQL revisions"))
+        Err(Status::failed_precondition(
+            "configuration mutations must be committed as MySQL revisions",
+        ))
     }
 
     async fn alter_outbound(
         &self,
         _request: Request<AlterOutboundRequest>,
     ) -> Result<Response<AlterOutboundResponse>, Status> {
-        Err(Status::failed_precondition("configuration mutations must be committed as MySQL revisions"))
+        Err(Status::failed_precondition(
+            "configuration mutations must be committed as MySQL revisions",
+        ))
     }
 
     async fn list_connections(
