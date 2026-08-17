@@ -9,7 +9,6 @@ User=nobody
 Group=black-ui
 ExecStart=/usr/local/bin/black-ui
 WorkingDirectory=/var/lib/black-ui
-Environment=BLACK_UI_DATA_DIR=/var/lib/black-ui
 LoadCredential=database-url:/etc/blackwire/database-url
 Environment=BLACK_UI_LISTEN=127.0.0.1:18080
 Environment=BLACK_UI_STATIC_DIR=/usr/share/black-ui/frontend/dist
@@ -18,7 +17,6 @@ Restart=on-failure
 RestartSec=5s
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/black-ui
 PrivateTmp=true
 NoNewPrivileges=true
 

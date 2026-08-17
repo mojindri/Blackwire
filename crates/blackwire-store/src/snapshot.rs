@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 use blackwire_config::schema::{
-    Config, DnsConfig, FakeIpConfig, InboundConfig, LimitsConfig, LogConfig, NetworkType,
+    ApiConfig, Config, DnsConfig, FakeIpConfig, InboundConfig, LimitsConfig, LogConfig, NetworkType,
     OutboundConfig, ProfileMode, Protocol, RealityConfig, RoutingConfig, RoutingRule,
     SecurityType, StreamSettingsConfig, TlsConfig,
 };
@@ -57,12 +57,10 @@ impl Database {
                 inbounds: load_inbounds(self.pool(), revision).await?,
                 outbounds: load_outbounds(self.pool(), revision).await?,
                 stats: None,
-                api: api_enabled.then(|| {
-                    json!({
-                        "listen": api_address.unwrap_or_else(|| "127.0.0.1:62789".into()),
-                        "tag": "api",
-                        "services": ["HandlerService", "StatsService"]
-                    })
+                api: api_enabled.then(|| ApiConfig {
+                    listen: api_address.unwrap_or_else(|| "127.0.0.1:62789".into()),
+                    token: None,
+                    services: vec!["HandlerService".into(), "StatsService".into()],
                 }),
                 metrics_addr: if metrics_enabled {
                     global.try_get("metrics_address")?

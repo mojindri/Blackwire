@@ -45,9 +45,9 @@ use clap::{Parser, Subcommand};
 use tracing::{error, info, warn};
 use validator::Validate;
 
-use blackwire_api::management::{InboundManagement, NativeEndpointConfig};
+use blackwire_api::management::InboundManagement;
 use blackwire_config::schema::{
-    explain_cost, validate_fast_profile, Config, InboundConfig, OutboundConfig, ProfileMode,
+    explain_cost, validate_fast_profile, Config, ProfileMode,
     ProfileViolation,
 };
 use blackwire_config::ConfigManager;
@@ -62,7 +62,6 @@ struct RunningInstance {
 #[derive(Clone)]
 struct RuntimeControl {
     instance: Arc<tokio::sync::Mutex<Option<RunningInstance>>>,
-    profile_override: Option<ProfileMode>,
 }
 
 // ── Top-level CLI struct ──────────────────────────────────────────────────────
@@ -550,7 +549,6 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
     if let Some(api_config) = api_config {
         let management: blackwire_api::management::ManagementHandle = Arc::new(RuntimeControl {
             instance: Arc::clone(&instance),
-            profile_override,
         });
         blackwire_api::server::start_api_server(
             &api_config.listen_addr,
@@ -690,86 +688,6 @@ impl RuntimeControl {
         Ok(f(&running.instance.reload))
     }
 
-    async fn apply_reloadable_config(&self, new_config: Config) -> Result<(), String> {
-        let runtime_config = Arc::new(new_config);
-        runtime_config
-            .validate()
-            .map_err(|e| format!("config validation failed: {e}"))?;
-        apply_profile_override_and_validate(&runtime_config, self.profile_override)
-            .map_err(|e| format!("{e:#}"))?;
-
-        let reload = {
-            let guard = self.instance.lock().await;
-            let running = guard
-                .as_ref()
-                .ok_or_else(|| "no running instance is available".to_string())?;
-            if requires_instance_restart(&running.config, &runtime_config) {
-                let changed_listeners = inbound_listener_changes(&running.config, &runtime_config);
-                return Err(format!(
-                    "structural runtime changes require a blackwire service restart; changed listeners: {changed_listeners:?}"
-                ));
-            }
-            running.instance.reload.clone()
-        };
-
-        reload
-            .apply(&runtime_config)
-            .map_err(|e| format!("runtime reload failed: {e:#}"))?;
-
-        let mut guard = self.instance.lock().await;
-        let running = guard
-            .as_mut()
-            .ok_or_else(|| "no running instance is available".to_string())?;
-        running.config = runtime_config;
-        Ok(())
-    }
-
-    async fn mutate_config(
-        &self,
-        f: impl FnOnce(&mut Config) -> Result<(), String>,
-    ) -> Result<(), String> {
-        let mut new_config = {
-            let guard = self.instance.lock().await;
-            guard
-                .as_ref()
-                .ok_or_else(|| "no running instance is available".to_string())?
-                .config
-                .as_ref()
-                .clone()
-        };
-        f(&mut new_config)?;
-        self.apply_reloadable_config(new_config).await
-    }
-}
-
-fn parse_inbound_endpoint(config: NativeEndpointConfig) -> Result<InboundConfig, String> {
-    let endpoint: InboundConfig = serde_json::from_value(config.config)
-        .map_err(|e| format!("invalid inbound config JSON: {e}"))?;
-    if endpoint.tag != config.tag {
-        return Err(format!(
-            "inbound tag mismatch: request tag '{}' != config tag '{}'",
-            config.tag, endpoint.tag
-        ));
-    }
-    endpoint
-        .validate()
-        .map_err(|e| format!("inbound validation failed: {e}"))?;
-    Ok(endpoint)
-}
-
-fn parse_outbound_endpoint(config: NativeEndpointConfig) -> Result<OutboundConfig, String> {
-    let endpoint: OutboundConfig = serde_json::from_value(config.config)
-        .map_err(|e| format!("invalid outbound config JSON: {e}"))?;
-    if endpoint.tag != config.tag {
-        return Err(format!(
-            "outbound tag mismatch: request tag '{}' != config tag '{}'",
-            config.tag, endpoint.tag
-        ));
-    }
-    endpoint
-        .validate()
-        .map_err(|e| format!("outbound validation failed: {e}"))?;
-    Ok(endpoint)
 }
 
 #[async_trait]
@@ -825,112 +743,6 @@ impl InboundManagement for RuntimeControl {
                 .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))
         })
         .await?
-    }
-
-    async fn add_vless_user(
-        &self,
-        inbound_tag: &str,
-        email: &str,
-        uuid: &str,
-        flow: &str,
-    ) -> Result<(), String> {
-        self.with_reload(|r| {
-            r.vless_registries
-                .get(inbound_tag)
-                .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))
-                .and_then(|registry| {
-                    let uuid = uuid::Uuid::parse_str(uuid)
-                        .map_err(|e| format!("invalid UUID '{uuid}': {e}"))?
-                        .into_bytes();
-                    registry.add_user(blackwire_protocol::vless::VlessUser {
-                        email: email.into(),
-                        uuid,
-                        flow: flow.to_string(),
-                    });
-                    Ok(())
-                })
-        })
-        .await?
-    }
-
-    async fn remove_vless_user(&self, inbound_tag: &str, email: &str) -> Result<(), String> {
-        self.with_reload(|r| {
-            r.vless_registries
-                .get(inbound_tag)
-                .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))
-                .and_then(|registry| {
-                    if registry.remove_user_by_email(email) {
-                        Ok(())
-                    } else {
-                        Err(format!(
-                            "no VLESS user with email '{email}' on inbound '{inbound_tag}'"
-                        ))
-                    }
-                })
-        })
-        .await?
-    }
-
-    async fn add_inbound(&self, config: NativeEndpointConfig) -> Result<(), String> {
-        let endpoint = parse_inbound_endpoint(config)?;
-        self.mutate_config(|cfg| {
-            if cfg.inbounds.iter().any(|i| i.tag == endpoint.tag) {
-                return Err(format!("inbound '{}' already exists", endpoint.tag));
-            }
-            cfg.inbounds.push(endpoint);
-            Ok(())
-        })
-        .await
-    }
-
-    async fn remove_inbound(&self, tag: &str) -> Result<(), String> {
-        self.mutate_config(|cfg| {
-            let before = cfg.inbounds.len();
-            cfg.inbounds.retain(|i| i.tag != tag);
-            if cfg.inbounds.len() == before {
-                return Err(format!("inbound '{tag}' not found"));
-            }
-            Ok(())
-        })
-        .await
-    }
-
-    async fn add_outbound(&self, config: NativeEndpointConfig) -> Result<(), String> {
-        let endpoint = parse_outbound_endpoint(config)?;
-        self.mutate_config(|cfg| {
-            if cfg.outbounds.iter().any(|o| o.tag == endpoint.tag) {
-                return Err(format!("outbound '{}' already exists", endpoint.tag));
-            }
-            cfg.outbounds.push(endpoint);
-            Ok(())
-        })
-        .await
-    }
-
-    async fn remove_outbound(&self, tag: &str) -> Result<(), String> {
-        self.mutate_config(|cfg| {
-            let before = cfg.outbounds.len();
-            cfg.outbounds.retain(|o| o.tag != tag);
-            if cfg.outbounds.len() == before {
-                return Err(format!("outbound '{tag}' not found"));
-            }
-            Ok(())
-        })
-        .await
-    }
-
-    async fn alter_outbound(&self, config: NativeEndpointConfig) -> Result<(), String> {
-        let endpoint = parse_outbound_endpoint(config)?;
-        self.mutate_config(|cfg| {
-            let existing = cfg
-                .outbounds
-                .iter_mut()
-                .find(|o| o.tag == endpoint.tag)
-                .ok_or_else(|| format!("outbound '{}' not found", endpoint.tag))?;
-            *existing = endpoint;
-            Ok(())
-        })
-        .await
     }
 
     async fn list_connections(&self) -> Vec<blackwire_connmgr::ConnectionSnapshot> {

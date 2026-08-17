@@ -165,7 +165,7 @@ hex         = "0.4"
 base64      = "0.22"
 num_cpus    = "1"
 chrono      = { version = "0.4", features = ["serde", "clock"] }
-sqlx        = { version = "=0.8.6", default-features = false, features = ["runtime-tokio-rustls", "mysql", "migrate", "macros", "chrono"] }
+sqlx        = { version = "=0.8.6", default-features = false, features = ["runtime-tokio-rustls", "mysql", "migrate", "chrono"] }
 # Transitional only while black-ui is moved to blackwire-store in this change.
 
 # ── Build profiles ───────────────────────────────────────────────────────────

@@ -117,11 +117,11 @@ pub struct Config {
 
     /// Statistics collection settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stats: Option<serde_json::Value>,
+    pub stats: Option<StatsConfig>,
 
     /// Management API settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api: Option<serde_json::Value>,
+    pub api: Option<ApiConfig>,
 
     /// Metrics/health HTTP server listen address, e.g. `"127.0.0.1:8080"`.
     ///
@@ -133,6 +133,23 @@ pub struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub metrics_addr: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiConfig {
+    pub listen: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub services: Vec<String>,
 }
 
 /// Runtime safety limits.

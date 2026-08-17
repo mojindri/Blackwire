@@ -9,7 +9,10 @@ use crate::{
 
 pub const EXPECTED_SCHEMA_VERSION: i64 = 2;
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("../migrations/0001_mysql_control_plane.sql")),
+    (2, include_str!("../migrations/0002_complete_relational_settings.sql")),
+];
 
 #[derive(Debug, Clone)]
 pub struct DatabaseOptions {
@@ -85,7 +88,34 @@ impl Database {
                 "timed out acquiring Blackwire migration lock".into(),
             )));
         }
-        let result = MIGRATOR.run(&mut *conn).await;
+        let current = sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE((SELECT version FROM blackwire_schema_version WHERE singleton_id=1), 0)",
+        )
+        .fetch_one(&mut *conn)
+        .await
+        .or_else(|error| match &error {
+            sqlx::Error::Database(db) if db.code().as_deref() == Some("42S02") => Ok(0),
+            _ => Err(error),
+        });
+        let result = match current {
+            Ok(current) => {
+                let mut result = Ok(());
+                for (version, script) in MIGRATIONS.iter().filter(|(version, _)| *version > current) {
+                    if let Err(error) = execute_migration_script(&mut conn, script).await {
+                        result = Err(error);
+                        break;
+                    }
+                    let applied: i64 = sqlx::query_scalar("SELECT version FROM blackwire_schema_version WHERE singleton_id=1")
+                        .fetch_one(&mut *conn).await?;
+                    if applied != *version {
+                        result = Err(StoreError::SchemaVersion { expected: *version, actual: applied });
+                        break;
+                    }
+                }
+                result
+            }
+            Err(error) => Err(StoreError::Sql(error)),
+        };
         let _ = sqlx::query("SELECT RELEASE_LOCK('blackwire-schema-migrate')")
             .execute(&mut *conn)
             .await;
@@ -305,6 +335,16 @@ impl Database {
         .await?;
         Ok(())
     }
+}
+
+async fn execute_migration_script(
+    conn: &mut sqlx::pool::PoolConnection<MySql>,
+    script: &str,
+) -> StoreResult<()> {
+    for statement in script.split(';').map(str::trim).filter(|statement| !statement.is_empty()) {
+        sqlx::query(statement).execute(&mut **conn).await?;
+    }
+    Ok(())
 }
 
 fn parse_activation_state(value: &str) -> StoreResult<ActivationState> {
