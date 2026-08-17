@@ -226,21 +226,21 @@ start_client() {
     if [[ "$client" == "xray" ]]; then
         if [[ -n "$root" ]]; then
             ssh_client "docker run -d --rm --name external-xray-client --network host \
-                -v '${REMOTE_DIR}/generated:/generated:ro' ghcr.io/xtls/xray-core:latest \
+                -v '${REMOTE_DIR}/generated:/generated:ro' ghcr.io/xtls/xray-core:26.7.28 \
                 run -c '/generated/${root}/${client_cfg}'"
         else
             ssh_client "docker run -d --rm --name external-xray-client --network host \
-                -v '${REMOTE_DIR}/generated/xray:/generated/xray:ro' ghcr.io/xtls/xray-core:latest \
+                -v '${REMOTE_DIR}/generated/xray:/generated/xray:ro' ghcr.io/xtls/xray-core:26.7.28 \
                 run -c '/generated/xray/${client_cfg}'"
         fi
     else
         if [[ -n "$root" ]]; then
             ssh_client "docker run -d --rm --name external-sing-box-client --network host \
-                -v '${REMOTE_DIR}/generated:/generated:ro' ghcr.io/sagernet/sing-box:latest \
+                -v '${REMOTE_DIR}/generated:/generated:ro' ghcr.io/sagernet/sing-box:v1.13.19 \
                 run -c '/generated/${root}/${client_cfg}'"
         else
             ssh_client "docker run -d --rm --name external-sing-box-client --network host \
-                -v '${REMOTE_DIR}/generated/sing-box:/generated/sing-box:ro' ghcr.io/sagernet/sing-box:latest \
+                -v '${REMOTE_DIR}/generated/sing-box:/generated/sing-box:ro' ghcr.io/sagernet/sing-box:v1.13.19 \
                 run -c '/generated/sing-box/${client_cfg}'"
         fi
     fi

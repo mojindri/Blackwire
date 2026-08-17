@@ -7,7 +7,7 @@ use crate::{
     ActivationClass, ActivationState, ConfigurationState, RevisionSummary, StoreError, StoreResult,
 };
 
-pub const EXPECTED_SCHEMA_VERSION: i64 = 6;
+pub const EXPECTED_SCHEMA_VERSION: i64 = 7;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -30,6 +30,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (
         6,
         include_str!("../migrations/0006_performance_control_surface.sql"),
+    ),
+    (
+        7,
+        include_str!("../migrations/0007_reality_fallback_limits.sql"),
     ),
 ];
 
@@ -480,7 +484,7 @@ async fn copy_revision_rows(
         "INSERT INTO stream_settings SELECT ?, endpoint_kind, endpoint_id, network, security FROM stream_settings WHERE revision_id=?",
         "INSERT INTO tls_settings SELECT ?, endpoint_kind, endpoint_id, server_name, allow_insecure, certificate_file, key_file FROM tls_settings WHERE revision_id=?",
         "INSERT INTO tls_alpn SELECT ?, endpoint_kind, endpoint_id, position, protocol FROM tls_alpn WHERE revision_id=?",
-        "INSERT INTO reality_settings SELECT ?, endpoint_kind, endpoint_id, show_details, destination, private_key, public_key, short_id, fingerprint, server_name, max_time_diff_seconds FROM reality_settings WHERE revision_id=?",
+        "INSERT INTO reality_settings SELECT ?, endpoint_kind, endpoint_id, show_details, destination, private_key, public_key, short_id, fingerprint, server_name, max_time_diff_seconds, fallback_upload_after_bytes, fallback_upload_bytes_per_sec, fallback_upload_burst_bytes_per_sec, fallback_download_after_bytes, fallback_download_bytes_per_sec, fallback_download_burst_bytes_per_sec FROM reality_settings WHERE revision_id=?",
         "INSERT INTO reality_server_names SELECT ?, endpoint_kind, endpoint_id, position, server_name FROM reality_server_names WHERE revision_id=?",
         "INSERT INTO reality_short_ids SELECT ?, endpoint_kind, endpoint_id, position, short_id FROM reality_short_ids WHERE revision_id=?",
         "INSERT INTO shadowtls_settings SELECT ?, endpoint_kind, endpoint_id, password_value, destination, version FROM shadowtls_settings WHERE revision_id=?",

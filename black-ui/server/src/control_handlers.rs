@@ -1018,7 +1018,10 @@ async fn subscription_link(
     }
     if user.security == "reality" {
         if let Some(public_key) = user.reality_public_key.as_deref() {
-            params.push(format!("pbk={}", url_escape(public_key)));
+            params.push(format!(
+                "pbk={}",
+                url_escape(&reality_public_key_base64url(public_key))
+            ));
         }
         if let Some(short_id) = user.reality_short_id.as_deref() {
             params.push(format!("sid={}", url_escape(short_id)));
@@ -1119,6 +1122,25 @@ async fn subscription_link(
             "subscription not available for this protocol",
         )),
     }
+}
+
+fn reality_public_key_base64url(value: &str) -> String {
+    if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        if let Ok(bytes) = hex::decode(value) {
+            return base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        }
+    }
+
+    let unpadded = value.trim_end_matches('=');
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(unpadded)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(unpadded));
+    if let Ok(bytes) = decoded {
+        if bytes.len() == 32 {
+            return base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        }
+    }
+    value.to_owned()
 }
 
 fn public_subscription_host(configured: &str, headers: &HeaderMap) -> String {
@@ -1313,5 +1335,29 @@ impl From<blackwire_store::MutationResult> for ApplyResult {
             activation_class: value.activation_class,
             message: value.message,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine as _;
+
+    use super::reality_public_key_base64url;
+
+    #[test]
+    fn subscription_reality_key_is_canonical_base64url() {
+        let key = [0xa5; 32];
+        let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
+        assert_eq!(reality_public_key_base64url(&hex::encode(key)), expected);
+        assert_eq!(
+            reality_public_key_base64url(&format!("{expected}=")),
+            expected
+        );
+
+        let key_with_standard_alphabet = [0xff; 32];
+        let standard = base64::engine::general_purpose::STANDARD.encode(key_with_standard_alphabet);
+        let canonical =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_with_standard_alphabet);
+        assert_eq!(reality_public_key_base64url(&standard), canonical);
     }
 }

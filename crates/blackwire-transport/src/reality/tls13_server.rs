@@ -5,34 +5,112 @@ use rand::RngExt;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use blackwire_common::{BoxedStream, ProxyError};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 use super::{
     decrypt_app_record, derive_app_keys, derive_handshake_keys, encrypt_app_record,
-    read_record_stream, split_handshake_messages, write_handshake_record, AppKeys, CipherSuite,
-    HsKeys, HS_CERTIFICATE, HS_CERTIFICATE_VERIFY, HS_CLIENT_HELLO, HS_ENCRYPTED_EXTENSIONS,
-    HS_FINISHED, HS_SERVER_HELLO, RT_ALERT, RT_APPLICATION_DATA, RT_CHANGE_CIPHER_SPEC,
-    RT_HANDSHAKE,
+    read_client_hello_message, read_record_stream, split_handshake_messages,
+    write_handshake_record, AppKeys, CipherSuite, HsKeys, HS_CERTIFICATE, HS_CERTIFICATE_VERIFY,
+    HS_ENCRYPTED_EXTENSIONS, HS_FINISHED, HS_SERVER_HELLO, RT_ALERT, RT_APPLICATION_DATA,
+    RT_CHANGE_CIPHER_SPEC, RT_HANDSHAKE,
 };
 
 const SIG_ED25519: u16 = 0x0807;
+const GROUP_X25519: u16 = 0x001d;
 // Must match Go TLS `serverSignatureContext`; Xray/sing-box verify this with uTLS.
 const TLS13_SERVER_CERT_VERIFY_CONTEXT: &[u8] = b"TLS 1.3, server CertificateVerify\x00";
+
+/// Small, reusable description of the cover server's visible TLS 1.3 flight.
+/// It intentionally contains no ephemeral keys or certificate material.
+#[derive(Clone, Debug)]
+pub struct CoverHandshakeProfile {
+    pub(crate) cipher_suite: CipherSuite,
+    pub(crate) selected_group: u16,
+    pub(crate) sends_ccs: bool,
+    /// TLS record body lengths for the encrypted server handshake flight.
+    pub(crate) encrypted_record_lengths: Vec<usize>,
+}
+
+/// Learn the cover's visible handshake shape from a connection that has
+/// already received the mirrored ClientHello. The result is bounded and safe
+/// to cache across connections because it excludes all ephemeral key data.
+pub(crate) async fn read_cover_handshake_profile(
+    cover: &mut TcpStream,
+) -> Result<CoverHandshakeProfile, ProxyError> {
+    const MAX_PROFILE_BYTES: usize = 64 * 1024;
+    const MAX_PROFILE_RECORDS: usize = 8;
+
+    let (header, server_hello) = read_tcp_record(cover).await?;
+    if header[0] != RT_HANDSHAKE {
+        return Err(ProxyError::Protocol(
+            "cover did not return a TLS ServerHello".into(),
+        ));
+    }
+    let (cipher_suite, selected_group, _) = super::parse_server_hello(&server_hello)?;
+    let mut total = header.len() + server_hello.len();
+    let mut sends_ccs = false;
+    let mut encrypted_record_lengths = Vec::with_capacity(2);
+
+    while encrypted_record_lengths.len() < MAX_PROFILE_RECORDS && total < MAX_PROFILE_BYTES {
+        let (record_header, body) = read_tcp_record(cover).await?;
+        total = total.saturating_add(record_header.len() + body.len());
+        match record_header[0] {
+            RT_CHANGE_CIPHER_SPEC => sends_ccs = true,
+            RT_APPLICATION_DATA => {
+                encrypted_record_lengths.push(body.len());
+                // A normal TLS 1.3 server flight is usually one or two records.
+                // Stop after the first full-size-short record; reading further
+                // risks waiting for post-handshake tickets.
+                if body.len() < 16 * 1024 {
+                    break;
+                }
+            }
+            RT_ALERT => break,
+            _ => break,
+        }
+    }
+
+    if encrypted_record_lengths.is_empty() {
+        return Err(ProxyError::Protocol(
+            "cover returned no encrypted TLS handshake record".into(),
+        ));
+    }
+    Ok(CoverHandshakeProfile {
+        cipher_suite,
+        selected_group,
+        sends_ccs,
+        encrypted_record_lengths,
+    })
+}
+
+async fn read_tcp_record(tcp: &mut TcpStream) -> Result<([u8; 5], Vec<u8>), ProxyError> {
+    let mut header = [0u8; 5];
+    tcp.read_exact(&mut header).await?;
+    let body_len = u16::from_be_bytes([header[3], header[4]]) as usize;
+    if body_len > 18 * 1024 {
+        return Err(ProxyError::Protocol(format!(
+            "cover TLS record too large: {body_len}"
+        )));
+    }
+    let mut body = vec![0u8; body_len];
+    tcp.read_exact(&mut body).await?;
+    Ok((header, body))
+}
 
 /// Complete TLS 1.3 as server after REALITY auth.
 pub async fn complete_tls13_server_handshake(
     stream: &mut BoxedStream,
     auth_key: &[u8; 32],
     cover_sni: &str,
+    cover_profile: Option<&CoverHandshakeProfile>,
 ) -> Result<AppKeys, ProxyError> {
-    let (ch_header, ch_body) = read_record_stream(stream).await?;
-    if ch_header[0] != RT_HANDSHAKE || ch_body.first() != Some(&HS_CLIENT_HELLO) {
-        return Err(ProxyError::Protocol(
-            "REALITY server TLS: expected ClientHello record".into(),
-        ));
-    }
+    let ch_body = read_client_hello_message(stream, None).await?;
+    // Blackwire currently negotiates X25519. A cover selecting another group
+    // cannot be mirrored safely, so retain the standard compatible shape.
+    let cover_profile = cover_profile.filter(|profile| profile.selected_group == GROUP_X25519);
 
-    let cs = pick_cipher_suite(&ch_body)?;
+    let cs = pick_cipher_suite(&ch_body, cover_profile.map(|profile| profile.cipher_suite))?;
     let client_share = crate::reality::parse_client_hello(&ch_body)
         .map_err(|e| ProxyError::Protocol(e.to_string()))?
         .x25519_key_share;
@@ -64,29 +142,34 @@ pub async fn complete_tls13_server_handshake(
     let transcript_hash_after_sh = cs.hash(&transcript);
     let hs_keys = derive_handshake_keys(cs, &tls_dhe, &transcript_hash_after_sh)?;
 
-    // uTLS / BoringSSL peers often expect a legacy CCS before TLS 1.3 encrypted flights.
-    stream
-        .write_all(&[RT_CHANGE_CIPHER_SPEC, 0x03, 0x03, 0x00, 0x01, 0x01])
-        .await?;
+    // Follow the cover's visible CCS behavior when a profile is available.
+    if cover_profile.is_none_or(|profile| profile.sends_ccs) {
+        stream
+            .write_all(&[RT_CHANGE_CIPHER_SPEC, 0x03, 0x03, 0x00, 0x01, 0x01])
+            .await?;
+    }
 
-    let mut srv_seq: u64 = 0;
     let ee_msg = build_encrypted_extensions();
     transcript.extend_from_slice(&ee_msg);
-    write_encrypted_hs(stream, cs, &hs_keys, &mut srv_seq, &ee_msg).await?;
 
     let cert_msg = build_certificate(&cert_der);
     transcript.extend_from_slice(&cert_msg);
-    write_encrypted_hs(stream, cs, &hs_keys, &mut srv_seq, &cert_msg).await?;
 
     let cv_msg = build_certificate_verify(cs, &signing_key, &transcript)?;
     transcript.extend_from_slice(&cv_msg);
-    write_encrypted_hs(stream, cs, &hs_keys, &mut srv_seq, &cv_msg).await?;
 
     let finished_hash = cs.hash(&transcript);
     let server_finished_data = cs.hmac(&hs_keys.server_finished_key, &finished_hash)?;
     let finished_msg = build_finished(server_finished_data);
     transcript.extend_from_slice(&finished_msg);
-    write_encrypted_hs(stream, cs, &hs_keys, &mut srv_seq, &finished_msg).await?;
+
+    let mut flight =
+        Vec::with_capacity(ee_msg.len() + cert_msg.len() + cv_msg.len() + finished_msg.len());
+    flight.extend_from_slice(&ee_msg);
+    flight.extend_from_slice(&cert_msg);
+    flight.extend_from_slice(&cv_msg);
+    flight.extend_from_slice(&finished_msg);
+    write_encrypted_flight(stream, cs, &hs_keys, &flight, cover_profile).await?;
 
     let app_transcript_hash = cs.hash(&transcript);
     let app_keys = derive_app_keys(cs, &hs_keys.master_secret, &app_transcript_hash)?;
@@ -96,23 +179,53 @@ pub async fn complete_tls13_server_handshake(
     Ok(app_keys)
 }
 
-async fn write_encrypted_hs(
+async fn write_encrypted_flight(
     stream: &mut BoxedStream,
     cs: CipherSuite,
     hs_keys: &HsKeys,
-    seq: &mut u64,
-    hs_msg: &[u8],
+    flight: &[u8],
+    cover_profile: Option<&CoverHandshakeProfile>,
 ) -> Result<(), ProxyError> {
-    let record = encrypt_app_record(
-        cs,
-        &hs_keys.server_key,
-        &hs_keys.server_iv,
-        *seq,
-        hs_msg,
-        RT_HANDSHAKE,
-    )?;
-    *seq += 1;
-    stream.write_all(&record).await?;
+    let mut offset = 0usize;
+    let mut seq = 0u64;
+    if let Some(profile) = cover_profile {
+        for &ciphertext_len in &profile.encrypted_record_lengths {
+            if offset == flight.len() {
+                break;
+            }
+            let content_capacity = ciphertext_len.saturating_sub(17);
+            if content_capacity == 0 {
+                continue;
+            }
+            let take = (flight.len() - offset).min(content_capacity);
+            let record = super::encrypt_app_record_padded(
+                cs,
+                &hs_keys.server_key,
+                &hs_keys.server_iv,
+                seq,
+                &flight[offset..offset + take],
+                RT_HANDSHAKE,
+                ciphertext_len,
+            )?;
+            stream.write_all(&record).await?;
+            offset += take;
+            seq += 1;
+        }
+    }
+    while offset < flight.len() {
+        let take = (flight.len() - offset).min(16 * 1024 - 1);
+        let record = encrypt_app_record(
+            cs,
+            &hs_keys.server_key,
+            &hs_keys.server_iv,
+            seq,
+            &flight[offset..offset + take],
+            RT_HANDSHAKE,
+        )?;
+        stream.write_all(&record).await?;
+        offset += take;
+        seq += 1;
+    }
     Ok(())
 }
 
@@ -170,8 +283,20 @@ async fn read_client_finished(
     }
 }
 
-fn pick_cipher_suite(ch_body: &[u8]) -> Result<CipherSuite, ProxyError> {
+fn pick_cipher_suite(
+    ch_body: &[u8],
+    cover_preference: Option<CipherSuite>,
+) -> Result<CipherSuite, ProxyError> {
     let list = crate::reality::parser::client_hello_cipher_suites(ch_body)?;
+    if let Some(preferred) = cover_preference {
+        let preferred = preferred.to_u16();
+        if list
+            .chunks_exact(2)
+            .any(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]) == preferred)
+        {
+            return CipherSuite::from_u16(preferred);
+        }
+    }
     for prefer in [0x1301u16, 0x1302] {
         for chunk in list.chunks_exact(2) {
             if u16::from_be_bytes([chunk[0], chunk[1]]) == prefer {
@@ -353,6 +478,38 @@ mod tests {
     }
 
     #[test]
+    fn cover_shaped_record_matches_observed_length_and_roundtrips() {
+        use super::super::{decrypt_app_record, derive_handshake_keys, encrypt_app_record_padded};
+
+        let hs =
+            derive_handshake_keys(CipherSuite::Aes128GcmSha256, &[1u8; 32], &[2u8; 32]).unwrap();
+        let content = build_encrypted_extensions();
+        let record = encrypt_app_record_padded(
+            CipherSuite::Aes128GcmSha256,
+            &hs.server_key,
+            &hs.server_iv,
+            0,
+            &content,
+            RT_HANDSHAKE,
+            4096,
+        )
+        .unwrap();
+        assert_eq!(record.len(), 5 + 4096);
+        let header = record[..5].try_into().unwrap();
+        let (plain, ty) = decrypt_app_record(
+            CipherSuite::Aes128GcmSha256,
+            &hs.server_key,
+            &hs.server_iv,
+            0,
+            &record[5..],
+            header,
+        )
+        .unwrap();
+        assert_eq!(plain, content);
+        assert_eq!(ty, RT_HANDSHAKE);
+    }
+
+    #[test]
     fn handshake_traffic_keys_match_manual() {
         use super::super::{derive_handshake_keys, parse_server_hello};
         use blackwire_tls::ClientHelloBuilder;
@@ -420,6 +577,52 @@ mod tests {
     use super::*;
     use crate::reality::{RealityClient, RealityClientConfig, RealityServer, RealityServerConfig};
 
+    async fn spawn_cover_sink() -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0u8; 4096];
+                while stream.read(&mut buffer).await.unwrap_or(0) != 0 {}
+            }
+        });
+        address
+    }
+
+    #[tokio::test]
+    async fn client_hello_split_across_tls_records_is_reassembled() {
+        use blackwire_tls::ClientHelloBuilder;
+        use tokio::io::AsyncWriteExt;
+
+        let client_secret = StaticSecret::random();
+        let client_pub = *PublicKey::from(&client_secret).as_bytes();
+        let mut rng = rand::rng();
+        let hello = ClientHelloBuilder::chrome_131().build_with_additional_key_share(
+            "www.example.com",
+            &[3u8; 32],
+            &[0u8; 32],
+            Some(&client_pub),
+            None,
+            &mut rng,
+        );
+        let handshake = &hello[5..];
+        let split_at = 73;
+        let mut fragmented = Vec::with_capacity(handshake.len() + 10);
+        for fragment in [&handshake[..split_at], &handshake[split_at..]] {
+            fragmented.extend_from_slice(&[RT_HANDSHAKE, 0x03, 0x03]);
+            fragmented.extend_from_slice(&(fragment.len() as u16).to_be_bytes());
+            fragmented.extend_from_slice(fragment);
+        }
+
+        let (mut writer, reader) = tokio::io::duplex(fragmented.len() + 32);
+        tokio::spawn(async move {
+            writer.write_all(&fragmented).await.unwrap();
+        });
+        let mut stream = Box::new(reader) as BoxedStream;
+        let reassembled = read_client_hello_message(&mut stream, None).await.unwrap();
+        assert_eq!(reassembled, handshake);
+    }
+
     #[tokio::test]
     async fn self_client_server_tls13_roundtrip() {
         let priv_bytes =
@@ -433,10 +636,7 @@ mod tests {
                 .try_into()
                 .unwrap();
         let short_id = hex::decode("0123456789abcdef").unwrap();
-        let fallback = {
-            let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            l.local_addr().unwrap()
-        };
+        let fallback = spawn_cover_sink().await;
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -453,11 +653,16 @@ mod tests {
         tokio::spawn(async move {
             let (tcp, _) = listener.accept().await.unwrap();
             let accepted = srv.accept_with_key(Box::new(tcp)).await.unwrap();
+            let cover_profile = accepted.cover_profile;
             let mut stream = accepted.stream;
-            let keys =
-                complete_tls13_server_handshake(&mut stream, &accepted.auth_key, "www.example.com")
-                    .await
-                    .unwrap();
+            let keys = complete_tls13_server_handshake(
+                &mut stream,
+                &accepted.auth_key,
+                "www.example.com",
+                cover_profile.as_ref(),
+            )
+            .await
+            .unwrap();
             let mut tls = Tls13Stream::new_server(stream, keys);
             let mut buf = [0u8; 4];
             tls.read_exact(&mut buf).await.unwrap();
@@ -555,10 +760,7 @@ mod tests {
         wire_hello[5 + sid..5 + sid + 32].copy_from_slice(&ct);
 
         let priv_bytes = *server_secret.as_bytes();
-        let fallback = {
-            let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            l.local_addr().unwrap()
-        };
+        let fallback = spawn_cover_sink().await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = Arc::new(RealityServer::new(RealityServerConfig {
@@ -574,11 +776,13 @@ mod tests {
         tokio::spawn(async move {
             let (tcp, _) = listener.accept().await.unwrap();
             let accepted = srv.accept_with_key(Box::new(tcp)).await.unwrap();
+            let cover_profile = accepted.cover_profile;
             let mut stream = accepted.stream;
             let keys = complete_tls13_server_handshake(
                 &mut stream,
                 &accepted.auth_key,
                 "www.microsoft.com",
+                cover_profile.as_ref(),
             )
             .await
             .unwrap();

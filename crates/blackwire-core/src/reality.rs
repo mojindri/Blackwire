@@ -7,12 +7,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
+use base64::Engine as _;
 
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::{
     ConnectionHandler, InboundHandler, OutboundConnectResult, OutboundHandler,
 };
-use blackwire_common::{with_handshake_timeout, BoxedStream, ProxyError};
+use blackwire_common::{with_handshake_timeout, BoxedStream, ProxyError, RelayRateLimit};
 use blackwire_config::schema::{SecurityType, StreamSettingsConfig};
 use blackwire_protocol::vless::codec::Command;
 use blackwire_protocol::vless::{
@@ -75,11 +76,17 @@ impl ConnectionHandler for RealityConnectionHandler {
         let accepted =
             with_handshake_timeout(self.handshake_timeout, self.reality.accept_with_key(stream))
                 .await?;
+        let cover_profile = accepted.cover_profile;
         let mut stream = accepted.stream;
         // Keep this on the custom TLS path: rustls does not currently negotiate with uTLS REALITY clients.
         let app_keys = with_handshake_timeout(
             self.handshake_timeout,
-            complete_tls13_server_handshake(&mut stream, &accepted.auth_key, &self.cover_sni),
+            complete_tls13_server_handshake(
+                &mut stream,
+                &accepted.auth_key,
+                &self.cover_sni,
+                cover_profile.as_ref(),
+            ),
         )
         .await
         .map_err(|e| {
@@ -169,7 +176,7 @@ pub(crate) fn build_reality_client(
 
     Ok(RealityClient::new(RealityClientConfig {
         server,
-        server_public_key: parse_hex_32(&reality.public_key, "publicKey")?,
+        server_public_key: parse_reality_key_32(&reality.public_key, "publicKey")?,
         short_id: parse_short_id(&reality.short_id, "shortId")?,
         sni: require_non_empty(&reality.server_name, "serverName")?.to_string(),
         fingerprint: reality.fingerprint.clone(),
@@ -201,14 +208,59 @@ pub(crate) fn build_reality_server(
 
     let server_names = reality_server_names(reality)?;
     let max_time_diff = reality_max_time_diff_seconds(reality)?;
+    warn_for_risky_reality_cover(&server_names);
 
-    Ok(Arc::new(RealityServer::new(RealityServerConfig {
-        private_key: parse_hex_32(&reality.private_key, "privateKey")?,
-        short_ids,
-        server_names,
-        fallback,
-        max_time_diff: max_time_diff as i64,
-    })))
+    let upload_limit = reality.limit_fallback_upload.map(reality_fallback_limit);
+    let download_limit = reality.limit_fallback_download.map(reality_fallback_limit);
+    Ok(Arc::new(
+        RealityServer::new(RealityServerConfig {
+            private_key: parse_reality_key_32(&reality.private_key, "privateKey")?,
+            short_ids,
+            server_names,
+            fallback,
+            max_time_diff: max_time_diff as i64,
+        })
+        .with_fallback_limits(upload_limit, download_limit),
+    ))
+}
+
+fn reality_fallback_limit(
+    value: blackwire_config::schema::RealityFallbackLimitConfig,
+) -> RelayRateLimit {
+    RelayRateLimit {
+        after_bytes: value.after_bytes,
+        bytes_per_second: value.bytes_per_sec,
+        burst_bytes: value.burst_bytes_per_sec,
+    }
+}
+
+fn warn_for_risky_reality_cover(server_names: &[String]) {
+    const HIGH_RISK_SUFFIXES: &[&str] = &[
+        "microsoft.com",
+        "apple.com",
+        "icloud.com",
+        ".ru",
+        ".ir",
+        ".cn",
+    ];
+    for name in server_names {
+        let normalized = name.trim_end_matches('.').to_ascii_lowercase();
+        if HIGH_RISK_SUFFIXES.iter().any(|suffix| {
+            if suffix.starts_with('.') {
+                normalized.ends_with(suffix)
+            } else {
+                normalized == *suffix
+                    || normalized
+                        .strip_suffix(suffix)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+            }
+        }) {
+            warn!(
+                cover = %name,
+                "REALITY cover may attract blocking or be unsuitable; prefer a stable, reachable TLS 1.3 site outside commonly targeted domains"
+            );
+        }
+    }
 }
 
 fn reality_server_names(reality: &blackwire_config::schema::RealityConfig) -> Result<Vec<String>> {
@@ -252,9 +304,17 @@ fn reality_max_time_diff_seconds(reality: &blackwire_config::schema::RealityConf
     Ok(legacy)
 }
 
-fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
-    let bytes = hex::decode(require_non_empty(value, field)?)
-        .with_context(|| format!("{field} must be hex"))?;
+fn parse_reality_key_32(value: &str, field: &str) -> Result<[u8; 32]> {
+    let value = require_non_empty(value, field)?;
+    let bytes = if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        hex::decode(value).with_context(|| format!("{field} must be hex or base64url"))?
+    } else {
+        let unpadded = value.trim_end_matches('=');
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(unpadded)
+            .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(unpadded))
+            .with_context(|| format!("{field} must be hex, base64url, or standard base64"))?
+    };
     bytes
         .try_into()
         .map_err(|bytes: Vec<u8>| anyhow::anyhow!("{field} must be 32 bytes, got {}", bytes.len()))
@@ -274,4 +334,30 @@ fn require_non_empty<'a>(value: &'a str, field: &str) -> Result<&'a str> {
         anyhow::bail!("{field} must not be empty");
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine as _;
+
+    use super::parse_reality_key_32;
+
+    #[test]
+    fn reality_keys_accept_hex_and_base64() {
+        let key = [0xa5; 32];
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
+        assert_eq!(parse_reality_key_32(&hex::encode(key), "key").unwrap(), key);
+        assert_eq!(parse_reality_key_32(&encoded, "key").unwrap(), key);
+        assert_eq!(
+            parse_reality_key_32(&format!("{encoded}="), "key").unwrap(),
+            key
+        );
+
+        let key_with_standard_alphabet = [0xff; 32];
+        let standard = base64::engine::general_purpose::STANDARD.encode(key_with_standard_alphabet);
+        assert_eq!(
+            parse_reality_key_32(&standard, "key").unwrap(),
+            key_with_standard_alphabet
+        );
+    }
 }

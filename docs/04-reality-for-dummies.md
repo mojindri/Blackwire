@@ -289,6 +289,13 @@ If it points to plain HTTP on port 80, the client cannot complete a real TLS han
 
 That is why the Xray interop harness uses a real HTTPS endpoint on `:443`.
 
+Blackwire also opens that cover connection before it classifies the client,
+mirrors the ClientHello incrementally, and caches the cover's compatible TLS
+1.3 cipher/record shape for later authenticated handshakes. Choose a stable,
+directly reachable TLS 1.3 cover. Avoid Microsoft, Apple/iCloud, and commonly
+blocked country-domain targets; using a famous or politically sensitive cover
+can make the endpoint easier to block rather than safer.
+
 ## The Most Important Files
 
 If you want to study REALITY in code, read in this order:
@@ -327,4 +334,3 @@ REALITY in this repo means:
 - if auth succeeds, become a real TLS 1.3 session
 
 That last step is the part that turns REALITY from a packet trick into a usable transport.
-
