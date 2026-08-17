@@ -51,7 +51,7 @@ use blackwire_config::schema::{
     ProfileViolation,
 };
 use blackwire_config::ConfigManager;
-use blackwire_core::{inbound_listener_changes, requires_instance_restart, Instance};
+use blackwire_core::{requires_instance_restart, Instance};
 use blackwire_store::Database;
 
 struct RunningInstance {
@@ -484,48 +484,6 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
     let profile_override = args.profile;
     apply_profile_override_and_validate(&manager.get(), profile_override)?;
 
-    // Step 3: Follow desired MySQL revisions. Polling is authoritative; an API
-    // notification may reduce latency later but is never required for safety.
-    {
-        let manager_clone = Arc::clone(&manager);
-        let database = database.clone();
-        tokio::spawn(async move {
-            let mut observed_revision = initial_revision;
-            loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                let state = match database.state().await {
-                    Ok(state) => state,
-                    Err(error) => {
-                        warn!(%error, "MySQL unavailable; retaining active in-memory revision");
-                        continue;
-                    }
-                };
-                if state.desired_revision == observed_revision
-                    || state.pending_maintenance_revision == Some(state.desired_revision)
-                {
-                    continue;
-                }
-                match database.load_config(state.desired_revision).await {
-                    Ok(stored) => match manager_clone.replace(stored.config) {
-                        Ok(()) => observed_revision = stored.revision,
-                        Err(error) => {
-                            let _ = database
-                                .record_activation_failure(state.desired_revision, &error.to_string())
-                                .await;
-                            error!(revision = state.desired_revision, %error, "database revision validation failed");
-                        }
-                    },
-                    Err(error) => {
-                        let _ = database
-                            .record_activation_failure(state.desired_revision, &error.to_string())
-                            .await;
-                        error!(revision = state.desired_revision, %error, "database revision load failed");
-                    }
-                }
-            }
-        });
-    }
-
     // Step 4: Build the proxy Instance.
     // `Instance::from_config()` reads the current config snapshot, builds
     // all inbound/outbound handlers, and starts all TCP listener tasks.
@@ -564,18 +522,44 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
         info!(addr = %api_config.listen_addr, authenticated = api_config.token.is_some(), "blackwire-api gRPC server started");
     }
 
-    // Step 4b: Apply hot-reload when config file changes (routing + VLESS users).
-    // Listeners keep running; only per-connection lookup tables are refreshed.
+    // Reconcile desired revisions. Hot-swappable state uses atomic reload;
+    // listener changes prepare a replacement instance before old accept loops
+    // are stopped. Spawned connection tasks are not owned by the accept loop,
+    // so established connections continue draining after handover.
     {
         let live_instance = Arc::clone(&instance);
-        let mut reload_rx = manager.subscribe();
+        let database = database.clone();
         tokio::spawn(async move {
+            let mut observed_revision = initial_revision;
             loop {
-                if reload_rx.changed().await.is_err() {
-                    break;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let state = match database.state().await {
+                    Ok(state) => state,
+                    Err(error) => {
+                        warn!(%error, "MySQL unavailable; retaining active in-memory revision");
+                        continue;
+                    }
+                };
+                if state.desired_revision == observed_revision || state.pending_maintenance_revision == Some(state.desired_revision) {
+                    continue;
                 }
-                let effective =
-                    effective_config(reload_rx.borrow_and_update().clone(), profile_override);
+                let stored = match database.load_config(state.desired_revision).await {
+                    Ok(stored) => stored,
+                    Err(error) => {
+                        let _ = database.record_activation_failure(state.desired_revision, &error.to_string()).await;
+                        observed_revision = state.desired_revision;
+                        error!(revision = state.desired_revision, %error, "revision reconstruction failed");
+                        continue;
+                    }
+                };
+                if let Err(error) = stored.config.validate().map_err(|error| anyhow::anyhow!(error))
+                    .and_then(|_| apply_profile_override_and_validate(&stored.config, profile_override)) {
+                    let _ = database.record_activation_failure(stored.revision, &error.to_string()).await;
+                    observed_revision = stored.revision;
+                    error!(revision = stored.revision, %error, "revision validation failed");
+                    continue;
+                }
+                let effective = effective_config(Arc::new(stored.config), profile_override);
                 let new_config = instance_runtime_config(&effective);
 
                 let should_restart = {
@@ -587,35 +571,48 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                 };
 
                 if should_restart {
-                    let changed_listeners = {
+                    let replacement = match Instance::from_config(Arc::clone(&new_config)).await {
+                        Ok(instance) => instance,
+                        Err(error) => {
+                            let is_maintenance = database.activation_class(stored.revision).await
+                                .is_ok_and(|class| class == blackwire_store::ActivationClass::MaintenanceRequired);
+                            if is_maintenance {
+                                let _ = database.restore_active_after_maintenance_failure(stored.revision, &error.to_string()).await;
+                            } else {
+                                let _ = database.record_activation_failure(stored.revision, &error.to_string()).await;
+                            }
+                            observed_revision = stored.revision;
+                            error!(revision = stored.revision, %error, "listener replacement preparation failed; active instance retained");
+                            continue;
+                        }
+                    };
+                    let old = {
+                        let mut guard = live_instance.lock().await;
+                        guard.replace(RunningInstance { config: Arc::clone(&new_config), instance: replacement })
+                    };
+                    if let Some(old) = old {
+                        old.instance.shutdown();
+                        drop(old);
+                    }
+                } else {
+                    let reload = {
                         let guard = live_instance.lock().await;
-                        guard
-                            .as_ref()
-                            .map(|running| inbound_listener_changes(&running.config, &new_config))
-                            .unwrap_or_default()
+                        let Some(running) = guard.as_ref() else { break; };
+                        running.instance.reload.clone()
                     };
-                    warn!(
-                        changed_listeners = ?changed_listeners,
-                        "structural config change detected; keeping current listeners until service restart"
-                    );
-                    continue;
+                    if let Err(error) = reload.apply(&new_config) {
+                        let _ = database.record_activation_failure(stored.revision, &error.to_string()).await;
+                        observed_revision = stored.revision;
+                        error!(revision = stored.revision, %error, "atomic revision reload failed; active state retained");
+                        continue;
+                    }
+                    let mut guard = live_instance.lock().await;
+                    if let Some(running) = guard.as_mut() { running.config = new_config; }
                 }
-
-                let reload = {
-                    let guard = live_instance.lock().await;
-                    let Some(running) = guard.as_ref() else {
-                        break;
-                    };
-                    running.instance.reload.clone()
-                };
-                if let Err(e) = reload.apply(&new_config) {
-                    error!(error = %e, "config reload apply failed — keeping prior routing/users");
-                    continue;
+                if let Err(error) = database.mark_active(stored.revision).await {
+                    error!(revision = stored.revision, %error, "runtime activated but active revision marker could not be updated");
                 }
-                let mut guard = live_instance.lock().await;
-                if let Some(running) = guard.as_mut() {
-                    running.config = new_config;
-                }
+                observed_revision = stored.revision;
             }
         });
     }

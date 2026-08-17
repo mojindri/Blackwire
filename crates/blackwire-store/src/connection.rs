@@ -284,6 +284,23 @@ impl Database {
         Ok(())
     }
 
+    pub async fn activation_class(&self, revision: i64) -> StoreResult<ActivationClass> {
+        let value: String = sqlx::query_scalar("SELECT activation_class FROM configuration_revisions WHERE revision=?")
+            .bind(revision).fetch_one(&self.pool).await?;
+        parse_activation_class(&value)
+    }
+
+    pub async fn restore_active_after_maintenance_failure(&self, failed_revision: i64, error: &str) -> StoreResult<()> {
+        let mut tx = self.begin_revision(failed_revision).await?;
+        let active: Option<i64> = sqlx::query_scalar("SELECT active_revision FROM configuration_state WHERE singleton_id=1")
+            .fetch_one(&mut *tx).await?;
+        let active = active.ok_or_else(|| StoreError::InvalidConfiguration("no prior active revision is available for restoration".into()))?;
+        sqlx::query("UPDATE configuration_state SET desired_revision=?, pending_maintenance_revision=NULL, activation_state='active', last_error=?, updated_at=UTC_TIMESTAMP(6) WHERE singleton_id=1")
+            .bind(active).bind(error).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn create_revision_metadata(
         tx: &mut Transaction<'_, MySql>,
         parent_revision: i64,
