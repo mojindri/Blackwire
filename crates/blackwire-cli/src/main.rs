@@ -515,6 +515,7 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
             &api_config.listen_addr,
             management,
             api_config.token.clone(),
+            &api_config.services,
         )
         .with_context(|| {
             format!(
