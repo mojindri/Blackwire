@@ -29,6 +29,6 @@ curl -L --progress-bar -o "$DATA_DIR/geosite.dat" "$GEOSITE_URL"
 echo "Saved to $DATA_DIR/geosite.dat"
 
 echo ""
-echo "Update complete. Add these to your config.json:"
+echo "Update complete. Set these paths in the Routing & DNS database form:"
 echo '  "geoipPath":   "'"$DATA_DIR/geoip.dat"'"'
 echo '  "geositePath": "'"$DATA_DIR/geosite.dat"'"'

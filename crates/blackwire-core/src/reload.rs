@@ -3,7 +3,7 @@
 //!
 //! # What gets hot-reloaded?
 //!
-//! When an operator edits `config.json` on disk, blackwire can pick up some
+//! When an operator commits a desired MySQL revision, Blackwire can apply some
 //! changes **without** dropping live connections or rebinding ports:
 //!
 //!   - **Routing rules** — which outbound each destination uses
@@ -23,9 +23,9 @@
 //!
 //! # How it works
 //!
-//! 1. `ConfigManager::watch()` detects the file change and validates the new JSON.
-//! 2. If valid, it stores the new config and pings subscribers via `subscribe()`.
-//! 3. `blackwire run` listens on that channel and calls `ReloadState::apply()`.
+//! 1. The reconciler detects and reconstructs the desired relational revision.
+//! 2. It validates the typed configuration before activation.
+//! 3. `blackwire run` calls `ReloadState::apply()` for hot-swappable state.
 //! 4. `apply()` atomically swaps the router (`LiveRouter::swap`) and refreshes
 //!    each supported inbound auth store in place. Connections already in flight keep using
 //!    the router snapshot they picked up at dispatch time; new connections see

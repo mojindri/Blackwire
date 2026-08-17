@@ -8,8 +8,8 @@
 //!
 //! | Command            | What it does                                              |
 //! |--------------------|-----------------------------------------------------------|
-//! | `run  -c PATH`     | Load the config file and start the proxy.                 |
-//! | `test -c PATH`     | Parse and validate the config; print OK or errors. Exit.  |
+//! | `run`              | Reconcile MySQL configuration and start the proxy.        |
+//! | `db validate`      | Reconstruct and validate the desired database revision.   |
 //! | `x25519`           | Generate a new X25519 key pair (for REALITY).             |
 //! | `uuid`             | Generate a random UUID v4 (for VLESS user IDs).           |
 //! | `version`          | Print the binary version and quit.                        |
@@ -18,8 +18,8 @@
 //!
 //! `run`:
 //!   1. Initialise the tracing/logging subsystem.
-//!   2. Load the config file via `ConfigManager::load()`.
-//!   3. Start the config file watcher (so SIGHUP / file changes hot-reload).
+//!   2. Load the desired typed revision from MySQL.
+//!   3. Start database reconciliation for later revisions.
 //!   4. Build the proxy `Instance` from the config.
 //!   5. Install signal handlers for SIGTERM / SIGINT.
 //!   6. Wait for either the instance to exit or a shutdown signal.
@@ -47,8 +47,7 @@ use validator::Validate;
 
 use blackwire_api::management::InboundManagement;
 use blackwire_config::schema::{
-    explain_cost, validate_fast_profile, Config, ProfileMode,
-    ProfileViolation,
+    explain_cost, validate_fast_profile, Config, ProfileMode, ProfileViolation,
 };
 use blackwire_core::{requires_instance_restart, Instance};
 use blackwire_store::Database;
@@ -469,9 +468,10 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
     let database = Database::connect_from_env()
         .await
         .context("connecting to MySQL control plane")?;
-    database.verify_schema().await.context(
-        "checking MySQL schema; run `blackwire db init` or `blackwire db migrate`",
-    )?;
+    database
+        .verify_schema()
+        .await
+        .context("checking MySQL schema; run `blackwire db init` or `blackwire db migrate`")?;
     let stored = database
         .load_desired_config()
         .await
@@ -539,21 +539,33 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                         continue;
                     }
                 };
-                if state.desired_revision == observed_revision || state.pending_maintenance_revision == Some(state.desired_revision) {
+                if state.desired_revision == observed_revision
+                    || state.pending_maintenance_revision == Some(state.desired_revision)
+                {
                     continue;
                 }
                 let stored = match database.load_config(state.desired_revision).await {
                     Ok(stored) => stored,
                     Err(error) => {
-                        let _ = database.record_activation_failure(state.desired_revision, &error.to_string()).await;
+                        let _ = database
+                            .record_activation_failure(state.desired_revision, &error.to_string())
+                            .await;
                         observed_revision = state.desired_revision;
                         error!(revision = state.desired_revision, %error, "revision reconstruction failed");
                         continue;
                     }
                 };
-                if let Err(error) = stored.config.validate().map_err(|error| anyhow::anyhow!(error))
-                    .and_then(|_| apply_profile_override_and_validate(&stored.config, profile_override)) {
-                    let _ = database.record_activation_failure(stored.revision, &error.to_string()).await;
+                if let Err(error) = stored
+                    .config
+                    .validate()
+                    .map_err(|error| anyhow::anyhow!(error))
+                    .and_then(|_| {
+                        apply_profile_override_and_validate(&stored.config, profile_override)
+                    })
+                {
+                    let _ = database
+                        .record_activation_failure(stored.revision, &error.to_string())
+                        .await;
                     observed_revision = stored.revision;
                     error!(revision = stored.revision, %error, "revision validation failed");
                     continue;
@@ -573,12 +585,23 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                     let replacement = match Instance::from_config(Arc::clone(&new_config)).await {
                         Ok(instance) => instance,
                         Err(error) => {
-                            let is_maintenance = database.activation_class(stored.revision).await
-                                .is_ok_and(|class| class == blackwire_store::ActivationClass::MaintenanceRequired);
+                            let is_maintenance = database
+                                .activation_class(stored.revision)
+                                .await
+                                .is_ok_and(|class| {
+                                    class == blackwire_store::ActivationClass::MaintenanceRequired
+                                });
                             if is_maintenance {
-                                let _ = database.restore_active_after_maintenance_failure(stored.revision, &error.to_string()).await;
+                                let _ = database
+                                    .restore_active_after_maintenance_failure(
+                                        stored.revision,
+                                        &error.to_string(),
+                                    )
+                                    .await;
                             } else {
-                                let _ = database.record_activation_failure(stored.revision, &error.to_string()).await;
+                                let _ = database
+                                    .record_activation_failure(stored.revision, &error.to_string())
+                                    .await;
                             }
                             observed_revision = stored.revision;
                             error!(revision = stored.revision, %error, "listener replacement preparation failed; active instance retained");
@@ -587,7 +610,10 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                     };
                     let old = {
                         let mut guard = live_instance.lock().await;
-                        guard.replace(RunningInstance { config: Arc::clone(&new_config), instance: replacement })
+                        guard.replace(RunningInstance {
+                            config: Arc::clone(&new_config),
+                            instance: replacement,
+                        })
                     };
                     if let Some(old) = old {
                         old.instance.shutdown();
@@ -596,17 +622,23 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                 } else {
                     let reload = {
                         let guard = live_instance.lock().await;
-                        let Some(running) = guard.as_ref() else { break; };
+                        let Some(running) = guard.as_ref() else {
+                            break;
+                        };
                         running.instance.reload.clone()
                     };
                     if let Err(error) = reload.apply(&new_config) {
-                        let _ = database.record_activation_failure(stored.revision, &error.to_string()).await;
+                        let _ = database
+                            .record_activation_failure(stored.revision, &error.to_string())
+                            .await;
                         observed_revision = stored.revision;
                         error!(revision = stored.revision, %error, "atomic revision reload failed; active state retained");
                         continue;
                     }
                     let mut guard = live_instance.lock().await;
-                    if let Some(running) = guard.as_mut() { running.config = new_config; }
+                    if let Some(running) = guard.as_mut() {
+                        running.config = new_config;
+                    }
                 }
                 if let Err(error) = database.mark_active(stored.revision).await {
                     error!(revision = stored.revision, %error, "runtime activated but active revision marker could not be updated");
@@ -683,7 +715,6 @@ impl RuntimeControl {
             .ok_or_else(|| "no running instance is available".to_string())?;
         Ok(f(&running.instance.reload))
     }
-
 }
 
 #[async_trait]
@@ -759,7 +790,10 @@ async fn cmd_db(command: DbCommand) -> Result<()> {
         .context("connecting to MySQL control plane")?;
     match command {
         DbCommand::Init | DbCommand::Migrate => {
-            database.migrate().await.context("applying MySQL migrations")?;
+            database
+                .migrate()
+                .await
+                .context("applying MySQL migrations")?;
             database.verify_schema().await?;
             println!("MySQL schema is ready");
         }
@@ -779,7 +813,9 @@ async fn cmd_db(command: DbCommand) -> Result<()> {
             println!("desired_revision={}", state.desired_revision);
             println!(
                 "active_revision={}",
-                state.active_revision.map_or_else(|| "none".into(), |v| v.to_string())
+                state
+                    .active_revision
+                    .map_or_else(|| "none".into(), |v| v.to_string())
             );
             println!("state={:?}", state.activation_state);
             if let Some(error) = state.last_error {
@@ -809,7 +845,35 @@ async fn cmd_db(command: DbCommand) -> Result<()> {
                     }).await?;
                     println!("created revision {} ({:?})", result.revision, result.state);
                 }
-                other => anyhow::bail!("unknown seed preset '{other}'; available: socks-local"),
+                "vless-local" | "trojan-local" | "shadowsocks-local" => {
+                    let (protocol, credential_kind, method, port) = match preset.as_str() {
+                        "vless-local" => ("vless", "uuid", None, 1081),
+                        "trojan-local" => ("trojan", "password", None, 1082),
+                        _ => ("shadowsocks", "password", Some("2022-blake3-aes-256-gcm".to_string()), 1083),
+                    };
+                    let tag = preset.clone();
+                    database.save_inbound("blackwire-cli", blackwire_store::InboundWrite {
+                        id: None, tag: tag.clone(), listen: "127.0.0.1".into(), port,
+                        protocol: protocol.into(), enabled: true, transport: "tcp".into(), security: "none".into(),
+                    }).await?;
+                    let revision = database.state().await?.desired_revision;
+                    let inbound = database.list_inbounds(revision).await?.into_iter()
+                        .find(|inbound| inbound.tag == tag).context("seeded inbound missing")?;
+                    let uuid = uuid::Uuid::new_v4().to_string();
+                    let password = uuid::Uuid::new_v4().simple().to_string();
+                    let token = uuid::Uuid::new_v4().simple().to_string();
+                    let result = database.save_user("blackwire-cli", blackwire_store::UserWrite {
+                        id: None, inbound_id: inbound.id, email: format!("{preset}@blackwire.local"), enabled: true,
+                        flow: String::new(), note: "Generated by db seed".into(), traffic_limit_bytes: None,
+                        expiry_at: None, subscription_token: token.clone(), credential_kind: credential_kind.into(),
+                        uuid: Some(uuid.clone()), password: (credential_kind == "password").then_some(password.clone()),
+                        method, auth: None,
+                    }).await?;
+                    println!("created revision {} ({:?})", result.revision, result.state);
+                    println!("subscription_token={token}");
+                    if credential_kind == "uuid" { println!("uuid={uuid}"); } else { println!("password={password}"); }
+                }
+                other => anyhow::bail!("unknown seed preset '{other}'; available: socks-local, vless-local, trojan-local, shadowsocks-local"),
             }
         }
         DbCommand::Rollback { revision } => {
@@ -1521,8 +1585,8 @@ fn print_connections(snapshots: Vec<blackwire_connmgr::ConnectionSnapshot>) {
 /// Default level is `info` if `RUST_LOG` is not set.
 ///
 /// Examples:
-///   `RUST_LOG=debug blackwire run -c config.json`   — very verbose
-///   `RUST_LOG=warn  blackwire run -c config.json`   — warnings only
+///   `RUST_LOG=debug blackwire run`   — very verbose
+///   `RUST_LOG=warn  blackwire run`   — warnings only
 fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
 
