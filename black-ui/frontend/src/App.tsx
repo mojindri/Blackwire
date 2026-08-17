@@ -19,7 +19,8 @@ const emptyData: AppData = {
   users: [],
   traffic: { users: [], inbounds: [] },
   capabilities: null,
-  service: null
+  service: null,
+  revisions: []
 };
 
 export default function App() {
@@ -52,16 +53,17 @@ export default function App() {
       setData((current) => ({ ...current, status }));
       return;
     }
-    const [settings, inbounds, outbounds, users, traffic, capabilities, service] = await Promise.all([
+    const [settings, inbounds, outbounds, users, traffic, capabilities, service, revisions] = await Promise.all([
       api.settings(),
       api.inbounds(),
       api.outbounds(),
       api.users(),
       api.traffic().catch(() => ({ users: [], inbounds: [] })),
       api.capabilities(),
-      api.serviceStatus().catch(() => null)
+      api.serviceStatus().catch(() => null),
+      api.revisions()
     ]);
-    setData({ status, settings, inbounds, outbounds, users, traffic, capabilities, service });
+    setData({ status, settings, inbounds, outbounds, users, traffic, capabilities, service, revisions });
   }, []);
 
   useEffect(() => {
@@ -142,6 +144,8 @@ export default function App() {
       updateOutbound: (id: number, input: OutboundInput) => run(() => api.updateOutbound(id, input), "Outbound saved", "Saving outbound..."),
       deleteOutbound: (id: number) => run(() => api.deleteOutbound(id), "Outbound deleted", "Deleting outbound..."),
       restartBlackwire: () => run(api.serviceRestartBlackwire, "Blackwire restarted", "Restarting Blackwire..."),
+      rollback: (revision: number) => run(() => api.rollback(revision), "Rollback revision created", "Creating rollback revision..."),
+      activateMaintenance: (revision: number) => run(() => api.activateMaintenance(revision), "Maintenance activation confirmed", "Confirming maintenance..."),
       saveSettings: (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved", "Saving settings..."),
       uuid: async () => (await api.uuid()).uuid
     }),
@@ -200,7 +204,7 @@ export default function App() {
       {page === "sections" ? (
         <SectionsPage status={data.status} />
       ) : null}
-      {page === "service" ? <ServicePage service={data.service} busy={busy} onRestart={actions.restartBlackwire} /> : null}
+      {page === "service" ? <ServicePage status={data.status} revisions={data.revisions} busy={busy} onRollback={actions.rollback} onActivateMaintenance={actions.activateMaintenance} /> : null}
       {page === "settings" ? <SettingsPage settings={data.settings} busy={busy} onSave={actions.saveSettings} /> : null}
     </AppShell>
   );

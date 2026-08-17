@@ -113,6 +113,9 @@ fn api_router() -> Router<AppState> {
             get(handlers::get_settings).put(handlers::update_settings),
         )
         .route("/runtime/traffic", get(handlers::runtime_traffic))
+        .route("/runtime/revisions", get(handlers::revision_history))
+        .route("/runtime/rollback", post(handlers::rollback_revision))
+        .route("/runtime/activate-maintenance", post(handlers::activate_maintenance))
         .route("/service/status", get(handlers::service_status))
         .route(
             "/service/restart-blackwire",

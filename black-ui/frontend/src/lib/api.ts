@@ -7,6 +7,7 @@ import type {
   ManagedUser,
   Outbound,
   OutboundInput,
+  RevisionSummary,
   ServiceStatus,
   Settings,
   Status,
@@ -61,6 +62,9 @@ export const api = {
   updateSettings: (settings: Settings) =>
     request<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
   traffic: () => request<TrafficSnapshot>("/api/runtime/traffic"),
+  revisions: () => request<RevisionSummary[]>("/api/runtime/revisions"),
+  rollback: (revision: number) => request<ApplyResult>("/api/runtime/rollback", body({ revision })),
+  activateMaintenance: (revision: number) => request<{ revision: number; message: string }>("/api/runtime/activate-maintenance", body({ revision })),
   inbounds: () => request<Inbound[]>("/api/inbounds"),
   createInbound: (input: InboundInput) => request<ApplyResult>("/api/inbounds", body(input)),
   updateInbound: (id: number, input: InboundInput) =>
