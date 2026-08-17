@@ -219,11 +219,13 @@ pub(crate) fn build_vless_outbound(
 ) -> Result<Arc<dyn OutboundHandler>> {
     let settings = &cfg.settings;
 
-    let server_str = settings["address"]
-        .as_str()
+    let server_str = settings
+        .address
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("VLESS outbound missing 'address'"))?;
-    let port = settings["port"]
-        .as_u64()
+    let port = settings
+        .port
+        .map(u64::from)
         .ok_or_else(|| anyhow::anyhow!("VLESS outbound missing 'port'"))?;
     let server = socket_addr_from_address_port(
         server_str,
@@ -231,15 +233,18 @@ pub(crate) fn build_vless_outbound(
         &format!("invalid VLESS server address for outbound '{}'", cfg.tag),
     )?;
 
-    let uuid_str = settings["users"][0]["id"]
-        .as_str()
+    let uuid_str = settings
+        .users
+        .first()
+        .and_then(|user| user.identifier())
         .ok_or_else(|| anyhow::anyhow!("VLESS outbound missing users[0].id"))?;
     let uuid = parse_uuid(uuid_str)?;
 
-    let flow = settings["users"][0]["flow"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let flow = settings
+        .users
+        .first()
+        .map(|user| user.flow.clone())
+        .unwrap_or_default();
 
     if uses_reality(&cfg.stream_settings) {
         let reality = build_reality_client(cfg, server)?;
@@ -276,8 +281,11 @@ pub(crate) fn build_vless_inbound(
         .clone();
     populate_vless_registry(&registry, cfg)?;
 
-    let fallback = cfg.settings["fallback"]["dest"]
-        .as_str()
+    let fallback = cfg
+        .settings
+        .fallback
+        .as_ref()
+        .map(|fallback| fallback.dest.as_str())
         .and_then(|s| s.parse::<SocketAddr>().ok());
 
     Ok(VlessInbound::new(
@@ -291,39 +299,10 @@ pub(crate) fn build_vless_inbound(
 }
 
 fn validate_vless_inbound_settings(cfg: &blackwire_config::schema::InboundConfig) -> Result<()> {
-    let settings = cfg.settings.as_object().ok_or_else(|| {
-        anyhow::anyhow!("VLESS inbound '{}' settings must be a JSON object", cfg.tag)
-    })?;
-
-    if let Some(decryption) = settings.get("decryption") {
-        if decryption.as_str() != Some("none") {
+    if let Some(decryption) = cfg.settings.decryption.as_deref() {
+        if decryption != "none" {
             anyhow::bail!(
                 "VLESS inbound '{}' supports only settings.decryption = \"none\"",
-                cfg.tag
-            );
-        }
-    }
-
-    if settings.contains_key("fallbacks") {
-        anyhow::bail!(
-            "VLESS inbound '{}' does not support Xray settings.fallbacks; \
-             use settings.fallback.dest for the single supported fallback",
-            cfg.tag
-        );
-    }
-
-    for key in [
-        "encryption",
-        "encryptionSettings",
-        "padding",
-        "paddingSettings",
-        "packetEncoding",
-        "packet_encoding",
-        "xudpEncryption",
-    ] {
-        if settings.contains_key(key) {
-            anyhow::bail!(
-                "VLESS inbound '{}' contains unsupported security-looking field settings.{key}",
                 cfg.tag
             );
         }
@@ -337,21 +316,19 @@ pub(crate) fn populate_vless_registry(
     cfg: &blackwire_config::schema::InboundConfig,
 ) -> Result<()> {
     registry.clear();
-    let clients = cfg.settings["clients"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("VLESS inbound '{}' missing 'clients' array", cfg.tag))?;
+    let clients = &cfg.settings.clients;
 
     if clients.is_empty() {
         anyhow::bail!("VLESS inbound '{}' has no configured clients", cfg.tag);
     }
 
     for client in clients {
-        let id_str = client["id"]
-            .as_str()
+        let id_str = client
+            .identifier()
             .ok_or_else(|| anyhow::anyhow!("VLESS client missing 'id'"))?;
         let uuid = parse_uuid(id_str)?;
-        let email: std::sync::Arc<str> = client["email"].as_str().unwrap_or("").into();
-        let flow = client["flow"].as_str().unwrap_or("").to_string();
+        let email: std::sync::Arc<str> = client.email.as_deref().unwrap_or("").into();
+        let flow = client.flow.clone();
         registry.add_user(VlessUser { email, uuid, flow });
     }
     Ok(())

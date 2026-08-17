@@ -26,7 +26,7 @@ fn minimal_config(port: u16) -> Config {
             listen: "127.0.0.1".parse::<IpAddr>().unwrap(),
             port,
             protocol: Protocol::Socks,
-            settings: serde_json::json!({}),
+            settings: Default::default(),
             stream_settings: None,
             limits: None,
             sniffing: None,
@@ -34,7 +34,7 @@ fn minimal_config(port: u16) -> Config {
         outbounds: vec![OutboundConfig {
             tag: "direct".into(),
             protocol: Protocol::Freedom,
-            settings: serde_json::json!({}),
+            settings: Default::default(),
             stream_settings: None,
         }],
         stats: None,
@@ -60,7 +60,7 @@ fn inbound_listener_changes_reports_added_listener_once() {
         listen: "127.0.0.1".parse::<IpAddr>().unwrap(),
         port: 1081,
         protocol: Protocol::Socks,
-        settings: serde_json::json!({}),
+        settings: Default::default(),
         stream_settings: None,
         limits: None,
         sniffing: None,
@@ -172,7 +172,7 @@ fn requires_instance_restart_for_outbound_changes() {
     new.outbounds.push(OutboundConfig {
         tag: "backup".into(),
         protocol: Protocol::Freedom,
-        settings: serde_json::json!({}),
+        settings: Default::default(),
         stream_settings: None,
     });
 

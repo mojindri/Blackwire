@@ -44,21 +44,19 @@ pub(crate) fn populate_vmess_registry(
     cfg: &blackwire_config::schema::InboundConfig,
 ) -> Result<()> {
     registry.clear();
-    let clients = cfg.settings["clients"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("VMess inbound '{}' missing 'clients' array", cfg.tag))?;
+    let clients = &cfg.settings.clients;
 
     if clients.is_empty() {
         anyhow::bail!("VMess inbound '{}' has no configured clients", cfg.tag);
     }
 
     for (i, client) in clients.iter().enumerate() {
-        let id_str = client["id"]
-            .as_str()
+        let id_str = client
+            .identifier()
             .ok_or_else(|| anyhow::anyhow!("VMess client #{i} missing 'id'"))?;
         let uuid =
             parse_uuid(id_str).with_context(|| format!("invalid UUID in VMess client #{i}"))?;
-        let email = client["email"].as_str().unwrap_or("").to_string();
+        let email = client.email.clone().unwrap_or_default();
         registry.add_user(uuid, email);
     }
     Ok(())
@@ -70,11 +68,13 @@ pub(crate) fn build_vmess_outbound(
 ) -> Result<Arc<dyn OutboundHandler>> {
     let settings = &cfg.settings;
 
-    let server_str = settings["address"]
-        .as_str()
+    let server_str = settings
+        .address
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("VMess outbound '{}' missing 'address'", cfg.tag))?;
-    let port = settings["port"]
-        .as_u64()
+    let port = settings
+        .port
+        .map(u64::from)
         .ok_or_else(|| anyhow::anyhow!("VMess outbound '{}' missing 'port'", cfg.tag))?;
     let server = socket_addr_from_address_port(
         server_str,
@@ -82,8 +82,10 @@ pub(crate) fn build_vmess_outbound(
         &format!("invalid VMess server address for outbound '{}'", cfg.tag),
     )?;
 
-    let uuid_str = settings["users"][0]["id"]
-        .as_str()
+    let uuid_str = settings
+        .users
+        .first()
+        .and_then(|user| user.identifier())
         .ok_or_else(|| anyhow::anyhow!("VMess outbound '{}' missing users[0].id", cfg.tag))?;
     let uuid = parse_uuid(uuid_str)?;
 

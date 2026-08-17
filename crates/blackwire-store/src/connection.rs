@@ -3,15 +3,20 @@ use std::{path::PathBuf, str::FromStr, time::Duration};
 use sqlx::{mysql::MySqlPoolOptions, MySql, MySqlPool, Row, Transaction};
 
 use crate::{
-    ActivationClass, ActivationState, ConfigurationState, RevisionSummary, StoreError,
-    StoreResult,
+    ActivationClass, ActivationState, ConfigurationState, RevisionSummary, StoreError, StoreResult,
 };
 
 pub const EXPECTED_SCHEMA_VERSION: i64 = 2;
 
 const MIGRATIONS: &[(i64, &str)] = &[
-    (1, include_str!("../migrations/0001_mysql_control_plane.sql")),
-    (2, include_str!("../migrations/0002_complete_relational_settings.sql")),
+    (
+        1,
+        include_str!("../migrations/0001_mysql_control_plane.sql"),
+    ),
+    (
+        2,
+        include_str!("../migrations/0002_complete_relational_settings.sql"),
+    ),
 ];
 
 #[derive(Debug, Clone)]
@@ -33,11 +38,10 @@ impl DatabaseOptions {
                 .ok()
                 .map(|dir| PathBuf::from(dir).join("database-url"));
             let path = explicit.or(systemd).ok_or(StoreError::MissingDatabaseUrl)?;
-            std::fs::read_to_string(&path)
-                .map_err(|source| StoreError::CredentialFile {
-                    path: path.display().to_string(),
-                    source,
-                })?
+            std::fs::read_to_string(&path).map_err(|source| StoreError::CredentialFile {
+                path: path.display().to_string(),
+                source,
+            })?
         };
         let url = url.trim().to_string();
         if url.is_empty() {
@@ -80,9 +84,10 @@ impl Database {
 
     pub async fn migrate(&self) -> StoreResult<()> {
         let mut conn = self.pool.acquire().await?;
-        let locked: Option<i64> = sqlx::query_scalar("SELECT GET_LOCK('blackwire-schema-migrate', 30)")
-            .fetch_one(&mut *conn)
-            .await?;
+        let locked: Option<i64> =
+            sqlx::query_scalar("SELECT GET_LOCK('blackwire-schema-migrate', 30)")
+                .fetch_one(&mut *conn)
+                .await?;
         if locked != Some(1) {
             return Err(StoreError::Sql(sqlx::Error::Protocol(
                 "timed out acquiring Blackwire migration lock".into(),
@@ -100,15 +105,22 @@ impl Database {
         let result = match current {
             Ok(current) => {
                 let mut result = Ok(());
-                for (version, script) in MIGRATIONS.iter().filter(|(version, _)| *version > current) {
+                for (version, script) in MIGRATIONS.iter().filter(|(version, _)| *version > current)
+                {
                     if let Err(error) = execute_migration_script(&mut conn, script).await {
                         result = Err(error);
                         break;
                     }
-                    let applied: i64 = sqlx::query_scalar("SELECT version FROM blackwire_schema_version WHERE singleton_id=1")
-                        .fetch_one(&mut *conn).await?;
+                    let applied: i64 = sqlx::query_scalar(
+                        "SELECT version FROM blackwire_schema_version WHERE singleton_id=1",
+                    )
+                    .fetch_one(&mut *conn)
+                    .await?;
                     if applied != *version {
-                        result = Err(StoreError::SchemaVersion { expected: *version, actual: applied });
+                        result = Err(StoreError::SchemaVersion {
+                            expected: *version,
+                            actual: applied,
+                        });
                         break;
                     }
                 }
@@ -213,14 +225,9 @@ impl Database {
         class: ActivationClass,
     ) -> StoreResult<(Transaction<'_, MySql>, i64)> {
         let mut tx = self.begin_revision(expected_revision).await?;
-        let revision = Self::create_revision_metadata(
-            &mut tx,
-            expected_revision,
-            actor,
-            summary,
-            class,
-        )
-        .await?;
+        let revision =
+            Self::create_revision_metadata(&mut tx, expected_revision, actor, summary, class)
+                .await?;
         copy_revision_rows(&mut tx, expected_revision, revision).await?;
         Ok((tx, revision))
     }
@@ -247,10 +254,18 @@ impl Database {
         Ok(())
     }
 
-    pub async fn rollback(&self, target_revision: i64, actor: &str) -> StoreResult<crate::MutationResult> {
+    pub async fn rollback(
+        &self,
+        target_revision: i64,
+        actor: &str,
+    ) -> StoreResult<crate::MutationResult> {
         let state = self.state().await?;
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM configuration_revisions WHERE revision = ?)")
-            .bind(target_revision).fetch_one(&self.pool).await?;
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM configuration_revisions WHERE revision = ?)",
+        )
+        .bind(target_revision)
+        .fetch_one(&self.pool)
+        .await?;
         if !exists {
             return Err(StoreError::Sql(sqlx::Error::RowNotFound));
         }
@@ -261,7 +276,8 @@ impl Database {
             actor,
             &format!("Rollback to revision {target_revision}"),
             ActivationClass::MaintenanceRequired,
-        ).await?;
+        )
+        .await?;
         copy_revision_rows(&mut tx, target_revision, revision).await?;
         Self::publish_revision(&mut tx, revision, ActivationClass::MaintenanceRequired).await?;
         tx.commit().await?;
@@ -271,7 +287,9 @@ impl Database {
             active_revision: state.active_revision,
             state: ActivationState::PendingMaintenance,
             activation_class: ActivationClass::MaintenanceRequired,
-            message: format!("Rollback revision created from {target_revision}; maintenance activation required"),
+            message: format!(
+                "Rollback revision created from {target_revision}; maintenance activation required"
+            ),
         })
     }
 
@@ -279,22 +297,40 @@ impl Database {
         let result = sqlx::query("UPDATE configuration_state SET pending_maintenance_revision=NULL, activation_state='activating', last_error=NULL, updated_at=UTC_TIMESTAMP(6) WHERE singleton_id=1 AND desired_revision=? AND pending_maintenance_revision=?")
             .bind(revision).bind(revision).execute(&self.pool).await?;
         if result.rows_affected() != 1 {
-            return Err(StoreError::RevisionConflict { expected: revision, actual: self.state().await?.desired_revision });
+            return Err(StoreError::RevisionConflict {
+                expected: revision,
+                actual: self.state().await?.desired_revision,
+            });
         }
         Ok(())
     }
 
     pub async fn activation_class(&self, revision: i64) -> StoreResult<ActivationClass> {
-        let value: String = sqlx::query_scalar("SELECT activation_class FROM configuration_revisions WHERE revision=?")
-            .bind(revision).fetch_one(&self.pool).await?;
+        let value: String = sqlx::query_scalar(
+            "SELECT activation_class FROM configuration_revisions WHERE revision=?",
+        )
+        .bind(revision)
+        .fetch_one(&self.pool)
+        .await?;
         parse_activation_class(&value)
     }
 
-    pub async fn restore_active_after_maintenance_failure(&self, failed_revision: i64, error: &str) -> StoreResult<()> {
+    pub async fn restore_active_after_maintenance_failure(
+        &self,
+        failed_revision: i64,
+        error: &str,
+    ) -> StoreResult<()> {
         let mut tx = self.begin_revision(failed_revision).await?;
-        let active: Option<i64> = sqlx::query_scalar("SELECT active_revision FROM configuration_state WHERE singleton_id=1")
-            .fetch_one(&mut *tx).await?;
-        let active = active.ok_or_else(|| StoreError::InvalidConfiguration("no prior active revision is available for restoration".into()))?;
+        let active: Option<i64> = sqlx::query_scalar(
+            "SELECT active_revision FROM configuration_state WHERE singleton_id=1",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let active = active.ok_or_else(|| {
+            StoreError::InvalidConfiguration(
+                "no prior active revision is available for restoration".into(),
+            )
+        })?;
         sqlx::query("UPDATE configuration_state SET desired_revision=?, pending_maintenance_revision=NULL, activation_state='active', last_error=?, updated_at=UTC_TIMESTAMP(6) WHERE singleton_id=1")
             .bind(active).bind(error).execute(&mut *tx).await?;
         tx.commit().await?;
@@ -358,7 +394,11 @@ async fn execute_migration_script(
     conn: &mut sqlx::pool::PoolConnection<MySql>,
     script: &str,
 ) -> StoreResult<()> {
-    for statement in script.split(';').map(str::trim).filter(|statement| !statement.is_empty()) {
+    for statement in script
+        .split(';')
+        .map(str::trim)
+        .filter(|statement| !statement.is_empty())
+    {
         sqlx::query(statement).execute(&mut **conn).await?;
     }
     Ok(())

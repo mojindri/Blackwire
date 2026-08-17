@@ -1,7 +1,7 @@
 //! Hysteria2 glue used by the instance builder.
 //!
 //! This module wires together the Hysteria2 transport (from blackwire-transport)
-//! with the instance lifecycle. It reads the config settings JSON and
+//! with the instance lifecycle. It reads typed endpoint settings and
 //! constructs `Hysteria2ServerConfig` / `Hysteria2ClientConfig`.
 
 use std::net::SocketAddr;
@@ -14,8 +14,8 @@ use dashmap::DashMap;
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_config::schema::{
-    DatagramConfig, DatagramPolicy as ConfigDatagramPolicy, FecConfig, FecMode as ConfigFecMode,
-    InboundConfig, OutboundConfig, QuicConfig,
+    DatagramConfig, DatagramPolicy as ConfigDatagramPolicy, EndpointSettings, FecConfig,
+    FecMode as ConfigFecMode, InboundConfig, OutboundConfig, QuicConfig,
 };
 use blackwire_transport::{
     CongestionConfig, CongestionMode, Hysteria2AuthStore, Hysteria2ClientConfig,
@@ -164,22 +164,13 @@ fn parse_server_config(
     })
 }
 
-pub(crate) fn hysteria2_user_label(settings: &serde_json::Value, password: &str) -> Option<String> {
-    let clients = settings.get("clients")?.as_array()?;
-    clients.iter().find_map(|client| {
-        let auth = client
-            .get("auth")
-            .or_else(|| client.get("password"))
-            .and_then(|value| value.as_str())?;
+pub(crate) fn hysteria2_user_label(settings: &EndpointSettings, password: &str) -> Option<String> {
+    settings.clients.iter().find_map(|client| {
+        let auth = client.auth.as_deref().or(client.password.as_deref())?;
         if auth != password {
             return None;
         }
-        client
-            .get("email")
-            .or_else(|| client.get("name"))
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
+        client.label().map(ToOwned::to_owned)
     })
 }
 
@@ -192,32 +183,30 @@ fn parse_client_config(
 ) -> Result<Hysteria2ClientConfig> {
     let s = &cfg.settings;
 
-    let server_str = s["server"]
-        .as_str()
+    let server_str = s
+        .server
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("Hysteria2 outbound '{}' missing 'server'", cfg.tag))?;
     let server: SocketAddr = server_str
         .parse()
         .with_context(|| format!("invalid Hysteria2 server address '{server_str}'"))?;
 
-    let password = s["auth"].as_str().unwrap_or_default().to_string();
+    let password = s.auth.clone().unwrap_or_default();
 
-    let skip_cert_verify = s["skipCertVerify"].as_bool().unwrap_or(false);
+    let skip_cert_verify = s.skip_cert_verify;
     let congestion = parse_congestion_config(s)?;
     let up_mbps = congestion.up_mbps;
     let down_mbps = congestion.down_mbps;
-    let endpoint_shards = s["endpointShards"]
-        .as_u64()
-        .map(|v| v.clamp(1, 64) as usize)
-        .unwrap_or(1);
+    let endpoint_shards = s.endpoint_shards.map(|v| v.clamp(1, 64)).unwrap_or(1);
     let socket = parse_socket_config(s, quic);
     let datagram_enabled = datagram_enabled(s, datagram);
     let fec = parse_fec_policy(s, fec);
     let datagram_policy = parse_datagram_policy(s, datagram);
 
     // Use the server address host as SNI if not explicitly configured.
-    let server_name = s["serverName"]
-        .as_str()
-        .map(|s| s.to_string())
+    let server_name = s
+        .server_name
+        .clone()
         .unwrap_or_else(|| server.ip().to_string());
 
     Ok(Hysteria2ClientConfig {
@@ -246,66 +235,35 @@ pub(crate) fn socket_config_from_quic(quic: Option<&QuicConfig>) -> QuicSocketCo
     }
 }
 
-fn parse_socket_config(
-    settings: &serde_json::Value,
-    quic: Option<&QuicConfig>,
-) -> QuicSocketConfig {
+fn parse_socket_config(settings: &EndpointSettings, quic: Option<&QuicConfig>) -> QuicSocketConfig {
     let mut socket = socket_config_from_quic(quic);
-    let Some(overrides) = settings.get("quic") else {
+    let Some(overrides) = settings.quic.as_ref() else {
         return socket;
     };
-    if let Some(reuse_port) = overrides
-        .get("reusePort")
-        .and_then(serde_json::Value::as_bool)
-    {
+    if let Some(reuse_port) = overrides.reuse_port {
         socket.reuse_port = reuse_port;
     }
-    if let Some(endpoints) = overrides.get("endpoints").and_then(parse_endpoint_count) {
-        socket.endpoint_count = endpoints.clamp(1, 64);
+    if let Some(endpoints) = overrides.endpoints.as_ref() {
+        socket.endpoint_count = endpoints.resolve();
     }
-    if let Some(bytes) = overrides
-        .get("recvBufferBytes")
-        .and_then(serde_json::Value::as_u64)
-    {
-        socket.recv_buffer_bytes = bytes as usize;
+    if let Some(bytes) = overrides.recv_buffer_bytes {
+        socket.recv_buffer_bytes = bytes;
     }
-    if let Some(bytes) = overrides
-        .get("sendBufferBytes")
-        .and_then(serde_json::Value::as_u64)
-    {
-        socket.send_buffer_bytes = bytes as usize;
+    if let Some(bytes) = overrides.send_buffer_bytes {
+        socket.send_buffer_bytes = bytes;
     }
     socket
 }
 
-fn parse_endpoint_count(value: &serde_json::Value) -> Option<usize> {
-    match value {
-        serde_json::Value::String(s) if s.eq_ignore_ascii_case("cpu") => Some(
-            std::thread::available_parallelism()
-                .map(usize::from)
-                .unwrap_or(1),
-        ),
-        serde_json::Value::String(s) => s.parse().ok(),
-        serde_json::Value::Number(n) => n.as_u64().map(|v| v as usize),
-        _ => None,
-    }
-}
-
-fn datagram_enabled(settings: &serde_json::Value, datagram: Option<&DatagramConfig>) -> bool {
+fn datagram_enabled(settings: &EndpointSettings, datagram: Option<&DatagramConfig>) -> bool {
     let mut enabled = datagram
         .map(|cfg| cfg.enabled && cfg.udp_over_datagram)
         .unwrap_or(false);
-    if let Some(overrides) = settings.get("datagram") {
-        if let Some(value) = overrides
-            .get("enabled")
-            .and_then(serde_json::Value::as_bool)
-        {
+    if let Some(overrides) = settings.datagram.as_ref() {
+        if let Some(value) = overrides.enabled {
             enabled = value;
         }
-        if let Some(value) = overrides
-            .get("udpOverDatagram")
-            .and_then(serde_json::Value::as_bool)
-        {
+        if let Some(value) = overrides.udp_over_datagram {
             enabled &= value;
         }
     }
@@ -313,61 +271,37 @@ fn datagram_enabled(settings: &serde_json::Value, datagram: Option<&DatagramConf
 }
 
 fn parse_fec_policy(
-    settings: &serde_json::Value,
+    settings: &EndpointSettings,
     fec: Option<&FecConfig>,
 ) -> blackwire_transport::FecPolicy {
     let mut cfg = fec.cloned().unwrap_or_default();
-    if let Some(overrides) = settings.get("fec") {
-        if let Some(mode) = overrides.get("mode").and_then(serde_json::Value::as_str) {
+    if let Some(overrides) = settings.fec.as_ref() {
+        if let Some(mode) = overrides.mode.as_deref() {
             cfg.mode = parse_config_fec_mode(mode);
         }
-        if let Some(max) = overrides
-            .get("maxOverheadPercent")
-            .and_then(serde_json::Value::as_u64)
-        {
-            cfg.max_overhead_percent = max.min(u8::MAX as u64) as u8;
+        if let Some(max) = overrides.max_overhead_percent {
+            cfg.max_overhead_percent = max;
         }
-        if let Some(avoid) = overrides
-            .get("avoidBulkTcp")
-            .and_then(serde_json::Value::as_bool)
-        {
+        if let Some(avoid) = overrides.avoid_bulk_tcp {
             cfg.avoid_bulk_tcp = avoid;
         }
-        if let Some(disable) = overrides
-            .get("disableForSequentialDns")
-            .and_then(serde_json::Value::as_bool)
-        {
+        if let Some(disable) = overrides.disable_for_sequential_dns {
             cfg.disable_for_sequential_dns = disable;
         }
-        if let Some(min) = overrides
-            .get("minConcurrencyForBlockFec")
-            .and_then(serde_json::Value::as_u64)
-        {
-            cfg.min_concurrency_for_block_fec = min as usize;
+        if let Some(min) = overrides.min_concurrency_for_block_fec {
+            cfg.min_concurrency_for_block_fec = min;
         }
-        if let Some(max) = overrides
-            .get("maxGenerationPackets")
-            .and_then(serde_json::Value::as_u64)
-        {
-            cfg.max_generation_packets = max.min(u8::MAX as u64) as u8;
+        if let Some(max) = overrides.max_generation_packets {
+            cfg.max_generation_packets = max;
         }
-        if let Some(delay) = overrides
-            .get("maxGenerationDelayMs")
-            .and_then(serde_json::Value::as_u64)
-        {
+        if let Some(delay) = overrides.max_generation_delay_ms {
             cfg.max_generation_delay_ms = delay;
         }
-        if let Some(deadline) = overrides
-            .get("recoveryDeadlineMs")
-            .and_then(serde_json::Value::as_u64)
-        {
+        if let Some(deadline) = overrides.recovery_deadline_ms {
             cfg.recovery_deadline_ms = deadline;
         }
-        if let Some(window) = overrides
-            .get("dedupWindowPackets")
-            .and_then(serde_json::Value::as_u64)
-        {
-            cfg.dedup_window_packets = window as usize;
+        if let Some(window) = overrides.dedup_window_packets {
+            cfg.dedup_window_packets = window;
         }
     }
     blackwire_transport::FecPolicy {
@@ -383,7 +317,7 @@ fn parse_fec_policy(
 }
 
 fn parse_datagram_policy(
-    settings: &serde_json::Value,
+    settings: &EndpointSettings,
     datagram: Option<&DatagramConfig>,
 ) -> blackwire_transport::DatagramPolicy {
     let cfg = datagram.cloned().unwrap_or_default();
@@ -392,26 +326,17 @@ fn parse_datagram_policy(
     let mut fast_dns_retry = cfg.fast_dns_retry;
     let mut fast_dns_retry_delay_ms = cfg.fast_dns_retry_delay_ms;
 
-    if let Some(overrides) = settings.get("datagram") {
-        if let Some(value) = overrides.get("policy").and_then(serde_json::Value::as_str) {
+    if let Some(overrides) = settings.datagram.as_ref() {
+        if let Some(value) = overrides.policy.as_deref() {
             policy = parse_config_datagram_policy(value);
         }
-        if let Some(value) = overrides
-            .get("maxQueueDelayMs")
-            .and_then(serde_json::Value::as_u64)
-        {
+        if let Some(value) = overrides.max_queue_delay_ms {
             max_queue_delay_ms = value;
         }
-        if let Some(value) = overrides
-            .get("fastDnsRetry")
-            .and_then(serde_json::Value::as_bool)
-        {
+        if let Some(value) = overrides.fast_dns_retry {
             fast_dns_retry = value;
         }
-        if let Some(value) = overrides
-            .get("fastDnsRetryDelayMs")
-            .and_then(serde_json::Value::as_u64)
-        {
+        if let Some(value) = overrides.fast_dns_retry_delay_ms {
             fast_dns_retry_delay_ms = value;
         }
     }
@@ -458,13 +383,10 @@ fn map_fec_mode(mode: ConfigFecMode) -> blackwire_transport::FecMode {
     }
 }
 
-fn parse_congestion_config(settings: &serde_json::Value) -> Result<CongestionConfig> {
-    let congestion = settings
-        .get("congestion")
-        .unwrap_or(&serde_json::Value::Null);
+fn parse_congestion_config(settings: &EndpointSettings) -> Result<CongestionConfig> {
+    let congestion = settings.congestion.as_ref();
     let mode = congestion
-        .get("mode")
-        .and_then(|v| v.as_str())
+        .map(|value| value.mode.as_str())
         .unwrap_or("standard")
         .parse::<CongestionMode>()
         .map_err(anyhow::Error::msg)?;
@@ -474,26 +396,22 @@ fn parse_congestion_config(settings: &serde_json::Value) -> Result<CongestionCon
         }
         _ => HYSTERIA2_DEFAULT_STABLE_MBPS,
     };
-    let up_mbps = parse_mbps_field(settings, "upMbps", "up_mbps").unwrap_or(default_mbps);
-    let down_mbps = parse_mbps_field(settings, "downMbps", "down_mbps").unwrap_or(default_mbps);
+    let up_mbps = settings.up_mbps.unwrap_or(default_mbps).clamp(1, 10_000);
+    let down_mbps = settings.down_mbps.unwrap_or(default_mbps).clamp(1, 10_000);
     let min_ack_rate = congestion
-        .get("minAckRate")
-        .and_then(|v| v.as_f64())
+        .and_then(|value| value.min_ack_rate)
         .unwrap_or(0.8)
         .clamp(0.05, 1.0);
     let max_queue_delay_ms = congestion
-        .get("maxQueueDelayMs")
-        .and_then(|v| v.as_u64())
+        .and_then(|value| value.max_queue_delay_ms)
         .unwrap_or(80)
         .clamp(1, 10_000);
     let pacing_gain = congestion
-        .get("pacingGain")
-        .and_then(|v| v.as_f64())
+        .and_then(|value| value.pacing_gain)
         .unwrap_or(1.25)
         .clamp(0.1, 5.0);
     let loss_compensation = congestion
-        .get("lossCompensation")
-        .and_then(|v| v.as_bool())
+        .and_then(|value| value.loss_compensation)
         .unwrap_or(true);
 
     Ok(CongestionConfig {
@@ -507,18 +425,6 @@ fn parse_congestion_config(settings: &serde_json::Value) -> Result<CongestionCon
     })
 }
 
-fn parse_mbps_field(settings: &serde_json::Value, camel: &str, snake: &str) -> Option<u64> {
-    settings
-        .get(camel)
-        .or_else(|| settings.get(snake))
-        .and_then(|value| match value {
-            serde_json::Value::Number(n) => n.as_u64(),
-            serde_json::Value::String(s) => s.trim().parse::<u64>().ok(),
-            _ => None,
-        })
-        .map(|value| value.clamp(1, 10_000))
-}
-
 fn require_field<'a>(value: &'a str, field: &str) -> Result<&'a str> {
     if value.is_empty() {
         anyhow::bail!("{field} must not be empty");
@@ -526,8 +432,8 @@ fn require_field<'a>(value: &'a str, field: &str) -> Result<&'a str> {
     Ok(value)
 }
 
-fn require_hysteria2_auth<'a>(settings: &'a serde_json::Value, tag: &str) -> Result<&'a str> {
-    let auth = settings.get("auth").and_then(|value| value.as_str());
+fn require_hysteria2_auth<'a>(settings: &'a EndpointSettings, tag: &str) -> Result<&'a str> {
+    let auth = settings.auth.as_deref();
     match auth {
         Some(auth) if !auth.is_empty() => Ok(auth),
         Some(_) => anyhow::bail!("Hysteria2 inbound '{tag}' settings.auth must not be empty"),
@@ -537,22 +443,26 @@ fn require_hysteria2_auth<'a>(settings: &'a serde_json::Value, tag: &str) -> Res
 
 #[cfg(test)]
 mod tests {
-    use blackwire_config::schema::DatagramConfig;
+    use blackwire_config::schema::{DatagramConfig, EndpointSettings};
     use serde_json::json;
 
     use super::{
         datagram_enabled, hysteria2_user_label, parse_congestion_config, require_hysteria2_auth,
     };
 
+    fn settings(value: serde_json::Value) -> EndpointSettings {
+        serde_json::from_value(value).unwrap()
+    }
+
     #[test]
     fn hysteria2_user_label_matches_auth_client() {
-        let settings = json!({
+        let settings = settings(json!({
             "auth": "secret",
             "clients": [
                 { "email": "alice@example.test", "auth": "secret" },
                 { "email": "bob@example.test", "auth": "other" }
             ]
-        });
+        }));
 
         assert_eq!(
             hysteria2_user_label(&settings, "secret").as_deref(),
@@ -562,9 +472,9 @@ mod tests {
 
     #[test]
     fn hysteria2_user_label_accepts_password_alias() {
-        let settings = json!({
+        let settings = settings(json!({
             "clients": [{ "name": "mobile", "password": "secret" }]
-        });
+        }));
 
         assert_eq!(
             hysteria2_user_label(&settings, "secret").as_deref(),
@@ -574,9 +484,9 @@ mod tests {
 
     #[test]
     fn hysteria2_user_label_ignores_nonmatching_clients() {
-        let settings = json!({
+        let settings = settings(json!({
             "clients": [{ "email": "alice@example.test", "auth": "other" }]
-        });
+        }));
 
         assert!(hysteria2_user_label(&settings, "secret").is_none());
     }
@@ -584,10 +494,9 @@ mod tests {
     #[test]
     fn require_hysteria2_auth_rejects_missing_non_string_and_empty_values() {
         for settings in [
-            json!({}),
-            json!({ "auth": "" }),
-            json!({ "auth": 42 }),
-            json!({ "auth": null }),
+            settings(json!({})),
+            settings(json!({ "auth": "" })),
+            settings(json!({ "auth": null })),
         ] {
             assert!(require_hysteria2_auth(&settings, "h2-public").is_err());
         }
@@ -595,7 +504,7 @@ mod tests {
 
     #[test]
     fn require_hysteria2_auth_accepts_non_empty_string() {
-        let settings = json!({ "auth": "secret" });
+        let settings = settings(json!({ "auth": "secret" }));
 
         assert_eq!(
             require_hysteria2_auth(&settings, "h2-public").unwrap(),
@@ -605,7 +514,7 @@ mod tests {
 
     #[test]
     fn hysteria2_standard_defaults_to_stable_windows_without_fixed_rate_auth() {
-        let cfg = parse_congestion_config(&json!({})).unwrap();
+        let cfg = parse_congestion_config(&EndpointSettings::default()).unwrap();
 
         assert_eq!(cfg.mode, blackwire_transport::CongestionMode::StandardQuic);
         assert_eq!(cfg.up_mbps, 100);
@@ -615,9 +524,9 @@ mod tests {
 
     #[test]
     fn hysteria2_throughput_mode_uses_explicit_or_throughput_defaults() {
-        let cfg = parse_congestion_config(&json!({
+        let cfg = parse_congestion_config(&settings(json!({
             "congestion": { "mode": "brutal-compatible" }
-        }))
+        })))
         .unwrap();
 
         assert_eq!(cfg.up_mbps, 300);
@@ -627,11 +536,11 @@ mod tests {
 
     #[test]
     fn hysteria2_bandwidth_fields_are_honored_and_clamped() {
-        let cfg = parse_congestion_config(&json!({
-            "upMbps": "250",
-            "down_mbps": 50_000,
+        let cfg = parse_congestion_config(&settings(json!({
+            "upMbps": 250,
+            "downMbps": 50_000,
             "congestion": { "mode": "badnet-throughput" }
-        }))
+        })))
         .unwrap();
 
         assert_eq!(cfg.up_mbps, 250);
@@ -640,13 +549,13 @@ mod tests {
 
     #[test]
     fn datagram_defaults_to_disabled_without_explicit_policy() {
-        assert!(!datagram_enabled(&json!({}), None));
+        assert!(!datagram_enabled(&EndpointSettings::default(), None));
     }
 
     #[test]
     fn datagram_can_be_enabled_explicitly_per_inbound() {
         assert!(datagram_enabled(
-            &json!({ "datagram": { "enabled": true, "udpOverDatagram": true } }),
+            &settings(json!({ "datagram": { "enabled": true, "udpOverDatagram": true } })),
             None
         ));
     }
@@ -659,6 +568,6 @@ mod tests {
             ..DatagramConfig::default()
         };
 
-        assert!(datagram_enabled(&json!({}), Some(&cfg)));
+        assert!(datagram_enabled(&EndpointSettings::default(), Some(&cfg)));
     }
 }

@@ -429,7 +429,7 @@ mod tests {
                 protocol: Protocol::Socks,
                 listen: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 port: 1080,
-                settings: serde_json::json!({}),
+                settings: Default::default(),
                 stream_settings: None,
                 limits: None,
                 sniffing: None,
@@ -437,7 +437,7 @@ mod tests {
             outbounds: vec![OutboundConfig {
                 tag: "direct".into(),
                 protocol: Protocol::Freedom,
-                settings: serde_json::json!({}),
+                settings: Default::default(),
                 stream_settings: None,
             }],
             stats: None,

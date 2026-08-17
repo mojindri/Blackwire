@@ -15,7 +15,11 @@ mod routing;
 mod transport;
 mod vision;
 
-pub use endpoint::{InboundConfig, InboundLimitsConfig, OutboundConfig};
+pub use endpoint::{
+    CongestionSettings, DatagramOverrides, EndpointCount, EndpointSettings, EndpointUser,
+    FallbackSettings, FecOverrides, InboundConfig, InboundLimitsConfig, OutboundConfig,
+    PoolSettings, QuicSocketOverrides,
+};
 pub use logging_dns::{DnsConfig, FakeIpConfig, LogConfig};
 pub use profile::{
     explain_cost, validate_fast_profile, BudgetConfig, CopyMode, CostClass, CostReport, FastConfig,
@@ -29,8 +33,9 @@ pub use routing::{
     RoutingConfig, RoutingRule,
 };
 pub use transport::{
-    GrpcConfig, Hysteria2Config, KcpConfig, RealityConfig, ShadowTlsConfig, SniffingConfig,
-    SplitHttpConfig, StreamSettingsConfig, TlsConfig, WsConfig,
+    DownloadSettings, GrpcConfig, Hysteria2Config, KcpConfig, PaddingBounds, PaddingBytes,
+    RealityConfig, ShadowTlsConfig, SniffingConfig, SplitHttpConfig, StreamSettingsConfig,
+    TlsConfig, WsConfig, XmuxConfig,
 };
 pub use vision::{VisionConfig, VisionDirectCopyPolicy};
 
@@ -216,7 +221,7 @@ pub struct QuicConfig {
 
     /// Endpoint shard count: integer string/number or "cpu".
     #[serde(default = "QuicConfig::default_endpoints")]
-    pub endpoints: serde_json::Value,
+    pub endpoints: EndpointCount,
 
     /// Requested UDP receive buffer size.
     #[serde(default = "QuicConfig::default_buffer_bytes")]
@@ -228,35 +233,32 @@ pub struct QuicConfig {
 
     /// Maximum datagram size hint. Current transport accepts the field for config parity.
     #[serde(default = "QuicConfig::default_max_datagram_size")]
-    pub max_datagram_size: serde_json::Value,
+    pub max_datagram_size: DatagramSize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DatagramSize {
+    Fixed(usize),
+    Named(String),
 }
 
 impl QuicConfig {
-    fn default_endpoints() -> serde_json::Value {
-        serde_json::Value::String("1".into())
+    fn default_endpoints() -> EndpointCount {
+        EndpointCount::Fixed(1)
     }
 
     fn default_buffer_bytes() -> usize {
         8 * 1024 * 1024
     }
 
-    fn default_max_datagram_size() -> serde_json::Value {
-        serde_json::Value::String("auto".into())
+    fn default_max_datagram_size() -> DatagramSize {
+        DatagramSize::Named("auto".into())
     }
 
     /// Returns the number of QUIC endpoints, clamped to 1–64.
     pub fn endpoint_count(&self) -> usize {
-        match &self.endpoints {
-            serde_json::Value::String(s) if s.eq_ignore_ascii_case("cpu") => {
-                std::thread::available_parallelism()
-                    .map(usize::from)
-                    .unwrap_or(1)
-            }
-            serde_json::Value::String(s) => s.parse::<usize>().unwrap_or(1),
-            serde_json::Value::Number(n) => n.as_u64().unwrap_or(1) as usize,
-            _ => 1,
-        }
-        .clamp(1, 64)
+        self.endpoints.resolve()
     }
 }
 

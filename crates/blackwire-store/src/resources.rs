@@ -47,6 +47,22 @@ pub struct UserRecord {
     pub method: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SubscriptionRecord {
+    pub email: String,
+    pub enabled: bool,
+    pub expiry_at: Option<DateTime<Utc>>,
+    pub uuid: Option<String>,
+    pub password: Option<String>,
+    pub method: Option<String>,
+    pub auth: Option<String>,
+    pub flow: String,
+    pub protocol: String,
+    pub port: u16,
+    pub transport: String,
+    pub security: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InboundWrite {
@@ -93,6 +109,49 @@ pub struct UserWrite {
 }
 
 impl Database {
+    pub async fn subscription_by_token(
+        &self,
+        token: &str,
+    ) -> StoreResult<Option<SubscriptionRecord>> {
+        let revision = self.state().await?.desired_revision;
+        let row = sqlx::query(
+            "SELECT u.email,u.enabled,u.expiry_at,u.flow,c.uuid_value,c.password_value,c.method,c.auth_value,i.protocol,i.listen_port,COALESCE(s.network,'tcp') network,COALESCE(s.security,'none') security FROM users u JOIN user_credentials c ON c.revision_id=u.revision_id AND c.user_id=u.user_id JOIN inbounds i ON i.revision_id=u.revision_id AND i.inbound_id=u.inbound_id LEFT JOIN stream_settings s ON s.revision_id=i.revision_id AND s.endpoint_kind='inbound' AND s.endpoint_id=i.inbound_id WHERE u.revision_id=? AND u.subscription_token=? AND u.enabled=TRUE AND i.enabled=TRUE LIMIT 1",
+        )
+        .bind(revision)
+        .bind(token)
+        .fetch_optional(self.pool())
+        .await?;
+        row.map(|row| {
+            let password = row
+                .try_get::<Option<Vec<u8>>, _>("password_value")?
+                .map(String::from_utf8)
+                .transpose()
+                .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+            let auth = row
+                .try_get::<Option<Vec<u8>>, _>("auth_value")?
+                .map(String::from_utf8)
+                .transpose()
+                .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+            Ok::<SubscriptionRecord, sqlx::Error>(SubscriptionRecord {
+                email: row.try_get("email")?,
+                enabled: row.try_get("enabled")?,
+                expiry_at: row.try_get("expiry_at")?,
+                uuid: row.try_get("uuid_value")?,
+                password,
+                method: row.try_get("method")?,
+                auth,
+                flow: row.try_get("flow")?,
+                protocol: row.try_get("protocol")?,
+                port: u16::try_from(row.try_get::<u32, _>("listen_port")?)
+                    .map_err(|error| sqlx::Error::Decode(Box::new(error)))?,
+                transport: row.try_get("network")?,
+                security: row.try_get("security")?,
+            })
+        })
+        .transpose()
+        .map_err(Into::into)
+    }
+
     pub async fn list_inbounds(&self, revision: i64) -> StoreResult<Vec<InboundRecord>> {
         let rows = sqlx::query(
             "SELECT i.inbound_id, i.tag, i.listen_address, i.listen_port, i.protocol, i.enabled, COALESCE(s.network, 'tcp') network, COALESCE(s.security, 'none') security FROM inbounds i LEFT JOIN stream_settings s ON s.revision_id=i.revision_id AND s.endpoint_kind='inbound' AND s.endpoint_id=i.inbound_id WHERE i.revision_id=? ORDER BY i.position",
@@ -134,7 +193,10 @@ impl Database {
                     protocol: row.try_get("protocol")?,
                     enabled: row.try_get("enabled")?,
                     address: row.try_get("server_address")?,
-                    port: port.map(u16::try_from).transpose().map_err(|error| sqlx::Error::Decode(Box::new(error)))?,
+                    port: port
+                        .map(u16::try_from)
+                        .transpose()
+                        .map_err(|error| sqlx::Error::Decode(Box::new(error)))?,
                     transport: row.try_get("network")?,
                     security: row.try_get("security")?,
                 })
@@ -171,15 +233,41 @@ impl Database {
             .map_err(Into::into)
     }
 
-    pub async fn save_inbound(&self, actor: &str, input: InboundWrite) -> StoreResult<MutationResult> {
+    pub async fn save_inbound(
+        &self,
+        actor: &str,
+        input: InboundWrite,
+    ) -> StoreResult<MutationResult> {
         validate_inbound(&input)?;
         let state = self.state().await?;
-        let (mut tx, revision) = self.fork_revision(state.desired_revision, actor, "Save inbound", ActivationClass::ListenerHandover).await?;
-        let id = input.id.unwrap_or(sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(inbound_id) FROM inbounds WHERE revision_id=?")
-            .bind(revision).fetch_one(&mut *tx).await?.unwrap_or(0) + 1);
-        let position = if input.id.is_some() { 0 } else {
-            sqlx::query_scalar::<_, Option<u32>>("SELECT MAX(position) FROM inbounds WHERE revision_id=?")
-                .bind(revision).fetch_one(&mut *tx).await?.map_or(0, |value| value + 1)
+        let (mut tx, revision) = self
+            .fork_revision(
+                state.desired_revision,
+                actor,
+                "Save inbound",
+                ActivationClass::ListenerHandover,
+            )
+            .await?;
+        let id = input.id.unwrap_or(
+            sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT MAX(inbound_id) FROM inbounds WHERE revision_id=?",
+            )
+            .bind(revision)
+            .fetch_one(&mut *tx)
+            .await?
+            .unwrap_or(0)
+                + 1,
+        );
+        let position = if input.id.is_some() {
+            0
+        } else {
+            sqlx::query_scalar::<_, Option<u32>>(
+                "SELECT MAX(position) FROM inbounds WHERE revision_id=?",
+            )
+            .bind(revision)
+            .fetch_one(&mut *tx)
+            .await?
+            .map_or(0, |value| value + 1)
         };
         sqlx::query("INSERT INTO inbounds (revision_id,inbound_id,tag,listen_address,listen_port,protocol,enabled,position) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE tag=VALUES(tag),listen_address=VALUES(listen_address),listen_port=VALUES(listen_port),protocol=VALUES(protocol),enabled=VALUES(enabled)")
             .bind(revision).bind(id).bind(input.tag).bind(input.listen).bind(input.port).bind(input.protocol).bind(input.enabled).bind(position)
@@ -191,28 +279,70 @@ impl Database {
         }
         Database::publish_revision(&mut tx, revision, ActivationClass::ListenerHandover).await?;
         tx.commit().await?;
-        Ok(mutation_result(&state, revision, ActivationClass::ListenerHandover, "Inbound saved"))
+        Ok(mutation_result(
+            &state,
+            revision,
+            ActivationClass::ListenerHandover,
+            "Inbound saved",
+        ))
     }
 
     pub async fn delete_inbound(&self, actor: &str, id: i64) -> StoreResult<MutationResult> {
         let state = self.state().await?;
-        let (mut tx, revision) = self.fork_revision(state.desired_revision, actor, "Delete inbound", ActivationClass::ListenerHandover).await?;
-        sqlx::query("DELETE FROM inbounds WHERE revision_id=? AND inbound_id=?").bind(revision).bind(id).execute(&mut *tx).await?;
+        let (mut tx, revision) = self
+            .fork_revision(
+                state.desired_revision,
+                actor,
+                "Delete inbound",
+                ActivationClass::ListenerHandover,
+            )
+            .await?;
+        sqlx::query("DELETE FROM inbounds WHERE revision_id=? AND inbound_id=?")
+            .bind(revision)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         Database::publish_revision(&mut tx, revision, ActivationClass::ListenerHandover).await?;
         tx.commit().await?;
-        Ok(mutation_result(&state, revision, ActivationClass::ListenerHandover, "Inbound deleted"))
+        Ok(mutation_result(
+            &state,
+            revision,
+            ActivationClass::ListenerHandover,
+            "Inbound deleted",
+        ))
     }
 
-    pub async fn save_outbound(&self, actor: &str, input: OutboundWrite) -> StoreResult<MutationResult> {
+    pub async fn save_outbound(
+        &self,
+        actor: &str,
+        input: OutboundWrite,
+    ) -> StoreResult<MutationResult> {
         validate_outbound(&input)?;
         let state = self.state().await?;
         let class = ActivationClass::MaintenanceRequired;
-        let (mut tx, revision) = self.fork_revision(state.desired_revision, actor, "Save outbound", class).await?;
-        let id = input.id.unwrap_or(sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(outbound_id) FROM outbounds WHERE revision_id=?")
-            .bind(revision).fetch_one(&mut *tx).await?.unwrap_or(0) + 1);
-        let position = if input.id.is_some() { 0 } else {
-            sqlx::query_scalar::<_, Option<u32>>("SELECT MAX(position) FROM outbounds WHERE revision_id=?")
-                .bind(revision).fetch_one(&mut *tx).await?.map_or(0, |value| value + 1)
+        let (mut tx, revision) = self
+            .fork_revision(state.desired_revision, actor, "Save outbound", class)
+            .await?;
+        let id = input.id.unwrap_or(
+            sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT MAX(outbound_id) FROM outbounds WHERE revision_id=?",
+            )
+            .bind(revision)
+            .fetch_one(&mut *tx)
+            .await?
+            .unwrap_or(0)
+                + 1,
+        );
+        let position = if input.id.is_some() {
+            0
+        } else {
+            sqlx::query_scalar::<_, Option<u32>>(
+                "SELECT MAX(position) FROM outbounds WHERE revision_id=?",
+            )
+            .bind(revision)
+            .fetch_one(&mut *tx)
+            .await?
+            .map_or(0, |value| value + 1)
         };
         sqlx::query("INSERT INTO outbounds (revision_id,outbound_id,tag,protocol,enabled,position,server_address,server_port,domain_strategy,deny_loopback,reject_ipv6_literal) VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL) ON DUPLICATE KEY UPDATE tag=VALUES(tag),protocol=VALUES(protocol),enabled=VALUES(enabled),server_address=VALUES(server_address),server_port=VALUES(server_port)")
             .bind(revision).bind(id).bind(input.tag).bind(input.protocol).bind(input.enabled).bind(position).bind(input.address).bind(input.port)
@@ -224,32 +354,60 @@ impl Database {
         }
         Database::publish_revision(&mut tx, revision, class).await?;
         tx.commit().await?;
-        Ok(mutation_result(&state, revision, class, "Outbound saved; maintenance activation required"))
+        Ok(mutation_result(
+            &state,
+            revision,
+            class,
+            "Outbound saved; maintenance activation required",
+        ))
     }
 
     pub async fn delete_outbound(&self, actor: &str, id: i64) -> StoreResult<MutationResult> {
         let state = self.state().await?;
         let class = ActivationClass::MaintenanceRequired;
-        let (mut tx, revision) = self.fork_revision(state.desired_revision, actor, "Delete outbound", class).await?;
-        sqlx::query("DELETE FROM outbounds WHERE revision_id=? AND outbound_id=?").bind(revision).bind(id).execute(&mut *tx).await?;
+        let (mut tx, revision) = self
+            .fork_revision(state.desired_revision, actor, "Delete outbound", class)
+            .await?;
+        sqlx::query("DELETE FROM outbounds WHERE revision_id=? AND outbound_id=?")
+            .bind(revision)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         Database::publish_revision(&mut tx, revision, class).await?;
         tx.commit().await?;
-        Ok(mutation_result(&state, revision, class, "Outbound deleted; maintenance activation required"))
+        Ok(mutation_result(
+            &state,
+            revision,
+            class,
+            "Outbound deleted; maintenance activation required",
+        ))
     }
 
     pub async fn save_user(&self, actor: &str, input: UserWrite) -> StoreResult<MutationResult> {
         if input.email.trim().is_empty() || input.subscription_token.trim().is_empty() {
-            return Err(StoreError::InvalidConfiguration("user email and subscription token are required".into()));
+            return Err(StoreError::InvalidConfiguration(
+                "user email and subscription token are required".into(),
+            ));
         }
         let state = self.state().await?;
         let class = ActivationClass::HotSwap;
-        let (mut tx, revision) = self.fork_revision(state.desired_revision, actor, "Save user", class).await?;
-        let id = input.id.unwrap_or(sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(user_id) FROM users WHERE revision_id=?")
-            .bind(revision).fetch_one(&mut *tx).await?.unwrap_or(0) + 1);
+        let (mut tx, revision) = self
+            .fork_revision(state.desired_revision, actor, "Save user", class)
+            .await?;
+        let id = input.id.unwrap_or(
+            sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT MAX(user_id) FROM users WHERE revision_id=?",
+            )
+            .bind(revision)
+            .fetch_one(&mut *tx)
+            .await?
+            .unwrap_or(0)
+                + 1,
+        );
         sqlx::query("INSERT INTO users (revision_id,user_id,inbound_id,email,enabled,flow,note,traffic_limit_bytes,expiry_at,subscription_token) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE inbound_id=VALUES(inbound_id),email=VALUES(email),enabled=VALUES(enabled),flow=VALUES(flow),note=VALUES(note),traffic_limit_bytes=VALUES(traffic_limit_bytes),expiry_at=VALUES(expiry_at),subscription_token=VALUES(subscription_token)")
             .bind(revision).bind(id).bind(input.inbound_id).bind(input.email).bind(input.enabled).bind(input.flow).bind(input.note).bind(input.traffic_limit_bytes).bind(input.expiry_at).bind(input.subscription_token)
             .execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO user_credentials (revision_id,user_id,credential_kind,uuid_value,password_value,method,auth_value) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE credential_kind=VALUES(credential_kind),uuid_value=VALUES(uuid_value),password_value=VALUES(password_value),method=VALUES(method),auth_value=VALUES(auth_value)")
+        sqlx::query("INSERT INTO user_credentials (revision_id,user_id,credential_kind,uuid_value,password_value,method,auth_value) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE credential_kind=VALUES(credential_kind),uuid_value=COALESCE(VALUES(uuid_value),uuid_value),password_value=COALESCE(VALUES(password_value),password_value),method=COALESCE(VALUES(method),method),auth_value=COALESCE(VALUES(auth_value),auth_value)")
             .bind(revision).bind(id).bind(input.credential_kind).bind(input.uuid).bind(input.password.map(String::into_bytes)).bind(input.method).bind(input.auth.map(String::into_bytes))
             .execute(&mut *tx).await?;
         Database::publish_revision(&mut tx, revision, class).await?;
@@ -260,8 +418,14 @@ impl Database {
     pub async fn delete_user(&self, actor: &str, id: i64) -> StoreResult<MutationResult> {
         let state = self.state().await?;
         let class = ActivationClass::HotSwap;
-        let (mut tx, revision) = self.fork_revision(state.desired_revision, actor, "Delete user", class).await?;
-        sqlx::query("DELETE FROM users WHERE revision_id=? AND user_id=?").bind(revision).bind(id).execute(&mut *tx).await?;
+        let (mut tx, revision) = self
+            .fork_revision(state.desired_revision, actor, "Delete user", class)
+            .await?;
+        sqlx::query("DELETE FROM users WHERE revision_id=? AND user_id=?")
+            .bind(revision)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         Database::publish_revision(&mut tx, revision, class).await?;
         tx.commit().await?;
         Ok(mutation_result(&state, revision, class, "User deleted"))
@@ -269,44 +433,84 @@ impl Database {
 }
 
 fn validate_inbound(input: &InboundWrite) -> StoreResult<()> {
-    if input.tag.trim().is_empty() || input.listen.parse::<std::net::IpAddr>().is_err() || input.port == 0 {
-        return Err(StoreError::InvalidConfiguration("inbound tag, IP listen address, and non-zero port are required".into()));
+    if input.tag.trim().is_empty()
+        || input.listen.parse::<std::net::IpAddr>().is_err()
+        || input.port == 0
+    {
+        return Err(StoreError::InvalidConfiguration(
+            "inbound tag, IP listen address, and non-zero port are required".into(),
+        ));
     }
-    if !matches!(input.protocol.as_str(), "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "tuic" | "socks" | "http") {
-        return Err(StoreError::InvalidConfiguration(format!("unsupported inbound protocol '{}'", input.protocol)));
+    if !matches!(
+        input.protocol.as_str(),
+        "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "tuic" | "socks" | "http"
+    ) {
+        return Err(StoreError::InvalidConfiguration(format!(
+            "unsupported inbound protocol '{}'",
+            input.protocol
+        )));
     }
     validate_transport_security(&input.transport, &input.security)
 }
 
 fn validate_outbound(input: &OutboundWrite) -> StoreResult<()> {
     if input.tag.trim().is_empty() {
-        return Err(StoreError::InvalidConfiguration("outbound tag is required".into()));
+        return Err(StoreError::InvalidConfiguration(
+            "outbound tag is required".into(),
+        ));
     }
-    if !matches!(input.protocol.as_str(), "freedom" | "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "tuic") {
-        return Err(StoreError::InvalidConfiguration(format!("unsupported outbound protocol '{}'", input.protocol)));
+    if !matches!(
+        input.protocol.as_str(),
+        "freedom" | "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "tuic"
+    ) {
+        return Err(StoreError::InvalidConfiguration(format!(
+            "unsupported outbound protocol '{}'",
+            input.protocol
+        )));
     }
-    if input.protocol != "freedom" && (input.address.as_deref().is_none_or(str::is_empty) || input.port.is_none_or(|port| port == 0)) {
-        return Err(StoreError::InvalidConfiguration("non-freedom outbounds require a server address and port".into()));
+    if input.protocol != "freedom"
+        && (input.address.as_deref().is_none_or(str::is_empty)
+            || input.port.is_none_or(|port| port == 0))
+    {
+        return Err(StoreError::InvalidConfiguration(
+            "non-freedom outbounds require a server address and port".into(),
+        ));
     }
     validate_transport_security(&input.transport, &input.security)
 }
 
 fn validate_transport_security(transport: &str, security: &str) -> StoreResult<()> {
-    if !matches!(transport, "tcp" | "ws" | "grpc" | "httpupgrade" | "splithttp" | "quic" | "kcp") {
-        return Err(StoreError::InvalidConfiguration(format!("unsupported transport '{transport}'")));
+    if !matches!(
+        transport,
+        "tcp" | "ws" | "grpc" | "httpupgrade" | "splithttp" | "quic" | "kcp"
+    ) {
+        return Err(StoreError::InvalidConfiguration(format!(
+            "unsupported transport '{transport}'"
+        )));
     }
     if !matches!(security, "none" | "tls" | "reality" | "shadowtls") {
-        return Err(StoreError::InvalidConfiguration(format!("unsupported security mode '{security}'")));
+        return Err(StoreError::InvalidConfiguration(format!(
+            "unsupported security mode '{security}'"
+        )));
     }
     Ok(())
 }
 
-fn mutation_result(state: &crate::ConfigurationState, revision: i64, class: ActivationClass, message: &str) -> MutationResult {
+fn mutation_result(
+    state: &crate::ConfigurationState,
+    revision: i64,
+    class: ActivationClass,
+    message: &str,
+) -> MutationResult {
     MutationResult {
         revision,
         parent_revision: state.desired_revision,
         active_revision: state.active_revision,
-        state: if class == ActivationClass::MaintenanceRequired { ActivationState::PendingMaintenance } else { ActivationState::Activating },
+        state: if class == ActivationClass::MaintenanceRequired {
+            ActivationState::PendingMaintenance
+        } else {
+            ActivationState::Activating
+        },
         activation_class: class,
         message: message.into(),
     }

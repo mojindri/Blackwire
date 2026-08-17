@@ -69,12 +69,23 @@ impl Database {
     }
 
     pub async fn admin_username(&self, admin_id: i64) -> StoreResult<Option<String>> {
-        Ok(sqlx::query_scalar("SELECT username FROM panel_admins WHERE admin_id = ?")
-            .bind(admin_id).fetch_optional(self.pool()).await?)
+        Ok(
+            sqlx::query_scalar("SELECT username FROM panel_admins WHERE admin_id = ?")
+                .bind(admin_id)
+                .fetch_optional(self.pool())
+                .await?,
+        )
     }
 
-    pub async fn create_session(&self, token_hash: &[u8], admin_id: i64, expires_at: DateTime<Utc>) -> StoreResult<()> {
-        sqlx::query("DELETE FROM panel_sessions WHERE expires_at <= UTC_TIMESTAMP(6)").execute(self.pool()).await?;
+    pub async fn create_session(
+        &self,
+        token_hash: &[u8],
+        admin_id: i64,
+        expires_at: DateTime<Utc>,
+    ) -> StoreResult<()> {
+        sqlx::query("DELETE FROM panel_sessions WHERE expires_at <= UTC_TIMESTAMP(6)")
+            .execute(self.pool())
+            .await?;
         sqlx::query("INSERT INTO panel_sessions (token_hash, admin_id, created_at, expires_at) VALUES (?, ?, UTC_TIMESTAMP(6), ?)")
             .bind(token_hash).bind(admin_id).bind(expires_at).execute(self.pool()).await?;
         Ok(())
@@ -86,7 +97,10 @@ impl Database {
     }
 
     pub async fn delete_session(&self, token_hash: &[u8]) -> StoreResult<()> {
-        sqlx::query("DELETE FROM panel_sessions WHERE token_hash = ?").bind(token_hash).execute(self.pool()).await?;
+        sqlx::query("DELETE FROM panel_sessions WHERE token_hash = ?")
+            .bind(token_hash)
+            .execute(self.pool())
+            .await?;
         Ok(())
     }
 
@@ -94,12 +108,16 @@ impl Database {
         let row = sqlx::query("SELECT public_base_url, subscription_host, firewall_auto_open, enforcement_interval_seconds, adaptive_routing_enabled, adaptive_tuning_mode, adaptive_tuning_interval_seconds, adaptive_tuning_cooldown_seconds, adaptive_tuning_max_hysteria2_mbps FROM panel_settings WHERE singleton_id=1")
             .fetch_one(self.pool()).await?;
         Ok(PanelSettings {
-            public_base_url: row.try_get("public_base_url")?, subscription_host: row.try_get("subscription_host")?,
-            firewall_auto_open: row.try_get("firewall_auto_open")?, enforcement_interval_seconds: row.try_get("enforcement_interval_seconds")?,
-            adaptive_routing_enabled: row.try_get("adaptive_routing_enabled")?, adaptive_tuning_mode: row.try_get("adaptive_tuning_mode")?,
+            public_base_url: row.try_get("public_base_url")?,
+            subscription_host: row.try_get("subscription_host")?,
+            firewall_auto_open: row.try_get("firewall_auto_open")?,
+            enforcement_interval_seconds: row.try_get("enforcement_interval_seconds")?,
+            adaptive_routing_enabled: row.try_get("adaptive_routing_enabled")?,
+            adaptive_tuning_mode: row.try_get("adaptive_tuning_mode")?,
             adaptive_tuning_interval_seconds: row.try_get("adaptive_tuning_interval_seconds")?,
             adaptive_tuning_cooldown_seconds: row.try_get("adaptive_tuning_cooldown_seconds")?,
-            adaptive_tuning_max_hysteria2_mbps: row.try_get("adaptive_tuning_max_hysteria2_mbps")?,
+            adaptive_tuning_max_hysteria2_mbps: row
+                .try_get("adaptive_tuning_max_hysteria2_mbps")?,
         })
     }
 

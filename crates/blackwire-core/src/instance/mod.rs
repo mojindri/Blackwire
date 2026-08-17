@@ -51,7 +51,9 @@ use blackwire_common::{
     clear_outbound_bypass_mark, clear_outbound_interface_index, set_outbound_bypass_mark,
     set_outbound_interface_name,
 };
-use blackwire_config::schema::{Config, FastPoolPolicy, ProfileMode, Protocol};
+use blackwire_config::schema::{
+    Config, EndpointSettings, FastPoolPolicy, PoolSettings, ProfileMode, Protocol,
+};
 use blackwire_protocol::freedom::{FreedomIpStrategy, FreedomOutbound, PoolConfig};
 use blackwire_protocol::socks::Socks5Inbound;
 use blackwire_transport::mkcp_accept_sessions;
@@ -89,12 +91,6 @@ use helpers::{
     select_balancer_outbounds, InboundConnectionHandler,
 };
 
-fn as_usize(value: Option<&serde_json::Value>) -> Option<usize> {
-    value
-        .and_then(serde_json::Value::as_u64)
-        .map(|v| v as usize)
-}
-
 fn try_acquire_global_permit(
     limiter: Option<&Arc<Semaphore>>,
     addr: SocketAddr,
@@ -116,53 +112,23 @@ fn try_acquire_global_permit(
     }
 }
 
-fn as_u64(value: Option<&serde_json::Value>) -> Option<u64> {
-    value.and_then(serde_json::Value::as_u64)
-}
-
-fn as_pool_mode(value: Option<&serde_json::Value>) -> Option<String> {
-    value
-        .and_then(serde_json::Value::as_str)
-        .map(|s| s.trim().to_ascii_lowercase())
-}
-
-fn apply_pool_overrides(mut cfg: PoolConfig, source: &serde_json::Value) -> PoolConfig {
-    if let Some(v) = as_usize(
-        source
-            .get("maxPerDest")
-            .or_else(|| source.get("max_per_dest")),
-    ) {
+fn apply_pool_overrides(mut cfg: PoolConfig, source: &PoolSettings) -> PoolConfig {
+    if let Some(v) = source.max_per_dest {
         cfg.max_per_dest = v.max(1);
     }
-    if let Some(v) = as_usize(
-        source
-            .get("maxGlobalIdle")
-            .or_else(|| source.get("max_global_idle")),
-    ) {
+    if let Some(v) = source.max_global_idle {
         cfg.max_global_idle = v.max(1);
     }
-    if let Some(v) = as_usize(source.get("maxDests").or_else(|| source.get("max_dests"))) {
+    if let Some(v) = source.max_dests {
         cfg.max_dests = v.max(1);
     }
-    if let Some(ms) = as_u64(
-        source
-            .get("idleTtlMs")
-            .or_else(|| source.get("idle_ttl_ms")),
-    ) {
+    if let Some(ms) = source.idle_ttl_ms {
         cfg.idle_ttl = std::time::Duration::from_millis(ms.max(1));
     }
-    if let Some(ms) = as_u64(
-        source
-            .get("hotnessWindowMs")
-            .or_else(|| source.get("hotness_window_ms")),
-    ) {
+    if let Some(ms) = source.hotness_window_ms {
         cfg.hotness_window = std::time::Duration::from_millis(ms.max(1));
     }
-    if let Some(v) = as_u64(
-        source
-            .get("minHotnessForPool")
-            .or_else(|| source.get("min_hotness_for_pool")),
-    ) {
+    if let Some(v) = source.min_hotness_for_pool {
         cfg.min_hotness_for_pool = v.max(1);
     }
     cfg
@@ -177,29 +143,19 @@ fn pool_config_from_mode(mode: &str) -> Option<PoolConfig> {
     }
 }
 
-fn freedom_deny_loopback(settings: &serde_json::Value) -> bool {
-    settings
-        .get("denyLoopback")
-        .or_else(|| settings.get("deny_loopback"))
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false)
+fn freedom_deny_loopback(settings: &EndpointSettings) -> bool {
+    settings.deny_loopback
 }
 
-fn freedom_reject_ipv6_literal(settings: &serde_json::Value) -> bool {
-    settings
-        .get("rejectIpv6Literal")
-        .or_else(|| settings.get("reject_ipv6_literal"))
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false)
+fn freedom_reject_ipv6_literal(settings: &EndpointSettings) -> bool {
+    settings.reject_ipv6_literal
 }
 
-fn freedom_ip_strategy(settings: &serde_json::Value) -> FreedomIpStrategy {
+fn freedom_ip_strategy(settings: &EndpointSettings) -> FreedomIpStrategy {
     let Some(raw) = settings
-        .get("domainStrategy")
-        .or_else(|| settings.get("domain_strategy"))
-        .or_else(|| settings.get("ipStrategy"))
-        .or_else(|| settings.get("ip_strategy"))
-        .and_then(|value| value.as_str())
+        .domain_strategy
+        .as_deref()
+        .or(settings.ip_strategy.as_deref())
     else {
         return FreedomIpStrategy::Auto;
     };
@@ -220,40 +176,13 @@ fn freedom_ip_strategy(settings: &serde_json::Value) -> FreedomIpStrategy {
     }
 }
 
-fn freedom_pool_config(config: &Config, settings: &serde_json::Value) -> Option<PoolConfig> {
-    if let Some(pool) = settings.get("pool") {
-        if pool.is_null() {
-            return None;
-        }
-        if let Some(mode) = as_pool_mode(Some(pool)) {
-            return pool_config_from_mode(&mode);
-        }
-        if let Some(pool_obj) = pool.as_object() {
-            let mode = as_pool_mode(pool_obj.get("mode")).unwrap_or_else(|| "adaptive".into());
-            let base = pool_config_from_mode(&mode)?;
-            return Some(apply_pool_overrides(base, pool));
-        }
+fn freedom_pool_config(config: &Config, settings: &EndpointSettings) -> Option<PoolConfig> {
+    if let Some(pool) = settings.pool.as_ref() {
+        let base = pool_config_from_mode(&pool.mode.trim().to_ascii_lowercase())?;
+        return Some(apply_pool_overrides(base, pool));
     }
 
-    if let Some(value) = settings.get("poolSize") {
-        if value.is_null() {
-            return None;
-        }
-        {
-            if let Some(size) = value.as_u64() {
-                return Some(PoolConfig::fixed((size as usize).max(1)));
-            }
-            if let Some(policy) = value.as_str() {
-                return pool_config_from_mode(&policy.to_ascii_lowercase());
-            }
-        }
-    }
-
-    if settings
-        .get("poolEnabled")
-        .and_then(serde_json::Value::as_bool)
-        == Some(false)
-    {
+    if settings.pool_enabled == Some(false) {
         return None;
     }
 
@@ -632,11 +561,7 @@ impl Instance {
 
             // SS-2022 UDP: standalone UDP listener (SIP022).
             if in_cfg.protocol == Protocol::Shadowsocks {
-                let net = in_cfg
-                    .settings
-                    .get("network")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("tcp");
+                let net = in_cfg.settings.network.as_deref().unwrap_or("tcp");
                 if net == "udp" || net == "tcp,udp" || net == "udp,tcp" {
                     let auth = reload
                         .ss2022_auth_stores

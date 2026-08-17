@@ -7,16 +7,18 @@
 mod connection;
 mod error;
 mod panel;
-mod revision;
 mod resources;
+mod revision;
 mod snapshot;
 
 pub use connection::{Database, DatabaseOptions, EXPECTED_SCHEMA_VERSION};
 pub use error::{StoreError, StoreResult};
 pub use panel::{AdminRecord, PanelSettings};
+pub use resources::{
+    InboundRecord, InboundWrite, OutboundRecord, OutboundWrite, SubscriptionRecord, UserRecord,
+    UserWrite,
+};
 pub use revision::{
-    ActivationClass, ActivationState, ConfigurationState, MutationResult, Revision,
-    RevisionSummary,
+    ActivationClass, ActivationState, ConfigurationState, MutationResult, Revision, RevisionSummary,
 };
 pub use snapshot::StoredConfig;
-pub use resources::{InboundRecord, InboundWrite, OutboundRecord, OutboundWrite, UserRecord, UserWrite};
