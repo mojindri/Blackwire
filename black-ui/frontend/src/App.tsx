@@ -35,6 +35,16 @@ export default function App() {
   const statusKnown = data.status !== null;
   const setupRequired = data.status?.setupRequired ?? false;
   const authenticated = Boolean(token) && !setupRequired;
+  const databaseReadOnly = data.status?.databaseConnected === false;
+
+  const markDatabaseUnavailable = useCallback(() => {
+    setData((current) => ({
+      ...current,
+      status: current.status
+        ? { ...current.status, databaseConnected: false, runtimeReachable: false }
+        : current.status
+    }));
+  }, []);
 
   const refresh = useCallback(async () => {
     const status = await api.status();
@@ -71,12 +81,13 @@ export default function App() {
   useEffect(() => {
     refresh().catch((err: Error) => {
       setError(err.message);
+      markDatabaseUnavailable();
       if (err.message.includes("authentication")) {
         clearToken();
         setTokenState("");
       }
     });
-  }, [refresh, token]);
+  }, [markDatabaseUnavailable, refresh, token]);
 
   const run = useCallback(
     async (action: () => Promise<unknown>, success: string, pending = "Working...") => {
@@ -94,13 +105,14 @@ export default function App() {
           await refresh();
         } catch {
           // Keep the original mutation error visible; refresh is best-effort after partial writes.
+          markDatabaseUnavailable();
         }
         setError(errorMessage);
       } finally {
         setBusy(false);
       }
     },
-    [refresh]
+    [markDatabaseUnavailable, refresh]
   );
 
   const login = (username: string, password: string) => {
@@ -173,7 +185,7 @@ export default function App() {
       {page === "users" ? (
         <UsersPage
           data={data}
-          busy={busy}
+          busy={busy || databaseReadOnly}
           onSave={actions.saveUser}
           onUuid={actions.uuid}
           onToggle={actions.toggleUser}
@@ -188,7 +200,7 @@ export default function App() {
         <InboundsPage
           inbounds={data.inbounds}
           capabilities={data.capabilities}
-          busy={busy}
+          busy={busy || databaseReadOnly}
           onCreate={actions.createInbound}
           onUpdate={actions.updateInbound}
           onDelete={actions.deleteInbound}
@@ -198,17 +210,17 @@ export default function App() {
         <OutboundsPage
           outbounds={data.outbounds}
           capabilities={data.capabilities}
-          busy={busy}
+          busy={busy || databaseReadOnly}
           onCreate={actions.createOutbound}
           onUpdate={actions.updateOutbound}
           onDelete={actions.deleteOutbound}
         />
       ) : null}
       {page === "sections" ? (
-        <SectionsPage value={data.routingDns} outbounds={data.outbounds} busy={busy} onSave={actions.saveRoutingDns} />
+        <SectionsPage value={data.routingDns} outbounds={data.outbounds} busy={busy || databaseReadOnly} onSave={actions.saveRoutingDns} />
       ) : null}
-      {page === "service" ? <ServicePage status={data.status} revisions={data.revisions} busy={busy} onRollback={actions.rollback} onActivateMaintenance={actions.activateMaintenance} /> : null}
-      {page === "settings" ? <SettingsPage settings={data.settings} busy={busy} onSave={actions.saveSettings} /> : null}
+      {page === "service" ? <ServicePage status={data.status} revisions={data.revisions} busy={busy || databaseReadOnly} onRollback={actions.rollback} onActivateMaintenance={actions.activateMaintenance} /> : null}
+      {page === "settings" ? <SettingsPage settings={data.settings} busy={busy || databaseReadOnly} onSave={actions.saveSettings} /> : null}
     </AppShell>
   );
 }
