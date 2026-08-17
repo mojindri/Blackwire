@@ -23,7 +23,9 @@ pub async fn create_first_admin(
 ) -> Result<(), AppError> {
     let username = normalized_username(username)?;
     if password.len() < 8 {
-        return Err(AppError::bad_request("password must be at least 8 characters"));
+        return Err(AppError::bad_request(
+            "password must be at least 8 characters",
+        ));
     }
     let salt = util::random_token(24);
     let created = state
@@ -53,12 +55,14 @@ pub async fn create_admin_session(
         .await
         .map_err(|error| AppError::internal(error.into()))?
         .ok_or_else(|| AppError::unauthorized_message("invalid username or password"))?;
-    let salt = String::from_utf8(admin.password_salt)
-        .map_err(|error| AppError::internal(error.into()))?;
-    let expected = String::from_utf8(admin.password_hash)
-        .map_err(|error| AppError::internal(error.into()))?;
+    let salt =
+        String::from_utf8(admin.password_salt).map_err(|error| AppError::internal(error.into()))?;
+    let expected =
+        String::from_utf8(admin.password_hash).map_err(|error| AppError::internal(error.into()))?;
     if util::hash_password(password, &salt) != expected {
-        return Err(AppError::unauthorized_message("invalid username or password"));
+        return Err(AppError::unauthorized_message(
+            "invalid username or password",
+        ));
     }
     let token = util::random_token(48);
     state

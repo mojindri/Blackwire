@@ -26,7 +26,10 @@ pub struct ApiServerConfig {
 
 /// Parse `api` listener settings from config (`"host:port"` string or object).
 pub fn api_server_config(api: &blackwire_config::schema::ApiConfig) -> Option<ApiServerConfig> {
-    (!api.listen.trim().is_empty()).then(|| ApiServerConfig { listen_addr: api.listen.clone(), token: api.token.clone() })
+    (!api.listen.trim().is_empty()).then(|| ApiServerConfig {
+        listen_addr: api.listen.clone(),
+        token: api.token.clone(),
+    })
 }
 
 /// Parse `api` listen address from config (`"host:port"` string or object).
@@ -121,7 +124,9 @@ mod tests {
     #[test]
     fn parses_api_token_from_object_config() {
         let config = api_server_config(&blackwire_config::schema::ApiConfig {
-            listen: "0.0.0.0:9000".into(), token: Some("secret".into()), services: Vec::new()
+            listen: "0.0.0.0:9000".into(),
+            token: Some("secret".into()),
+            services: Vec::new(),
         })
         .expect("api config");
 
