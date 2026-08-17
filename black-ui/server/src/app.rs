@@ -130,6 +130,10 @@ fn api_router() -> Router<AppState> {
             "/routing-dns",
             get(handlers::get_routing_dns).put(handlers::update_routing_dns),
         )
+        .route(
+            "/core-settings",
+            get(handlers::get_core_settings).put(handlers::update_core_settings),
+        )
         .route("/runtime/revisions", get(handlers::revision_history))
         .route("/runtime/rollback", post(handlers::rollback_revision))
         .route(
@@ -140,6 +144,14 @@ fn api_router() -> Router<AppState> {
         .route(
             "/service/restart-blackwire",
             post(handlers::service_restart_blackwire),
+        )
+        .route(
+            "/service/start-blackwire",
+            post(handlers::service_start_blackwire),
+        )
+        .route(
+            "/service/stop-blackwire",
+            post(handlers::service_stop_blackwire),
         )
         .route("/service/logs", get(handlers::service_logs))
         .route(

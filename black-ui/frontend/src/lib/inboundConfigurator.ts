@@ -1,4 +1,5 @@
 import type { Inbound, InboundInput } from "./types";
+import { buildSplitHttp, readSplitHttp, type SplitHttpEditorState } from "./splitHttpConfigurator";
 
 export type JsonObject = Record<string, unknown>;
 export type SliceKey = "settings" | "streamSettings" | "sniffing" | "limits";
@@ -39,6 +40,7 @@ export interface InboundEditorState {
   grpcServiceName: string;
   httpupgradePath: string;
   httpupgradeHost: string;
+  splitHttp: SplitHttpEditorState;
   splitHttpPath: string;
   kcpHeader: string;
   kcpMtu: string;
@@ -59,6 +61,9 @@ export interface InboundEditorState {
   realityDest: string;
   realityFingerprint: string;
   realitySpiderX: string;
+  shadowTlsPassword: string;
+  shadowTlsDest: string;
+  shadowTlsVersion: string;
   sniffingEnabled: boolean;
   sniffingDestOverride: string[];
   sniffingMetadataOnly: boolean;
@@ -137,6 +142,7 @@ export function createInboundEditorState(inbound?: Inbound | null): InboundEdito
     grpcServiceName: stringValue(objectValue(streamSettings.value.grpcSettings)?.serviceName) ?? "",
     httpupgradePath: stringValue(objectValue(streamSettings.value.httpupgradeSettings)?.path) ?? "",
     httpupgradeHost: stringValue(objectValue(streamSettings.value.httpupgradeSettings)?.host) ?? "",
+    splitHttp: readSplitHttp(streamSettings.value.splithttpSettings),
     splitHttpPath: stringValue(objectValue(streamSettings.value.splithttpSettings)?.path) ?? "",
     kcpHeader: stringValue(objectValue(streamSettings.value.kcpSettings)?.header) ?? "",
     kcpMtu: numberString(objectValue(streamSettings.value.kcpSettings)?.mtu),
@@ -163,6 +169,9 @@ export function createInboundEditorState(inbound?: Inbound | null): InboundEdito
     realityDest: stringValue(objectValue(streamSettings.value.realitySettings)?.dest) ?? "",
     realityFingerprint: stringValue(objectValue(streamSettings.value.realitySettings)?.fingerprint) ?? "chrome",
     realitySpiderX: stringValue(objectValue(streamSettings.value.realitySettings)?.spiderX) ?? "/",
+    shadowTlsPassword: stringValue(objectValue(streamSettings.value.shadowTlsSettings)?.password) ?? "",
+    shadowTlsDest: stringValue(objectValue(streamSettings.value.shadowTlsSettings)?.dest) ?? "",
+    shadowTlsVersion: numberString(objectValue(streamSettings.value.shadowTlsSettings)?.version) || "3",
     sniffingEnabled: boolValue(sniffing.value.enabled) ?? false,
     sniffingDestOverride: arrayOfStrings(sniffing.value.destOverride),
     sniffingMetadataOnly: boolValue(sniffing.value.metadataOnly) ?? false,
@@ -261,9 +270,7 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
   }
 
   if (state.network === "splithttp") {
-    const splitHttpSettings = cloneObject(objectValue(streamSettings.splithttpSettings));
-    splitHttpSettings.path = state.splitHttpPath.trim() || "/";
-    streamSettings.splithttpSettings = pruneEmpty(splitHttpSettings);
+    streamSettings.splithttpSettings = pruneEmpty(buildSplitHttp({ ...state.splitHttp, path: state.splitHttp.path || state.splitHttpPath }, streamSettings.splithttpSettings));
   } else {
     delete streamSettings.splithttpSettings;
   }
@@ -328,6 +335,13 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
     delete streamSettings.tlsSettings;
   } else {
     delete streamSettings.realitySettings;
+  }
+  if (state.security === "shadowtls") {
+    streamSettings.shadowTlsSettings = { password: state.shadowTlsPassword.trim(), dest: state.shadowTlsDest.trim(), version: Number(state.shadowTlsVersion || 3) };
+    delete streamSettings.tlsSettings;
+    delete streamSettings.realitySettings;
+  } else {
+    delete streamSettings.shadowTlsSettings;
   }
 
   if (!state.sniffingEnabled && state.sniffingDestOverride.length === 0 && !state.sniffingMetadataOnly && !state.sniffingRouteOnly) {
@@ -553,6 +567,7 @@ function syncStructuredFields(state: InboundEditorState): InboundEditorState {
     grpcServiceName: next.grpcServiceName,
     httpupgradePath: next.httpupgradePath,
     httpupgradeHost: next.httpupgradeHost,
+    splitHttp: next.splitHttp,
     splitHttpPath: next.splitHttpPath,
     kcpHeader: next.kcpHeader,
     kcpMtu: next.kcpMtu,
@@ -573,6 +588,9 @@ function syncStructuredFields(state: InboundEditorState): InboundEditorState {
     realityDest: next.realityDest,
     realityFingerprint: next.realityFingerprint,
     realitySpiderX: next.realitySpiderX,
+    shadowTlsPassword: next.shadowTlsPassword,
+    shadowTlsDest: next.shadowTlsDest,
+    shadowTlsVersion: next.shadowTlsVersion,
     sniffingEnabled: next.sniffingEnabled,
     sniffingDestOverride: next.sniffingDestOverride,
     sniffingMetadataOnly: next.sniffingMetadataOnly,

@@ -10,6 +10,7 @@
 //! instead of reading configuration files or issuing ad-hoc queries.
 
 mod connection;
+mod core_settings;
 mod error;
 mod panel;
 mod resources;
@@ -35,6 +36,7 @@ mod sqlx {
 }
 
 pub use connection::{Database, DatabaseOptions, EXPECTED_SCHEMA_VERSION};
+pub use core_settings::CoreSettings;
 pub use error::{StoreError, StoreResult};
 pub use panel::{AdminRecord, PanelSettings};
 pub use resources::{
@@ -44,6 +46,9 @@ pub use resources::{
 pub use revision::{
     ActivationClass, ActivationState, ConfigurationState, MutationResult, Revision, RevisionSummary,
 };
-pub use routing::{RouteWrite, RoutingDnsRecord, RoutingDnsWrite};
+pub use routing::{
+    AdaptiveBalancerWrite, BalancerMemberWrite, BalancerWrite, HealthCheckWrite, RouteWrite,
+    RoutingDnsRecord, RoutingDnsWrite,
+};
 pub use runtime::{InboundTrafficRecord, UserTrafficRecord};
 pub use snapshot::StoredConfig;

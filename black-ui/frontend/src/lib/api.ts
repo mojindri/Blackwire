@@ -1,6 +1,7 @@
 import type {
   ApplyResult,
   CapabilityMap,
+  CoreSettings,
   Inbound,
   InboundInput,
   LoginResponse,
@@ -87,6 +88,8 @@ export const api = {
   revisions: () => request<RevisionSummary[]>("/api/runtime/revisions"),
   routingDns: () => request<RoutingDns>("/api/routing-dns"),
   updateRoutingDns: (value: RoutingDns) => request<ApplyResult>("/api/routing-dns", { method: "PUT", body: JSON.stringify(value) }),
+  coreSettings: () => request<CoreSettings>("/api/core-settings"),
+  updateCoreSettings: (value: CoreSettings) => request<ApplyResult>("/api/core-settings", { method: "PUT", body: JSON.stringify(value) }),
   rollback: (revision: number) => request<ApplyResult>("/api/runtime/rollback", body({ revision })),
   activateMaintenance: (revision: number) => request<{ revision: number; message: string }>("/api/runtime/activate-maintenance", body({ revision })),
   inbounds: () => request<Inbound[]>("/api/inbounds"),
@@ -118,5 +121,7 @@ export const api = {
   uuid: () => request<{ uuid: string }>("/api/uuid", { method: "POST" }),
   serviceStatus: () => request<ServiceStatus>("/api/service/status"),
   serviceRestartBlackwire: () => request<ServiceStatus>("/api/service/restart-blackwire", { method: "POST" }),
+  serviceStartBlackwire: () => request<ServiceStatus>("/api/service/start-blackwire", { method: "POST" }),
+  serviceStopBlackwire: () => request<ServiceStatus>("/api/service/stop-blackwire", { method: "POST" }),
   serviceLogs: () => request<string[]>("/api/service/logs")
 };
