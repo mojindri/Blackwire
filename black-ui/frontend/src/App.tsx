@@ -20,7 +20,8 @@ const emptyData: AppData = {
   traffic: { users: [], inbounds: [] },
   capabilities: null,
   service: null,
-  revisions: []
+  revisions: [],
+  routingDns: { domainStrategy: "AsIs", dnsServers: [], rules: [] }
 };
 
 export default function App() {
@@ -53,7 +54,7 @@ export default function App() {
       setData((current) => ({ ...current, status }));
       return;
     }
-    const [settings, inbounds, outbounds, users, traffic, capabilities, service, revisions] = await Promise.all([
+    const [settings, inbounds, outbounds, users, traffic, capabilities, service, revisions, routingDns] = await Promise.all([
       api.settings(),
       api.inbounds(),
       api.outbounds(),
@@ -61,9 +62,10 @@ export default function App() {
       api.traffic().catch(() => ({ users: [], inbounds: [] })),
       api.capabilities(),
       api.serviceStatus().catch(() => null),
-      api.revisions()
+      api.revisions(),
+      api.routingDns()
     ]);
-    setData({ status, settings, inbounds, outbounds, users, traffic, capabilities, service, revisions });
+    setData({ status, settings, inbounds, outbounds, users, traffic, capabilities, service, revisions, routingDns });
   }, []);
 
   useEffect(() => {
@@ -147,6 +149,7 @@ export default function App() {
       rollback: (revision: number) => run(() => api.rollback(revision), "Rollback revision created", "Creating rollback revision..."),
       activateMaintenance: (revision: number) => run(() => api.activateMaintenance(revision), "Maintenance activation confirmed", "Confirming maintenance..."),
       saveSettings: (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved", "Saving settings..."),
+      saveRoutingDns: (value: typeof data.routingDns) => run(() => api.updateRoutingDns(value), "Routing and DNS saved", "Saving routing and DNS..."),
       uuid: async () => (await api.uuid()).uuid
     }),
     [run]
@@ -202,7 +205,7 @@ export default function App() {
         />
       ) : null}
       {page === "sections" ? (
-        <SectionsPage status={data.status} />
+        <SectionsPage value={data.routingDns} outbounds={data.outbounds} busy={busy} onSave={actions.saveRoutingDns} />
       ) : null}
       {page === "service" ? <ServicePage status={data.status} revisions={data.revisions} busy={busy} onRollback={actions.rollback} onActivateMaintenance={actions.activateMaintenance} /> : null}
       {page === "settings" ? <SettingsPage settings={data.settings} busy={busy} onSave={actions.saveSettings} /> : null}
