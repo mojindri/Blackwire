@@ -502,6 +502,10 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
         .mark_active(initial_revision)
         .await
         .context("recording active MySQL revision")?;
+    let runtime_id = std::env::var("BLACKWIRE_INSTANCE_ID")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+    database.heartbeat(&runtime_id, initial_revision).await?;
 
     if let Some(api_config) = api_config {
         let management: blackwire_api::management::ManagementHandle = Arc::new(RuntimeControl {
@@ -528,8 +532,10 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
     {
         let live_instance = Arc::clone(&instance);
         let database = database.clone();
+        let runtime_id = runtime_id.clone();
         tokio::spawn(async move {
             let mut observed_revision = initial_revision;
+            let mut counter_tick = 0u8;
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let state = match database.state().await {
@@ -539,6 +545,17 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                         continue;
                     }
                 };
+                let active_revision = state.active_revision.unwrap_or(observed_revision);
+                if let Err(error) = database.heartbeat(&runtime_id, active_revision).await {
+                    warn!(%error, "failed to record runtime heartbeat");
+                }
+                counter_tick = counter_tick.wrapping_add(1);
+                if counter_tick % 5 == 0 {
+                    let (users, inbounds) = runtime_counter_snapshots();
+                    if let Err(error) = database.persist_runtime_counters(&users, &inbounds).await {
+                        warn!(%error, "failed to persist runtime traffic counters");
+                    }
+                }
                 if state.desired_revision == observed_revision
                     || state.pending_maintenance_revision == Some(state.desired_revision)
                 {
@@ -643,6 +660,9 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                 if let Err(error) = database.mark_active(stored.revision).await {
                     error!(revision = stored.revision, %error, "runtime activated but active revision marker could not be updated");
                 }
+                if let Err(error) = database.prune_revision_history().await {
+                    warn!(%error, "failed to prune revision history");
+                }
                 observed_revision = stored.revision;
             }
         });
@@ -655,6 +675,38 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
     shutdown_signal(instance).await;
 
     Ok(())
+}
+
+fn runtime_counter_snapshots() -> (Vec<(String, u64, u64)>, Vec<(String, u64, u64)>) {
+    let mut users = HashMap::<String, (u64, u64)>::new();
+    let mut inbounds = HashMap::<String, (u64, u64)>::new();
+    for (name, value) in blackwire_app::runtime_stats::query(">>>traffic>>>", false) {
+        let parts: Vec<_> = name.split(">>>").collect();
+        if parts.len() != 4 || parts[2] != "traffic" {
+            continue;
+        }
+        let value = value.max(0) as u64;
+        let target = match parts[0] {
+            "user" => users.entry(parts[1].to_string()).or_default(),
+            "inbound" => inbounds.entry(parts[1].to_string()).or_default(),
+            _ => continue,
+        };
+        match parts[3] {
+            "uplink" => target.0 = value,
+            "downlink" => target.1 = value,
+            _ => {}
+        }
+    }
+    (
+        users
+            .into_iter()
+            .map(|(name, (up, down))| (name, up, down))
+            .collect(),
+        inbounds
+            .into_iter()
+            .map(|(name, (up, down))| (name, up, down))
+            .collect(),
+    )
 }
 
 /// Wait for a shutdown signal or for all listeners to exit.

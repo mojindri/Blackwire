@@ -9,6 +9,7 @@ mod error;
 mod panel;
 mod resources;
 mod revision;
+mod runtime;
 mod snapshot;
 
 pub use connection::{Database, DatabaseOptions, EXPECTED_SCHEMA_VERSION};
@@ -21,4 +22,5 @@ pub use resources::{
 pub use revision::{
     ActivationClass, ActivationState, ConfigurationState, MutationResult, Revision, RevisionSummary,
 };
+pub use runtime::{InboundTrafficRecord, UserTrafficRecord};
 pub use snapshot::StoredConfig;

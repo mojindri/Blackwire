@@ -6,7 +6,7 @@ use crate::{
     ActivationClass, ActivationState, ConfigurationState, RevisionSummary, StoreError, StoreResult,
 };
 
-pub const EXPECTED_SCHEMA_VERSION: i64 = 2;
+pub const EXPECTED_SCHEMA_VERSION: i64 = 3;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -16,6 +16,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (
         2,
         include_str!("../migrations/0002_complete_relational_settings.sql"),
+    ),
+    (
+        3,
+        include_str!("../migrations/0003_runtime_state_and_retention.sql"),
     ),
 ];
 
