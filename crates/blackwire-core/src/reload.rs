@@ -46,7 +46,7 @@ use tracing::info;
 use blackwire_app::geo::{GeoIpMatcher, GeoSiteMatcher};
 use blackwire_app::router::LiveRouter;
 use blackwire_app::user_limits::UserConnectionLimiter;
-use blackwire_app::{set_user_bandwidth_policies, set_user_bandwidth_policy};
+use blackwire_app::set_user_bandwidth_policies;
 use blackwire_config::schema::{Config, Protocol};
 use blackwire_protocol::ss2022::inbound::Ss2022AuthStore;
 use blackwire_protocol::trojan::inbound::TrojanAuthStore;
@@ -299,40 +299,6 @@ impl blackwire_api::management::InboundManagement for ReloadState {
                 level: 0,
             })
             .collect())
-    }
-
-    async fn add_vless_user(
-        &self,
-        inbound_tag: &str,
-        email: &str,
-        uuid_str: &str,
-        flow: &str,
-    ) -> Result<(), String> {
-        let registry = self
-            .vless_registry(inbound_tag)
-            .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))?;
-        let uuid = crate::instance::parse_uuid(uuid_str).map_err(|e| e.to_string())?;
-        registry.add_user(blackwire_protocol::vless::VlessUser {
-            email: email.into(),
-            uuid,
-            flow: flow.to_string(),
-        });
-        set_user_bandwidth_policy(Arc::<str>::from(email), None);
-        Ok(())
-    }
-
-    async fn remove_vless_user(&self, inbound_tag: &str, email: &str) -> Result<(), String> {
-        let registry = self
-            .vless_registry(inbound_tag)
-            .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))?;
-        if registry.remove_user_by_email(email) {
-            set_user_bandwidth_policy(Arc::<str>::from(email), None);
-            Ok(())
-        } else {
-            Err(format!(
-                "no VLESS user with email '{email}' on inbound '{inbound_tag}'"
-            ))
-        }
     }
 
     async fn list_connections(&self) -> Vec<blackwire_connmgr::ConnectionSnapshot> {

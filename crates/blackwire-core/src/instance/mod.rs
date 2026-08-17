@@ -74,7 +74,7 @@ pub(crate) use crate::ss2022::populate_ss2022_auth_store;
 pub(crate) use crate::trojan::populate_trojan_auth_store;
 pub(crate) use crate::vmess::populate_vmess_registry;
 pub(crate) use helpers::{
-    build_rules, build_sniffing_map, build_user_bandwidth_policies, load_geo_data, parse_uuid,
+    build_rules, build_sniffing_map, build_user_bandwidth_policies, load_geo_data,
     populate_vless_registry,
 };
 

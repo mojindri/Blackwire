@@ -13,8 +13,7 @@
 # Or: make -C labs/realistic build-amd64
 #
 # Run:
-#   docker run -v /path/to/config.json:/etc/blackwire/config.json \
-#              -p 443:443 blackwire:latest
+#   docker run --secret database_url -p 443:443 blackwire:latest
 
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
 FROM rust:1.83-slim AS builder

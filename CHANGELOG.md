@@ -154,7 +154,7 @@ This project is pre-1.0. The support contract is owned by
   `BLACK_UI_CONFIG_PATH`, and config writes now report clear permission/read-only
   path hints.
 - Black UI now validates duplicate inbound tags before insert/update so users
-  see a clear validation error instead of a raw SQLite constraint failure.
+  see a clear validation error instead of a raw persistence constraint failure.
 
 ### Changed
 
@@ -238,7 +238,7 @@ This project is pre-1.0. The support contract is owned by
 ### Fixed
 
 - Installer upgrades now re-own existing Black UI data files under
-  `BLACK_UI_DATA_DIR` when the service user/group changes, preventing SQLite
+  the panel data directory when the service user/group changes, preventing local database
   `attempt to write a readonly database` crash loops after migration from older
   `nobody:nogroup` installs.
 

@@ -4,7 +4,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
-use serde_json::Value;
 use tokio::task::JoinHandle;
 use tonic::transport::Server;
 use tonic::{Request, Status};
@@ -26,36 +25,12 @@ pub struct ApiServerConfig {
 }
 
 /// Parse `api` listener settings from config (`"host:port"` string or object).
-pub fn api_server_config(api: &Value) -> Option<ApiServerConfig> {
-    if let Some(addr) = api.as_str() {
-        return Some(ApiServerConfig {
-            listen_addr: addr.to_string(),
-            token: None,
-        });
-    }
-
-    let listen_addr = api
-        .get("listen")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .or_else(|| {
-            let host = api.get("host").and_then(Value::as_str)?;
-            let port = api.get("port").and_then(Value::as_u64)?;
-            Some(format!("{host}:{port}"))
-        })?;
-    let token = api
-        .get("token")
-        .or_else(|| api.get("auth_token"))
-        .or_else(|| api.get("api_token"))
-        .and_then(Value::as_str)
-        .filter(|token| !token.is_empty())
-        .map(ToString::to_string);
-
-    Some(ApiServerConfig { listen_addr, token })
+pub fn api_server_config(api: &blackwire_config::schema::ApiConfig) -> Option<ApiServerConfig> {
+    (!api.listen.trim().is_empty()).then(|| ApiServerConfig { listen_addr: api.listen.clone(), token: api.token.clone() })
 }
 
 /// Parse `api` listen address from config (`"host:port"` string or object).
-pub fn api_listen_addr(api: &Value) -> Option<String> {
+pub fn api_listen_addr(api: &blackwire_config::schema::ApiConfig) -> Option<String> {
     api_server_config(api).map(|config| config.listen_addr)
 }
 
@@ -142,14 +117,12 @@ fn authorize_api_request<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn parses_api_token_from_object_config() {
-        let config = api_server_config(&json!({
-            "listen": "0.0.0.0:9000",
-            "token": "secret"
-        }))
+        let config = api_server_config(&blackwire_config::schema::ApiConfig {
+            listen: "0.0.0.0:9000".into(), token: Some("secret".into()), services: Vec::new()
+        })
         .expect("api config");
 
         assert_eq!(config.listen_addr, "0.0.0.0:9000");
