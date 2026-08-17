@@ -7,6 +7,7 @@ use axum::{
 use blackwire_store::{InboundWrite, OutboundWrite, PanelSettings, UserWrite};
 use chrono::{DateTime, Utc};
 use serde_json::json;
+use serde::Deserialize;
 
 use crate::{
     capabilities,
@@ -214,6 +215,26 @@ pub async fn generate_uuid(State(state): State<AppState>, headers: HeaderMap) ->
 pub async fn runtime_traffic(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<TrafficSnapshot> {
     auth::require(&headers, &state).await?;
     Ok(Json(TrafficSnapshot { users: Vec::new(), inbounds: Vec::new() }))
+}
+
+pub async fn revision_history(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Vec<blackwire_store::RevisionSummary>> {
+    auth::require(&headers, &state).await?;
+    Ok(Json(state.store.history(20).await.map_err(store_error)?))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionInput { revision: i64 }
+
+pub async fn rollback_revision(State(state): State<AppState>, headers: HeaderMap, Json(input): Json<RevisionInput>) -> ApiResult<ApplyResult> {
+    auth::require(&headers, &state).await?;
+    Ok(Json(state.store.rollback(input.revision, "black-ui").await.map_err(store_error)?.into()))
+}
+
+pub async fn activate_maintenance(State(state): State<AppState>, headers: HeaderMap, Json(input): Json<RevisionInput>) -> ApiResult<serde_json::Value> {
+    auth::require(&headers, &state).await?;
+    state.store.confirm_maintenance(input.revision).await.map_err(store_error)?;
+    Ok(Json(json!({ "revision": input.revision, "message": "Maintenance activation confirmed" })))
 }
 
 pub async fn service_status(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<ServiceStatus> {

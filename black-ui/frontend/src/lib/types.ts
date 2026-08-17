@@ -189,6 +189,15 @@ export interface ServiceStatus {
   logs: string[];
 }
 
+export interface RevisionSummary {
+  revision: number;
+  parentRevision: number | null;
+  actor: string;
+  summary: string;
+  activationClass: "hotSwap" | "listenerHandover" | "maintenanceRequired";
+  createdAt: string;
+}
+
 export interface AppData {
   status: Status | null;
   settings: Settings | null;
@@ -198,4 +207,5 @@ export interface AppData {
   traffic: TrafficSnapshot;
   capabilities: CapabilityMap | null;
   service: ServiceStatus | null;
+  revisions: RevisionSummary[];
 }
