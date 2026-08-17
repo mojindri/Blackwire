@@ -16,7 +16,7 @@
 #   docker run --secret database_url -p 443:443 blackwire:latest
 
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
-FROM rust:1.83-slim AS builder
+FROM rust:slim-bookworm AS builder
 
 WORKDIR /build
 

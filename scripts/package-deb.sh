@@ -50,14 +50,18 @@ CONTROL
 cat > "$root/DEBIAN/postinst" <<'POSTINST'
 #!/bin/sh
 set -e
-if ! getent group black-ui >/dev/null 2>&1; then
-    groupadd --system black-ui
+if ! getent group blackwire >/dev/null 2>&1; then
+    groupadd --system blackwire
+fi
+if ! id blackwire >/dev/null 2>&1; then
+    useradd --system --home /var/lib/blackwire --shell /usr/sbin/nologin --gid blackwire blackwire
 fi
 mkdir -p /etc/blackwire /var/lib/blackwire /run/blackwire
-chown root:black-ui /etc/blackwire
-chmod 0770 /etc/blackwire
+chown root:blackwire /etc/blackwire
+chmod 0750 /etc/blackwire
+chown blackwire:blackwire /var/lib/blackwire /run/blackwire
 if [ -f /etc/blackwire/runtime-database-url ]; then
-    chown root:black-ui /etc/blackwire/runtime-database-url
+    chown root:blackwire /etc/blackwire/runtime-database-url
     chmod 0640 /etc/blackwire/runtime-database-url
 fi
 if command -v systemctl >/dev/null 2>&1; then

@@ -16,7 +16,7 @@ Understand one full connection end to end with real file jumps.
 
 Read:
 
-- [crates/blackwire-cli/src/main.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-cli/src/main.rs)
+- [crates/blackwire-cli/src/main.rs](../crates/blackwire-cli/src/main.rs)
 
 What to notice:
 
@@ -30,7 +30,7 @@ If you want one mental anchor, this file is the front door.
 
 Read:
 
-- [crates/blackwire-core/src/instance/mod.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance/mod.rs)
+- [crates/blackwire-core/src/instance/mod.rs](../crates/blackwire-core/src/instance/mod.rs)
 
 This is the assembly line.
 
@@ -49,7 +49,7 @@ For a plain SOCKS inbound, there is no TLS/REALITY/WebSocket wrapper in front.
 
 Read:
 
-- [crates/blackwire-app/src/features.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-app/src/features.rs)
+- [crates/blackwire-app/src/features.rs](../crates/blackwire-app/src/features.rs)
 
 These traits define the architecture:
 
@@ -66,7 +66,7 @@ For this trace:
 
 Read:
 
-- [crates/blackwire-transport/src/tcp.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/tcp.rs)
+- [crates/blackwire-transport/src/tcp.rs](../crates/blackwire-transport/src/tcp.rs)
 
 What happens here:
 
@@ -81,7 +81,7 @@ It only knows it accepted a stream.
 
 Read:
 
-- [crates/blackwire-protocol/src/socks.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-protocol/src/socks.rs)
+- [crates/blackwire-protocol/src/socks.rs](../crates/blackwire-protocol/src/socks.rs)
 
 This is where the bytes start to mean something.
 
@@ -104,7 +104,7 @@ That change is the whole purpose of an inbound protocol handler.
 
 Read:
 
-- [crates/blackwire-common/src/address.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-common/src/address.rs)
+- [crates/blackwire-common/src/address.rs](../crates/blackwire-common/src/address.rs)
 
 The parsed destination becomes an `Address`.
 
@@ -120,7 +120,7 @@ This type is passed around everywhere after parsing.
 
 Read:
 
-- [crates/blackwire-app/src/dispatcher.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-app/src/dispatcher.rs)
+- [crates/blackwire-app/src/dispatcher.rs](../crates/blackwire-app/src/dispatcher.rs)
 
 This file answers:
 
@@ -140,7 +140,7 @@ This is the middle of the whole architecture.
 
 Read:
 
-- [crates/blackwire-app/src/router.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-app/src/router.rs)
+- [crates/blackwire-app/src/router.rs](../crates/blackwire-app/src/router.rs)
 
 For our simplest path, the router often just picks the default outbound tag.
 
@@ -158,7 +158,7 @@ That separation matters:
 
 Read:
 
-- [crates/blackwire-protocol/src/freedom.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-protocol/src/freedom.rs)
+- [crates/blackwire-protocol/src/freedom.rs](../crates/blackwire-protocol/src/freedom.rs)
 
 This is the simplest outbound in the repo.
 
@@ -202,7 +202,7 @@ Once you understand the simple path, extend it one layer at a time.
 
 Instead of Freedom, switch Step 8 to:
 
-- [crates/blackwire-protocol/src/vless/outbound.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-protocol/src/vless/outbound.rs)
+- [crates/blackwire-protocol/src/vless/outbound.rs](../crates/blackwire-protocol/src/vless/outbound.rs)
 
 Now the outbound:
 
@@ -218,7 +218,7 @@ Now add transport wrapping before the protocol write/read side.
 
 Read:
 
-- [crates/blackwire-transport/src/ws.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/ws.rs)
+- [crates/blackwire-transport/src/ws.rs](../crates/blackwire-transport/src/ws.rs)
 
 Now the path becomes:
 
@@ -233,7 +233,7 @@ The protocol still sees a stream, but the stream is now WebSocket-backed.
 
 Read:
 
-- [crates/blackwire-transport/src/tls.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/tls.rs)
+- [crates/blackwire-transport/src/tls.rs](../crates/blackwire-transport/src/tls.rs)
 
 Now the path becomes:
 
@@ -249,8 +249,8 @@ This is where the path changes the most.
 
 Read:
 
-- [docs/04-reality-for-dummies.md](/Users/mojnader/RustroverProjects/v2ray/docs/04-reality-for-dummies.md)
-- [crates/blackwire-core/src/reality.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/reality.rs)
+- [docs/04-reality-for-dummies.md](04-reality-for-dummies.md)
+- [crates/blackwire-core/src/reality.rs](../crates/blackwire-core/src/reality.rs)
 
 On the server side, the path becomes:
 
@@ -272,39 +272,39 @@ If you ask:
 
 Read:
 
-- [crates/blackwire-cli/src/main.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-cli/src/main.rs)
-- [crates/blackwire-core/src/instance/mod.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance/mod.rs)
+- [crates/blackwire-cli/src/main.rs](../crates/blackwire-cli/src/main.rs)
+- [crates/blackwire-core/src/instance/mod.rs](../crates/blackwire-core/src/instance/mod.rs)
 
 ### "Where is the client destination parsed?"
 
 Read:
 
-- [crates/blackwire-protocol/src/socks.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-protocol/src/socks.rs)
-- [crates/blackwire-protocol/src/http_connect.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-protocol/src/http_connect.rs)
-- [crates/blackwire-protocol/src/vless/codec.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-protocol/src/vless/codec.rs)
+- [crates/blackwire-protocol/src/socks.rs](../crates/blackwire-protocol/src/socks.rs)
+- [crates/blackwire-protocol/src/http_connect.rs](../crates/blackwire-protocol/src/http_connect.rs)
+- [crates/blackwire-protocol/src/vless/codec.rs](../crates/blackwire-protocol/src/vless/codec.rs)
 
 ### "Where is the outbound chosen?"
 
 Read:
 
-- [crates/blackwire-app/src/router.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-app/src/router.rs)
-- [crates/blackwire-app/src/dispatcher.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-app/src/dispatcher.rs)
+- [crates/blackwire-app/src/router.rs](../crates/blackwire-app/src/router.rs)
+- [crates/blackwire-app/src/dispatcher.rs](../crates/blackwire-app/src/dispatcher.rs)
 
 ### "Where is the remote socket opened?"
 
 Read:
 
-- [crates/blackwire-protocol/src/freedom.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-protocol/src/freedom.rs)
+- [crates/blackwire-protocol/src/freedom.rs](../crates/blackwire-protocol/src/freedom.rs)
 - outbound modules for other protocols
 
 ### "Where do transport wrappers live?"
 
 Read:
 
-- [crates/blackwire-transport/src/tcp.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/tcp.rs)
-- [crates/blackwire-transport/src/tls.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/tls.rs)
-- [crates/blackwire-transport/src/ws.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/ws.rs)
-- [crates/blackwire-transport/src/reality.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality.rs)
+- [crates/blackwire-transport/src/tcp.rs](../crates/blackwire-transport/src/tcp.rs)
+- [crates/blackwire-transport/src/tls.rs](../crates/blackwire-transport/src/tls.rs)
+- [crates/blackwire-transport/src/ws.rs](../crates/blackwire-transport/src/ws.rs)
+- [crates/blackwire-transport/src/reality.rs](../crates/blackwire-transport/src/reality.rs)
 
 ## Best Follow-Up Exercises
 
