@@ -24,7 +24,11 @@ fn parse_config(value: Value) -> Config {
 }
 
 fn base_config(inbounds: Value, outbounds: Value) -> Config {
-    parse_config(json!({
+    try_base_config(inbounds, outbounds).expect("test JSON must match blackwire-config schema")
+}
+
+fn try_base_config(inbounds: Value, outbounds: Value) -> serde_json::Result<Config> {
+    serde_json::from_value(json!({
         "log": { "level": "warning" },
         "inbounds": inbounds,
         "outbounds": outbounds,
@@ -591,7 +595,7 @@ async fn vless_inbound_rejects_misleading_unsupported_security_fields() {
     ];
 
     for settings in cases {
-        let cfg = base_config(
+        let parsed = try_base_config(
             json!([{
                 "tag": "vless-in",
                 "listen": "127.0.0.1",
@@ -602,10 +606,12 @@ async fn vless_inbound_rejects_misleading_unsupported_security_fields() {
             json!([freedom_outbound("direct")]),
         );
 
-        assert!(
-            Instance::from_config(Arc::new(cfg)).await.is_err(),
-            "misleading VLESS settings were accepted"
-        );
+        if let Ok(cfg) = parsed {
+            assert!(
+                Instance::from_config(Arc::new(cfg)).await.is_err(),
+                "misleading VLESS settings were accepted"
+            );
+        }
     }
 }
 

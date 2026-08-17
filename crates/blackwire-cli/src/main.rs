@@ -550,7 +550,8 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                     warn!(%error, "failed to record runtime heartbeat");
                 }
                 counter_tick = counter_tick.wrapping_add(1);
-                if counter_tick % 5 == 0 {
+                if counter_tick >= 5 {
+                    counter_tick = 0;
                     let (users, inbounds) = runtime_counter_snapshots();
                     if let Err(error) = database.persist_runtime_counters(&users, &inbounds).await {
                         warn!(%error, "failed to persist runtime traffic counters");
@@ -677,7 +678,9 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
     Ok(())
 }
 
-fn runtime_counter_snapshots() -> (Vec<(String, u64, u64)>, Vec<(String, u64, u64)>) {
+type RuntimeCounterSnapshot = Vec<(String, u64, u64)>;
+
+fn runtime_counter_snapshots() -> (RuntimeCounterSnapshot, RuntimeCounterSnapshot) {
     let mut users = HashMap::<String, (u64, u64)>::new();
     let mut inbounds = HashMap::<String, (u64, u64)>::new();
     for (name, value) in blackwire_app::runtime_stats::query(">>>traffic>>>", false) {

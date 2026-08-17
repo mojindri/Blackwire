@@ -1,3 +1,8 @@
+#![allow(
+    missing_docs,
+    reason = "database record fields and query methods mirror the relational schema"
+)]
+
 //! MySQL-only persistence for Blackwire's configuration control plane.
 //!
 //! This crate is the sole owner of production configuration SQL. Runtime,
