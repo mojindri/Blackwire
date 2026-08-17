@@ -82,7 +82,7 @@ export function InboundsPage({
                     <td>{inbound.transport}</td>
                     <td>
                       <div className="table-chips">
-                        <Badge tone={inbound.security === "none" ? "gray" : "cyan"}>{inbound.security}</Badge>
+                        <Badge tone={(inbound.security ?? "none") === "none" ? "gray" : "cyan"}>{inbound.security ?? "none"}</Badge>
                       </div>
                     </td>
                     <td>

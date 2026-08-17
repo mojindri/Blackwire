@@ -2,10 +2,11 @@ use std::net::IpAddr;
 
 use crate::sqlx;
 use blackwire_config::schema::{
-    ApiConfig, Config, DnsConfig, EndpointSettings, EndpointUser, FakeIpConfig, GrpcConfig,
-    InboundConfig, InboundLimitsConfig, KcpConfig, LimitsConfig, LogConfig, NetworkType,
-    OutboundConfig, ProfileMode, Protocol, RealityConfig, RoutingConfig, RoutingRule, SecurityType,
-    SniffingConfig, StreamSettingsConfig, TlsConfig, WsConfig,
+    ApiConfig, Config, CongestionSettings, DatagramOverrides, DnsConfig, EndpointCount,
+    EndpointSettings, EndpointUser, FakeIpConfig, FecOverrides, GrpcConfig, InboundConfig,
+    InboundLimitsConfig, KcpConfig, LimitsConfig, LogConfig, NetworkType, OutboundConfig,
+    ProfileMode, Protocol, QuicSocketOverrides, RealityConfig, RoutingConfig, RoutingRule,
+    SecurityType, SniffingConfig, SplitHttpConfig, StreamSettingsConfig, TlsConfig, WsConfig,
 };
 use sqlx::{MySqlPool, Row};
 
@@ -103,6 +104,7 @@ async fn load_inbounds(pool: &MySqlPool, revision: i64) -> StoreResult<Vec<Inbou
             settings.down_mbps = protocol_row.try_get("down_mbps")?;
             settings.endpoint_shards = protocol_row.try_get::<Option<u32>, _>("endpoint_shards")?.map(usize::try_from).transpose().map_err(decode_error)?;
         }
+        load_endpoint_tuning(pool, revision, "inbound", inbound_id, &mut settings).await?;
         match protocol {
             Protocol::Tuic => settings.users = clients,
             Protocol::Hysteria2 => {
@@ -171,6 +173,7 @@ async fn load_outbounds(pool: &MySqlPool, revision: i64) -> StoreResult<Vec<Outb
             settings.skip_cert_verify = protocol.try_get::<Option<bool>, _>("skip_certificate_verify")?.unwrap_or(false);
             settings.endpoint_shards = protocol.try_get::<Option<u32>, _>("endpoint_shards")?.map(usize::try_from).transpose().map_err(decode_error)?;
         }
+        load_endpoint_tuning(pool, revision, "outbound", outbound_id, &mut settings).await?;
         if matches!(
             parse_protocol(&row.try_get::<String, _>("protocol")?)?,
             Protocol::Vless | Protocol::Vmess
@@ -285,6 +288,13 @@ async fn load_stream(
             if transport_kind == "ws" { stream.ws_settings = Some(config); } else { stream.httpupgrade_settings = Some(config); }
         }
     }
+    if let Some(transport) = sqlx::query("SELECT request_path FROM websocket_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? AND transport_kind='splithttp'")
+        .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {
+        stream.splithttp_settings = Some(SplitHttpConfig {
+            path: transport.try_get("request_path")?,
+            ..Default::default()
+        });
+    }
     if let Some(grpc) = sqlx::query("SELECT service_name, multi_mode FROM grpc_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
         .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {
         stream.grpc_settings = Some(GrpcConfig { service_name: grpc.try_get("service_name")?, multi_mode: grpc.try_get("multi_mode")? });
@@ -303,6 +313,82 @@ async fn load_stream(
         });
     }
     Ok(Some(stream))
+}
+
+async fn load_endpoint_tuning(
+    pool: &MySqlPool,
+    revision: i64,
+    kind: &str,
+    id: i64,
+    settings: &mut EndpointSettings,
+) -> StoreResult<()> {
+    let Some(row) = sqlx::query("SELECT congestion_mode,min_ack_rate,max_queue_delay_ms,pacing_gain,loss_compensation,quic_reuse_port,quic_endpoints,quic_recv_buffer_bytes,quic_send_buffer_bytes,datagram_enabled,udp_over_datagram,datagram_policy,fec_mode,fec_max_overhead_percent FROM endpoint_tuning WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
+        .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? else { return Ok(()); };
+
+    let congestion_mode: Option<String> = row.try_get("congestion_mode")?;
+    let min_ack_rate: Option<f64> = row.try_get("min_ack_rate")?;
+    let max_queue_delay_ms: Option<u64> = row.try_get("max_queue_delay_ms")?;
+    let pacing_gain: Option<f64> = row.try_get("pacing_gain")?;
+    let loss_compensation: Option<bool> = row.try_get("loss_compensation")?;
+    if congestion_mode.is_some()
+        || min_ack_rate.is_some()
+        || max_queue_delay_ms.is_some()
+        || pacing_gain.is_some()
+        || loss_compensation.is_some()
+    {
+        settings.congestion = Some(CongestionSettings {
+            mode: congestion_mode.unwrap_or_else(|| "standard".into()),
+            min_ack_rate,
+            max_queue_delay_ms,
+            pacing_gain,
+            loss_compensation,
+        });
+    }
+
+    let endpoints: Option<String> = row.try_get("quic_endpoints")?;
+    let reuse_port: Option<bool> = row.try_get("quic_reuse_port")?;
+    let recv_buffer_bytes = optional_usize(&row, "quic_recv_buffer_bytes")?;
+    let send_buffer_bytes = optional_usize(&row, "quic_send_buffer_bytes")?;
+    if endpoints.is_some()
+        || reuse_port.is_some()
+        || recv_buffer_bytes.is_some()
+        || send_buffer_bytes.is_some()
+    {
+        settings.quic = Some(QuicSocketOverrides {
+            reuse_port,
+            endpoints: endpoints.map(|value| {
+                value
+                    .parse::<usize>()
+                    .map(EndpointCount::Fixed)
+                    .unwrap_or(EndpointCount::Named(value))
+            }),
+            recv_buffer_bytes,
+            send_buffer_bytes,
+        });
+    }
+
+    let datagram_enabled: Option<bool> = row.try_get("datagram_enabled")?;
+    let udp_over_datagram: Option<bool> = row.try_get("udp_over_datagram")?;
+    let datagram_policy: Option<String> = row.try_get("datagram_policy")?;
+    if datagram_enabled.is_some() || udp_over_datagram.is_some() || datagram_policy.is_some() {
+        settings.datagram = Some(DatagramOverrides {
+            enabled: datagram_enabled,
+            udp_over_datagram,
+            policy: datagram_policy,
+            ..Default::default()
+        });
+    }
+
+    let fec_mode: Option<String> = row.try_get("fec_mode")?;
+    let max_overhead_percent: Option<u8> = row.try_get("fec_max_overhead_percent")?;
+    if fec_mode.is_some() || max_overhead_percent.is_some() {
+        settings.fec = Some(FecOverrides {
+            mode: fec_mode,
+            max_overhead_percent,
+            ..Default::default()
+        });
+    }
+    Ok(())
 }
 
 async fn load_inbound_limits(

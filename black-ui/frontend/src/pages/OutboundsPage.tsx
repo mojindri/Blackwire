@@ -81,7 +81,7 @@ export function OutboundsPage({
                     <td>{outbound.transport}</td>
                     <td>
                       <div className="table-chips">
-                        <Badge tone={outbound.security === "none" ? "gray" : "cyan"}>{outbound.security}</Badge>
+                        <Badge tone={(outbound.security ?? "none") === "none" ? "gray" : "cyan"}>{outbound.security ?? "none"}</Badge>
                       </div>
                     </td>
                     <td>{outbound.address ? `${outbound.address}:${outbound.port ?? "—"}` : "direct"}</td>

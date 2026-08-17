@@ -54,6 +54,63 @@ fn default_adaptive_tuning_max_hysteria2_mbps() -> u64 {
     1000
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RealityClientValues {
+    pub source: String,
+    pub tag: Option<String>,
+    pub address: Option<String>,
+    pub port: Option<u16>,
+    pub uuid: Option<String>,
+    pub private_key: Option<String>,
+    pub public_key: String,
+    pub short_id: String,
+    pub server_name: String,
+    pub dest: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RealityGeneratedValues {
+    pub private_key: String,
+    pub public_key: String,
+    pub short_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsServerValues {
+    pub source: String,
+    pub tag: Option<String>,
+    pub port: Option<u16>,
+    pub server_name: Option<String>,
+    pub alpn: Vec<String>,
+    pub certificate_file: Option<String>,
+    pub key_file: Option<String>,
+    pub allow_insecure: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsSelfSignedInput {
+    pub server_name: String,
+    #[serde(default = "default_tls_self_signed_days")]
+    pub days: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsSelfSignedResult {
+    pub server_name: String,
+    pub certificate_file: String,
+    pub key_file: String,
+    pub days: u16,
+}
+
+fn default_tls_self_signed_days() -> i64 {
+    365
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
@@ -84,6 +141,10 @@ pub struct Inbound {
     pub enabled: bool,
     pub transport: String,
     pub security: String,
+    pub settings: String,
+    pub stream_settings: String,
+    pub sniffing: String,
+    pub limits: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,9 +155,18 @@ pub struct InboundInput {
     pub port: u16,
     pub protocol: String,
     pub enabled: bool,
+    #[serde(default = "default_transport")]
     pub transport: String,
     #[serde(default = "default_security")]
     pub security: String,
+    #[serde(default)]
+    pub settings: Option<String>,
+    #[serde(default)]
+    pub stream_settings: Option<String>,
+    #[serde(default)]
+    pub sniffing: Option<String>,
+    #[serde(default)]
+    pub limits: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -110,6 +180,8 @@ pub struct Outbound {
     pub port: Option<u16>,
     pub transport: String,
     pub security: String,
+    pub settings: String,
+    pub stream_settings: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +196,10 @@ pub struct OutboundInput {
     pub transport: String,
     #[serde(default = "default_security")]
     pub security: String,
+    #[serde(default)]
+    pub settings: Option<String>,
+    #[serde(default)]
+    pub stream_settings: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -135,6 +211,7 @@ pub struct ManagedUser {
     pub uuid: String,
     pub flow: String,
     pub credential_kind: String,
+    pub credential: serde_json::Map<String, serde_json::Value>,
     pub method: Option<String>,
     pub note: String,
     pub enabled: bool,
@@ -155,6 +232,8 @@ pub struct UserInput {
     pub uuid: String,
     pub flow: Option<String>,
     pub credential_kind: Option<String>,
+    #[serde(default)]
+    pub credential: Option<serde_json::Map<String, serde_json::Value>>,
     pub password: Option<String>,
     pub method: Option<String>,
     pub auth: Option<String>,
@@ -273,6 +352,10 @@ impl From<InboundRecord> for Inbound {
             enabled: value.enabled,
             transport: value.transport,
             security: value.security,
+            settings: "{}".into(),
+            stream_settings: "{}".into(),
+            sniffing: "{}".into(),
+            limits: "{}".into(),
         }
     }
 }
@@ -288,6 +371,8 @@ impl From<OutboundRecord> for Outbound {
             port: value.port,
             transport: value.transport,
             security: value.security,
+            settings: "{}".into(),
+            stream_settings: "{}".into(),
         }
     }
 }
@@ -295,6 +380,13 @@ impl From<OutboundRecord> for Outbound {
 impl From<UserRecord> for ManagedUser {
     fn from(value: UserRecord) -> Self {
         let subscription_token = value.subscription_token;
+        let mut credential = serde_json::Map::new();
+        if let Some(uuid) = value.uuid.as_ref() {
+            credential.insert("id".into(), serde_json::Value::String(uuid.clone()));
+        }
+        if let Some(method) = value.method.as_ref() {
+            credential.insert("method".into(), serde_json::Value::String(method.clone()));
+        }
         Self {
             id: value.id,
             inbound_id: value.inbound_id,
@@ -302,6 +394,7 @@ impl From<UserRecord> for ManagedUser {
             uuid: value.uuid.unwrap_or_default(),
             flow: value.flow,
             credential_kind: value.credential_kind,
+            credential,
             method: value.method,
             note: value.note,
             enabled: value.enabled,

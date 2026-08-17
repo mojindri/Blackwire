@@ -114,6 +114,19 @@ fn api_router() -> Router<AppState> {
         )
         .route("/runtime/traffic", get(handlers::runtime_traffic))
         .route(
+            "/reality/client-values",
+            get(handlers::reality_client_values),
+        )
+        .route(
+            "/reality/generate-values",
+            post(handlers::reality_generate_values),
+        )
+        .route("/tls/server-values", get(handlers::tls_server_values))
+        .route(
+            "/tls/generate-self-signed",
+            post(handlers::tls_generate_self_signed),
+        )
+        .route(
             "/routing-dns",
             get(handlers::get_routing_dns).put(handlers::update_routing_dns),
         )

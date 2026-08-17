@@ -1,36 +1,568 @@
-import { Save, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertCircle, Save, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CapabilityMap, Outbound, OutboundInput } from "../../lib/types";
+import {
+  buildOutboundInput,
+  createOutboundEditorState,
+  outboundSummary,
+  syncOutboundAfterStructuredChange,
+  validateOutboundState,
+  type OutboundEditorState
+} from "../../lib/outboundConfigurator";
 import { Button } from "../atoms/Button";
 import { IconButton } from "../atoms/IconButton";
 import { Input, Select } from "../atoms/Input";
 import { Switch } from "../atoms/Switch";
 import { Field } from "../molecules/Field";
 
-const emptyOutbound: OutboundInput = { tag: "", protocol: "freedom", enabled: true, address: null, port: null, transport: "tcp", security: "none" };
+type TabKey = "basic" | "protocol" | "transport" | "security";
 
-export function OutboundDrawer({ editing, capabilities, busy, onClose, onCreate, onUpdate, onDelete }: {
-  editing: Outbound | null; capabilities: CapabilityMap | null; busy: boolean; onClose: () => void;
-  onCreate: (input: OutboundInput) => void; onUpdate: (id: number, input: OutboundInput) => void; onDelete: (id: number) => void;
+const hysteria2SimpleModes = new Set(["standard", "brutal-compatible", "badnet-low-latency"]);
+const tabOrder: Array<{ key: TabKey; label: string }> = [
+  { key: "basic", label: "Basic" },
+  { key: "protocol", label: "Protocol" },
+  { key: "transport", label: "Transport" },
+  { key: "security", label: "Security" }
+];
+
+function hysteria2HasCustomTuning(state: OutboundEditorState): boolean {
+  return (
+    !hysteria2SimpleModes.has(state.hysteria2CongestionMode) ||
+    state.hysteria2MinAckRate !== "0.8" ||
+    state.hysteria2MaxQueueDelayMs !== "80" ||
+    state.hysteria2PacingGain !== "1.25" ||
+    !state.hysteria2LossCompensation ||
+    state.hysteria2EndpointShards !== "1" ||
+    state.hysteria2QuicReusePort ||
+    state.hysteria2QuicEndpoints !== "1" ||
+    state.hysteria2QuicRecvBufferBytes !== "8388608" ||
+    state.hysteria2QuicSendBufferBytes !== "8388608" ||
+    state.hysteria2DatagramEnabled ||
+    !state.hysteria2DatagramUdpOverDatagram ||
+    state.hysteria2DatagramPolicy !== "standard" ||
+    state.hysteria2FecMode !== "off" ||
+    state.hysteria2FecMaxOverheadPercent.trim() !== ""
+  );
+}
+
+export function OutboundDrawer({
+  editing,
+  capabilities,
+  busy,
+  onClose,
+  onCreate,
+  onUpdate,
+  onDelete
+}: {
+  editing: Outbound | null;
+  capabilities: CapabilityMap | null;
+  busy: boolean;
+  onClose: () => void;
+  onCreate: (input: OutboundInput) => void;
+  onUpdate: (id: number, input: OutboundInput) => void;
+  onDelete: (id: number) => void;
 }) {
-  const [form, setForm] = useState<OutboundInput>(emptyOutbound);
-  useEffect(() => { setForm(editing ? { tag: editing.tag, protocol: editing.protocol, enabled: editing.enabled, address: editing.address, port: editing.port, transport: editing.transport, security: editing.security } : emptyOutbound); }, [editing]);
-  const valid = form.tag.trim() !== "" && (form.protocol === "freedom" || Boolean(form.address?.trim()));
-  const save = () => { if (!valid || busy) return; editing ? onUpdate(editing.id, form) : onCreate(form); onClose(); };
+  const [activeTab, setActiveTab] = useState<TabKey>("basic");
+  const [state, setState] = useState<OutboundEditorState>(() => createOutboundEditorState(editing));
+  const stateRef = useRef(state);
 
-  return <aside className="drawer">
-    <div className="drawer-head"><div><h2>{editing ? editing.tag : "New outbound"}</h2><p>Typed destination settings stored in a relational revision.</p></div><IconButton label="Close" onClick={onClose}><X size={18} /></IconButton></div>
-    <div className="drawer-body">
-      <section className="drawer-card"><div className="summary-head"><strong>{form.tag || "Untitled outbound"}</strong><Switch checked={form.enabled} onChange={(enabled) => setForm({ ...form, enabled })} label={form.enabled ? "Enabled" : "Disabled"} /></div></section>
-      <section className="drawer-card configurator-grid">
-        <Field label="Tag"><Input value={form.tag} onChange={(event) => setForm({ ...form, tag: event.target.value })} /></Field>
-        <Field label="Protocol"><Select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value })}>{(capabilities?.protocols ?? []).filter((item) => ["freedom", "vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic"].includes(item.key)).map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</Select></Field>
-        {form.protocol !== "freedom" ? <><Field label="Server address"><Input value={form.address ?? ""} onChange={(event) => setForm({ ...form, address: event.target.value })} /></Field><Field label="Server port"><Input type="number" min={1} max={65535} value={form.port ?? ""} onChange={(event) => setForm({ ...form, port: event.target.value ? Number(event.target.value) : null })} /></Field></> : null}
-        <Field label="Transport"><Select value={form.transport} onChange={(event) => setForm({ ...form, transport: event.target.value })}>{(capabilities?.transports ?? []).filter((item) => ["tcp", "ws", "grpc", "httpupgrade", "splithttp", "quic", "kcp"].includes(item.key)).map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</Select></Field>
-        <Field label="Security"><Select value={form.security} onChange={(event) => setForm({ ...form, security: event.target.value })}>{(capabilities?.security ?? []).map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</Select></Field>
-      </section>
-      <p className="field-hint">Exclusive bindings stay pending until a maintenance activation is confirmed.</p>
-    </div>
-    <div className="drawer-actions">{editing ? <Button variant="danger" icon={<Trash2 size={16} />} disabled={busy} onClick={() => onDelete(editing.id)}>Delete</Button> : <span />}<Button variant="primary" icon={<Save size={16} />} disabled={!valid || busy} loading={busy} onClick={save}>Save revision</Button></div>
-  </aside>;
+  useEffect(() => {
+    const next = createOutboundEditorState(editing);
+    stateRef.current = next;
+    setState(next);
+    setActiveTab("basic");
+  }, [editing]);
+
+  const protocolOptions = useMemo(
+    () =>
+      capabilities?.protocols.filter((item) =>
+        ["freedom", "vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic"].includes(item.key)
+      ) ?? [
+        { key: "freedom", label: "Freedom", status: "supported", notes: "" },
+        { key: "vless", label: "VLESS", status: "supported", notes: "" },
+        { key: "vmess", label: "VMess", status: "supported", notes: "" },
+        { key: "trojan", label: "Trojan", status: "supported", notes: "" },
+        { key: "shadowsocks", label: "Shadowsocks", status: "supported", notes: "" },
+        { key: "hysteria2", label: "Hysteria2", status: "supported", notes: "" },
+        { key: "tuic", label: "TUIC v5", status: "supported", notes: "QUIC v5 TCP and UDP" }
+      ],
+    [capabilities]
+  );
+  const transportOptions = useMemo(
+    () => {
+      const visible =
+        capabilities?.transports.filter((item) =>
+          ["tcp", "ws", "grpc", "httpupgrade", "splithttp", "quic"].includes(item.key)
+        ) ?? [
+          { key: "tcp", label: "TCP", status: "supported", notes: "" },
+          { key: "ws", label: "WebSocket", status: "supported", notes: "" },
+          { key: "grpc", label: "gRPC", status: "supported", notes: "" },
+          { key: "httpupgrade", label: "HTTPUpgrade", status: "supported", notes: "" },
+          { key: "splithttp", label: "SplitHTTP", status: "supported", notes: "" },
+          { key: "quic", label: "QUIC", status: "supported", notes: "" }
+        ];
+      const current = capabilities?.transports.find((item) => item.key === state.network);
+      if (current && !visible.some((item) => item.key === current.key)) {
+        return [...visible, current];
+      }
+      if (!current && state.network && !visible.some((item) => item.key === state.network)) {
+        return [...visible, { key: state.network, label: state.network, status: "deprecated", notes: "Legacy transport retained for editing existing configs" }];
+      }
+      return visible;
+    },
+    [capabilities, state.network]
+  );
+  const securityOptions = useMemo(
+    () =>
+      capabilities?.security.filter((item) => ["none", "tls", "reality"].includes(item.key)) ?? [
+        { key: "none", label: "No security", status: "supported", notes: "" },
+        { key: "tls", label: "TLS", status: "supported", notes: "" },
+        { key: "reality", label: "REALITY", status: "supported", notes: "" }
+      ],
+    [capabilities]
+  );
+
+  const currentSummary = editing ? outboundSummary(editing) : { network: state.network, security: state.security, detail: "" };
+  const jsonErrors = [state.settings, state.streamSettings].filter((slice) => slice.error);
+  const validationIssues = validateOutboundState(state);
+  const saveDisabled = busy || jsonErrors.length > 0 || validationIssues.length > 0;
+  const hysteria2CustomTuning = state.protocol === "hysteria2" && hysteria2HasCustomTuning(state);
+
+  const updateStructured = (patch: Partial<OutboundEditorState>) => {
+    const next = syncOutboundAfterStructuredChange({ ...stateRef.current, ...patch });
+    stateRef.current = next;
+    setState(next);
+  };
+
+  const updateHysteria2PerformanceMode = (value: string) => {
+    if (value === "custom") {
+      const current = stateRef.current;
+      updateStructured({
+        hysteria2CongestionMode: hysteria2SimpleModes.has(current.hysteria2CongestionMode)
+          ? "badnet-throughput"
+          : current.hysteria2CongestionMode
+      });
+      return;
+    }
+    updateStructured({
+      hysteria2CongestionMode: value,
+      hysteria2EndpointShards: "1",
+      hysteria2MinAckRate: "0.8",
+      hysteria2MaxQueueDelayMs: "80",
+      hysteria2PacingGain: "1.25",
+      hysteria2LossCompensation: true,
+      hysteria2QuicReusePort: false,
+      hysteria2QuicEndpoints: "1",
+      hysteria2QuicRecvBufferBytes: "8388608",
+      hysteria2QuicSendBufferBytes: "8388608",
+      hysteria2DatagramEnabled: false,
+      hysteria2DatagramUdpOverDatagram: true,
+      hysteria2DatagramPolicy: "standard",
+      hysteria2FecMode: "off",
+      hysteria2FecMaxOverheadPercent: ""
+    });
+  };
+
+  const submit = () => {
+    const latest = stateRef.current;
+    const latestJsonErrors = [latest.settings, latest.streamSettings].filter((slice) => slice.error);
+    if (busy || latestJsonErrors.length > 0 || validateOutboundState(latest).length > 0) return;
+    const input = buildOutboundInput(latest);
+    if (editing) onUpdate(editing.id, input);
+    else onCreate(input);
+    onClose();
+  };
+
+  return (
+    <aside className="drawer drawer-wide">
+      <div className="drawer-head">
+        <div>
+          <h2>{editing ? editing.tag : "New outbound"}</h2>
+          <p>
+            {editing
+              ? "Structured outbound configuration with protocol-aware typed fields."
+              : "Create a new outbound with guided protocol, transport, and security settings."}
+          </p>
+        </div>
+        <IconButton label="Close" onClick={onClose}>
+          <X size={18} />
+        </IconButton>
+      </div>
+      <div className="drawer-body drawer-body-configurator">
+        <section className="drawer-card drawer-summary-card">
+          <div className="summary-head">
+            <div>
+              <strong>{state.tag || "Untitled outbound"}</strong>
+              <span>{currentSummary.detail || "No destination configured yet"}</span>
+            </div>
+            <Switch checked={state.enabled} onChange={(enabled) => updateStructured({ enabled })} label={state.enabled ? "Enabled" : "Disabled"} />
+          </div>
+          <div className="summary-badges">
+            <span className="summary-chip">{state.protocol}</span>
+            <span className="summary-chip">{state.network}</span>
+            <span className="summary-chip">{state.security}</span>
+            {currentSummary.detail ? <span className="summary-chip summary-chip-soft">{currentSummary.detail}</span> : null}
+          </div>
+        </section>
+
+        <div className="configurator-tabs" role="tablist" aria-label="Outbound editor sections">
+          {tabOrder.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              className={`configurator-tab ${activeTab === tab.key ? "configurator-tab-active" : ""}`}
+              onClick={() => setActiveTab(tab.key)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === "basic" ? (
+          <section className="drawer-card configurator-section">
+            <div className="configurator-grid">
+              <Field label="Tag">
+                <Input value={state.tag} onChange={(e) => updateStructured({ tag: e.target.value })} />
+              </Field>
+              <Field label="Protocol">
+                <Select value={state.protocol} onChange={(e) => updateStructured({ protocol: e.target.value })}>
+                  {protocolOptions.map((item) => (
+                    <option key={item.key} value={item.key} disabled={item.status === "unsupported"} title={item.notes}>
+                      {item.status === "supported" ? item.label : `${item.label} (${item.status})`}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+          </section>
+        ) : null}
+
+        {activeTab === "protocol" ? (
+          <section className="drawer-card configurator-section">
+            {state.protocol === "freedom" ? (
+              <>
+                <div className="configurator-grid">
+                  <Field label="IP strategy" hint="Prefer IPv4 keeps IPv6 fallback. IPv4 only blocks IPv6 domain results for VPSes with broken IPv6 egress.">
+                    <Select value={state.freedomIpStrategy} onChange={(e) => updateStructured({ freedomIpStrategy: e.target.value })}>
+                      <option value="auto">Auto</option>
+                      <option value="UseIP">Use IP</option>
+                      <option value="PreferIPv4">Prefer IPv4</option>
+                      <option value="PreferIPv6">Prefer IPv6</option>
+                      <option value="UseIPv4">IPv4 only</option>
+                      <option value="UseIPv6">IPv6 only</option>
+                    </Select>
+                  </Field>
+                  <Switch
+                    checked={state.freedomRejectIpv6Literal}
+                    onChange={(freedomRejectIpv6Literal) => updateStructured({ freedomRejectIpv6Literal })}
+                    label="Reject IPv6 literal destinations"
+                  />
+                </div>
+                <p className="field-hint">Use Prefer IPv4 first. If this VPS still times out on literal IPv6 destinations, enable the IPv6 literal guard.</p>
+              </>
+            ) : null}
+
+            {["vless", "vmess", "trojan", "shadowsocks"].includes(state.protocol) ? (
+              <div className="configurator-grid">
+                <Field label="Address">
+                <Input value={state.address} onChange={(e) => updateStructured({ address: e.target.value })} placeholder="1.2.3.4" />
+              </Field>
+              <Field label="Port">
+                <Input value={state.port} onChange={(e) => updateStructured({ port: e.target.value })} placeholder="443" />
+                </Field>
+              </div>
+            ) : null}
+
+            {state.protocol === "vless" || state.protocol === "vmess" ? (
+              <Field label="User ID" hint="Maps to settings.users[0].id. Any extra user keys in JSON are preserved.">
+                <Input value={state.userId} onChange={(e) => updateStructured({ userId: e.target.value })} placeholder="550e8400-e29b-41d4-a716-446655440000" />
+              </Field>
+            ) : null}
+
+            {state.protocol === "trojan" || state.protocol === "shadowsocks" ? (
+              <Field label="Password">
+                <Input value={state.password} onChange={(e) => updateStructured({ password: e.target.value })} placeholder="secret-password" />
+              </Field>
+            ) : null}
+
+            {state.protocol === "shadowsocks" ? (
+              <Field label="Method">
+                <Input value={state.method} onChange={(e) => updateStructured({ method: e.target.value })} placeholder="2022-blake3-aes-128-gcm" />
+              </Field>
+            ) : null}
+
+            {state.protocol === "hysteria2" || state.protocol === "tuic" ? (
+              <Field label="Server" hint={`Client-side ${state.protocol === "tuic" ? "TUIC v5" : "Hysteria2"} target, for example 127.0.0.1:443 or [::1]:443`}>
+                <Input value={state.server} onChange={(e) => updateStructured({ server: e.target.value })} placeholder="127.0.0.1:443" />
+              </Field>
+            ) : null}
+
+            {state.protocol === "hysteria2" ? (
+              <>
+                <div className="configurator-grid">
+                  <Field label="Auth">
+                    <Input value={state.hysteria2Auth} onChange={(e) => updateStructured({ hysteria2Auth: e.target.value })} placeholder="shared-secret" />
+                  </Field>
+                  <Field label="Server name" hint="SNI for the Hysteria2 TLS/QUIC connection.">
+                    <Input value={state.hysteria2ServerName} onChange={(e) => updateStructured({ hysteria2ServerName: e.target.value })} placeholder="example.com" />
+                  </Field>
+                  <Switch checked={state.hysteria2SkipCertVerify} onChange={(hysteria2SkipCertVerify) => updateStructured({ hysteria2SkipCertVerify })} label="Skip certificate verification" />
+                  <Field label="Performance mode" hint="Throughput restores the aggressive Hysteria2-style behavior; Balanced is conservative.">
+                    <Select
+                      value={hysteria2CustomTuning ? "custom" : state.hysteria2CongestionMode}
+                      onChange={(e) => updateHysteria2PerformanceMode(e.target.value)}
+                    >
+                      <option value="standard">Balanced</option>
+                      <option value="brutal-compatible">Throughput</option>
+                      <option value="badnet-low-latency">Low latency</option>
+                      <option value="custom">Custom</option>
+                    </Select>
+                  </Field>
+                </div>
+                {hysteria2CustomTuning ? (
+                  <div className="configurator-grid">
+                    <Field label="Congestion mode">
+                      <Select value={state.hysteria2CongestionMode} onChange={(e) => updateStructured({ hysteria2CongestionMode: e.target.value })}>
+                        <option value="standard">standard</option>
+                        <option value="brutal-compatible">brutal-compatible</option>
+                        <option value="badnet-throughput">badnet-throughput</option>
+                        <option value="badnet-low-latency">badnet-low-latency</option>
+                        <option value="nova-cc">nova-cc</option>
+                        <option value="auto-probe">auto-probe</option>
+                      </Select>
+                    </Field>
+                  <Field label="Endpoint shards" hint="Optional parallel QUIC endpoints, 1-64.">
+                    <Input value={state.hysteria2EndpointShards} onChange={(e) => updateStructured({ hysteria2EndpointShards: e.target.value })} placeholder="1" />
+                  </Field>
+                  <Field label="Min ACK rate">
+                    <Input value={state.hysteria2MinAckRate} onChange={(e) => updateStructured({ hysteria2MinAckRate: e.target.value })} placeholder="0.8" />
+                  </Field>
+                  <Field label="Max queue delay ms">
+                    <Input value={state.hysteria2MaxQueueDelayMs} onChange={(e) => updateStructured({ hysteria2MaxQueueDelayMs: e.target.value })} placeholder="80" />
+                  </Field>
+                  <Field label="Pacing gain">
+                    <Input value={state.hysteria2PacingGain} onChange={(e) => updateStructured({ hysteria2PacingGain: e.target.value })} placeholder="1.25" />
+                  </Field>
+                  <Switch checked={state.hysteria2LossCompensation} onChange={(hysteria2LossCompensation) => updateStructured({ hysteria2LossCompensation })} label="Loss compensation" />
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+
+            {state.protocol === "tuic" ? (
+              <div className="configurator-grid">
+                <Field label="UUID" hint="Maps to settings.uuid for TUIC v5 authentication.">
+                  <Input value={state.userId} onChange={(e) => updateStructured({ userId: e.target.value })} placeholder="550e8400-e29b-41d4-a716-446655440000" />
+                </Field>
+                <Field label="Password">
+                  <Input value={state.password} onChange={(e) => updateStructured({ password: e.target.value })} placeholder="secret-password" />
+                </Field>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        {activeTab === "transport" ? (
+          <section className="drawer-card configurator-section">
+            <div className="configurator-grid">
+              <Field label="Network">
+                <Select value={state.network} onChange={(e) => updateStructured({ network: e.target.value })}>
+                  {transportOptions.map((item) => (
+                    <option key={item.key} value={item.key}>
+                      {item.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+
+            {state.network === "ws" ? (
+              <div className="configurator-grid">
+                <Field label="Path">
+                  <Input value={state.wsPath} onChange={(e) => updateStructured({ wsPath: e.target.value })} placeholder="/proxy" />
+                </Field>
+                <Field label="Host header">
+                  <Input value={state.wsHost} onChange={(e) => updateStructured({ wsHost: e.target.value })} placeholder="edge.example.com" />
+                </Field>
+              </div>
+            ) : null}
+
+            {state.network === "grpc" ? (
+              <Field label="Service name">
+                <Input value={state.grpcServiceName} onChange={(e) => updateStructured({ grpcServiceName: e.target.value })} placeholder="GunService" />
+              </Field>
+            ) : null}
+
+            {state.network === "httpupgrade" ? (
+              <div className="configurator-grid">
+                <Field label="Path">
+                  <Input value={state.httpupgradePath} onChange={(e) => updateStructured({ httpupgradePath: e.target.value })} placeholder="/upgrade" />
+                </Field>
+                <Field label="Host">
+                  <Input value={state.httpupgradeHost} onChange={(e) => updateStructured({ httpupgradeHost: e.target.value })} placeholder="edge.example.com" />
+                </Field>
+              </div>
+            ) : null}
+
+            {state.network === "splithttp" ? (
+              <Field label="Path">
+                <Input value={state.splitHttpPath} onChange={(e) => updateStructured({ splitHttpPath: e.target.value })} placeholder="/packet" />
+              </Field>
+            ) : null}
+
+            {state.network === "kcp" ? (
+              <div className="configurator-grid">
+                <Field label="Header">
+                  <Input value={state.kcpHeader} onChange={(e) => updateStructured({ kcpHeader: e.target.value })} placeholder="srtp" />
+                </Field>
+                <Field label="MTU">
+                  <Input value={state.kcpMtu} onChange={(e) => updateStructured({ kcpMtu: e.target.value })} placeholder="1350" />
+                </Field>
+                <Field label="TTI">
+                  <Input value={state.kcpTti} onChange={(e) => updateStructured({ kcpTti: e.target.value })} placeholder="20" />
+                </Field>
+                <Field label="Uplink capacity">
+                  <Input value={state.kcpUplinkCapacity} onChange={(e) => updateStructured({ kcpUplinkCapacity: e.target.value })} placeholder="5" />
+                </Field>
+                <Field label="Downlink capacity">
+                  <Input value={state.kcpDownlinkCapacity} onChange={(e) => updateStructured({ kcpDownlinkCapacity: e.target.value })} placeholder="20" />
+                </Field>
+                <Field label="Read buffer size">
+                  <Input value={state.kcpReadBufferSize} onChange={(e) => updateStructured({ kcpReadBufferSize: e.target.value })} placeholder="2" />
+                </Field>
+                <Field label="Write buffer size">
+                  <Input value={state.kcpWriteBufferSize} onChange={(e) => updateStructured({ kcpWriteBufferSize: e.target.value })} placeholder="2" />
+                </Field>
+                <Switch checked={state.kcpCongestion} onChange={(kcpCongestion) => updateStructured({ kcpCongestion })} label="Enable congestion control" />
+              </div>
+            ) : null}
+
+            {state.network === "quic" ? (
+              <p className="field-hint">QUIC transport uses the runtime defaults. Hysteria2 exposes its additional socket tuning as typed controls below.</p>
+            ) : null}
+
+            {hysteria2CustomTuning ? (
+              <>
+                <p className="field-hint">Custom Hysteria2 transport tuning is active for this outbound.</p>
+                <div className="configurator-grid">
+                  <Switch checked={state.hysteria2QuicReusePort} onChange={(hysteria2QuicReusePort) => updateStructured({ hysteria2QuicReusePort })} label="QUIC reuse port" />
+                  <Field label="QUIC endpoints" hint="Number or cpu. Leave empty for default.">
+                    <Input value={state.hysteria2QuicEndpoints} onChange={(e) => updateStructured({ hysteria2QuicEndpoints: e.target.value })} placeholder="1" />
+                  </Field>
+                  <Field label="Receive buffer bytes">
+                    <Input value={state.hysteria2QuicRecvBufferBytes} onChange={(e) => updateStructured({ hysteria2QuicRecvBufferBytes: e.target.value })} placeholder="16777216" />
+                  </Field>
+                  <Field label="Send buffer bytes">
+                    <Input value={state.hysteria2QuicSendBufferBytes} onChange={(e) => updateStructured({ hysteria2QuicSendBufferBytes: e.target.value })} placeholder="16777216" />
+                  </Field>
+                </div>
+                <div className="configurator-grid">
+                  <Switch checked={state.hysteria2DatagramEnabled} onChange={(hysteria2DatagramEnabled) => updateStructured({ hysteria2DatagramEnabled })} label="Enable datagram UDP relay" />
+                  <Switch checked={state.hysteria2DatagramUdpOverDatagram} onChange={(hysteria2DatagramUdpOverDatagram) => updateStructured({ hysteria2DatagramUdpOverDatagram })} label="UDP over datagram" />
+                  <Field label="Datagram policy">
+                    <Select value={state.hysteria2DatagramPolicy} onChange={(e) => updateStructured({ hysteria2DatagramPolicy: e.target.value })}>
+                      <option value="standard">standard</option>
+                      <option value="h2-plus">h2-plus</option>
+                    </Select>
+                  </Field>
+                  <Field label="FEC mode">
+                    <Select value={state.hysteria2FecMode} onChange={(e) => updateStructured({ hysteria2FecMode: e.target.value })}>
+                      <option value="off">off</option>
+                      <option value="auto">auto</option>
+                      <option value="xor1-of-n">xor1-of-n</option>
+                      <option value="reed-solomon">reed-solomon</option>
+                      <option value="raptor-like">raptor-like</option>
+                    </Select>
+                  </Field>
+                  <Field label="FEC overhead percent">
+                    <Input value={state.hysteria2FecMaxOverheadPercent} onChange={(e) => updateStructured({ hysteria2FecMaxOverheadPercent: e.target.value })} placeholder="20" />
+                  </Field>
+                </div>
+              </>
+            ) : null}
+          </section>
+        ) : null}
+
+        {activeTab === "security" ? (
+          <section className="drawer-card configurator-section">
+            <Field label="Security layer">
+              <Select value={state.security} onChange={(e) => updateStructured({ security: e.target.value })}>
+                {securityOptions.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            {state.security === "tls" ? (
+              <div className="configurator-grid">
+                <Field label="Server name">
+                  <Input value={state.tlsServerName} onChange={(e) => updateStructured({ tlsServerName: e.target.value })} placeholder="example.com" />
+                </Field>
+                <Field label="ALPN">
+                  <Input value={state.tlsAlpn} onChange={(e) => updateStructured({ tlsAlpn: e.target.value })} placeholder="h2, http/1.1" />
+                </Field>
+                <Field label="Certificate file">
+                  <Input value={state.tlsCertificateFile} onChange={(e) => updateStructured({ tlsCertificateFile: e.target.value })} placeholder="/etc/blackwire/fullchain.pem" />
+                </Field>
+                <Field label="Key file">
+                  <Input value={state.tlsKeyFile} onChange={(e) => updateStructured({ tlsKeyFile: e.target.value })} placeholder="/etc/blackwire/privkey.pem" />
+                </Field>
+              </div>
+            ) : null}
+
+            {state.security === "reality" ? (
+              <div className="configurator-grid">
+                <Field label="Server name">
+                  <Input value={state.realityServerName} onChange={(e) => updateStructured({ realityServerName: e.target.value })} placeholder="www.cloudflare.com" />
+                </Field>
+                <Field label="Public key">
+                  <Input value={state.realityPublicKey} onChange={(e) => updateStructured({ realityPublicKey: e.target.value })} placeholder="base64-x25519-public-key" />
+                </Field>
+                <Field label="Short ID">
+                  <Input value={state.realityShortId} onChange={(e) => updateStructured({ realityShortId: e.target.value })} placeholder="6ba85179e30d4fc2" />
+                </Field>
+                <Field label="Fingerprint">
+                  <Input value={state.realityFingerprint} onChange={(e) => updateStructured({ realityFingerprint: e.target.value })} placeholder="chrome" />
+                </Field>
+                <Field label="Spider X">
+                  <Input value={state.realitySpiderX} onChange={(e) => updateStructured({ realitySpiderX: e.target.value })} placeholder="/" />
+                </Field>
+              </div>
+            ) : null}
+
+            {state.security === "none" ? <p className="field-hint">No extra security wrapper. TLS or REALITY is usually the better fit for remote proxy outbounds.</p> : null}
+          </section>
+        ) : null}
+
+        {jsonErrors.length > 0 ? (
+          <div className="error-line inline-error">
+            <AlertCircle size={15} />
+            <span>The stored typed configuration is invalid and cannot be saved safely.</span>
+          </div>
+        ) : null}
+        {validationIssues.length > 0 ? (
+          <div className="error-line inline-error">
+            <AlertCircle size={15} />
+            <span>{validationIssues[0].message}</span>
+          </div>
+        ) : null}
+      </div>
+      <div className="drawer-foot">
+        {editing ? (
+          <Button variant="danger" icon={<Trash2 size={16} />} onClick={() => onDelete(editing.id)} loading={busy}>
+            Delete
+          </Button>
+        ) : (
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+        )}
+        <Button variant="primary" icon={<Save size={16} />} onClick={submit} loading={busy} disabled={saveDisabled}>
+          Save Outbound
+        </Button>
+      </div>
+    </aside>
+  );
 }
