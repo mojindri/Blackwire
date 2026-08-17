@@ -5,9 +5,8 @@
 #   systemctl daemon-reload
 #   systemctl enable --now blackwire
 #
-# Configuration:
-#   Edit /etc/blackwire/config.json to configure the proxy.
-#   Run `systemctl reload blackwire` after changes (sends SIGHUP for hot-reload).
+# Configuration is stored in MySQL. Provision the protected database-url
+# systemd credential and run `blackwire db migrate` before starting.
 #
 # Logs:
 #   journalctl -u blackwire -f
@@ -23,12 +22,8 @@ Wants=network-online.target
 User=nobody
 Group=black-ui
 
-# The binary and config file paths.
-ExecStart=/usr/local/bin/blackwire run -c /etc/blackwire/config.json
-
-# Send SIGHUP to trigger a hot config reload (reload users, routing rules, etc.)
-# without stopping the process or dropping existing connections.
-ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=/usr/local/bin/blackwire run
+LoadCredential=database-url:/etc/blackwire/database-url
 
 # Working directory (for relative paths in config).
 WorkingDirectory=/var/lib/blackwire

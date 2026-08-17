@@ -1,0 +1,18 @@
+[package]
+name = "blackwire-store"
+description = "MySQL-backed configuration and control-plane persistence for Blackwire."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+blackwire-config = { path = "../blackwire-config" }
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true

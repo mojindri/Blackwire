@@ -51,6 +51,28 @@ pub struct ConfigManager {
 }
 
 impl ConfigManager {
+    /// Create a manager from a typed configuration supplied by a durable store.
+    pub fn from_config(config: Config) -> Arc<Self> {
+        let config = Arc::new(config);
+        let (reload_tx, _) = watch::channel(Arc::clone(&config));
+        Arc::new(Self {
+            current: ArcSwap::from(config),
+            path: PathBuf::new(),
+            reload_tx,
+        })
+    }
+
+    /// Atomically publish a validated typed configuration revision.
+    pub fn replace(&self, config: Config) -> anyhow::Result<()> {
+        config
+            .validate()
+            .map_err(|e| anyhow::anyhow!("config validation error: {e}"))?;
+        let config = Arc::new(config);
+        self.current.store(Arc::clone(&config));
+        let _ = self.reload_tx.send(config);
+        Ok(())
+    }
+
     /// Load a config file from `path`, validate it, and return a manager
     /// ready to watch for changes.
     ///

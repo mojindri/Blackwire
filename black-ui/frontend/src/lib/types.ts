@@ -1,9 +1,6 @@
-export type PageKey = "dashboard" | "users" | "inbounds" | "outbounds" | "sections" | "config" | "service" | "settings";
+export type PageKey = "dashboard" | "users" | "inbounds" | "outbounds" | "sections" | "service" | "settings";
 
 export interface Settings {
-  configPath: string;
-  grpcEnabled: boolean;
-  grpcAddress: string;
   firewallAutoOpen: boolean;
   publicBaseUrl: string;
   subscriptionHost: string;
@@ -18,15 +15,18 @@ export interface Settings {
 
 export interface Status {
   setupRequired: boolean;
-  configPath: string;
-  grpcEnabled: boolean;
-  grpcAddress: string;
+  databaseConnected: boolean;
+  schemaVersion: number;
+  desiredRevision: number;
+  activeRevision: number | null;
+  pendingMaintenanceRevision: number | null;
+  activationState: "active" | "activating" | "pendingMaintenance" | "failed";
+  lastActivationError: string | null;
   grpcReachable: boolean;
   inbounds: number;
   outbounds: number;
   users: number;
   activeUsers: number;
-  runCommand: string;
 }
 
 export interface RealityClientValues {
@@ -79,12 +79,7 @@ export interface Inbound {
   protocol: string;
   enabled: boolean;
   transport: string;
-  settings: string;
-  streamSettings: string;
-  sniffing: string;
-  limits: string;
-  createdAt: string;
-  updatedAt: string;
+  security: string;
 }
 
 export interface InboundInput {
@@ -94,10 +89,7 @@ export interface InboundInput {
   protocol: string;
   enabled: boolean;
   transport: string;
-  settings?: string;
-  streamSettings?: string;
-  sniffing?: string;
-  limits?: string;
+  security: string;
 }
 
 export interface Outbound {
@@ -105,25 +97,20 @@ export interface Outbound {
   tag: string;
   protocol: string;
   enabled: boolean;
-  settings: string;
-  streamSettings: string;
-  createdAt: string;
-  updatedAt: string;
+  address: string | null;
+  port: number | null;
+  transport: string;
+  security: string;
 }
 
 export interface OutboundInput {
   tag: string;
   protocol: string;
   enabled: boolean;
-  settings?: string;
-  streamSettings?: string;
-}
-
-export interface ConfigSection {
-  name: string;
-  enabled: boolean;
-  value: string;
-  updatedAt: string;
+  address: string | null;
+  port: number | null;
+  transport: string;
+  security: string;
 }
 
 export interface ManagedUser {
@@ -132,17 +119,17 @@ export interface ManagedUser {
   email: string;
   uuid: string;
   flow: string;
-  credential: Record<string, unknown>;
+  credentialKind: string;
+  method: string | null;
   note: string;
   enabled: boolean;
   trafficLimitBytes: number | null;
   expiryAt: string | null;
+  subscriptionToken: string;
+  subToken: string;
   uploadBytes: number;
   downloadBytes: number;
-  subToken: string;
   enforcementStatus: string;
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface UserInput {
@@ -150,7 +137,11 @@ export interface UserInput {
   email: string;
   uuid: string;
   flow?: string;
-  credential?: Record<string, unknown>;
+  credentialKind?: string;
+  password?: string;
+  method?: string;
+  auth?: string;
+  subscriptionToken?: string;
   note?: string;
   enabled: boolean;
   trafficLimitBytes?: number | null;
@@ -163,9 +154,11 @@ export interface LoginResponse {
 }
 
 export interface ApplyResult {
-  configValid: boolean;
-  configWritten: boolean;
-  liveApplied: boolean;
+  revision: number;
+  parentRevision: number;
+  activeRevision: number | null;
+  state: "active" | "activating" | "pendingMaintenance" | "failed";
+  activationClass: "hotSwap" | "listenerHandover" | "maintenanceRequired";
   message: string;
 }
 
@@ -201,7 +194,6 @@ export interface AppData {
   settings: Settings | null;
   inbounds: Inbound[];
   outbounds: Outbound[];
-  sections: ConfigSection[];
   users: ManagedUser[];
   traffic: TrafficSnapshot;
   capabilities: CapabilityMap | null;

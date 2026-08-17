@@ -78,12 +78,8 @@ COPY --from=builder /build/target/release/blackwire /usr/local/bin/blackwire
 # These are optional — the router works without them.
 COPY --from=builder /build/fingerprints/ /usr/local/share/blackwire/fingerprints/
 
-# The config file is mounted at runtime via a Docker volume or bind mount.
-# Example: docker run -v /host/config.json:/etc/blackwire/config.json blackwire
-VOLUME ["/etc/blackwire"]
-
 # Expose proxy port and metrics port.
 EXPOSE 443 8080
 
 ENTRYPOINT ["/usr/local/bin/blackwire"]
-CMD ["run", "-c", "/etc/blackwire/config.json"]
+CMD ["run"]

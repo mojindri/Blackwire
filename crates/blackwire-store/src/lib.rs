@@ -1,0 +1,22 @@
+//! MySQL-only persistence for Blackwire's configuration control plane.
+//!
+//! This crate is the sole owner of production configuration SQL. Runtime,
+//! command-line, and panel code consume typed snapshots and revision results
+//! instead of reading configuration files or issuing ad-hoc queries.
+
+mod connection;
+mod error;
+mod panel;
+mod revision;
+mod resources;
+mod snapshot;
+
+pub use connection::{Database, DatabaseOptions, EXPECTED_SCHEMA_VERSION};
+pub use error::{StoreError, StoreResult};
+pub use panel::{AdminRecord, PanelSettings};
+pub use revision::{
+    ActivationClass, ActivationState, ConfigurationState, MutationResult, Revision,
+    RevisionSummary,
+};
+pub use snapshot::StoredConfig;
+pub use resources::{InboundRecord, InboundWrite, OutboundRecord, OutboundWrite, UserRecord, UserWrite};

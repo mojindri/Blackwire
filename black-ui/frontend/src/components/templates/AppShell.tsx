@@ -11,7 +11,6 @@ export function AppShell({
   children,
   onPage,
   onRefresh,
-  onApply,
   onLogout
 }: {
   page: PageKey;
@@ -21,14 +20,13 @@ export function AppShell({
   children: ReactNode;
   onPage: (page: PageKey) => void;
   onRefresh: () => void;
-  onApply: () => void;
   onLogout: () => void;
 }) {
   return (
     <div className="app-shell">
       <AppSidebar page={page} onPage={onPage} />
       <main className="main">
-        <TopStatusStrip status={status} message={message} busy={busy} onRefresh={onRefresh} onApply={onApply} onLogout={onLogout} />
+        <TopStatusStrip status={status} message={message} busy={busy} onRefresh={onRefresh} onLogout={onLogout} />
         {children}
       </main>
     </div>

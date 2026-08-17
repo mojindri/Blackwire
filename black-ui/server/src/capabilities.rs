@@ -151,12 +151,7 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "supported",
                 "metrics/health HTTP listener",
             ),
-            item(
-                "api",
-                "gRPC API",
-                "supported",
-                "Handler and Stats service listener",
-            ),
+            item("api", "Runtime API", "supported", "Revision status and traffic operations"),
             item(
                 "profile",
                 "Runtime profile",
@@ -171,12 +166,7 @@ pub fn blackwire_capabilities() -> CapabilityMap {
             ),
         ],
         runtime: vec![
-            item(
-                "grpc-live-apply",
-                "gRPC live apply",
-                "supported",
-                "Native endpoint JSON through proxy_settings",
-            ),
+            item("revision-reconcile", "Revision reconciliation", "supported", "MySQL desired state is authoritative"),
             item(
                 "stats",
                 "Traffic stats",
