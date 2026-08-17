@@ -14,8 +14,9 @@ use crate::{
     capabilities,
     error::{ApiResult, AppError},
     models::{
-        ApplyResult, Inbound, InboundInput, LoginInput, LoginResponse, ManagedUser, Outbound,
-        OutboundInput, ServiceStatus, Settings, SetupInput, Status, TrafficSnapshot, UserInput,
+        ApplyResult, BulkUserInput, Inbound, InboundInput, LoginInput, LoginResponse, ManagedUser,
+        Outbound, OutboundInput, ServiceStatus, Settings, SetupInput, Status, TrafficSnapshot,
+        UserInput,
     },
     mysql_auth as auth,
     mysql_state::AppState,
@@ -376,6 +377,145 @@ pub async fn disable_user(
     Path(id): Path<i64>,
 ) -> ApiResult<ApplyResult> {
     set_user_enabled(&state, &headers, id, false).await
+}
+
+pub async fn reset_user_usage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<ManagedUser> {
+    auth::require(&headers, &state).await?;
+    state
+        .store
+        .reset_user_traffic(id)
+        .await
+        .map_err(store_error)?;
+    Ok(Json(load_user(&state, id).await?.into()))
+}
+
+pub async fn rotate_user_uuid(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<ApplyResult> {
+    auth::require(&headers, &state).await?;
+    let mut write = record_to_write(load_user(&state, id).await?);
+    write.uuid = Some(uuid::Uuid::new_v4().to_string());
+    Ok(Json(
+        state
+            .store
+            .save_user("black-ui", write)
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
+}
+
+pub async fn rotate_user_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<ManagedUser> {
+    auth::require(&headers, &state).await?;
+    let mut write = record_to_write(load_user(&state, id).await?);
+    write.subscription_token = util::random_token(24);
+    state
+        .store
+        .save_user("black-ui", write)
+        .await
+        .map_err(store_error)?;
+    Ok(Json(load_user(&state, id).await?.into()))
+}
+
+pub async fn bulk_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<BulkUserInput>,
+) -> ApiResult<ApplyResult> {
+    auth::require(&headers, &state).await?;
+    if input.user_ids.is_empty() {
+        return Err(AppError::bad_request("select at least one user"));
+    }
+    if input.action == "resetUsage" {
+        for id in input.user_ids {
+            state
+                .store
+                .reset_user_traffic(id)
+                .await
+                .map_err(store_error)?;
+        }
+        let current = state.store.state().await.map_err(store_error)?;
+        return Ok(Json(ApplyResult {
+            revision: current.desired_revision,
+            parent_revision: current.desired_revision,
+            active_revision: current.active_revision,
+            state: current.activation_state,
+            activation_class: blackwire_store::ActivationClass::HotSwap,
+            message: "Usage reset".into(),
+        }));
+    }
+    let expiry = input
+        .expiry_at
+        .as_deref()
+        .map(DateTime::parse_from_rfc3339)
+        .transpose()
+        .map_err(|_| AppError::bad_request("expiry must be RFC 3339"))?
+        .map(|value| value.with_timezone(&Utc));
+    let mut last = None;
+    for id in input.user_ids {
+        let mut write = record_to_write(load_user(&state, id).await?);
+        match input.action.as_str() {
+            "enable" => write.enabled = true,
+            "disable" => write.enabled = false,
+            "setTrafficLimit" => write.traffic_limit_bytes = input.traffic_limit_bytes,
+            "setExpiry" => write.expiry_at = expiry,
+            _ => return Err(AppError::bad_request("unsupported bulk action")),
+        }
+        last = Some(
+            state
+                .store
+                .save_user("black-ui", write)
+                .await
+                .map_err(store_error)?,
+        );
+    }
+    Ok(Json(last.expect("non-empty bulk operation").into()))
+}
+
+async fn load_user(state: &AppState, id: i64) -> Result<blackwire_store::UserRecord, AppError> {
+    let revision = state
+        .store
+        .state()
+        .await
+        .map_err(store_error)?
+        .desired_revision;
+    state
+        .store
+        .list_users(revision)
+        .await
+        .map_err(store_error)?
+        .into_iter()
+        .find(|user| user.id == id)
+        .ok_or_else(|| AppError::not_found("user not found"))
+}
+
+fn record_to_write(user: blackwire_store::UserRecord) -> UserWrite {
+    UserWrite {
+        id: Some(user.id),
+        inbound_id: user.inbound_id,
+        email: user.email,
+        enabled: user.enabled,
+        flow: user.flow,
+        note: user.note,
+        traffic_limit_bytes: user.traffic_limit_bytes,
+        expiry_at: user.expiry_at,
+        subscription_token: user.subscription_token,
+        credential_kind: user.credential_kind,
+        uuid: user.uuid,
+        password: None,
+        method: user.method,
+        auth: None,
+    }
 }
 
 async fn set_user_enabled(

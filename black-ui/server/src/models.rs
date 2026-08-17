@@ -167,6 +167,15 @@ pub struct UserInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BulkUserInput {
+    pub user_ids: Vec<i64>,
+    pub action: String,
+    pub traffic_limit_bytes: Option<i64>,
+    pub expiry_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetupInput {
     pub username: String,
     pub password: String,
