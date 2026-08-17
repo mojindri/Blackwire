@@ -228,6 +228,29 @@ impl Database {
         summary: &str,
         class: ActivationClass,
     ) -> StoreResult<(Transaction<'_, MySql>, i64)> {
+        const MAX_ATTEMPTS: u32 = 3;
+        for attempt in 1..=MAX_ATTEMPTS {
+            match self
+                .fork_revision_once(expected_revision, actor, summary, class)
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(error) if attempt < MAX_ATTEMPTS && is_retryable_transaction_error(&error) => {
+                    tokio::time::sleep(Duration::from_millis(20 * u64::from(attempt))).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("bounded revision retry loop always returns")
+    }
+
+    async fn fork_revision_once(
+        &self,
+        expected_revision: i64,
+        actor: &str,
+        summary: &str,
+        class: ActivationClass,
+    ) -> StoreResult<(Transaction<'_, MySql>, i64)> {
         let mut tx = self.begin_revision(expected_revision).await?;
         let revision =
             Self::create_revision_metadata(&mut tx, expected_revision, actor, summary, class)
@@ -392,6 +415,14 @@ impl Database {
         .await?;
         Ok(())
     }
+}
+
+fn is_retryable_transaction_error(error: &StoreError) -> bool {
+    matches!(
+        error,
+        StoreError::Sql(sqlx::Error::Database(database))
+            if matches!(database.code().as_deref(), Some("1205" | "1213"))
+    )
 }
 
 async fn execute_migration_script(
