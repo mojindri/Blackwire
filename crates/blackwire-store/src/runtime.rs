@@ -82,9 +82,9 @@ impl Database {
         &self,
     ) -> StoreResult<(Vec<UserTrafficRecord>, Vec<InboundTrafficRecord>)> {
         let revision = self.state().await?.desired_revision;
-        let users = sqlx::query("SELECT u.email,COALESCE(t.upload_bytes,0) upload_bytes,COALESCE(t.download_bytes,0) download_bytes FROM users u LEFT JOIN user_traffic t ON t.user_id=u.user_id WHERE u.revision_id=? ORDER BY u.email")
+        let users = sqlx::query("SELECT u.email,CAST(COALESCE(t.upload_bytes,0) AS UNSIGNED) upload_bytes,CAST(COALESCE(t.download_bytes,0) AS UNSIGNED) download_bytes FROM users u LEFT JOIN user_traffic t ON t.user_id=u.user_id WHERE u.revision_id=? ORDER BY u.email")
             .bind(revision).fetch_all(self.pool()).await?.into_iter().map(|row| Ok(UserTrafficRecord { email: row.try_get("email")?, upload_bytes: row.try_get("upload_bytes")?, download_bytes: row.try_get("download_bytes")? })).collect::<Result<_, sqlx::Error>>()?;
-        let inbounds = sqlx::query("SELECT i.tag,COALESCE(t.upload_bytes,0) upload_bytes,COALESCE(t.download_bytes,0) download_bytes FROM inbounds i LEFT JOIN inbound_traffic t ON t.inbound_id=i.inbound_id WHERE i.revision_id=? ORDER BY i.position")
+        let inbounds = sqlx::query("SELECT i.tag,CAST(COALESCE(t.upload_bytes,0) AS UNSIGNED) upload_bytes,CAST(COALESCE(t.download_bytes,0) AS UNSIGNED) download_bytes FROM inbounds i LEFT JOIN inbound_traffic t ON t.inbound_id=i.inbound_id WHERE i.revision_id=? ORDER BY i.position")
             .bind(revision).fetch_all(self.pool()).await?.into_iter().map(|row| Ok(InboundTrafficRecord { tag: row.try_get("tag")?, upload_bytes: row.try_get("upload_bytes")?, download_bytes: row.try_get("download_bytes")? })).collect::<Result<_, sqlx::Error>>()?;
         Ok((users, inbounds))
     }

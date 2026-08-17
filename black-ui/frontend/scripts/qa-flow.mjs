@@ -1,42 +1,28 @@
 import { spawn } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { chromium } from "playwright";
 
 const repoRoot = new URL("../../..", import.meta.url).pathname;
 const workDir = "/tmp/black-ui-qa-flow";
 const uiData = `${workDir}/ui-data`;
-const bwConfig = `${workDir}/blackwire.json`;
 const uiBase = "http://127.0.0.1:18094";
-const grpcAddress = "127.0.0.1:26294";
 const frontendDir = `${repoRoot}/black-ui/frontend`;
 const processes = [];
+const databaseUrl = process.env.BLACKWIRE_QA_DATABASE_URL;
 
 async function main() {
+  if (!databaseUrl) throw new Error("BLACKWIRE_QA_DATABASE_URL must point to an empty MySQL 8.4 database");
   await rm(workDir, { recursive: true, force: true });
   await mkdir(uiData, { recursive: true });
-  await writeFile(
-    bwConfig,
-    JSON.stringify(
-      {
-        api: { listen: grpcAddress },
-        log: { level: "info", json: false },
-        inbounds: [{ tag: "seed-socks", listen: "127.0.0.1", port: 26295, protocol: "socks" }],
-        outbounds: [{ tag: "freedom", protocol: "freedom", settings: {} }],
-        routing: { rules: [{ outboundTag: "freedom" }] }
-      },
-      null,
-      2
-    )
-  );
-
-  await run("cargo", ["run", "-q", "-p", "blackwire", "--", "test", "-c", bwConfig]);
+  const databaseEnv = { ...process.env, BLACKWIRE_DATABASE_URL: databaseUrl };
+  await run("cargo", ["run", "-q", "-p", "blackwire", "--", "db", "init"], { env: databaseEnv });
+  await run("cargo", ["run", "-q", "-p", "blackwire", "--", "db", "seed", "socks-local"], { env: databaseEnv });
   await run("npm", ["exec", "--", "vite", "build"], { cwd: frontendDir });
-  processes.push(spawn("cargo", ["run", "-q", "-p", "blackwire", "--", "run", "-c", bwConfig], { cwd: repoRoot }));
-  await waitForPort(26294);
+  processes.push(spawn("cargo", ["run", "-q", "-p", "blackwire", "--", "run"], { cwd: repoRoot, env: databaseEnv }));
   processes.push(
     spawn("cargo", ["run", "-q", "-p", "black-ui-server"], {
       cwd: repoRoot,
-      env: { ...process.env, BLACK_UI_DATA_DIR: uiData, BLACK_UI_LISTEN: "127.0.0.1:18094" }
+      env: { ...databaseEnv, BLACK_UI_DATA_DIR: uiData, BLACK_UI_LISTEN: "127.0.0.1:18094" }
     })
   );
   await waitForHttp(`${uiBase}/api/status`);
@@ -63,8 +49,6 @@ async function main() {
   await page.getByRole("heading", { name: "Users", exact: true }).waitFor();
 
   await nav(page, "Settings");
-  await page.getByLabel("Config path", { exact: true }).fill(`${uiData}/config.json`);
-  await page.getByLabel("gRPC address", { exact: true }).fill(grpcAddress);
   await page.getByLabel("Public base URL", { exact: true }).fill(uiBase);
   await page.getByLabel("Subscription host", { exact: true }).fill("127.0.0.1");
   await page.getByRole("button", { name: "Save Settings", exact: true }).click();
@@ -72,33 +56,19 @@ async function main() {
   await waitForIdle(page);
 
   await addInbound(page, "qa-main", "26320");
-  await addUser(page, "qa@example.com", "qa-main :26320");
-  await page.getByRole("button", { name: "qa@example.com", exact: true }).click();
-  await page.locator(".drawer").getByRole("button", { name: "Copy subscription content", exact: true }).click();
+  await addUser(page, "qa@example.com", "qa-main");
+  const userRow = page.locator("tr", { hasText: "qa@example.com" });
+  await userRow.getByRole("button", { name: "Copy subscription content", exact: true }).click();
   await page.getByText("Copied", { exact: true }).waitFor();
-  await page.locator(".drawer").getByRole("button", { name: "Rotate UUID", exact: true }).click();
-  await page.locator(".drawer").getByRole("button", { name: "Rotate token", exact: true }).click();
-  await page.locator(".drawer").getByRole("button", { name: "Close", exact: true }).click();
 
   await nav(page, "Inbounds");
-  await page.getByRole("button", { name: /qa-main/ }).click();
-  if (await page.getByRole("button", { name: "Delete", exact: true }).isEnabled()) {
-    throw new Error("last inbound delete button should be disabled");
-  }
-  await page.getByText("Create another inbound before deleting this one.").waitFor();
-  await page.locator(".drawer").getByRole("button", { name: "Close", exact: true }).click();
   await addInbound(page, "qa-delete", "26321");
   await page.getByRole("button", { name: /qa-delete/ }).click();
   await page.getByRole("button", { name: "Delete", exact: true }).click();
   await page.getByRole("button", { name: "qa-delete", exact: true }).waitFor({ state: "detached" });
 
-  await nav(page, "Config");
-  await page.getByRole("button", { name: "Validate", exact: true }).click();
-  await strip(page, /Config valid/);
-  await waitForIdle(page);
-  await page.getByRole("button", { name: "Apply", exact: true }).click();
-  await strip(page, /synchronized|saved/);
-  await waitForIdle(page);
+  await nav(page, "Runtime");
+  await page.getByText(/Revision history/i).waitFor();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload({ waitUntil: "networkidle" });
@@ -115,15 +85,11 @@ async function main() {
 async function addInbound(page, tag, port) {
   await nav(page, "Inbounds");
   await page.getByRole("button", { name: "New Inbound", exact: true }).click();
-  // Basic tab (default) — fill core fields
   await page.getByLabel("Tag", { exact: true }).fill(tag);
-  await page.getByLabel("Listen host", { exact: true }).fill("0.0.0.0");
+  await page.getByLabel("Listen address", { exact: true }).fill("127.0.0.1");
   await page.getByLabel("Port", { exact: true }).fill(port);
-  // Transport tab — pick network type
-  await page.getByRole("button", { name: "Transport", exact: true }).click();
-  await page.getByLabel("Network", { exact: true }).selectOption("ws");
-  await page.getByLabel("Path", { exact: true }).fill(`/${tag}`);
-  const saveButton = page.getByRole("button", { name: "Save Inbound", exact: true });
+  await page.getByLabel("Transport", { exact: true }).selectOption("tcp");
+  const saveButton = page.getByRole("button", { name: "Save revision", exact: true });
   if (await saveButton.isDisabled()) {
     const inlineErrors = await page.locator(".inline-error, .field-error").allTextContents();
     throw new Error(`Save Inbound is disabled for ${tag}: ${inlineErrors.join(" | ") || "no validation message found"}`);
@@ -143,10 +109,10 @@ async function addUser(page, email, inboundLabel) {
   );
   if (!inboundValue) throw new Error(`inbound option not found for ${inboundLabel}`);
   await inboundSelect.selectOption(inboundValue);
-  await page.getByLabel("Generate UUID", { exact: true }).click();
+  await page.getByRole("button", { name: "Generate", exact: true }).click();
   await page.waitForFunction(() => Array.from(document.querySelectorAll("input")).some((input) => input.value.includes("-")));
-  await page.getByRole("button", { name: "Save User", exact: true }).click();
-  await page.getByText(email, { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Save revision", exact: true }).click();
+  await page.locator("tr", { hasText: email }).waitFor({ timeout: 30000 });
 }
 
 async function nav(page, name) {
@@ -180,24 +146,6 @@ async function waitForHttp(url) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`timed out waiting for ${url}`);
-}
-
-async function waitForPort(port) {
-  const deadline = Date.now() + 30000;
-  while (Date.now() < deadline) {
-    try {
-      const socket = await import("node:net").then(({ createConnection }) => createConnection({ host: "127.0.0.1", port }));
-      await new Promise((resolve, reject) => {
-        socket.once("connect", resolve);
-        socket.once("error", reject);
-      });
-      socket.destroy();
-      return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-  }
-  throw new Error(`timed out waiting for port ${port}`);
 }
 
 async function run(command, args, options = {}) {
