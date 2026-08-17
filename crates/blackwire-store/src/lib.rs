@@ -9,6 +9,7 @@ mod error;
 mod panel;
 mod resources;
 mod revision;
+mod routing;
 mod runtime;
 mod snapshot;
 
@@ -22,5 +23,6 @@ pub use resources::{
 pub use revision::{
     ActivationClass, ActivationState, ConfigurationState, MutationResult, Revision, RevisionSummary,
 };
+pub use routing::{RouteWrite, RoutingDnsRecord, RoutingDnsWrite};
 pub use runtime::{InboundTrafficRecord, UserTrafficRecord};
 pub use snapshot::StoredConfig;

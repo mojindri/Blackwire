@@ -599,6 +599,42 @@ pub async fn runtime_traffic(
     }))
 }
 
+pub async fn get_routing_dns(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<blackwire_store::RoutingDnsRecord> {
+    auth::require(&headers, &state).await?;
+    let revision = state
+        .store
+        .state()
+        .await
+        .map_err(store_error)?
+        .desired_revision;
+    Ok(Json(
+        state
+            .store
+            .routing_dns(revision)
+            .await
+            .map_err(store_error)?,
+    ))
+}
+
+pub async fn update_routing_dns(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<blackwire_store::RoutingDnsWrite>,
+) -> ApiResult<ApplyResult> {
+    auth::require(&headers, &state).await?;
+    Ok(Json(
+        state
+            .store
+            .save_routing_dns("black-ui", input)
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
+}
+
 pub async fn revision_history(
     State(state): State<AppState>,
     headers: HeaderMap,

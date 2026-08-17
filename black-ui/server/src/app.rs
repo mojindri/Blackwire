@@ -113,6 +113,10 @@ fn api_router() -> Router<AppState> {
             get(handlers::get_settings).put(handlers::update_settings),
         )
         .route("/runtime/traffic", get(handlers::runtime_traffic))
+        .route(
+            "/routing-dns",
+            get(handlers::get_routing_dns).put(handlers::update_routing_dns),
+        )
         .route("/runtime/revisions", get(handlers::revision_history))
         .route("/runtime/rollback", post(handlers::rollback_revision))
         .route(

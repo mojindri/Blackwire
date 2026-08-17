@@ -168,6 +168,23 @@ export interface TrafficSnapshot {
   inbounds: Array<{ tag: string; uploadBytes: number; downloadBytes: number }>;
 }
 
+export interface RouteInput {
+  ruleType: string;
+  port: string | null;
+  outboundTag: string;
+  domains: string[];
+  ips: string[];
+  inboundTags: string[];
+  protocols: string[];
+  users: string[];
+}
+
+export interface RoutingDns {
+  domainStrategy: string;
+  dnsServers: string[];
+  rules: RouteInput[];
+}
+
 export interface CapabilityItem {
   key: string;
   label: string;
@@ -209,4 +226,5 @@ export interface AppData {
   capabilities: CapabilityMap | null;
   service: ServiceStatus | null;
   revisions: RevisionSummary[];
+  routingDns: RoutingDns;
 }
