@@ -22,7 +22,7 @@ These are different promises. Compatibility Mode may be slower or more complex â
 
 **CLI override:**
 ```bash
-blackwire run -c config.json --profile fast
+blackwire run --profile fast
 ```
 
 The CLI flag wins over the config field. This allows using an existing config without editing it.
