@@ -902,6 +902,7 @@ impl Instance {
                 &api_config.listen_addr,
                 management,
                 api_config.token.clone(),
+                &api_config.services,
             )
             .with_context(|| {
                 format!(
