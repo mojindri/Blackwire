@@ -40,7 +40,7 @@ services:
 
   # sing-box image includes /bin/sh — idle holder + exec-driven runs.
   sing-box-client:
-    image: ghcr.io/sagernet/sing-box:latest
+    image: ghcr.io/sagernet/sing-box:v1.13.19
     hostname: sing-box-client
     entrypoint: ["/bin/sh", "-c"]
     command: ["exec sleep infinity"]
@@ -49,9 +49,9 @@ services:
     depends_on:
       - target-http
 
-  # hiddify-sing-box: sing-box fork with xHTTP/packet-up support.
+  # Hiddify Core used by the current Hiddify app release.
   hiddify-sing-box-client:
-    image: ghcr.io/hiddify/hiddify-sing-box:latest
+    image: ghcr.io/hiddify/hiddify-core:v4.1.0
     hostname: hiddify-sing-box-client
     entrypoint: ["/bin/sh", "-c"]
     command: ["exec sleep infinity"]
@@ -63,7 +63,7 @@ services:
   # Xray-core is distroless (no shell). Not started via `compose up`; matrix uses
   # `compose run --name xray-client` per case (see run-docker-matrix.sh).
   xray-client:
-    image: ghcr.io/xtls/xray-core:latest
+    image: ghcr.io/xtls/xray-core:26.7.28
     hostname: xray-client
     volumes:
       - ./generated:/generated:ro

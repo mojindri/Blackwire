@@ -44,7 +44,7 @@ keys: $(PRIVATE_KEY) ## Generate x25519 keypair via Xray-core docker image (once
 $(PRIVATE_KEY):
 	@mkdir -p $(KEYS_DIR)
 	@echo "Generating x25519 keypair via Xray-core…"
-	@docker run --rm ghcr.io/xtls/xray-core:latest x25519 \
+	@docker run --rm ghcr.io/xtls/xray-core:26.7.28 x25519 \
 	    | tee $(KEYS_DIR)/keypair.txt
 	@grep "^PrivateKey:" $(KEYS_DIR)/keypair.txt \
 	    | awk '{print $$2}' | tr -d '[:space:]' > $(PRIVATE_KEY)

@@ -577,7 +577,7 @@ fn xray_client(short_id: Vec<u8>, sni: &str) -> RealityClient {
 ///   6. Derives application traffic secrets.
 ///
 /// Xray's `xray-server.json` must point `dest` at a real HTTPS server
-/// (microsoft.com:443) so it can relay a real TLS certificate.
+/// (example.com:443) so it can relay a real TLS certificate.
 ///
 /// Pass condition: `dial()` returns `Ok(_)` — the handshake completed,
 /// meaning Xray set `hs.c.isHandshakeComplete = true` and accepted the auth.
@@ -593,7 +593,7 @@ async fn d1_valid_auth_tls13_handshake_completes() {
                 "\n\n[d1_valid_auth] TLS 1.3 handshake FAILED: {e}\n\n\
                  Checklist:\n  \
                  1. `make -C tests/interop up` (Xray server running?)\n  \
-                 2. xray-server.json dest = microsoft.com:443 (internet access?)\n  \
+                 2. xray-server.json dest = example.com:443 (internet access?)\n  \
                  3. keys/public.key matches the running Xray config\n"
             )
         });

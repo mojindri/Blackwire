@@ -50,6 +50,19 @@ async fn spawn_echo_server() -> (u16, tokio::task::JoinHandle<()>) {
     (port, task)
 }
 
+async fn spawn_cover_sink() -> (u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("cover bind failed");
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("cover accept failed");
+        let mut buf = [0u8; 4096];
+        while stream.read(&mut buf).await.unwrap_or(0) != 0 {}
+    });
+    (port, task)
+}
+
 async fn socks5_connect(socks_port: u16, dest_host: &str, dest_port: u16) -> TcpStream {
     let mut stream = TcpStream::connect(("127.0.0.1", socks_port))
         .await
@@ -158,7 +171,7 @@ async fn reality_vless_to_freedom_transfers_data() {
     let (echo_port, echo_task) = spawn_echo_server().await;
     let socks_port = unused_local_port();
     let vless_port = unused_local_port();
-    let fallback_port = unused_local_port();
+    let (fallback_port, cover_task) = spawn_cover_sink().await;
 
     let _server = blackwire_core::Instance::from_config(server_config(vless_port, fallback_port))
         .await
@@ -189,4 +202,5 @@ async fn reality_vless_to_freedom_transfers_data() {
     assert_eq!(echoed, payload);
 
     echo_task.abort();
+    cover_task.abort();
 }

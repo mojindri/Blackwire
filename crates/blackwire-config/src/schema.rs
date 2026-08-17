@@ -34,8 +34,8 @@ pub use routing::{
 };
 pub use transport::{
     DownloadSettings, GrpcConfig, Hysteria2Config, KcpConfig, PaddingBounds, PaddingBytes,
-    RealityConfig, ShadowTlsConfig, SniffingConfig, SplitHttpConfig, StreamSettingsConfig,
-    TlsConfig, WsConfig, XmuxConfig,
+    RealityConfig, RealityFallbackLimitConfig, ShadowTlsConfig, SniffingConfig, SplitHttpConfig,
+    StreamSettingsConfig, TlsConfig, WsConfig, XmuxConfig,
 };
 pub use vision::{VisionConfig, VisionDirectCopyPolicy};
 

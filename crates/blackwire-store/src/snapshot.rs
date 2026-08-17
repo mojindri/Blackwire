@@ -8,10 +8,10 @@ use blackwire_config::schema::{
     FastLinuxConfig, FastRelayConfig, FecConfig, FecOverrides, FirstPacketBoostConfig, GrpcConfig,
     HealthCheckConfig, InboundConfig, InboundLimitsConfig, KcpConfig, LimitsConfig, LogConfig,
     NetworkType, OutboundConfig, PaddingBounds, PaddingBytes, ProfileMode, Protocol, QuicConfig,
-    QuicSocketOverrides, RealityConfig, RoutingConfig, RoutingRule, SecurityType, ShadowTlsConfig,
-    SniffingConfig, SplitHttpConfig, StatsConfig, StreamSettingsConfig, TlsConfig, TunAfXdpConfig,
-    TunBatchConfig, TunConfig, TunLinuxConfig, TunSessionConfig, VisionConfig, WsConfig,
-    XmuxConfig,
+    QuicSocketOverrides, RealityConfig, RealityFallbackLimitConfig, RoutingConfig, RoutingRule,
+    SecurityType, ShadowTlsConfig, SniffingConfig, SplitHttpConfig, StatsConfig,
+    StreamSettingsConfig, TlsConfig, TunAfXdpConfig, TunBatchConfig, TunConfig, TunLinuxConfig,
+    TunSessionConfig, VisionConfig, WsConfig, XmuxConfig,
 };
 use sqlx::{MySqlPool, Row};
 
@@ -512,13 +512,41 @@ async fn load_stream(
             .bind(revision).bind(kind).bind(id).fetch_all(pool).await?;
         stream.tls_settings = Some(TlsConfig { server_name: tls.try_get("server_name")?, allow_insecure: tls.try_get("allow_insecure")?, alpn, certificate_file: tls.try_get("certificate_file")?, key_file: tls.try_get("key_file")? });
     }
-    if let Some(reality) = sqlx::query("SELECT show_details, destination, private_key, public_key, short_id, fingerprint, server_name, max_time_diff_seconds FROM reality_settings WHERE revision_id = ? AND endpoint_kind = ? AND endpoint_id = ?")
+    if let Some(reality) = sqlx::query("SELECT show_details, destination, private_key, public_key, short_id, fingerprint, server_name, max_time_diff_seconds, fallback_upload_after_bytes, fallback_upload_bytes_per_sec, fallback_upload_burst_bytes_per_sec, fallback_download_after_bytes, fallback_download_bytes_per_sec, fallback_download_burst_bytes_per_sec FROM reality_settings WHERE revision_id = ? AND endpoint_kind = ? AND endpoint_id = ?")
         .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {
         let names = sqlx::query_scalar("SELECT server_name FROM reality_server_names WHERE revision_id = ? AND endpoint_kind = ? AND endpoint_id = ? ORDER BY position")
             .bind(revision).bind(kind).bind(id).fetch_all(pool).await?;
         let short_ids = sqlx::query_scalar("SELECT short_id FROM reality_short_ids WHERE revision_id = ? AND endpoint_kind = ? AND endpoint_id = ? ORDER BY position")
             .bind(revision).bind(kind).bind(id).fetch_all(pool).await?;
-        stream.reality_settings = Some(RealityConfig { show: reality.try_get("show_details")?, dest: reality.try_get("destination")?, private_key: reality.try_get("private_key")?, short_ids, public_key: reality.try_get("public_key")?, short_id: reality.try_get("short_id")?, fingerprint: reality.try_get("fingerprint")?, server_name: reality.try_get("server_name")?, server_names: names, max_time_diff: 0, max_time_diff_seconds: reality.try_get("max_time_diff_seconds")? });
+        let upload_after: Option<u64> = reality.try_get("fallback_upload_after_bytes")?;
+        let upload_rate: Option<u64> = reality.try_get("fallback_upload_bytes_per_sec")?;
+        let upload_burst: Option<u64> = reality.try_get("fallback_upload_burst_bytes_per_sec")?;
+        let download_after: Option<u64> = reality.try_get("fallback_download_after_bytes")?;
+        let download_rate: Option<u64> = reality.try_get("fallback_download_bytes_per_sec")?;
+        let download_burst: Option<u64> = reality.try_get("fallback_download_burst_bytes_per_sec")?;
+        stream.reality_settings = Some(RealityConfig {
+            show: reality.try_get("show_details")?,
+            dest: reality.try_get("destination")?,
+            private_key: reality.try_get("private_key")?,
+            short_ids,
+            public_key: reality.try_get("public_key")?,
+            short_id: reality.try_get("short_id")?,
+            fingerprint: reality.try_get("fingerprint")?,
+            server_name: reality.try_get("server_name")?,
+            server_names: names,
+            max_time_diff: 0,
+            max_time_diff_seconds: reality.try_get("max_time_diff_seconds")?,
+            limit_fallback_upload: upload_rate.map(|bytes_per_sec| RealityFallbackLimitConfig {
+                after_bytes: upload_after.unwrap_or_default(),
+                bytes_per_sec,
+                burst_bytes_per_sec: upload_burst.unwrap_or_default(),
+            }),
+            limit_fallback_download: download_rate.map(|bytes_per_sec| RealityFallbackLimitConfig {
+                after_bytes: download_after.unwrap_or_default(),
+                bytes_per_sec,
+                burst_bytes_per_sec: download_burst.unwrap_or_default(),
+            }),
+        });
     }
     if let Some(shadow) = sqlx::query("SELECT password_value,destination,version FROM shadowtls_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
         .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {

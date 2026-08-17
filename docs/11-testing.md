@@ -340,8 +340,8 @@ HYSTERIA2_PASSWORD=<strong random string>
 REALITY_PRIVATE_KEY=<server private key>
 REALITY_PUBLIC_KEY=<client public key>
 REALITY_SHORT_ID=<8-byte hex, e.g. aabbccdd00000001>
-REALITY_SERVER_NAME=www.microsoft.com
-REALITY_DEST=www.microsoft.com:443
+REALITY_SERVER_NAME=www.cloudflare.com
+REALITY_DEST=<resolved-cover-ip>:443
 ```
 
 ### Step 3 — Provision the server VPS

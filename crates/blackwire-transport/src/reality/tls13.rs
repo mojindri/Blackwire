@@ -381,12 +381,16 @@ pub(super) fn decrypt_app_record_with(
 ) -> Result<(Vec<u8>, u8), ProxyError> {
     let nonce = compute_nonce(iv, seq);
     let mut plaintext = crypter.decrypt(&nonce, ciphertext, &header)?;
-    // The inner content-type is the last plaintext byte. `pop` strips it in
-    // place, so we return the decrypted buffer itself instead of copying its
-    // body into a fresh Vec on every record.
-    let inner_type = plaintext.pop().ok_or_else(|| {
-        ProxyError::Protocol("decrypted TLS record is empty (no content-type byte)".into())
-    })?;
+    // TLSInnerPlaintext is content || type || zero-padding. Locate the final
+    // non-zero byte without copying, then truncate both it and any padding.
+    let type_pos = plaintext
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .ok_or_else(|| {
+            ProxyError::Protocol("decrypted TLS record has no inner content type".into())
+        })?;
+    let inner_type = plaintext[type_pos];
+    plaintext.truncate(type_pos);
     Ok((plaintext, inner_type))
 }
 
@@ -460,6 +464,46 @@ pub(super) fn encrypt_app_record(
     encrypt_app_record_with(&crypter, iv, seq, inner_plaintext, inner_type)
 }
 
+/// Encrypt a TLS 1.3 record padded to a cover-observed ciphertext length.
+///
+/// TLS 1.3 padding is authenticated zero bytes after the inner content type.
+/// The requested size is bounded by the caller's cover-profile parser.
+pub(super) fn encrypt_app_record_padded(
+    cs: CipherSuite,
+    key: &[u8],
+    iv: &[u8; 12],
+    seq: u64,
+    inner_plaintext: &[u8],
+    inner_type: u8,
+    ciphertext_len: usize,
+) -> Result<Vec<u8>, ProxyError> {
+    let minimum_len = inner_plaintext.len() + 1 + TAG_LEN;
+    if ciphertext_len < minimum_len || ciphertext_len > u16::MAX as usize {
+        return Err(ProxyError::Protocol(format!(
+            "invalid padded TLS record length {ciphertext_len} for {minimum_len}-byte minimum"
+        )));
+    }
+
+    let mut msg = Vec::with_capacity(ciphertext_len - TAG_LEN);
+    msg.extend_from_slice(inner_plaintext);
+    msg.push(inner_type);
+    msg.resize(ciphertext_len - TAG_LEN, 0);
+    let header = [
+        RT_APPLICATION_DATA,
+        0x03,
+        0x03,
+        (ciphertext_len >> 8) as u8,
+        ciphertext_len as u8,
+    ];
+    let nonce = compute_nonce(iv, seq);
+    let crypter = RecordCrypter::new(cs, key)?;
+    let ciphertext = crypter.encrypt(&nonce, &msg, &header)?;
+    let mut record = Vec::with_capacity(5 + ciphertext.len());
+    record.extend_from_slice(&header);
+    record.extend_from_slice(&ciphertext);
+    Ok(record)
+}
+
 // ── TLS record I/O ────────────────────────────────────────────────────────────
 
 /// Read one complete TLS record from the stream.
@@ -484,6 +528,99 @@ pub(super) async fn read_record_stream(
     Ok((header, body))
 }
 
+/// Maximum accepted ClientHello handshake message size.
+///
+/// Modern browser hellos containing hybrid key shares can exceed one TLS
+/// record, but a ClientHello should never require an unbounded allocation.
+pub(super) const MAX_CLIENT_HELLO_SIZE: usize = 64 * 1024;
+
+/// Read one complete ClientHello handshake message across one or more TLS
+/// records. When `mirror` is present, every wire byte is forwarded to the
+/// cover connection as it is consumed.
+///
+/// The returned bytes are the TLS handshake message (type + 3-byte length +
+/// body), without record headers. Record boundaries are not part of the TLS
+/// transcript or REALITY AAD.
+pub(super) async fn read_client_hello_message(
+    stream: &mut BoxedStream,
+    mut mirror: Option<&mut TcpStream>,
+) -> Result<Vec<u8>, ProxyError> {
+    const TLS_MAX_PLAINTEXT_RECORD: usize = 16 * 1024;
+    const READ_CHUNK: usize = 8 * 1024;
+
+    let mut message = Vec::with_capacity(2048);
+    let mut expected_len = None;
+    let mut chunk = [0u8; READ_CHUNK];
+
+    loop {
+        let mut header = [0u8; 5];
+        stream.read_exact(&mut header).await?;
+        if let Some(target) = mirror.as_deref_mut() {
+            target.write_all(&header).await?;
+        }
+
+        if header[0] != RT_HANDSHAKE {
+            return Err(ProxyError::Protocol(format!(
+                "expected ClientHello TLS record, got type 0x{:02x}",
+                header[0]
+            )));
+        }
+
+        let record_len = u16::from_be_bytes([header[3], header[4]]) as usize;
+        if record_len == 0 || record_len > TLS_MAX_PLAINTEXT_RECORD {
+            return Err(ProxyError::Protocol(format!(
+                "invalid ClientHello TLS record length {record_len}"
+            )));
+        }
+
+        let mut remaining = record_len;
+        while remaining != 0 {
+            let take = remaining.min(chunk.len());
+            stream.read_exact(&mut chunk[..take]).await?;
+            if let Some(target) = mirror.as_deref_mut() {
+                target.write_all(&chunk[..take]).await?;
+            }
+            if message.len().saturating_add(take) > MAX_CLIENT_HELLO_SIZE {
+                return Err(ProxyError::Protocol(format!(
+                    "ClientHello exceeds {MAX_CLIENT_HELLO_SIZE} bytes"
+                )));
+            }
+            message.extend_from_slice(&chunk[..take]);
+            remaining -= take;
+
+            if expected_len.is_none() && message.len() >= 4 {
+                if message[0] != HS_CLIENT_HELLO {
+                    return Err(ProxyError::Protocol(format!(
+                        "expected ClientHello handshake, got 0x{:02x}",
+                        message[0]
+                    )));
+                }
+                let body_len = u32::from_be_bytes([0, message[1], message[2], message[3]]) as usize;
+                let total = body_len
+                    .checked_add(4)
+                    .ok_or_else(|| ProxyError::Protocol("ClientHello length overflow".into()))?;
+                if total > MAX_CLIENT_HELLO_SIZE {
+                    return Err(ProxyError::Protocol(format!(
+                        "ClientHello length {total} exceeds {MAX_CLIENT_HELLO_SIZE}"
+                    )));
+                }
+                expected_len = Some(total);
+            }
+        }
+
+        if let Some(expected) = expected_len {
+            if message.len() == expected {
+                return Ok(message);
+            }
+            if message.len() > expected {
+                return Err(ProxyError::Protocol(
+                    "ClientHello record contains trailing handshake bytes".into(),
+                ));
+            }
+        }
+    }
+}
+
 pub(super) fn write_handshake_record(body: &[u8]) -> Vec<u8> {
     let mut record = Vec::with_capacity(5 + body.len());
     record.push(RT_HANDSHAKE);
@@ -498,7 +635,9 @@ pub(super) fn write_handshake_record(body: &[u8]) -> Vec<u8> {
 /// Parse a ServerHello handshake message body (starting at the `type` byte).
 ///
 /// Returns `(cipher_suite, selected_group, server_key_share_bytes)`.
-fn parse_server_hello(hs_body: &[u8]) -> Result<(CipherSuite, u16, Vec<u8>), ProxyError> {
+pub(super) fn parse_server_hello(
+    hs_body: &[u8],
+) -> Result<(CipherSuite, u16, Vec<u8>), ProxyError> {
     if hs_body.len() < 4 {
         return Err(ProxyError::Protocol("ServerHello body too short".into()));
     }
@@ -1167,4 +1306,5 @@ impl AsyncWrite for Tls13Stream {
 
 #[path = "tls13_server.rs"]
 mod tls13_server;
-pub use tls13_server::complete_tls13_server_handshake;
+pub(crate) use tls13_server::read_cover_handshake_profile;
+pub use tls13_server::{complete_tls13_server_handshake, CoverHandshakeProfile};

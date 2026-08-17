@@ -39,7 +39,8 @@ pub use connect::{
 };
 pub use error::ProxyError;
 pub use relay::{
-    copy_bidirectional_with_idle, domain_wire_len, with_handshake_timeout, CONNECTION_IDLE_TIMEOUT,
+    copy_bidirectional_with_idle, copy_bidirectional_with_idle_limits, domain_wire_len,
+    with_handshake_timeout, RelayRateLimit, CONNECTION_IDLE_TIMEOUT,
 };
 pub use socks5_address::{
     decode_socks5_address, read_socks5_address, write_socks5_address, ATYP_DOMAIN, ATYP_IPV4,

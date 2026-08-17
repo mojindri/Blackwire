@@ -195,16 +195,21 @@ start_sing_box() {
 }
 
 stop_hiddify() {
-    "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c 'pkill -x sing-box 2>/dev/null || true' \
+    "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c 'pkill -x hiddify-core 2>/dev/null || true' \
         </dev/null >/dev/null 2>&1 || true
     sleep 0.2
 }
 
 start_hiddify() {
     local client_cfg="$1"
+    local mode="${2:-plain}"
     stop_hiddify
-    "${COMPOSE[@]}" exec -d hiddify-sing-box-client \
-        sing-box run -c "/generated/${client_cfg}" </dev/null >> "$REPORT_DIR/compose.log" 2>&1
+    local command="/hiddify/hiddify-core-linux-*/hiddify-core srun -c /generated/${client_cfg}"
+    if [[ "$mode" == *tcp-fragment* ]]; then
+        command="/hiddify/hiddify-core-linux-*/hiddify-core run -c /generated/${client_cfg} --full-config --fragment --fragment-size 2-4 --fragment-sleep 2-4"
+    fi
+    "${COMPOSE[@]}" exec -d hiddify-sing-box-client sh -c "$command" \
+        </dev/null >> "$REPORT_DIR/compose.log" 2>&1
 }
 
 assert_single_client() {
@@ -213,7 +218,7 @@ assert_single_client() {
     if "${COMPOSE[@]}" exec -T sing-box-client sh -c 'pgrep -x sing-box >/dev/null' </dev/null 2>/dev/null; then
         n=$((n + 1))
     fi
-    if "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c 'pgrep -x sing-box >/dev/null' </dev/null 2>/dev/null; then
+    if "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c 'pgrep -x hiddify-core >/dev/null' </dev/null 2>/dev/null; then
         n=$((n + 1))
     fi
     if [[ "$n" -gt 1 ]]; then
@@ -425,7 +430,7 @@ run_client_case() {
             return 1
         }
     elif [[ "$client" == "hiddify" ]]; then
-        start_hiddify "$resolved_cfg"
+        start_hiddify "$resolved_cfg" "$label"
     else
         start_sing_box "$resolved_cfg" || {
             echo "FAIL ${label} (client start)" | tee -a "$REPORT_DIR/summary.txt"
@@ -521,6 +526,26 @@ run_protocol() {
         "$REPORT_DIR/logs/negative-xray-${protocol}.log" "$protocol" || overall=1
     run_client_case reject "negative-sing-box-${protocol}" sing-box "$sing_cfg" \
         "$REPORT_DIR/logs/negative-sing-box-${protocol}.log" "$protocol" || overall=1
+
+    if [[ "$protocol" == "vless-reality" ]]; then
+        stop_blackwire
+        if start_blackwire "$server_cfg" && wait_for_server_port "$protocol"; then
+            run_client_case pass "hiddify-${protocol}-tcp-fragment" hiddify "$sing_cfg" \
+                "$REPORT_DIR/logs/hiddify-${protocol}-tcp-fragment.log" "$protocol" || overall=1
+        else
+            echo "FAIL hiddify-${protocol}-tcp-fragment (server restart)" | tee -a "$REPORT_DIR/summary.txt"
+            overall=1
+        fi
+
+        stop_blackwire
+        if start_blackwire "$server_cfg" && wait_for_server_port "$protocol"; then
+            run_client_case pass "hiddify-${protocol}-record-fragment" hiddify "vless-reality-record-fragment.json" \
+                "$REPORT_DIR/logs/hiddify-${protocol}-record-fragment.log" "$protocol" || overall=1
+        else
+            echo "FAIL hiddify-${protocol}-record-fragment (server restart)" | tee -a "$REPORT_DIR/summary.txt"
+            overall=1
+        fi
+    fi
 
     stop_blackwire
     stop_xray

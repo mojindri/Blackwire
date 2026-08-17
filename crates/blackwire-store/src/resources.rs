@@ -629,10 +629,16 @@ async fn write_stream_details(
             .bind(revision).bind(kind).bind(id).execute(&mut **tx).await?;
     }
     if let Some(reality) = &stream.reality_settings {
-        sqlx::query("INSERT INTO reality_settings (revision_id,endpoint_kind,endpoint_id,show_details,destination,private_key,public_key,short_id,fingerprint,server_name,max_time_diff_seconds) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE show_details=VALUES(show_details),destination=VALUES(destination),private_key=VALUES(private_key),public_key=VALUES(public_key),short_id=VALUES(short_id),fingerprint=VALUES(fingerprint),server_name=VALUES(server_name),max_time_diff_seconds=VALUES(max_time_diff_seconds)")
+        sqlx::query("INSERT INTO reality_settings (revision_id,endpoint_kind,endpoint_id,show_details,destination,private_key,public_key,short_id,fingerprint,server_name,max_time_diff_seconds,fallback_upload_after_bytes,fallback_upload_bytes_per_sec,fallback_upload_burst_bytes_per_sec,fallback_download_after_bytes,fallback_download_bytes_per_sec,fallback_download_burst_bytes_per_sec) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE show_details=VALUES(show_details),destination=VALUES(destination),private_key=VALUES(private_key),public_key=VALUES(public_key),short_id=VALUES(short_id),fingerprint=VALUES(fingerprint),server_name=VALUES(server_name),max_time_diff_seconds=VALUES(max_time_diff_seconds),fallback_upload_after_bytes=VALUES(fallback_upload_after_bytes),fallback_upload_bytes_per_sec=VALUES(fallback_upload_bytes_per_sec),fallback_upload_burst_bytes_per_sec=VALUES(fallback_upload_burst_bytes_per_sec),fallback_download_after_bytes=VALUES(fallback_download_after_bytes),fallback_download_bytes_per_sec=VALUES(fallback_download_bytes_per_sec),fallback_download_burst_bytes_per_sec=VALUES(fallback_download_burst_bytes_per_sec)")
             .bind(revision).bind(kind).bind(id).bind(reality.show).bind(&reality.dest).bind(&reality.private_key)
             .bind(&reality.public_key).bind(&reality.short_id).bind(&reality.fingerprint).bind(&reality.server_name)
             .bind(reality.max_time_diff_seconds.or((reality.max_time_diff > 0).then_some(reality.max_time_diff)))
+            .bind(reality.limit_fallback_upload.map(|limit| limit.after_bytes))
+            .bind(reality.limit_fallback_upload.map(|limit| limit.bytes_per_sec))
+            .bind(reality.limit_fallback_upload.map(|limit| limit.burst_bytes_per_sec))
+            .bind(reality.limit_fallback_download.map(|limit| limit.after_bytes))
+            .bind(reality.limit_fallback_download.map(|limit| limit.bytes_per_sec))
+            .bind(reality.limit_fallback_download.map(|limit| limit.burst_bytes_per_sec))
             .execute(&mut **tx).await?;
         sqlx::query("DELETE FROM reality_server_names WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
             .bind(revision).bind(kind).bind(id).execute(&mut **tx).await?;

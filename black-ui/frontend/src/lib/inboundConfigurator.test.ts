@@ -329,6 +329,27 @@ describe("inboundConfigurator", () => {
     ]);
   });
 
+  it("rejects invalid REALITY fallback pacing values", () => {
+    const issues = validateInboundState({
+      ...createInboundEditorState(),
+      security: "reality",
+      realityServerName: "proxy.example.com",
+      realityPrivateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+      realityPublicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
+      realityShortId: "feedbeef",
+      realityDest: "93.184.216.34:443",
+      realityFallbackUploadAfterBytes: "-1",
+      realityFallbackUploadBytesPerSec: "1.5",
+      realityFallbackDownloadBurstBytesPerSec: "9007199254740992"
+    });
+
+    expect(issues.map((issue) => issue.field)).toEqual([
+      "realityFallbackUploadAfterBytes",
+      "realityFallbackUploadBytesPerSec",
+      "realityFallbackDownloadBurstBytesPerSec"
+    ]);
+  });
+
   it("validates TLS server link and certificate pair fields", () => {
     const missingSni = validateInboundState({
       ...createInboundEditorState(),

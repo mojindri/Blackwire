@@ -110,18 +110,37 @@ async fn reality_fallback_response_for_probe(probe: &[u8]) -> Vec<u8> {
     buf
 }
 
+async fn direct_cover_response_for_probe(probe: &[u8]) -> Vec<u8> {
+    let fallback_port = free_port().await;
+    start_fallback_echo(fallback_port).await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, fallback_port))
+        .await
+        .unwrap();
+    client.write_all(probe).await.unwrap();
+    let mut response = vec![0u8; 1024];
+    let n = tokio::time::timeout(Duration::from_secs(2), client.read(&mut response))
+        .await
+        .expect("direct cover read timed out")
+        .expect("direct cover read");
+    response.truncate(n);
+    response
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn reality_random_tcp_probe_is_forwarded_to_fallback() {
     let probe = b"HELLO";
     let response = reality_fallback_response_for_probe(probe).await;
-    assert_eq!(&response, probe);
+    let direct = direct_cover_response_for_probe(probe).await;
+    assert_eq!(response, direct, "Blackwire and direct cover must agree");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn reality_oversized_tls_record_probe_is_forwarded_to_fallback() {
     let probe = [0x16, 0x03, 0x01, 0xff, 0xff];
     let response = reality_fallback_response_for_probe(&probe).await;
-    assert_eq!(response, probe);
+    let direct = direct_cover_response_for_probe(&probe).await;
+    assert_eq!(response, direct, "Blackwire and direct cover must agree");
 }
 
 // Verify that a legitimate client can authenticate and exchange data with the server.
@@ -163,11 +182,13 @@ async fn reality_legitimate_client_can_authenticate_and_exchange_data() {
             .accept_with_key(Box::new(tcp))
             .await
             .expect("REALITY authentication should succeed for legitimate client");
+        let cover_profile = accepted.cover_profile;
         let mut raw_stream = accepted.stream;
         let app_keys = complete_tls13_server_handshake(
             &mut raw_stream,
             &accepted.auth_key,
             "www.microsoft.com",
+            cover_profile.as_ref(),
         )
         .await
         .expect("TLS 1.3 should complete after REALITY authentication");

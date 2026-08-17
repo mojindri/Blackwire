@@ -180,6 +180,38 @@ pub struct RealityConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub max_time_diff_seconds: Option<u64>,
+
+    /// Optional pacing for unauthenticated bytes sent to the fallback.
+    #[serde(
+        default,
+        rename = "limitFallbackUpload",
+        alias = "limit_fallback_upload",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub limit_fallback_upload: Option<RealityFallbackLimitConfig>,
+
+    /// Optional pacing for fallback bytes returned to unauthenticated clients.
+    #[serde(
+        default,
+        rename = "limitFallbackDownload",
+        alias = "limit_fallback_download",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub limit_fallback_download: Option<RealityFallbackLimitConfig>,
+}
+
+/// Xray-compatible fallback pacing controls. Zero `bytesPerSec` disables it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct RealityFallbackLimitConfig {
+    /// Number of bytes relayed before pacing begins.
+    #[serde(default, rename = "afterBytes", alias = "after_bytes")]
+    pub after_bytes: u64,
+    /// Sustained bytes per second; zero disables pacing.
+    #[serde(default, rename = "bytesPerSec", alias = "bytes_per_sec")]
+    pub bytes_per_sec: u64,
+    /// Additional bytes allowed immediately before sustained pacing.
+    #[serde(default, rename = "burstBytesPerSec", alias = "burst_bytes_per_sec")]
+    pub burst_bytes_per_sec: u64,
 }
 
 fn default_fingerprint() -> String {
