@@ -37,30 +37,48 @@ Without this crate, every higher-level crate would duplicate base types or creat
 
 ### Purpose
 
-Owns the JSON config schema and config lifecycle.
+Owns the typed runtime configuration schema and validation rules.
 
 ### Main Responsibilities
 
-- deserialize JSON into Rust structs
-- validate config
-- support environment expansion
-- support hot reload
+- model typed runtime snapshots
+- validate reconstructed configuration
+- reject unknown or unsupported endpoint fields
 
 ### Read First
 
 - `crates/blackwire-config/src/lib.rs`
 - `crates/blackwire-config/src/schema.rs`
-- `crates/blackwire-config/src/manager.rs`
 
 ### What To Learn Here
 
 - which fields exist in config
 - how `metricsAddr`, `streamSettings`, `routing`, `inbounds`, and `outbounds` map into typed data
-- where startup errors come from when config is wrong
+- where startup errors come from when a revision is invalid
 
 ### Mental Note
 
-No other crate should be inventing its own JSON parsing rules. They should consume typed config from here.
+Runtime crates consume these typed snapshots rather than reading persistent
+configuration themselves.
+
+## `blackwire-store`
+
+### Purpose
+
+Owns MySQL persistence and the immutable configuration revision lifecycle.
+
+### Main Responsibilities
+
+- verify and migrate the relational schema
+- create, publish, activate, and roll back revisions
+- reconstruct validated `blackwire-config` snapshots
+- persist panel sessions, traffic counters, and runtime heartbeats
+
+### Read First
+
+- `crates/blackwire-store/src/lib.rs`
+- `crates/blackwire-store/src/connection.rs`
+- `crates/blackwire-store/src/snapshot.rs`
 
 ## `blackwire-app`
 
@@ -336,16 +354,15 @@ gRPC management/stats API crate.
 
 ### Current Status
 
-Handler and Stats services are wired. Handler supports list, VLESS user mutate,
-and structural add/remove/alter operations through the CLI management handle.
+Handler and Stats services are wired. Handler configuration mutation RPCs are
+rejected; MySQL revisions are the only configuration write path.
 
 ### Why It Matters
 
 It provides runtime control-plane operations:
 
-- management interface
+- runtime inspection and connection operations
 - stats exposure
-- native blackwire endpoint JSON flow for structural operations
 
 ### Read First
 
@@ -423,7 +440,10 @@ Use this ownership map:
   base shared types
 
 - `blackwire-config`
-  typed config and reload
+  typed runtime schema and validation
+
+- `blackwire-store`
+  MySQL revisions, snapshots, and runtime persistence
 
 - `blackwire-app`
   routing, dispatch, relay, metrics

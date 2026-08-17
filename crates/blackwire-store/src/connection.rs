@@ -1,5 +1,6 @@
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
+use crate::sqlx;
 use sqlx::{mysql::MySqlPoolOptions, MySql, MySqlPool, Row, Transaction};
 
 use crate::{

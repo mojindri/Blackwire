@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::sqlx;
+
 pub type StoreResult<T> = Result<T, StoreError>;
 
 #[derive(Debug, Error)]

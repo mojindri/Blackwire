@@ -18,6 +18,22 @@ mod routing;
 mod runtime;
 mod snapshot;
 
+// Depend on the MySQL driver crates directly. The public `sqlx` facade records
+// every optional database backend in Cargo.lock even when only MySQL is built.
+mod sqlx {
+    pub(crate) use sqlx_core::error::Error;
+    pub(crate) use sqlx_core::pool;
+    pub(crate) use sqlx_core::query::query;
+    pub(crate) use sqlx_core::query_scalar::query_scalar;
+    pub(crate) use sqlx_core::row::Row;
+    pub(crate) use sqlx_core::transaction::Transaction;
+    pub(crate) use sqlx_mysql::{MySql, MySqlPool};
+
+    pub(crate) mod mysql {
+        pub(crate) use sqlx_mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlRow};
+    }
+}
+
 pub use connection::{Database, DatabaseOptions, EXPECTED_SCHEMA_VERSION};
 pub use error::{StoreError, StoreResult};
 pub use panel::{AdminRecord, PanelSettings};

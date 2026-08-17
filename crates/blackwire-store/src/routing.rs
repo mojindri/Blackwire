@@ -1,3 +1,4 @@
+use crate::sqlx;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 

@@ -23,10 +23,11 @@
 //!
 //! # Hot-reload
 //!
-//! When the config file changes, `ConfigManager` validates the new JSON and
-//! notifies subscribers. `ReloadState::apply()` (in `reload.rs`) then swaps
-//! routing rules and supported inbound auth state **without** restarting TCP listeners.
-//! Outbound handlers and listen ports are still fixed at startup.
+//! When the runtime observes a new desired MySQL revision, the store
+//! reconstructs and validates a typed snapshot. `ReloadState::apply()` (in
+//! `reload.rs`) swaps routing rules and supported inbound auth state without
+//! restarting listeners. Structural changes are applied through a prepared
+//! instance handover.
 
 use anyhow::{Context as _, Result};
 use arc_swap::ArcSwap;
