@@ -1,9 +1,10 @@
 use std::net::IpAddr;
 
 use blackwire_config::schema::{
-    ApiConfig, Config, DnsConfig, EndpointSettings, EndpointUser, FakeIpConfig, InboundConfig,
-    LimitsConfig, LogConfig, NetworkType, OutboundConfig, ProfileMode, Protocol, RealityConfig,
-    RoutingConfig, RoutingRule, SecurityType, StreamSettingsConfig, TlsConfig,
+    ApiConfig, Config, DnsConfig, EndpointSettings, EndpointUser, FakeIpConfig, GrpcConfig,
+    InboundConfig, InboundLimitsConfig, KcpConfig, LimitsConfig, LogConfig, NetworkType,
+    OutboundConfig, ProfileMode, Protocol, RealityConfig, RoutingConfig, RoutingRule, SecurityType,
+    SniffingConfig, StreamSettingsConfig, TlsConfig, WsConfig,
 };
 use sqlx::{MySqlPool, Row};
 
@@ -92,17 +93,27 @@ async fn load_inbounds(pool: &MySqlPool, revision: i64) -> StoreResult<Vec<Inbou
         let protocol = parse_protocol(&row.try_get::<String, _>("protocol")?)?;
         let clients = load_clients(pool, revision, inbound_id, &protocol).await?;
         let mut settings = EndpointSettings::default();
+        if let Some(protocol_row) = sqlx::query("SELECT decryption, method, auth_value, up_mbps, down_mbps, endpoint_shards FROM inbound_protocol_settings WHERE revision_id=? AND inbound_id=?")
+            .bind(revision).bind(inbound_id).fetch_optional(pool).await? {
+            settings.decryption = protocol_row.try_get("decryption")?;
+            settings.method = protocol_row.try_get("method")?;
+            settings.auth = bytes_string(&protocol_row, "auth_value")?;
+            settings.up_mbps = protocol_row.try_get("up_mbps")?;
+            settings.down_mbps = protocol_row.try_get("down_mbps")?;
+            settings.endpoint_shards = protocol_row.try_get::<Option<u32>, _>("endpoint_shards")?.map(usize::try_from).transpose().map_err(decode_error)?;
+        }
         match protocol {
             Protocol::Tuic => settings.users = clients,
             Protocol::Hysteria2 => {
-                settings.auth = clients
-                    .first()
-                    .and_then(|user| user.auth.clone().or_else(|| user.password.clone()));
+                if settings.auth.is_none() {
+                    settings.auth = clients
+                        .first()
+                        .and_then(|user| user.auth.clone().or_else(|| user.password.clone()));
+                }
                 settings.clients = clients;
             }
             Protocol::Shadowsocks => {
                 settings.password = clients.first().and_then(|user| user.password.clone());
-                settings.method = clients.first().and_then(|user| user.name.clone());
                 settings.clients = clients;
             }
             Protocol::Vless | Protocol::Vmess | Protocol::Trojan => settings.clients = clients,
@@ -118,8 +129,8 @@ async fn load_inbounds(pool: &MySqlPool, revision: i64) -> StoreResult<Vec<Inbou
             port: u16::try_from(row.try_get::<u32, _>("listen_port")?).map_err(decode_error)?,
             settings,
             stream_settings: load_stream(pool, revision, "inbound", inbound_id).await?,
-            limits: None,
-            sniffing: None,
+            limits: load_inbound_limits(pool, revision, inbound_id).await?,
+            sniffing: load_sniffing(pool, revision, inbound_id).await?,
         });
     }
     Ok(result)
@@ -260,7 +271,71 @@ async fn load_stream(
             .bind(revision).bind(kind).bind(id).fetch_all(pool).await?;
         stream.reality_settings = Some(RealityConfig { show: reality.try_get("show_details")?, dest: reality.try_get("destination")?, private_key: reality.try_get("private_key")?, short_ids, public_key: reality.try_get("public_key")?, short_id: reality.try_get("short_id")?, fingerprint: reality.try_get("fingerprint")?, server_name: reality.try_get("server_name")?, server_names: names, max_time_diff: 0, max_time_diff_seconds: reality.try_get("max_time_diff_seconds")? });
     }
+    for transport_kind in ["ws", "httpupgrade"] {
+        if let Some(transport) = sqlx::query("SELECT request_path FROM websocket_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? AND transport_kind=?")
+            .bind(revision).bind(kind).bind(id).bind(transport_kind).fetch_optional(pool).await? {
+            let header_rows = sqlx::query("SELECT header_name, header_value FROM transport_headers WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? AND transport_kind=?")
+                .bind(revision).bind(kind).bind(id).bind(transport_kind).fetch_all(pool).await?;
+            let mut headers = std::collections::HashMap::new();
+            for header in header_rows {
+                headers.insert(header.try_get("header_name")?, header.try_get("header_value")?);
+            }
+            let config = WsConfig { path: transport.try_get("request_path")?, headers };
+            if transport_kind == "ws" { stream.ws_settings = Some(config); } else { stream.httpupgrade_settings = Some(config); }
+        }
+    }
+    if let Some(grpc) = sqlx::query("SELECT service_name, multi_mode FROM grpc_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
+        .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {
+        stream.grpc_settings = Some(GrpcConfig { service_name: grpc.try_get("service_name")?, multi_mode: grpc.try_get("multi_mode")? });
+    }
+    if let Some(kcp) = sqlx::query("SELECT header_type, mtu, tti_ms, uplink_capacity, downlink_capacity, congestion, read_buffer_size, write_buffer_size FROM kcp_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
+        .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {
+        stream.kcp_settings = Some(KcpConfig {
+            header: kcp.try_get("header_type")?,
+            mtu: u16::try_from(kcp.try_get::<u32, _>("mtu")?).map_err(decode_error)?,
+            tti: kcp.try_get("tti_ms")?,
+            uplink_capacity: kcp.try_get("uplink_capacity")?,
+            downlink_capacity: kcp.try_get("downlink_capacity")?,
+            congestion: kcp.try_get("congestion")?,
+            read_buffer_size: kcp.try_get("read_buffer_size")?,
+            write_buffer_size: kcp.try_get("write_buffer_size")?,
+        });
+    }
     Ok(Some(stream))
+}
+
+async fn load_inbound_limits(
+    pool: &MySqlPool,
+    revision: i64,
+    inbound_id: i64,
+) -> StoreResult<Option<InboundLimitsConfig>> {
+    let row = sqlx::query("SELECT max_connections, max_handshake_seconds, max_idle_seconds FROM inbound_limits WHERE revision_id=? AND inbound_id=?")
+        .bind(revision).bind(inbound_id).fetch_optional(pool).await?;
+    row.map(|row| {
+        Ok(InboundLimitsConfig {
+            max_connections: optional_usize(&row, "max_connections")?,
+            max_handshake_seconds: row.try_get("max_handshake_seconds")?,
+            max_idle_seconds: row.try_get("max_idle_seconds")?,
+        })
+    })
+    .transpose()
+}
+
+async fn load_sniffing(
+    pool: &MySqlPool,
+    revision: i64,
+    inbound_id: i64,
+) -> StoreResult<Option<SniffingConfig>> {
+    let Some(row) = sqlx::query("SELECT enabled, metadata_only, route_only FROM sniffing_settings WHERE revision_id=? AND inbound_id=?")
+        .bind(revision).bind(inbound_id).fetch_optional(pool).await? else { return Ok(None); };
+    let dest_override = sqlx::query_scalar("SELECT protocol FROM sniffing_overrides WHERE revision_id=? AND inbound_id=? ORDER BY position")
+        .bind(revision).bind(inbound_id).fetch_all(pool).await?;
+    Ok(Some(SniffingConfig {
+        enabled: row.try_get("enabled")?,
+        dest_override,
+        metadata_only: row.try_get("metadata_only")?,
+        route_only: row.try_get("route_only")?,
+    }))
 }
 
 async fn load_dns(pool: &MySqlPool, revision: i64) -> StoreResult<Option<DnsConfig>> {
