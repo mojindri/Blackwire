@@ -34,6 +34,7 @@ COPY crates/blackwire-app/Cargo.toml    crates/blackwire-app/
 COPY crates/blackwire-tls/Cargo.toml    crates/blackwire-tls/
 COPY crates/blackwire-api/Cargo.toml    crates/blackwire-api/
 COPY crates/blackwire-connmgr/Cargo.toml crates/blackwire-connmgr/
+COPY crates/blackwire-store/Cargo.toml crates/blackwire-store/
 COPY black-ui/server/Cargo.toml     black-ui/server/
 COPY tests/Cargo.toml               tests/
 COPY benches/Cargo.toml             benches/
@@ -41,7 +42,7 @@ COPY benches/benches/               benches/benches/
 
 # Create stub lib/main.rs files so cargo can resolve dependencies.
 # These will be replaced by the full source copy below.
-RUN for d in blackwire-common blackwire-config blackwire-app blackwire-transport blackwire-protocol blackwire-core blackwire-tls blackwire-api blackwire-connmgr; do \
+RUN for d in blackwire-common blackwire-config blackwire-app blackwire-transport blackwire-protocol blackwire-core blackwire-tls blackwire-api blackwire-connmgr blackwire-store; do \
         mkdir -p crates/$d/src && echo "// stub" > crates/$d/src/lib.rs; \
     done && \
     mkdir -p crates/blackwire-cli/src && echo "fn main(){}" > crates/blackwire-cli/src/main.rs && \
@@ -67,6 +68,7 @@ FROM debian:bookworm-slim
 # Install CA certificates for TLS outbound verification.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     procps \
     && rm -rf /var/lib/apt/lists/*
 

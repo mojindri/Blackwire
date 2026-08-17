@@ -23,9 +23,8 @@ User=nobody
 Group=black-ui
 
 ExecStart=/usr/local/bin/blackwire run
-LoadCredential=database-url:/etc/blackwire/database-url
+LoadCredential=database-url:/etc/blackwire/runtime-database-url
 
-# Working directory (for relative paths in config).
 WorkingDirectory=/var/lib/blackwire
 
 # Restart automatically if the process crashes (but not if we stopped it).
