@@ -49,6 +49,18 @@ services:
         condition: service_healthy
     restart: "no"
 
+  grant-accounts:
+    image: mysql:8.4
+    command: ["sh", "/grant-accounts.sh"]
+    volumes:
+      - ./mysql-grant-accounts.sh:/grant-accounts.sh:ro
+    secrets:
+      - mysql_root_password
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
   blackwire:
     build:
       context: ../..
@@ -71,7 +83,7 @@ services:
     secrets:
       - runtime_database_url
     depends_on:
-      migrate:
+      grant-accounts:
         condition: service_completed_successfully
 
     # Security: drop all capabilities except what's needed for binding to :443.
@@ -116,7 +128,7 @@ services:
     secrets:
       - ui_database_url
     depends_on:
-      migrate:
+      grant-accounts:
         condition: service_completed_successfully
 
 volumes:

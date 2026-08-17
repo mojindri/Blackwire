@@ -197,6 +197,23 @@ pub struct LoginResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CurrentAdmin {
+    pub username: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GeneratedUuid {
+    pub uuid: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MaintenanceResult {
+    pub revision: i64,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApplyResult {
     pub revision: i64,
     pub parent_revision: i64,

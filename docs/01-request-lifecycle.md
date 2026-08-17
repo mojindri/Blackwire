@@ -69,7 +69,7 @@ This is the best beginner example.
 
 Your browser or tool connects to a local TCP port.
 
-That port belongs to a SOCKS inbound listener configured in `config.json`.
+That port belongs to a SOCKS inbound listener in the active MySQL revision.
 
 ### Step 2: TCP transport accepts
 
@@ -375,4 +375,3 @@ That is how to trace any connection without getting lost.
 Every connection in this repo is:
 
 "accepted by a listener, optionally unwrapped by transports, decoded by an inbound protocol, routed by the dispatcher, connected by an outbound, and relayed until close."
-

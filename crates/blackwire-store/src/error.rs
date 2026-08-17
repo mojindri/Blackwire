@@ -22,6 +22,4 @@ pub enum StoreError {
     InvalidConfiguration(String),
     #[error(transparent)]
     Sql(#[from] sqlx::Error),
-    #[error(transparent)]
-    Migration(#[from] sqlx::migrate::MigrateError),
 }

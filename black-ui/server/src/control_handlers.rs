@@ -14,9 +14,9 @@ use crate::{
     capabilities,
     error::{ApiResult, AppError},
     models::{
-        ApplyResult, BulkUserInput, Inbound, InboundInput, LoginInput, LoginResponse, ManagedUser,
-        Outbound, OutboundInput, ServiceStatus, Settings, SetupInput, Status, TrafficSnapshot,
-        UserInput,
+        ApplyResult, BulkUserInput, CurrentAdmin, GeneratedUuid, Inbound, InboundInput, LoginInput,
+        LoginResponse, MaintenanceResult, ManagedUser, Outbound, OutboundInput, ServiceStatus,
+        Settings, SetupInput, Status, TrafficSnapshot, UserInput,
     },
     mysql_auth as auth,
     mysql_state::AppState,
@@ -65,7 +65,7 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl I
     }
 }
 
-pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<serde_json::Value> {
+pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<CurrentAdmin> {
     let admin_id = auth::require(&headers, &state).await?;
     let username = state
         .store
@@ -73,7 +73,7 @@ pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<
         .await
         .map_err(store_error)?
         .ok_or_else(AppError::unauthorized)?;
-    Ok(Json(json!({ "username": username })))
+    Ok(Json(CurrentAdmin { username }))
 }
 
 pub async fn capabilities(
@@ -568,9 +568,11 @@ async fn set_user_enabled(
 pub async fn generate_uuid(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> ApiResult<serde_json::Value> {
+) -> ApiResult<GeneratedUuid> {
     auth::require(&headers, &state).await?;
-    Ok(Json(json!({ "uuid": uuid::Uuid::new_v4().to_string() })))
+    Ok(Json(GeneratedUuid {
+        uuid: uuid::Uuid::new_v4().to_string(),
+    }))
 }
 
 pub async fn runtime_traffic(
@@ -669,16 +671,17 @@ pub async fn activate_maintenance(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(input): Json<RevisionInput>,
-) -> ApiResult<serde_json::Value> {
+) -> ApiResult<MaintenanceResult> {
     auth::require(&headers, &state).await?;
     state
         .store
         .confirm_maintenance(input.revision)
         .await
         .map_err(store_error)?;
-    Ok(Json(
-        json!({ "revision": input.revision, "message": "Maintenance activation confirmed" }),
-    ))
+    Ok(Json(MaintenanceResult {
+        revision: input.revision,
+        message: "Maintenance activation confirmed".into(),
+    }))
 }
 
 pub async fn service_status(

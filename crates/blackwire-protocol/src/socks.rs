@@ -82,7 +82,7 @@ const REP_ATYP_NOT_SUPPORTED: u8 = 0x08;
 /// Listens for SOCKS5 connections, performs the handshake, extracts the
 /// destination address, then hands the connection to the dispatcher.
 pub struct Socks5Inbound {
-    /// Unique tag for this inbound (from config.json).
+    /// Unique tag for this inbound (from the active database revision).
     tag: Arc<str>,
 
     /// Optional limit for reading the SOCKS5 greeting and request.
