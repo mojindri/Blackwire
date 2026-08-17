@@ -48,7 +48,7 @@ use super::vision::wrap_vision_inbound_stream;
 
 /// The VLESS inbound handler.
 pub struct VlessInbound {
-    /// The unique tag for this inbound (from config.json).
+    /// The unique tag for this inbound (from the active database revision).
     tag: Arc<str>,
 
     /// The user registry: UUID → user info.
@@ -71,7 +71,7 @@ impl VlessInbound {
     /// Create a new VLESS inbound handler.
     ///
     /// # Arguments
-    /// * `tag`      — the inbound's unique name from config.json
+    /// * `tag`      — the inbound's unique name from the active revision
     /// * `registry` — the user UUID registry
     /// * `fallback` — optional fallback backend address for failed auth
     /// * `dns`      — optional DNS module for UDP relay resolution

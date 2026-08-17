@@ -13,7 +13,7 @@
 -include .env.vm
 include make/verify.mk
 
-.PHONY: all ci build dev test fmt fmt-check lint lint-strict audit deny update-geoip fuzz-build \
+.PHONY: all ci build dev test fmt fmt-check lint lint-strict mysql-only-check audit deny update-geoip fuzz-build \
 	fmt fmt-check lint audit audit-optional deny-optional fuzz-smoke \
 	clean clean-generated clean-all-generated clean-reports clean-pcaps clean-lima-artifacts clean-bench \
 	bench bench-build bench-xray bench-singbox bench-smoke \
@@ -66,6 +66,10 @@ lint-strict:
 		-D warnings \
 		-D clippy::unwrap_used \
 		-D clippy::expect_used
+
+## mysql-only-check: Reject persistent SQLite, JSON columns, and file configuration paths.
+mysql-only-check:
+	scripts/check-mysql-only.sh
 
 ## audit: Check for known security vulnerabilities in dependencies.
 audit:

@@ -16,8 +16,6 @@ mysql --protocol=socket -uroot -p"$(cat /run/secrets/mysql_root_password)" <<SQL
 CREATE USER IF NOT EXISTS 'blackwire_runtime'@'%' IDENTIFIED BY '${runtime_password}';
 CREATE USER IF NOT EXISTS 'blackwire_ui'@'%' IDENTIFIED BY '${ui_password}';
 CREATE USER IF NOT EXISTS 'blackwire_migrator'@'%' IDENTIFIED BY '${migrator_password}';
-GRANT SELECT, INSERT, UPDATE, DELETE ON blackwire.* TO 'blackwire_runtime'@'%';
-GRANT SELECT, INSERT, UPDATE, DELETE ON blackwire.* TO 'blackwire_ui'@'%';
 GRANT ALL PRIVILEGES ON blackwire.* TO 'blackwire_migrator'@'%';
 FLUSH PRIVILEGES;
 SQL
