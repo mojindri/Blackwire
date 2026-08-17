@@ -331,11 +331,12 @@ Hot reload does not mean the whole process restarts.
 
 The intended model is:
 
-- config manager watches the config file
-- new config is parsed and validated
-- atomic data like routing can be swapped
-- new connections see new config
-- in-flight connections finish on old state
+- Black UI or a database command publishes an immutable desired MySQL revision
+- the runtime reconstructs and validates the typed relational snapshot
+- routing and supported authentication state are swapped atomically
+- structural listener changes use prepared instance handover
+- new connections see the activated revision
+- in-flight connections finish on their existing state
 
 Not every possible listener/property can be changed instantly in every architecture, but that is the intended design boundary.
 

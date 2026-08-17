@@ -33,9 +33,9 @@ diagrams. Those sections build the basic mental model.
 If you already understand normal proxies, start at section 8 for protocol names
 and section 11 for transport names.
 
-If you are trying to understand a config file, read sections 3, 4, 12, 13, and
-19 together. Those explain how `protocol`, `streamSettings`, routing, and
-outbounds fit together.
+If you are trying to understand a runtime configuration snapshot, read sections
+3, 4, 12, 13, and 19 together. Those explain how `protocol`,
+`streamSettings`, routing, and outbounds fit together.
 
 If you are debugging code, read the concept section first, then jump to the
 source paths listed in section 18.

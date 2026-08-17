@@ -80,7 +80,7 @@ Examples:
 
 ## `settings`
 
-Protocol-specific config JSON.
+Protocol-specific typed configuration attached to an endpoint snapshot.
 
 Examples:
 
@@ -363,17 +363,15 @@ The running assembled proxy runtime built by `blackwire-core`.
 
 It owns listener tasks and startup composition.
 
-Defined in:
+Defined in `crates/blackwire-core/src/instance/mod.rs`.
 
-- [crates/blackwire-core/src/instance/mod.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance/mod.rs)
+## `Database`
 
-## `ConfigManager`
+The MySQL control-plane owner. It verifies the relational schema, reconstructs
+typed revisions, publishes mutations, tracks activation state, and records
+runtime health.
 
-The config owner that loads, validates, and hot-reloads config.
-
-Defined in:
-
-- [crates/blackwire-config/src/manager.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-config/src/manager.rs)
+Defined in `crates/blackwire-store/src/connection.rs`.
 
 ## `ConnectionHandler`
 

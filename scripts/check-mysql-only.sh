@@ -13,8 +13,13 @@ if rg -n -i 'rusqlite|libsqlite|sqlite[_-]' --glob 'Cargo.toml' --glob '*.rs' \
     fail "SQLite code or a direct SQLite dependency remains"
 fi
 
-if cargo tree -e normal,no-dev -i sqlx-sqlite --prefix none 2>/dev/null | rg -q .; then
+if cargo tree --workspace -e normal --prefix none 2>/dev/null \
+    | rg -q '^(sqlx-sqlite|libsqlite3-sys)( |$)'; then
     fail "SQLite is active in the Rust dependency graph"
+fi
+
+if rg -q '^name = "(sqlx-sqlite|libsqlite3-sys)"$' Cargo.lock; then
+    fail "SQLite remains recorded in Cargo.lock"
 fi
 
 if git ls-files | rg -q '\.(sqlite|sqlite3|db)$'; then
@@ -34,6 +39,11 @@ if rg -n --glob '!docs/release.md' --glob '!docs/panel-qa.md' \
     -- '--config\b|CONFIG_PATH\b|CONFIG_URL\b|BLACK_UI_CONFIG_PATH\b|config\.json' \
     crates/blackwire-cli crates/blackwire-app black-ui deploy README.md docs examples; then
     fail "an active file-configuration path or deployment instruction remains"
+fi
+
+if rg -n 'ConfigManager|blackwire-config/src/(manager|env)\.rs|file watch \+ validated reload' \
+    README.md docs crates/blackwire-cli crates/blackwire-core; then
+    fail "legacy file-configuration architecture documentation remains"
 fi
 
 echo "MySQL-only consistency checks passed"

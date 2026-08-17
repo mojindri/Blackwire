@@ -1,3 +1,4 @@
+use crate::sqlx;
 use sqlx::Row;
 
 use crate::{Database, StoreResult};

@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 
+use crate::sqlx;
 use blackwire_config::schema::{
     ApiConfig, Config, DnsConfig, EndpointSettings, EndpointUser, FakeIpConfig, GrpcConfig,
     InboundConfig, InboundLimitsConfig, KcpConfig, LimitsConfig, LogConfig, NetworkType,

@@ -1,8 +1,8 @@
 //! blackwire — command-line entry point.
 //!
-//! This binary is the "front door" to the entire proxy platform. Everything
-//! you do — start the proxy, test a config file, generate crypto keys — goes
-//! through one of the subcommands defined here.
+//! This binary is the "front door" to the entire proxy platform. Starting the
+//! proxy, validating a MySQL revision, and generating cryptographic keys all
+//! go through the subcommands defined here.
 //!
 //! # Subcommands
 //!
@@ -1547,8 +1547,8 @@ fn cmd_x25519() {
     let secret = StaticSecret::random();
     let public = PublicKey::from(&secret);
 
-    // Print as hex so the user can paste them into a JSON config file.
-    // The private key stays on the server; the public key goes in client configs.
+    // Print as hex for Black UI's typed REALITY fields and client profiles.
+    // The private key stays on the server; the public key goes to clients.
     println!(
         "Private key (server config): {}",
         hex::encode(secret.to_bytes())

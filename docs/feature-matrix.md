@@ -50,9 +50,9 @@ No claim of full Xray/sing-box feature parity is made. See the Unsupported rows 
 | Area                                            | Status           | Notes                                                                                                                                                                                                                                                         |
 | ----------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Xray / sing-box **wire interop** (as server)    | **Supported**    | Realistic Docker external-client matrix is green with PASS/SKIP-only outcomes (zero FAIL), including `vless-reality`, `hysteria2`, `vless-quic` (sing-box PASS, Xray SKIP), and documented SKIP rows (`vless-shadowtls`, `vless-mkcp`) — see [parity-status.md](parity-status.md) |
-| Native JSON config schema                       | **Supported**    | `blackwire-config` — validated at load; fail-closed schema tests                                                                                                                                                                                              |
-| V2Ray JSON config                               | **Unsupported**  | Not a goal                                                                                                                                                                                                                                                    |
-| Xray JSON config                                | **Unsupported**  | Interop is wire-level only; configs must be translated                                                                                                                                                                                                        |
+| Typed relational configuration                  | **Supported**    | MySQL revisions are reconstructed into `blackwire-config` types and validated fail-closed                                                                                                                                                                      |
+| V2Ray JSON config import                        | **Unsupported**  | Not a goal                                                                                                                                                                                                                                                    |
+| Xray JSON config import                         | **Unsupported**  | Interop is wire-level only; configuration must be entered through typed relational workflows                                                                                                                                                                  |
 | **Server mode** (listen for clients)            | **Supported**    | Primary product: `blackwire run`                                                                                                                                                                                                                              |
 | **Local proxy mode** (SOCKS/HTTP in → outbound) | **Supported**    | Same `Instance` stack; covered by e2e (`e2e_socks5_vless`, `e2e_http_connect`, etc.)                                                                                                                                                                          |
 | Standalone **client app** (TUN/system proxy UI) | **Unsupported**  | No dedicated mobile/desktop shell or system proxy UI; TUN is a runtime traffic-capture path                                                                                                                                                                   |
@@ -176,9 +176,9 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 
 | Feature                                    | Status           | Notes                                                                                                                                                                                                             |
 | ------------------------------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Config file load + validation              | **Supported**    | `blackwire-config`                                                                                                                                                                                                |
-| `${ENV}` substitution                      | **Supported**    | `env.rs`                                                                                                                                                                                                          |
-| File watch + validated reload notify       | **Supported**    | `ConfigManager::watch`; CLI subscribes                                                                                                                                                                            |
+| MySQL revision reconstruction + validation | **Supported**    | `blackwire-store` reconstructs `blackwire-config` snapshots and fails closed                                                                                                                                       |
+| Database outage continuity                 | **Supported**    | Active in-memory revision continues serving; no new revision activates until MySQL returns                                                                                                                         |
+| Desired revision reconciliation            | **Supported**    | CLI polls immutable revisions and records activation or failure state                                                                                                                                              |
 | Hot-reload **routing rules**               | **Supported**    | `blackwire-core/reload.rs` — `LiveRouter::swap`                                                                                                                                                                   |
 | Hot-reload **VLESS user UUIDs**            | **Supported**    | Per-inbound registry refresh                                                                                                                                                                                      |
 | Hot-reload **GeoIP/geosite data**          | **Supported**    | Reloaded with router rebuild                                                                                                                                                                                      |
@@ -187,7 +187,7 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 | Prometheus HTTP (`metricsAddr`)            | **Supported**    | `metrics.rs` — `/metrics`, `/healthz`, `/readyz`, `/version`                                                                                                                                                      |
 | Per-connection Prometheus counters         | **Supported**    | `record_connection_`* called from `dispatcher` after each relay                                                                                                                                                   |
 | Stats API (gRPC)                           | **Experimental** | `blackwire-api` StatsService + `runtime_stats`; starts when `api` listen set                                                                                                                                      |
-| Handler API (gRPC)                         | **Supported**    | `ListInbounds`, `ListOutbounds`, `GetInboundUsersCount`, `GetInboundUsers`, `AlterInbound` VLESS add/remove; structural `AddInbound`, `RemoveInbound`, `AddOutbound`, `RemoveOutbound`, `AlterOutbound` accept native blackwire endpoint JSON in `proxy_settings`, rebuild the running CLI instance, and roll back on rebuild failure |
+| Handler API (gRPC)                         | **Read-only**    | Runtime inspection and connection operations remain; configuration mutations are rejected because MySQL revisions are the only write path                                                                         |
 
 
 ---
@@ -251,10 +251,10 @@ pre-1.0 project into a stable production application.
 
 ## Known intentional deviations
 
-- Native JSON schema — not V2Ray/Xray config paste-compatible.
+- Relational configuration — no V2Ray/Xray server-config import or paste path.
 - VMess legacy non-AEAD / alterId — not implemented.
-- Handler API (gRPC) — structural add/remove/alter RPCs use native blackwire endpoint JSON in `proxy_settings` rather than Xray core endpoint protobufs.
-- Structural config changes (listeners/outbounds/TLS material) trigger CLI-driven instance rebuild with rollback; not in-place listener mutation.
+- Handler API (gRPC) — configuration mutation RPCs are rejected; writes use MySQL revisions.
+- Structural config changes (listeners/outbounds/TLS material) trigger CLI-driven instance handover; not in-place listener mutation.
 
 ---
 

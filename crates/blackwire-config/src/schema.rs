@@ -1,4 +1,4 @@
-//! Configuration schema — Rust structs that map to the JSON config file.
+//! Typed runtime configuration reconstructed from relational MySQL revisions.
 //!
 //! The schema is split by responsibility so each file stays small:
 //! - `logging_dns` handles logging and DNS/FakeIP settings.
@@ -44,8 +44,8 @@ use validator::Validate;
 
 /// The top-level configuration object.
 ///
-/// This is what gets deserialised from the JSON config file. Every field is
-/// optional except `inbounds` and `outbounds`.
+/// The MySQL store reconstructs this snapshot before validation and activation.
+/// Every field is optional except `inbounds` and `outbounds`.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct Config {
     /// Operating profile. `"compat"` (default) enables all features.
