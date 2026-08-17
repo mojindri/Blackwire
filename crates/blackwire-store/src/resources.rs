@@ -210,7 +210,7 @@ impl Database {
 
     pub async fn list_users(&self, revision: i64) -> StoreResult<Vec<UserRecord>> {
         let rows = sqlx::query(
-            "SELECT u.user_id, u.inbound_id, u.email, u.enabled, u.flow, u.note, u.traffic_limit_bytes, u.expiry_at, u.subscription_token, c.credential_kind, c.uuid_value, c.method, COALESCE(t.upload_bytes,0) upload_bytes, COALESCE(t.download_bytes,0) download_bytes, COALESCE(e.status,CASE WHEN NOT u.enabled THEN 'disabled' WHEN u.expiry_at IS NOT NULL AND u.expiry_at<=UTC_TIMESTAMP(6) THEN 'expired' ELSE 'current' END) enforcement_status FROM users u JOIN user_credentials c ON c.revision_id=u.revision_id AND c.user_id=u.user_id LEFT JOIN user_traffic t ON t.user_id=u.user_id LEFT JOIN enforcement_state e ON e.user_id=u.user_id WHERE u.revision_id=? ORDER BY u.user_id",
+            "SELECT u.user_id, u.inbound_id, u.email, u.enabled, u.flow, u.note, u.traffic_limit_bytes, u.expiry_at, u.subscription_token, c.credential_kind, c.uuid_value, c.method, CAST(COALESCE(t.upload_bytes,0) AS UNSIGNED) upload_bytes, CAST(COALESCE(t.download_bytes,0) AS UNSIGNED) download_bytes, COALESCE(e.status,CASE WHEN NOT u.enabled THEN 'disabled' WHEN u.expiry_at IS NOT NULL AND u.expiry_at<=UTC_TIMESTAMP(6) THEN 'expired' ELSE 'current' END) enforcement_status FROM users u JOIN user_credentials c ON c.revision_id=u.revision_id AND c.user_id=u.user_id LEFT JOIN user_traffic t ON t.user_id=u.user_id LEFT JOIN enforcement_state e ON e.user_id=u.user_id WHERE u.revision_id=? ORDER BY u.user_id",
         )
         .bind(revision)
         .fetch_all(self.pool())
