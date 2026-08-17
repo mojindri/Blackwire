@@ -247,13 +247,11 @@ impl Database {
     ) -> StoreResult<MutationResult> {
         validate_inbound(&input)?;
         let state = self.state().await?;
+        let class = self
+            .inbound_activation_class(expected_revision, input.id, &input.transport)
+            .await?;
         let (mut tx, revision) = self
-            .fork_revision(
-                expected_revision,
-                actor,
-                "Save inbound",
-                ActivationClass::ListenerHandover,
-            )
+            .fork_revision(expected_revision, actor, "Save inbound", class)
             .await?;
         let id = input.id.unwrap_or(
             sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(inbound_id) FROM inbounds")
@@ -281,13 +279,17 @@ impl Database {
             sqlx::query("INSERT INTO stream_settings (revision_id,endpoint_kind,endpoint_id,network,security) VALUES (?,'inbound',?,?,?)")
                 .bind(revision).bind(id).bind(input.transport).bind(input.security).execute(&mut *tx).await?;
         }
-        Database::publish_revision(&mut tx, revision, ActivationClass::ListenerHandover).await?;
+        Database::publish_revision(&mut tx, revision, class).await?;
         tx.commit().await?;
         Ok(mutation_result(
             &state,
             revision,
-            ActivationClass::ListenerHandover,
-            "Inbound saved",
+            class,
+            if class == ActivationClass::MaintenanceRequired {
+                "Inbound saved; mKCP activation requires maintenance confirmation"
+            } else {
+                "Inbound saved"
+            },
         ))
     }
 
@@ -298,26 +300,28 @@ impl Database {
         id: i64,
     ) -> StoreResult<MutationResult> {
         let state = self.state().await?;
+        let class = self
+            .inbound_activation_class(expected_revision, Some(id), "tcp")
+            .await?;
         let (mut tx, revision) = self
-            .fork_revision(
-                expected_revision,
-                actor,
-                "Delete inbound",
-                ActivationClass::ListenerHandover,
-            )
+            .fork_revision(expected_revision, actor, "Delete inbound", class)
             .await?;
         sqlx::query("DELETE FROM inbounds WHERE revision_id=? AND inbound_id=?")
             .bind(revision)
             .bind(id)
             .execute(&mut *tx)
             .await?;
-        Database::publish_revision(&mut tx, revision, ActivationClass::ListenerHandover).await?;
+        Database::publish_revision(&mut tx, revision, class).await?;
         tx.commit().await?;
         Ok(mutation_result(
             &state,
             revision,
-            ActivationClass::ListenerHandover,
-            "Inbound deleted",
+            class,
+            if class == ActivationClass::MaintenanceRequired {
+                "Inbound deleted; mKCP shutdown requires maintenance confirmation"
+            } else {
+                "Inbound deleted"
+            },
         ))
     }
 
@@ -329,7 +333,7 @@ impl Database {
     ) -> StoreResult<MutationResult> {
         validate_outbound(&input)?;
         let state = self.state().await?;
-        let class = ActivationClass::MaintenanceRequired;
+        let class = ActivationClass::HotSwap;
         let (mut tx, revision) = self
             .fork_revision(expected_revision, actor, "Save outbound", class)
             .await?;
@@ -361,12 +365,7 @@ impl Database {
         }
         Database::publish_revision(&mut tx, revision, class).await?;
         tx.commit().await?;
-        Ok(mutation_result(
-            &state,
-            revision,
-            class,
-            "Outbound saved; maintenance activation required",
-        ))
+        Ok(mutation_result(&state, revision, class, "Outbound saved"))
     }
 
     pub async fn delete_outbound(
@@ -376,7 +375,7 @@ impl Database {
         id: i64,
     ) -> StoreResult<MutationResult> {
         let state = self.state().await?;
-        let class = ActivationClass::MaintenanceRequired;
+        let class = ActivationClass::HotSwap;
         let (mut tx, revision) = self
             .fork_revision(expected_revision, actor, "Delete outbound", class)
             .await?;
@@ -387,12 +386,7 @@ impl Database {
             .await?;
         Database::publish_revision(&mut tx, revision, class).await?;
         tx.commit().await?;
-        Ok(mutation_result(
-            &state,
-            revision,
-            class,
-            "Outbound deleted; maintenance activation required",
-        ))
+        Ok(mutation_result(&state, revision, class, "Outbound deleted"))
     }
 
     pub async fn save_user(
@@ -448,6 +442,32 @@ impl Database {
         Database::publish_revision(&mut tx, revision, class).await?;
         tx.commit().await?;
         Ok(mutation_result(&state, revision, class, "User deleted"))
+    }
+
+    async fn inbound_activation_class(
+        &self,
+        revision: i64,
+        inbound_id: Option<i64>,
+        next_transport: &str,
+    ) -> StoreResult<ActivationClass> {
+        if next_transport == "kcp" {
+            return Ok(ActivationClass::MaintenanceRequired);
+        }
+        let Some(inbound_id) = inbound_id else {
+            return Ok(ActivationClass::ListenerHandover);
+        };
+        let current_transport: Option<String> = sqlx::query_scalar(
+            "SELECT COALESCE(s.network,'tcp') FROM inbounds i LEFT JOIN stream_settings s ON s.revision_id=i.revision_id AND s.endpoint_kind='inbound' AND s.endpoint_id=i.inbound_id WHERE i.revision_id=? AND i.inbound_id=?",
+        )
+        .bind(revision)
+        .bind(inbound_id)
+        .fetch_optional(self.pool())
+        .await?;
+        Ok(if current_transport.as_deref() == Some("kcp") {
+            ActivationClass::MaintenanceRequired
+        } else {
+            ActivationClass::ListenerHandover
+        })
     }
 }
 
