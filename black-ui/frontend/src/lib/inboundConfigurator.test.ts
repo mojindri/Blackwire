@@ -783,6 +783,18 @@ describe("inboundConfigurator", () => {
     expect(clearedBuilt.limits).toBe("");
   });
 
+  it("keeps enabled empty SplitHTTP option groups through structured sync", () => {
+    const initial = createInboundEditorState();
+    const state = syncAfterStructuredChange({
+      ...initial,
+      network: "splithttp",
+      splitHttp: { ...initial.splitHttp, xmuxEnabled: true, downloadEnabled: true }
+    });
+    expect(state.splitHttp.xmuxEnabled).toBe(true);
+    expect(state.splitHttp.downloadEnabled).toBe(true);
+    expect(parseObject(buildInboundInput(state).streamSettings).splithttpSettings).toMatchObject({ xmux: {}, downloadSettings: {} });
+  });
+
   it("keeps Shadowsocks method only for shadowsocks protocol", () => {
     const ssBuilt = buildInboundInput(
       syncAfterStructuredChange({

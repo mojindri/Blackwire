@@ -270,7 +270,10 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
   }
 
   if (state.network === "splithttp") {
-    streamSettings.splithttpSettings = pruneEmpty(buildSplitHttp({ ...state.splitHttp, path: state.splitHttp.path || state.splitHttpPath }, streamSettings.splithttpSettings));
+    const splitHttp = pruneEmpty(buildSplitHttp({ ...state.splitHttp, path: state.splitHttp.path || state.splitHttpPath }, streamSettings.splithttpSettings));
+    if (state.splitHttp.xmuxEnabled && !("xmux" in splitHttp)) splitHttp.xmux = {};
+    if (state.splitHttp.downloadEnabled && !("downloadSettings" in splitHttp)) splitHttp.downloadSettings = {};
+    streamSettings.splithttpSettings = splitHttp;
   } else {
     delete streamSettings.splithttpSettings;
   }
@@ -373,6 +376,12 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
   }
 
   streamSettings = pruneEmpty(streamSettings);
+  if (state.network === "splithttp") {
+    const splitHttp = objectValue(streamSettings.splithttpSettings) ?? {};
+    if (state.splitHttp.xmuxEnabled) splitHttp.xmux = objectValue(splitHttp.xmux) ?? {};
+    if (state.splitHttp.downloadEnabled) splitHttp.downloadSettings = objectValue(splitHttp.downloadSettings) ?? {};
+    streamSettings.splithttpSettings = splitHttp;
+  }
   settings = pruneEmpty(settings);
   sniffing = pruneEmpty(sniffing);
   limits = pruneEmpty(limits);

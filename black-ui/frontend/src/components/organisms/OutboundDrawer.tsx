@@ -503,6 +503,7 @@ export function OutboundDrawer({
                 <Field label="ALPN">
                   <Input value={state.tlsAlpn} onChange={(e) => updateStructured({ tlsAlpn: e.target.value })} placeholder="h2, http/1.1" />
                 </Field>
+                <Switch checked={state.tlsAllowInsecure} onChange={(tlsAllowInsecure) => updateStructured({ tlsAllowInsecure })} label="Allow insecure certificates" />
                 <Field label="Certificate file">
                   <Input value={state.tlsCertificateFile} onChange={(e) => updateStructured({ tlsCertificateFile: e.target.value })} placeholder="/etc/blackwire/fullchain.pem" />
                 </Field>
