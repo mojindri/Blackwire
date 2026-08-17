@@ -268,4 +268,3 @@ describe("userConfigurator", () => {
     expect(built.credential?.customKey).toBe("keep-me");
   });
 });
-

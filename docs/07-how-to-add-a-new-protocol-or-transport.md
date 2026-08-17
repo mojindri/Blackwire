@@ -133,7 +133,7 @@ Do not invent parallel core types.
 
 Read:
 
-- [crates/blackwire-app/src/features.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-app/src/features.rs)
+- [crates/blackwire-app/src/features.rs](../crates/blackwire-app/src/features.rs)
 
 Your new handler should fit those trait contracts cleanly.
 
@@ -180,9 +180,9 @@ For end-to-end behavior.
 
 Examples to copy style from:
 
-- [crates/blackwire-transport/src/tcp.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/tcp.rs)
-- [crates/blackwire-transport/src/tls.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/tls.rs)
-- [crates/blackwire-transport/src/ws.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/ws.rs)
+- [crates/blackwire-transport/src/tcp.rs](../crates/blackwire-transport/src/tcp.rs)
+- [crates/blackwire-transport/src/tls.rs](../crates/blackwire-transport/src/tls.rs)
+- [crates/blackwire-transport/src/ws.rs](../crates/blackwire-transport/src/ws.rs)
 
 ## 2. Expose a clean stream abstraction
 

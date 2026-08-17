@@ -5,7 +5,7 @@ RUN npm ci
 COPY black-ui/frontend/ ./
 RUN npm run build
 
-FROM rust:1.83-slim AS server
+FROM rust:slim-bookworm AS server
 WORKDIR /build
 COPY . .
 RUN cargo build --release --bin black-ui

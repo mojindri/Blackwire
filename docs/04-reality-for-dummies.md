@@ -54,10 +54,10 @@ There are two sides in the repo:
 
 Main files:
 
-- [crates/blackwire-transport/src/reality.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality.rs)
-- [crates/blackwire-transport/src/reality/client.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality/client.rs)
-- [crates/blackwire-tls/src/lib.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-tls/src/lib.rs)
-- [crates/blackwire-tls/src/client_hello.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-tls/src/client_hello.rs)
+- [crates/blackwire-transport/src/reality.rs](../crates/blackwire-transport/src/reality.rs)
+- [crates/blackwire-transport/src/reality/client.rs](../crates/blackwire-transport/src/reality/client.rs)
+- [crates/blackwire-tls/src/lib.rs](../crates/blackwire-tls/src/lib.rs)
+- [crates/blackwire-tls/src/client_hello.rs](../crates/blackwire-tls/src/client_hello.rs)
 
 Client responsibilities:
 
@@ -72,9 +72,9 @@ Client responsibilities:
 
 Main files:
 
-- [crates/blackwire-transport/src/reality/server.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality/server.rs)
-- [crates/blackwire-transport/src/reality/parser.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality/parser.rs)
-- [crates/blackwire-core/src/reality.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/reality.rs)
+- [crates/blackwire-transport/src/reality/server.rs](../crates/blackwire-transport/src/reality/server.rs)
+- [crates/blackwire-transport/src/reality/parser.rs](../crates/blackwire-transport/src/reality/parser.rs)
+- [crates/blackwire-core/src/reality.rs](../crates/blackwire-core/src/reality.rs)
 
 Server responsibilities:
 
@@ -133,7 +133,7 @@ Here is the simplified success path.
 
 ### Step 1: Client generates key material
 
-In [client.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality/client.rs), the client generates:
+In [client.rs](../crates/blackwire-transport/src/reality/client.rs), the client generates:
 
 - an `x25519` key share for REALITY auth and normal TLS
 - a `secp256r1` key share so real servers that prefer P-256 can work
@@ -204,7 +204,7 @@ This uses the **custom TLS 1.3 server path** in `tls13_server.rs`, not generic
 `rustls` accept. Real Xray/sing-box clients (uTLS) require that path — including
 the correct `CertificateVerify` signature input and REALITY cert HMAC.
 
-Wiring lives in [crates/blackwire-core/src/reality.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/reality.rs).
+Wiring lives in [crates/blackwire-core/src/reality.rs](../crates/blackwire-core/src/reality.rs).
 
 ### Step 8: TLS 1.3 completes
 
@@ -249,7 +249,7 @@ That is why the interop docs emphasize full TLS completion, not just auth token 
 
 See:
 
-- [tests/interop/README.md](/Users/mojnader/RustroverProjects/v2ray/tests/interop/README.md)
+- [tests/interop/README.md](../tests/interop/README.md)
 
 ## What `d0` And `d1` Mean
 
@@ -293,28 +293,28 @@ That is why the Xray interop harness uses a real HTTPS endpoint on `:443`.
 
 If you want to study REALITY in code, read in this order:
 
-1. [crates/blackwire-transport/src/reality.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality.rs)
+1. [crates/blackwire-transport/src/reality.rs](../crates/blackwire-transport/src/reality.rs)
    overview and module split
 
-2. [crates/blackwire-transport/src/reality/client.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality/client.rs)
+2. [crates/blackwire-transport/src/reality/client.rs](../crates/blackwire-transport/src/reality/client.rs)
    client build/send/handshake path
 
-3. [crates/blackwire-transport/src/reality/server.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality/server.rs)
+3. [crates/blackwire-transport/src/reality/server.rs](../crates/blackwire-transport/src/reality/server.rs)
    server auth and fallback path
 
-4. [crates/blackwire-transport/src/reality/parser.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality/parser.rs)
+4. [crates/blackwire-transport/src/reality/parser.rs](../crates/blackwire-transport/src/reality/parser.rs)
    field extraction
 
-5. [crates/blackwire-transport/src/reality/tls13_server.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality/tls13_server.rs)
+5. [crates/blackwire-transport/src/reality/tls13_server.rs](../crates/blackwire-transport/src/reality/tls13_server.rs)
    post-auth TLS 1.3 server handshake (ServerHello through Finished)
 
-6. [crates/blackwire-core/src/reality.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/reality.rs)
+6. [crates/blackwire-core/src/reality.rs](../crates/blackwire-core/src/reality.rs)
    how REALITY auth connects to TLS completion and VLESS
 
-7. [docs/reality-interop.md](/Users/mojnader/RustroverProjects/v2ray/docs/reality-interop.md)
+7. [docs/reality-interop.md](reality-interop.md)
    interop notes (auth key, cert HMAC, CertificateVerify)
 
-8. [tests/interop/README.md](/Users/mojnader/RustroverProjects/v2ray/tests/interop/README.md)
+8. [tests/interop/README.md](../tests/interop/README.md)
    what compatibility is actually being proven
 
 ## Beginner Summary

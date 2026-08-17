@@ -1,12 +1,12 @@
 [Unit]
 Description=blackwire proxy runtime
-Documentation=https://github.com/mojindri/v2ray
+Documentation=https://github.com/mojindri/Blackwire
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=nobody
-Group=black-ui
+User=blackwire
+Group=blackwire
 ExecStart=/usr/bin/blackwire run
 LoadCredential=database-url:/etc/blackwire/runtime-database-url
 WorkingDirectory=/var/lib/blackwire

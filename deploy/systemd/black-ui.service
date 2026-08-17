@@ -5,13 +5,14 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=nobody
-Group=black-ui
+# Use the same unprivileged account and install prefix as scripts/install.sh.
+User=blackwire
+Group=blackwire
 ExecStart=/usr/local/bin/black-ui
 WorkingDirectory=/var/lib/black-ui
 LoadCredential=database-url:/etc/blackwire/ui-database-url
 Environment=BLACK_UI_LISTEN=127.0.0.1:18080
-Environment=BLACK_UI_STATIC_DIR=/usr/share/black-ui/frontend/dist
+Environment=BLACK_UI_STATIC_DIR=/usr/local/share/black-ui/frontend/dist
 Environment=BLACK_UI_COOKIE_SECURE=0
 Restart=on-failure
 RestartSec=5s

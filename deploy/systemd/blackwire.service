@@ -1,6 +1,8 @@
 # blackwire.service — systemd unit for the blackwire process.
 #
 # Installation:
+#   useradd --system --home /var/lib/blackwire --shell /usr/sbin/nologin blackwire
+#   install -d -o blackwire -g blackwire /var/lib/blackwire /run/blackwire
 #   cp deploy/systemd/blackwire.service /etc/systemd/system/
 #   systemctl daemon-reload
 #   systemctl enable --now blackwire
@@ -13,14 +15,14 @@
 
 [Unit]
 Description=blackwire — v2ray-compatible proxy platform
-Documentation=https://github.com/mojindri/v2ray
+Documentation=https://github.com/mojindri/Blackwire
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 # Run as an unprivileged user.
-User=nobody
-Group=black-ui
+User=blackwire
+Group=blackwire
 
 ExecStart=/usr/local/bin/blackwire run
 LoadCredential=database-url:/etc/blackwire/runtime-database-url

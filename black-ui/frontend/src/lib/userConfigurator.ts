@@ -252,4 +252,3 @@ function fromInputDateTime(value: string): string | null {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
-

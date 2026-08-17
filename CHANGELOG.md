@@ -8,6 +8,32 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.1.41 - 2026-08-17
+
+### Added
+
+- MySQL 8.4/InnoDB is now the sole persistent control plane for the runtime,
+  CLI, and Black UI, with explicit schema migrations and immutable revisions.
+- Black UI now provides typed control surfaces for users, endpoints, routing,
+  DNS, runtime activation, performance settings, and contextual field help.
+- Docker and native deployment flows now support separate least-privilege
+  runtime, UI, and migrator database credentials.
+
+### Changed
+
+- Runtime configuration files, SQLite persistence, raw server configuration
+  editing, and deployable JSON examples were removed.
+- Runtime activation now supports hot swap, listener handover, maintenance
+  confirmation, rollback, and database-outage reconciliation.
+
+### Fixed
+
+- Structured inbound and outbound editors preserve complete transport and
+  security settings, including SplitHTTP option groups and outbound TLS
+  certificate verification policy.
+- Black UI forms, Routing & DNS, responsive layouts, and strict Rust 1.97
+  lint compatibility were brought into alignment with the current core.
+
 ## 0.1.40 - 2026-06-28
 
 ### Fixed

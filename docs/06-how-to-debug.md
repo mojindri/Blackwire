@@ -86,9 +86,9 @@ The test often tells you:
 
 Good places:
 
-- [crates/blackwire-transport/tests/production_readiness.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/tests/production_readiness.rs)
-- [crates/blackwire-protocol/tests/production_readiness.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-protocol/tests/production_readiness.rs)
-- [crates/blackwire-core/tests/production_readiness.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/tests/production_readiness.rs)
+- [crates/blackwire-transport/tests/production_readiness.rs](../crates/blackwire-transport/tests/production_readiness.rs)
+- [crates/blackwire-protocol/tests/production_readiness.rs](../crates/blackwire-protocol/tests/production_readiness.rs)
+- [crates/blackwire-core/tests/production_readiness.rs](../crates/blackwire-core/tests/production_readiness.rs)
 
 ## Rule 4: Distinguish "Stuck" From "Failed"
 
@@ -191,8 +191,8 @@ The live peer can reveal requirements your self-interop does not enforce.
 
 Read:
 
-- [crates/blackwire-cli/src/main.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-cli/src/main.rs)
-- [crates/blackwire-core/src/instance/mod.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance/mod.rs)
+- [crates/blackwire-cli/src/main.rs](../crates/blackwire-cli/src/main.rs)
+- [crates/blackwire-core/src/instance/mod.rs](../crates/blackwire-core/src/instance/mod.rs)
 
 Check:
 
@@ -205,8 +205,8 @@ Check:
 
 Read:
 
-- [crates/blackwire-app/src/router.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-app/src/router.rs)
-- [crates/blackwire-app/src/dispatcher.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-app/src/dispatcher.rs)
+- [crates/blackwire-app/src/router.rs](../crates/blackwire-app/src/router.rs)
+- [crates/blackwire-app/src/dispatcher.rs](../crates/blackwire-app/src/dispatcher.rs)
 
 Check:
 
@@ -219,8 +219,8 @@ Check:
 
 Read:
 
-- [crates/blackwire-protocol/src/socks.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-protocol/src/socks.rs)
-- [crates/blackwire-protocol/src/http_connect.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-protocol/src/http_connect.rs)
+- [crates/blackwire-protocol/src/socks.rs](../crates/blackwire-protocol/src/socks.rs)
+- [crates/blackwire-protocol/src/http_connect.rs](../crates/blackwire-protocol/src/http_connect.rs)
 
 ## VLESS / Trojan / VMess issues
 
@@ -233,11 +233,11 @@ Read:
 
 Read:
 
-- [docs/04-reality-for-dummies.md](/Users/mojnader/RustroverProjects/v2ray/docs/04-reality-for-dummies.md)
-- [tests/interop/README.md](/Users/mojnader/RustroverProjects/v2ray/tests/interop/README.md)
-- [crates/blackwire-transport/src/reality/client.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality/client.rs)
-- [crates/blackwire-transport/src/reality/server.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-transport/src/reality/server.rs)
-- [crates/blackwire-core/src/reality.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/reality.rs)
+- [docs/04-reality-for-dummies.md](04-reality-for-dummies.md)
+- [tests/interop/README.md](../tests/interop/README.md)
+- [crates/blackwire-transport/src/reality/client.rs](../crates/blackwire-transport/src/reality/client.rs)
+- [crates/blackwire-transport/src/reality/server.rs](../crates/blackwire-transport/src/reality/server.rs)
+- [crates/blackwire-core/src/reality.rs](../crates/blackwire-core/src/reality.rs)
 
 Look specifically for:
 
@@ -246,26 +246,22 @@ Look specifically for:
 - `ClientHello` layout
 - TLS group selection
 
-## How To Use Examples For Debugging
+## How To Build A Reduced Reproduction
 
-The `examples/` directory is useful when the full workspace feels too big.
+Blackwire no longer ships deployable JSON examples because MySQL is the only
+configuration source of truth. Start from a named relational seed preset, then
+reduce the problem through Black UI:
 
-Examples include:
+```bash
+blackwire db seed socks-local
+blackwire db seed vless-local
+blackwire db seed trojan-local
+blackwire db seed shadowsocks-local
+```
 
-- REALITY local demos
-- Hysteria2 local demos
-- VLESS+WebSocket local demos
-- SS2022 local demos
-- ShadowTLS demos
-- TUN demos
-
-Use the nearest example as a reduced reproduction case.
-
-Good starting point:
-
-- [examples/reality-client-server/README.md](/Users/mojnader/RustroverProjects/v2ray/examples/reality-client-server/README.md)
-- [examples/vless-ws-local/README.md](/Users/mojnader/RustroverProjects/v2ray/examples/vless-ws-local/README.md)
-- [examples/http-vmess-grpc-local/README.md](/Users/mojnader/RustroverProjects/v2ray/examples/http-vmess-grpc-local/README.md)
+See [the database seed guide](../examples/README.md) for the supported workflow.
+For protocol-level failures, use the nearest focused integration test as the
+reproduction and run it with `--nocapture`.
 
 ## Useful Commands
 
