@@ -50,7 +50,6 @@ use blackwire_config::schema::{
     explain_cost, validate_fast_profile, Config, ProfileMode,
     ProfileViolation,
 };
-use blackwire_config::ConfigManager;
 use blackwire_core::{requires_instance_restart, Instance};
 use blackwire_store::Database;
 
@@ -478,16 +477,16 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
         .await
         .context("loading desired configuration revision")?;
     let initial_revision = stored.revision;
-    let manager: Arc<ConfigManager> = ConfigManager::from_config(stored.config);
+    let initial_config = Arc::new(stored.config);
 
     // Apply CLI profile override and run Fast Profile validation.
     let profile_override = args.profile;
-    apply_profile_override_and_validate(&manager.get(), profile_override)?;
+    apply_profile_override_and_validate(&initial_config, profile_override)?;
 
     // Step 4: Build the proxy Instance.
     // `Instance::from_config()` reads the current config snapshot, builds
     // all inbound/outbound handlers, and starts all TCP listener tasks.
-    let config = effective_config(manager.get(), profile_override);
+    let config = effective_config(initial_config, profile_override);
     let api_config = config
         .api
         .as_ref()
