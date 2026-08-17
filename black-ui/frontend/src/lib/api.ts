@@ -7,11 +7,16 @@ import type {
   ManagedUser,
   Outbound,
   OutboundInput,
+  RealityClientValues,
+  RealityGeneratedValues,
   RevisionSummary,
   RoutingDns,
   ServiceStatus,
   Settings,
   Status,
+  TlsSelfSignedInput,
+  TlsSelfSignedResult,
+  TlsServerValues,
   TrafficSnapshot,
   UserInput
 } from "./types";
@@ -74,6 +79,11 @@ export const api = {
   updateSettings: (settings: Settings) =>
     request<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
   traffic: () => request<TrafficSnapshot>("/api/runtime/traffic"),
+  realityClientValues: () => request<RealityClientValues[]>("/api/reality/client-values"),
+  realityGenerateValues: () => request<RealityGeneratedValues>("/api/reality/generate-values", { method: "POST" }),
+  tlsServerValues: () => request<TlsServerValues[]>("/api/tls/server-values"),
+  tlsGenerateSelfSigned: (input: TlsSelfSignedInput) =>
+    request<TlsSelfSignedResult>("/api/tls/generate-self-signed", body(input)),
   revisions: () => request<RevisionSummary[]>("/api/runtime/revisions"),
   routingDns: () => request<RoutingDns>("/api/routing-dns"),
   updateRoutingDns: (value: RoutingDns) => request<ApplyResult>("/api/routing-dns", { method: "PUT", body: JSON.stringify(value) }),

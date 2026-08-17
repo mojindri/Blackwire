@@ -79,8 +79,14 @@ export interface Inbound {
   port: number;
   protocol: string;
   enabled: boolean;
-  transport: string;
-  security: string;
+  transport?: string;
+  security?: string;
+  settings: string;
+  streamSettings: string;
+  sniffing: string;
+  limits: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface InboundInput {
@@ -89,8 +95,12 @@ export interface InboundInput {
   port: number;
   protocol: string;
   enabled: boolean;
-  transport: string;
-  security: string;
+  transport?: string;
+  security?: string;
+  settings?: string;
+  streamSettings?: string;
+  sniffing?: string;
+  limits?: string;
 }
 
 export interface Outbound {
@@ -98,20 +108,26 @@ export interface Outbound {
   tag: string;
   protocol: string;
   enabled: boolean;
-  address: string | null;
-  port: number | null;
-  transport: string;
-  security: string;
+  address?: string | null;
+  port?: number | null;
+  transport?: string;
+  security?: string;
+  settings: string;
+  streamSettings: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface OutboundInput {
   tag: string;
   protocol: string;
   enabled: boolean;
-  address: string | null;
-  port: number | null;
-  transport: string;
-  security: string;
+  address?: string | null;
+  port?: number | null;
+  transport?: string;
+  security?: string;
+  settings?: string;
+  streamSettings?: string;
 }
 
 export interface ManagedUser {
@@ -120,17 +136,20 @@ export interface ManagedUser {
   email: string;
   uuid: string;
   flow: string;
-  credentialKind: string;
-  method: string | null;
+  credentialKind?: string;
+  credential: Record<string, unknown>;
+  method?: string | null;
   note: string;
   enabled: boolean;
   trafficLimitBytes: number | null;
   expiryAt: string | null;
-  subscriptionToken: string;
+  subscriptionToken?: string;
   subToken: string;
   uploadBytes: number;
   downloadBytes: number;
   enforcementStatus: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface UserInput {
@@ -139,6 +158,7 @@ export interface UserInput {
   uuid: string;
   flow?: string;
   credentialKind?: string;
+  credential?: Record<string, unknown>;
   password?: string;
   method?: string;
   auth?: string;

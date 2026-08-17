@@ -100,18 +100,22 @@ impl Database {
         let (mut tx, revision) = self
             .fork_revision(expected_revision, actor, "Save routing and DNS", class)
             .await?;
-        sqlx::query("DELETE FROM routing_config WHERE revision_id=?")
-            .bind(revision)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM dns_config WHERE revision_id=?")
-            .bind(revision)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("INSERT INTO routing_config (revision_id,enabled,domain_strategy,geoip_file,geosite_file) VALUES (?,TRUE,?,NULL,NULL)")
+        // Only replace the fields represented by this write model. Removing
+        // routing_config would cascade into balancers and would also discard
+        // GeoIP/GeoSite paths; replacing dns_config would silently disable
+        // FakeIP. Both are core settings that a basic UI edit must preserve.
+        sqlx::query("INSERT INTO routing_config (revision_id,enabled,domain_strategy,geoip_file,geosite_file) VALUES (?,TRUE,?,NULL,NULL) ON DUPLICATE KEY UPDATE enabled=TRUE,domain_strategy=VALUES(domain_strategy)")
             .bind(revision).bind(input.domain_strategy).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO dns_config (revision_id,enabled,fake_ip_enabled,fake_ip_pool) VALUES (?,TRUE,FALSE,NULL)")
+        sqlx::query("INSERT INTO dns_config (revision_id,enabled,fake_ip_enabled,fake_ip_pool) VALUES (?,TRUE,FALSE,NULL) ON DUPLICATE KEY UPDATE enabled=TRUE")
             .bind(revision).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM routing_rules WHERE revision_id=?")
+            .bind(revision)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM dns_servers WHERE revision_id=?")
+            .bind(revision)
+            .execute(&mut *tx)
+            .await?;
         for (position, server) in input.dns_servers.iter().enumerate() {
             sqlx::query("INSERT INTO dns_servers (revision_id,position,address) VALUES (?,?,?)")
                 .bind(revision)

@@ -8,6 +8,7 @@ mod models;
 mod mysql_auth;
 mod mysql_state;
 mod service;
+mod tls_cert;
 mod util;
 
 use anyhow::Result;

@@ -1,7 +1,10 @@
 use crate::sqlx;
+use blackwire_config::schema::{
+    EndpointSettings, InboundLimitsConfig, SniffingConfig, StreamSettingsConfig,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+use sqlx::{MySql, Row, Transaction};
 
 use crate::{ActivationClass, ActivationState, Database, MutationResult, StoreError, StoreResult};
 
@@ -85,6 +88,10 @@ pub struct InboundWrite {
     pub enabled: bool,
     pub transport: String,
     pub security: String,
+    pub settings: Option<EndpointSettings>,
+    pub stream_settings: Option<StreamSettingsConfig>,
+    pub sniffing: Option<SniffingConfig>,
+    pub limits: Option<InboundLimitsConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +105,8 @@ pub struct OutboundWrite {
     pub port: Option<u16>,
     pub transport: String,
     pub security: String,
+    pub settings: Option<EndpointSettings>,
+    pub stream_settings: Option<StreamSettingsConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -287,13 +296,14 @@ impl Database {
             .map_or(0, |value| value + 1)
         };
         sqlx::query("INSERT INTO inbounds (revision_id,inbound_id,tag,listen_address,listen_port,protocol,enabled,position) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE tag=VALUES(tag),listen_address=VALUES(listen_address),listen_port=VALUES(listen_port),protocol=VALUES(protocol),enabled=VALUES(enabled)")
-            .bind(revision).bind(id).bind(input.tag).bind(input.listen).bind(input.port).bind(input.protocol).bind(input.enabled).bind(position)
+            .bind(revision).bind(id).bind(&input.tag).bind(&input.listen).bind(input.port).bind(&input.protocol).bind(input.enabled).bind(position)
             .execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM stream_settings WHERE revision_id=? AND endpoint_kind='inbound' AND endpoint_id=?").bind(revision).bind(id).execute(&mut *tx).await?;
-        if input.transport != "tcp" || input.security != "none" {
-            sqlx::query("INSERT INTO stream_settings (revision_id,endpoint_kind,endpoint_id,network,security) VALUES (?,'inbound',?,?,?)")
-                .bind(revision).bind(id).bind(input.transport).bind(input.security).execute(&mut *tx).await?;
-        }
+        // Update the stream envelope in place. Deleting this row cascades into
+        // TLS, REALITY, WebSocket, gRPC, and mKCP detail tables, so a basic
+        // panel edit must never replace it destructively.
+        sqlx::query("INSERT INTO stream_settings (revision_id,endpoint_kind,endpoint_id,network,security) VALUES (?,'inbound',?,?,?) ON DUPLICATE KEY UPDATE network=VALUES(network),security=VALUES(security)")
+            .bind(revision).bind(id).bind(&input.transport).bind(&input.security).execute(&mut *tx).await?;
+        write_inbound_details(&mut tx, revision, id, &input).await?;
         Database::publish_revision(&mut tx, revision, class).await?;
         tx.commit().await?;
         Ok(mutation_result(
@@ -371,13 +381,14 @@ impl Database {
             .map_or(0, |value| value + 1)
         };
         sqlx::query("INSERT INTO outbounds (revision_id,outbound_id,tag,protocol,enabled,position,server_address,server_port,domain_strategy,deny_loopback,reject_ipv6_literal) VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL) ON DUPLICATE KEY UPDATE tag=VALUES(tag),protocol=VALUES(protocol),enabled=VALUES(enabled),server_address=VALUES(server_address),server_port=VALUES(server_port)")
-            .bind(revision).bind(id).bind(input.tag).bind(input.protocol).bind(input.enabled).bind(position).bind(input.address).bind(input.port)
+            .bind(revision).bind(id).bind(&input.tag).bind(&input.protocol).bind(input.enabled).bind(position).bind(&input.address).bind(input.port)
             .execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM stream_settings WHERE revision_id=? AND endpoint_kind='outbound' AND endpoint_id=?").bind(revision).bind(id).execute(&mut *tx).await?;
-        if input.transport != "tcp" || input.security != "none" {
-            sqlx::query("INSERT INTO stream_settings (revision_id,endpoint_kind,endpoint_id,network,security) VALUES (?,'outbound',?,?,?)")
-                .bind(revision).bind(id).bind(input.transport).bind(input.security).execute(&mut *tx).await?;
-        }
+        // Preserve protocol/transport child rows when the panel changes only
+        // the endpoint envelope. See the inbound path above for why this must
+        // be an upsert rather than delete-and-recreate.
+        sqlx::query("INSERT INTO stream_settings (revision_id,endpoint_kind,endpoint_id,network,security) VALUES (?,'outbound',?,?,?) ON DUPLICATE KEY UPDATE network=VALUES(network),security=VALUES(security)")
+            .bind(revision).bind(id).bind(&input.transport).bind(&input.security).execute(&mut *tx).await?;
+        write_outbound_details(&mut tx, revision, id, &input).await?;
         Database::publish_revision(&mut tx, revision, class).await?;
         tx.commit().await?;
         Ok(mutation_result(&state, revision, class, "Outbound saved"))
@@ -484,6 +495,296 @@ impl Database {
             ActivationClass::ListenerHandover
         })
     }
+}
+
+async fn write_inbound_details(
+    tx: &mut Transaction<'_, MySql>,
+    revision: i64,
+    id: i64,
+    input: &InboundWrite,
+) -> StoreResult<()> {
+    if let Some(settings) = &input.settings {
+        sqlx::query("INSERT INTO inbound_protocol_settings (revision_id,inbound_id,decryption,method,auth_value,up_mbps,down_mbps,endpoint_shards) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE decryption=VALUES(decryption),method=VALUES(method),auth_value=VALUES(auth_value),up_mbps=VALUES(up_mbps),down_mbps=VALUES(down_mbps),endpoint_shards=VALUES(endpoint_shards)")
+            .bind(revision).bind(id).bind(&settings.decryption).bind(&settings.method)
+            .bind(settings.auth.as_ref().map(|value| value.as_bytes()))
+            .bind(settings.up_mbps).bind(settings.down_mbps)
+            .bind(settings.endpoint_shards.map(|value| value as u64))
+            .execute(&mut **tx).await?;
+        write_endpoint_tuning(tx, revision, "inbound", id, settings).await?;
+    }
+    if let Some(stream) = &input.stream_settings {
+        write_stream_details(tx, revision, "inbound", id, stream).await?;
+    }
+    if let Some(sniffing) = &input.sniffing {
+        sqlx::query("INSERT INTO sniffing_settings (revision_id,inbound_id,enabled,metadata_only,route_only) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE enabled=VALUES(enabled),metadata_only=VALUES(metadata_only),route_only=VALUES(route_only)")
+            .bind(revision).bind(id).bind(sniffing.enabled).bind(sniffing.metadata_only).bind(sniffing.route_only)
+            .execute(&mut **tx).await?;
+        sqlx::query("DELETE FROM sniffing_overrides WHERE revision_id=? AND inbound_id=?")
+            .bind(revision)
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+        for (position, protocol) in sniffing.dest_override.iter().enumerate() {
+            sqlx::query("INSERT INTO sniffing_overrides (revision_id,inbound_id,position,protocol) VALUES (?,?,?,?)")
+                .bind(revision).bind(id).bind(position as u32).bind(protocol)
+                .execute(&mut **tx).await?;
+        }
+    }
+    if let Some(limits) = &input.limits {
+        sqlx::query("INSERT INTO inbound_limits (revision_id,inbound_id,max_connections,max_handshake_seconds,max_idle_seconds) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE max_connections=VALUES(max_connections),max_handshake_seconds=VALUES(max_handshake_seconds),max_idle_seconds=VALUES(max_idle_seconds)")
+            .bind(revision).bind(id).bind(limits.max_connections.map(|value| value as u64))
+            .bind(limits.max_handshake_seconds).bind(limits.max_idle_seconds)
+            .execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
+async fn write_outbound_details(
+    tx: &mut Transaction<'_, MySql>,
+    revision: i64,
+    id: i64,
+    input: &OutboundWrite,
+) -> StoreResult<()> {
+    if let Some(settings) = &input.settings {
+        let primary_user = settings.users.first().or_else(|| settings.clients.first());
+        let password = settings
+            .password
+            .as_ref()
+            .or_else(|| primary_user.and_then(|user| user.password.as_ref()));
+        let auth = settings
+            .auth
+            .as_ref()
+            .or_else(|| primary_user.and_then(|user| user.auth.as_ref()));
+        let uuid = settings
+            .uuid
+            .as_ref()
+            .or_else(|| primary_user.and_then(|user| user.id.as_ref()));
+        let flow = (!settings.flow.is_empty())
+            .then_some(&settings.flow)
+            .or_else(|| {
+                primary_user
+                    .map(|user| &user.flow)
+                    .filter(|flow| !flow.is_empty())
+            });
+        sqlx::query("UPDATE outbounds SET server_address=?,server_port=?,domain_strategy=?,deny_loopback=?,reject_ipv6_literal=? WHERE revision_id=? AND outbound_id=?")
+            .bind(settings.address.as_ref().or(settings.server.as_ref()).or(input.address.as_ref())).bind(settings.port.or(input.port))
+            .bind(&settings.domain_strategy).bind(settings.deny_loopback).bind(settings.reject_ipv6_literal)
+            .bind(revision).bind(id).execute(&mut **tx).await?;
+        sqlx::query("INSERT INTO outbound_protocol_settings (revision_id,outbound_id,password_value,auth_value,method,uuid_value,flow,server_name,skip_certificate_verify,endpoint_shards) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE password_value=VALUES(password_value),auth_value=VALUES(auth_value),method=VALUES(method),uuid_value=VALUES(uuid_value),flow=VALUES(flow),server_name=VALUES(server_name),skip_certificate_verify=VALUES(skip_certificate_verify),endpoint_shards=VALUES(endpoint_shards)")
+            .bind(revision).bind(id)
+            .bind(password.map(|value| value.as_bytes()))
+            .bind(auth.map(|value| value.as_bytes()))
+            .bind(&settings.method).bind(uuid).bind(flow).bind(&settings.server_name)
+            .bind(settings.skip_cert_verify).bind(settings.endpoint_shards.map(|value| value as u64))
+            .execute(&mut **tx).await?;
+        write_endpoint_tuning(tx, revision, "outbound", id, settings).await?;
+    }
+    if let Some(stream) = &input.stream_settings {
+        write_stream_details(tx, revision, "outbound", id, stream).await?;
+    }
+    Ok(())
+}
+
+async fn write_stream_details(
+    tx: &mut Transaction<'_, MySql>,
+    revision: i64,
+    kind: &str,
+    id: i64,
+    stream: &StreamSettingsConfig,
+) -> StoreResult<()> {
+    if let Some(tls) = &stream.tls_settings {
+        sqlx::query("INSERT INTO tls_settings (revision_id,endpoint_kind,endpoint_id,server_name,allow_insecure,certificate_file,key_file) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE server_name=VALUES(server_name),allow_insecure=VALUES(allow_insecure),certificate_file=VALUES(certificate_file),key_file=VALUES(key_file)")
+            .bind(revision).bind(kind).bind(id).bind(&tls.server_name).bind(tls.allow_insecure)
+            .bind(&tls.certificate_file).bind(&tls.key_file).execute(&mut **tx).await?;
+        sqlx::query(
+            "DELETE FROM tls_alpn WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?",
+        )
+        .bind(revision)
+        .bind(kind)
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+        for (position, protocol) in tls.alpn.iter().enumerate() {
+            sqlx::query("INSERT INTO tls_alpn (revision_id,endpoint_kind,endpoint_id,position,protocol) VALUES (?,?,?,?,?)")
+                .bind(revision).bind(kind).bind(id).bind(position as u32).bind(protocol)
+                .execute(&mut **tx).await?;
+        }
+    } else {
+        sqlx::query(
+            "DELETE FROM tls_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?",
+        )
+        .bind(revision)
+        .bind(kind)
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    if let Some(reality) = &stream.reality_settings {
+        sqlx::query("INSERT INTO reality_settings (revision_id,endpoint_kind,endpoint_id,show_details,destination,private_key,public_key,short_id,fingerprint,server_name,max_time_diff_seconds) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE show_details=VALUES(show_details),destination=VALUES(destination),private_key=VALUES(private_key),public_key=VALUES(public_key),short_id=VALUES(short_id),fingerprint=VALUES(fingerprint),server_name=VALUES(server_name),max_time_diff_seconds=VALUES(max_time_diff_seconds)")
+            .bind(revision).bind(kind).bind(id).bind(reality.show).bind(&reality.dest).bind(&reality.private_key)
+            .bind(&reality.public_key).bind(&reality.short_id).bind(&reality.fingerprint).bind(&reality.server_name)
+            .bind(reality.max_time_diff_seconds.or((reality.max_time_diff > 0).then_some(reality.max_time_diff)))
+            .execute(&mut **tx).await?;
+        sqlx::query("DELETE FROM reality_server_names WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
+            .bind(revision).bind(kind).bind(id).execute(&mut **tx).await?;
+        for (position, name) in reality.server_names.iter().enumerate() {
+            sqlx::query("INSERT INTO reality_server_names (revision_id,endpoint_kind,endpoint_id,position,server_name) VALUES (?,?,?,?,?)")
+                .bind(revision).bind(kind).bind(id).bind(position as u32).bind(name).execute(&mut **tx).await?;
+        }
+        sqlx::query("DELETE FROM reality_short_ids WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
+            .bind(revision).bind(kind).bind(id).execute(&mut **tx).await?;
+        for (position, short_id) in reality.short_ids.iter().enumerate() {
+            sqlx::query("INSERT INTO reality_short_ids (revision_id,endpoint_kind,endpoint_id,position,short_id) VALUES (?,?,?,?,?)")
+                .bind(revision).bind(kind).bind(id).bind(position as u32).bind(short_id).execute(&mut **tx).await?;
+        }
+    } else {
+        sqlx::query("DELETE FROM reality_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
+            .bind(revision).bind(kind).bind(id).execute(&mut **tx).await?;
+    }
+    write_web_transport(tx, revision, kind, id, "ws", stream.ws_settings.as_ref()).await?;
+    write_web_transport(
+        tx,
+        revision,
+        kind,
+        id,
+        "httpupgrade",
+        stream.httpupgrade_settings.as_ref(),
+    )
+    .await?;
+    write_transport_path(
+        tx,
+        revision,
+        kind,
+        id,
+        "splithttp",
+        stream
+            .splithttp_settings
+            .as_ref()
+            .map(|config| config.path.as_str()),
+    )
+    .await?;
+    if let Some(grpc) = &stream.grpc_settings {
+        sqlx::query("INSERT INTO grpc_settings (revision_id,endpoint_kind,endpoint_id,service_name,multi_mode) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE service_name=VALUES(service_name),multi_mode=VALUES(multi_mode)")
+            .bind(revision).bind(kind).bind(id).bind(&grpc.service_name).bind(grpc.multi_mode).execute(&mut **tx).await?;
+    } else {
+        sqlx::query(
+            "DELETE FROM grpc_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?",
+        )
+        .bind(revision)
+        .bind(kind)
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    if let Some(kcp) = &stream.kcp_settings {
+        sqlx::query("INSERT INTO kcp_settings (revision_id,endpoint_kind,endpoint_id,header_type,mtu,tti_ms,uplink_capacity,downlink_capacity,congestion,read_buffer_size,write_buffer_size) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE header_type=VALUES(header_type),mtu=VALUES(mtu),tti_ms=VALUES(tti_ms),uplink_capacity=VALUES(uplink_capacity),downlink_capacity=VALUES(downlink_capacity),congestion=VALUES(congestion),read_buffer_size=VALUES(read_buffer_size),write_buffer_size=VALUES(write_buffer_size)")
+            .bind(revision).bind(kind).bind(id).bind(&kcp.header).bind(kcp.mtu).bind(kcp.tti)
+            .bind(kcp.uplink_capacity).bind(kcp.downlink_capacity).bind(kcp.congestion)
+            .bind(kcp.read_buffer_size).bind(kcp.write_buffer_size).execute(&mut **tx).await?;
+    } else {
+        sqlx::query(
+            "DELETE FROM kcp_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?",
+        )
+        .bind(revision)
+        .bind(kind)
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn write_endpoint_tuning(
+    tx: &mut Transaction<'_, MySql>,
+    revision: i64,
+    kind: &str,
+    id: i64,
+    settings: &EndpointSettings,
+) -> StoreResult<()> {
+    if settings.congestion.is_none()
+        && settings.quic.is_none()
+        && settings.datagram.is_none()
+        && settings.fec.is_none()
+    {
+        sqlx::query(
+            "DELETE FROM endpoint_tuning WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?",
+        )
+        .bind(revision)
+        .bind(kind)
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+        return Ok(());
+    }
+    let congestion = settings.congestion.as_ref();
+    let quic = settings.quic.as_ref();
+    let datagram = settings.datagram.as_ref();
+    let fec = settings.fec.as_ref();
+    let endpoints = quic
+        .and_then(|value| value.endpoints.as_ref())
+        .map(|value| match value {
+            blackwire_config::schema::EndpointCount::Fixed(count) => count.to_string(),
+            blackwire_config::schema::EndpointCount::Named(name) => name.clone(),
+        });
+    sqlx::query("INSERT INTO endpoint_tuning (revision_id,endpoint_kind,endpoint_id,congestion_mode,min_ack_rate,max_queue_delay_ms,pacing_gain,loss_compensation,quic_reuse_port,quic_endpoints,quic_recv_buffer_bytes,quic_send_buffer_bytes,datagram_enabled,udp_over_datagram,datagram_policy,fec_mode,fec_max_overhead_percent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE congestion_mode=VALUES(congestion_mode),min_ack_rate=VALUES(min_ack_rate),max_queue_delay_ms=VALUES(max_queue_delay_ms),pacing_gain=VALUES(pacing_gain),loss_compensation=VALUES(loss_compensation),quic_reuse_port=VALUES(quic_reuse_port),quic_endpoints=VALUES(quic_endpoints),quic_recv_buffer_bytes=VALUES(quic_recv_buffer_bytes),quic_send_buffer_bytes=VALUES(quic_send_buffer_bytes),datagram_enabled=VALUES(datagram_enabled),udp_over_datagram=VALUES(udp_over_datagram),datagram_policy=VALUES(datagram_policy),fec_mode=VALUES(fec_mode),fec_max_overhead_percent=VALUES(fec_max_overhead_percent)")
+        .bind(revision).bind(kind).bind(id)
+        .bind(congestion.map(|value| value.mode.as_str()))
+        .bind(congestion.and_then(|value| value.min_ack_rate))
+        .bind(congestion.and_then(|value| value.max_queue_delay_ms))
+        .bind(congestion.and_then(|value| value.pacing_gain))
+        .bind(congestion.and_then(|value| value.loss_compensation))
+        .bind(quic.and_then(|value| value.reuse_port)).bind(endpoints)
+        .bind(quic.and_then(|value| value.recv_buffer_bytes).map(|value| value as u64))
+        .bind(quic.and_then(|value| value.send_buffer_bytes).map(|value| value as u64))
+        .bind(datagram.and_then(|value| value.enabled))
+        .bind(datagram.and_then(|value| value.udp_over_datagram))
+        .bind(datagram.and_then(|value| value.policy.as_deref()))
+        .bind(fec.and_then(|value| value.mode.as_deref()))
+        .bind(fec.and_then(|value| value.max_overhead_percent))
+        .execute(&mut **tx).await?;
+    Ok(())
+}
+
+async fn write_transport_path(
+    tx: &mut Transaction<'_, MySql>,
+    revision: i64,
+    kind: &str,
+    id: i64,
+    transport_kind: &str,
+    path: Option<&str>,
+) -> StoreResult<()> {
+    if let Some(path) = path {
+        sqlx::query("INSERT INTO websocket_settings (revision_id,endpoint_kind,endpoint_id,transport_kind,request_path) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE request_path=VALUES(request_path)")
+            .bind(revision).bind(kind).bind(id).bind(transport_kind).bind(path).execute(&mut **tx).await?;
+    } else {
+        sqlx::query("DELETE FROM websocket_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? AND transport_kind=?")
+            .bind(revision).bind(kind).bind(id).bind(transport_kind).execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
+async fn write_web_transport(
+    tx: &mut Transaction<'_, MySql>,
+    revision: i64,
+    kind: &str,
+    id: i64,
+    transport_kind: &str,
+    config: Option<&blackwire_config::schema::WsConfig>,
+) -> StoreResult<()> {
+    if let Some(config) = config {
+        sqlx::query("INSERT INTO websocket_settings (revision_id,endpoint_kind,endpoint_id,transport_kind,request_path) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE request_path=VALUES(request_path)")
+            .bind(revision).bind(kind).bind(id).bind(transport_kind).bind(&config.path).execute(&mut **tx).await?;
+        sqlx::query("DELETE FROM transport_headers WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? AND transport_kind=?")
+            .bind(revision).bind(kind).bind(id).bind(transport_kind).execute(&mut **tx).await?;
+        for (name, value) in &config.headers {
+            sqlx::query("INSERT INTO transport_headers (revision_id,endpoint_kind,endpoint_id,transport_kind,header_name,header_value) VALUES (?,?,?,?,?,?)")
+                .bind(revision).bind(kind).bind(id).bind(transport_kind).bind(name).bind(value).execute(&mut **tx).await?;
+        }
+    } else {
+        sqlx::query("DELETE FROM websocket_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? AND transport_kind=?")
+            .bind(revision).bind(kind).bind(id).bind(transport_kind).execute(&mut **tx).await?;
+    }
+    Ok(())
 }
 
 fn validate_inbound(input: &InboundWrite) -> StoreResult<()> {

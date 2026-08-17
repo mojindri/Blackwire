@@ -898,6 +898,7 @@ async fn cmd_db(command: DbCommand) -> Result<()> {
                     let result = database.save_inbound("blackwire-cli", expected, blackwire_store::InboundWrite {
                         id: None, tag: "socks-local".into(), listen: "127.0.0.1".into(), port: 1080,
                         protocol: "socks".into(), enabled: true, transport: "tcp".into(), security: "none".into(),
+                        settings: None, stream_settings: None, sniffing: None, limits: None,
                     }).await?;
                     println!("created revision {} ({:?})", result.revision, result.state);
                 }
@@ -912,6 +913,7 @@ async fn cmd_db(command: DbCommand) -> Result<()> {
                     database.save_inbound("blackwire-cli", expected, blackwire_store::InboundWrite {
                         id: None, tag: tag.clone(), listen: "127.0.0.1".into(), port,
                         protocol: protocol.into(), enabled: true, transport: "tcp".into(), security: "none".into(),
+                        settings: None, stream_settings: None, sniffing: None, limits: None,
                     }).await?;
                     let revision = database.state().await?.desired_revision;
                     let inbound = database.list_inbounds(revision).await?.into_iter()

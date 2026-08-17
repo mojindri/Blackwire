@@ -1,0 +1,819 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildInboundInput,
+  createInboundEditorState,
+  inboundCompatibilityNotice,
+  replaceSlice,
+  syncAfterStructuredChange,
+  validateInboundState
+} from "./inboundConfigurator";
+import type { Inbound } from "./types";
+
+function parseObject(raw?: string) {
+  return raw?.trim() ? JSON.parse(raw) : {};
+}
+
+describe("inboundConfigurator", () => {
+  it("serializes the supported inbound protocol baselines without leaking unrelated settings", () => {
+    const cases = [
+      {
+        protocol: "vless",
+        patch: { decryption: "none" },
+        expectedSettings: { decryption: "none" }
+      },
+      {
+        protocol: "vmess",
+        patch: { decryption: "auto" },
+        expectedSettings: {}
+      },
+      {
+        protocol: "trojan",
+        patch: {},
+        expectedSettings: {}
+      },
+      {
+        protocol: "shadowsocks",
+        patch: { shadowsocksMethod: "2022-blake3-aes-128-gcm" },
+        expectedSettings: { method: "2022-blake3-aes-128-gcm" }
+      },
+      {
+        protocol: "hysteria2",
+        patch: {},
+        expectedSettings: {}
+      },
+      {
+        protocol: "socks",
+        patch: {},
+        expectedSettings: {}
+      },
+      {
+        protocol: "http",
+        patch: {},
+        expectedSettings: {}
+      }
+    ] as const;
+
+    for (const testCase of cases) {
+      const built = buildInboundInput(
+        syncAfterStructuredChange({
+          ...createInboundEditorState(),
+          protocol: testCase.protocol,
+          ...testCase.patch
+        })
+      );
+      const settings = parseObject(built.settings);
+
+      expect(built.protocol, testCase.protocol).toBe(testCase.protocol);
+      expect(settings, testCase.protocol).toMatchObject(testCase.expectedSettings);
+      if (testCase.protocol !== "shadowsocks") {
+        expect(settings.method, `${testCase.protocol} method leak`).toBeUndefined();
+      }
+      if (testCase.protocol !== "vless") {
+        expect(settings.decryption, `${testCase.protocol} decryption leak`).toBeUndefined();
+      }
+    }
+  });
+
+  it("preserves unknown keys while applying structured inbound edits", () => {
+    const inbound: Inbound = {
+      id: 1,
+      tag: "vless-main",
+      listen: "0.0.0.0",
+      port: 443,
+      protocol: "vless",
+      enabled: true,
+      transport: "ws",
+      settings: JSON.stringify({
+        decryption: "none",
+        customSetting: "keep-me",
+        clients: [{ id: "remove-me" }]
+      }),
+      streamSettings: JSON.stringify({
+        network: "ws",
+        security: "tls",
+        customStream: "keep-stream",
+        wsSettings: { path: "/old", headers: { Host: "old.example.com" } },
+        tlsSettings: { serverName: "old.example.com", customTls: "keep-tls" }
+      }),
+      sniffing: JSON.stringify({
+        enabled: true,
+        destOverride: ["http"],
+        customSniffing: "keep-sniff"
+      }),
+      limits: JSON.stringify({
+        maxConnections: 200,
+        customLimits: "keep-limits"
+      }),
+      createdAt: "",
+      updatedAt: ""
+    };
+
+    const state = syncAfterStructuredChange({
+      ...createInboundEditorState(inbound),
+      wsPath: "/next",
+      wsHost: "edge.example.com",
+      tlsServerName: "new.example.com",
+      sniffingDestOverride: ["http", "tls"],
+      maxHandshakeSeconds: "15"
+    });
+    const built = buildInboundInput(state);
+    const settings = parseObject(built.settings);
+    const streamSettings = parseObject(built.streamSettings);
+    const sniffing = parseObject(built.sniffing);
+    const limits = parseObject(built.limits);
+
+    expect(settings.customSetting).toBe("keep-me");
+    expect(settings.clients).toBeUndefined();
+    expect(streamSettings.customStream).toBe("keep-stream");
+    expect(streamSettings.wsSettings.path).toBe("/next");
+    expect(streamSettings.wsSettings.headers.Host).toBe("edge.example.com");
+    expect(streamSettings.tlsSettings.serverName).toBe("new.example.com");
+    expect(streamSettings.tlsSettings.customTls).toBe("keep-tls");
+    expect(sniffing.customSniffing).toBe("keep-sniff");
+    expect(sniffing.destOverride).toEqual(["http", "tls"]);
+    expect(limits.customLimits).toBe("keep-limits");
+    expect(limits.maxHandshakeSeconds).toBe(15);
+  });
+
+  it("reports invalid advanced JSON without dropping the editor text", () => {
+    const state = replaceSlice(createInboundEditorState(), "streamSettings", "{invalid");
+
+    expect(state.streamSettings.error).not.toBe("");
+    expect(state.streamSettings.text).toBe("{invalid");
+  });
+
+  it("round-trips structured hysteria2 tuning settings", () => {
+    const defaultState = createInboundEditorState(null);
+    expect(defaultState.hysteria2CongestionMode).toBe("standard");
+    expect(defaultState.hysteria2MinAckRate).toBe("0.8");
+    expect(defaultState.hysteria2QuicEndpoints).toBe("1");
+    expect(defaultState.hysteria2DatagramPolicy).toBe("standard");
+    expect(defaultState.hysteria2FecMode).toBe("off");
+
+    const state = syncAfterStructuredChange({
+      ...createInboundEditorState(),
+      protocol: "hysteria2",
+      hysteria2Auth: "shared-secret",
+      hysteria2CongestionMode: "brutal-compatible",
+      hysteria2MinAckRate: "0.7",
+      hysteria2MaxQueueDelayMs: "120",
+      hysteria2PacingGain: "1.4",
+      hysteria2LossCompensation: false,
+      hysteria2QuicReusePort: true,
+      hysteria2QuicEndpoints: "cpu",
+      hysteria2QuicRecvBufferBytes: "16777216",
+      hysteria2QuicSendBufferBytes: "16777216",
+      hysteria2DatagramEnabled: true,
+      hysteria2DatagramUdpOverDatagram: false,
+      hysteria2DatagramPolicy: "h2-plus",
+      hysteria2FecMode: "auto",
+      hysteria2FecMaxOverheadPercent: "20"
+    });
+    const settings = parseObject(buildInboundInput(state).settings);
+
+    expect(settings.auth).toBe("shared-secret");
+    expect(settings.congestion).toMatchObject({
+      mode: "brutal-compatible",
+      minAckRate: 0.7,
+      maxQueueDelayMs: 120,
+      pacingGain: 1.4,
+      lossCompensation: false
+    });
+    expect(settings.quic).toMatchObject({
+      reusePort: true,
+      endpoints: "cpu",
+      recvBufferBytes: 16777216,
+      sendBufferBytes: 16777216
+    });
+    expect(settings.datagram).toMatchObject({
+      enabled: true,
+      udpOverDatagram: false,
+      policy: "h2-plus"
+    });
+    expect(settings.fec).toMatchObject({
+      mode: "auto",
+      maxOverheadPercent: 20
+    });
+  });
+
+  it("serializes simple hysteria2 performance modes like the save button output", () => {
+    const balanced = parseObject(
+      buildInboundInput(
+        syncAfterStructuredChange({
+          ...createInboundEditorState(),
+          protocol: "hysteria2",
+          hysteria2Auth: "shared-secret",
+          hysteria2CongestionMode: "standard"
+        })
+      ).settings
+    );
+    expect(balanced).toEqual({ auth: "shared-secret" });
+
+    const throughput = parseObject(
+      buildInboundInput(
+        syncAfterStructuredChange({
+          ...createInboundEditorState(),
+          protocol: "hysteria2",
+          hysteria2Auth: "shared-secret",
+          hysteria2CongestionMode: "brutal-compatible"
+        })
+      ).settings
+    );
+    expect(throughput).toEqual({
+      auth: "shared-secret",
+      congestion: { mode: "brutal-compatible" }
+    });
+
+    const lowLatency = parseObject(
+      buildInboundInput(
+        syncAfterStructuredChange({
+          ...createInboundEditorState(),
+          protocol: "hysteria2",
+          hysteria2Auth: "shared-secret",
+          hysteria2CongestionMode: "badnet-low-latency"
+        })
+      ).settings
+    );
+    expect(lowLatency).toEqual({
+      auth: "shared-secret",
+      congestion: { mode: "badnet-low-latency" }
+    });
+  });
+
+  it("keeps simple hysteria2 modes free of hidden caps and custom transport tuning", () => {
+    const settings = parseObject(
+      buildInboundInput(
+        syncAfterStructuredChange({
+          ...createInboundEditorState(),
+          protocol: "hysteria2",
+          hysteria2Auth: "shared-secret",
+          hysteria2CongestionMode: "brutal-compatible"
+        })
+      ).settings
+    );
+
+    expect(settings.up_mbps).toBeUndefined();
+    expect(settings.down_mbps).toBeUndefined();
+    expect(settings.upMbps).toBeUndefined();
+    expect(settings.downMbps).toBeUndefined();
+    expect(settings.quic).toBeUndefined();
+    expect(settings.datagram).toBeUndefined();
+    expect(settings.fec).toBeUndefined();
+  });
+
+  it("warns hysteria2 users about client TUN and FakeIP instability", () => {
+    const notice = inboundCompatibilityNotice({
+      ...createInboundEditorState(),
+      protocol: "hysteria2"
+    });
+
+    expect(notice?.tone).toBe("info");
+    expect(notice?.message).toContain("TUN/FakeIP");
+    expect(notice?.message).toContain("1500");
+    expect(notice?.message).toContain("1280");
+  });
+
+  it("validates core inbound compatibility rules", () => {
+    const validIssues = validateInboundState(createInboundEditorState());
+    const invalidIssues = validateInboundState({
+      ...createInboundEditorState(),
+      listen: "example.com",
+      port: 0,
+      network: "ws",
+      security: "reality",
+      realityServerName: "www.microsoft.com",
+      realityPrivateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+      realityPublicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
+      realityShortId: "feedbeef",
+      realityDest: "93.184.216.34:443"
+    });
+
+    expect(validIssues).toEqual([]);
+    expect(invalidIssues.map((issue) => issue.field)).toEqual(["listen", "port"]);
+  });
+
+  it("validates REALITY credentials before generated links can be saved", () => {
+    const missingIssues = validateInboundState({
+      ...createInboundEditorState(),
+      network: "tcp",
+      security: "reality",
+      realityServerName: "",
+      realityPrivateKey: "",
+      realityPublicKey: "",
+      realityShortId: "",
+      realityDest: ""
+    });
+    const malformedIssues = validateInboundState({
+      ...createInboundEditorState(),
+      network: "tcp",
+      security: "reality",
+      realityServerName: "www.microsoft.com",
+      realityPrivateKey: "random-private-key",
+      realityPublicKey: "random-public-key",
+      realityShortId: "xyz",
+      realityDest: "www.microsoft.com:443"
+    });
+
+    expect(missingIssues.map((issue) => issue.field)).toEqual([
+      "realityServerName",
+      "realityPrivateKey",
+      "realityPublicKey",
+      "realityShortId",
+      "realityDest"
+    ]);
+    expect(malformedIssues.map((issue) => issue.field)).toEqual([
+      "realityPrivateKey",
+      "realityPublicKey",
+      "realityShortId",
+      "realityDest"
+    ]);
+  });
+
+  it("validates TLS server link and certificate pair fields", () => {
+    const missingSni = validateInboundState({
+      ...createInboundEditorState(),
+      security: "tls",
+      tlsServerName: "",
+      tlsCertificateFile: "",
+      tlsKeyFile: ""
+    });
+    const missingKey = validateInboundState({
+      ...createInboundEditorState(),
+      security: "tls",
+      tlsServerName: "proxy.example.com",
+      tlsCertificateFile: "/etc/blackwire/fullchain.pem",
+      tlsKeyFile: ""
+    });
+    const missingCert = validateInboundState({
+      ...createInboundEditorState(),
+      security: "tls",
+      tlsServerName: "proxy.example.com",
+      tlsCertificateFile: "",
+      tlsKeyFile: "/etc/blackwire/privkey.pem"
+    });
+
+    expect(missingSni.map((issue) => issue.field)).toEqual(["tlsServerName"]);
+    expect(missingKey.map((issue) => issue.field)).toEqual(["tlsKeyFile"]);
+    expect(missingCert.map((issue) => issue.field)).toEqual(["tlsCertificateFile"]);
+  });
+
+  it("surfaces non-blocking compatibility notices for client-sensitive inbounds", () => {
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "tuic" })?.tone).toBe("info");
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "tuic" })?.message).toContain("TUIC v5 is supported");
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "vmess", network: "quic" })?.message).toContain("VMess over QUIC");
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "hysteria2" })?.tone).toBe("info");
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), network: "ws", security: "reality" })?.message).toContain(
+      "REALITY is best on TCP-compatible transport paths"
+    );
+    expect(inboundCompatibilityNotice(createInboundEditorState())).toBeNull();
+  });
+
+  it("round-trips reality-specific fields into Blackwire-compatible stream settings", () => {
+    const state = syncAfterStructuredChange({
+      ...createInboundEditorState(),
+      protocol: "vless",
+      network: "tcp",
+      security: "reality",
+      realityServerName: "www.microsoft.com",
+      realityPrivateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+      realityPublicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
+      realityShortId: "feedbeef",
+      realityDest: "93.184.216.34:443",
+      realityFingerprint: "chrome",
+      realitySpiderX: "/"
+    });
+    const built = buildInboundInput(state);
+    const streamSettings = parseObject(built.streamSettings);
+
+    expect(built.transport).toBe("tcp");
+    expect(built.security).toBe("reality");
+    expect(streamSettings.network).toBe("tcp");
+    expect(streamSettings.security).toBe("reality");
+    expect(streamSettings.realitySettings.privateKey).toBe("769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c");
+    expect(streamSettings.realitySettings.publicKey).toBe("e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142");
+    expect(streamSettings.realitySettings.shortId).toBe("feedbeef");
+    expect(streamSettings.realitySettings.shortIds).toEqual(["feedbeef"]);
+    expect(streamSettings.realitySettings.serverName).toBe("www.microsoft.com");
+    expect(streamSettings.realitySettings.serverNames).toEqual(["www.microsoft.com"]);
+    expect(streamSettings.realitySettings.dest).toBe("93.184.216.34:443");
+    expect(streamSettings.realitySettings.maxTimeDiffSeconds).toBe(60);
+    expect(streamSettings.realitySettings.maxTimeDiff).toBeUndefined();
+    expect(streamSettings.realitySettings.fingerprint).toBe("chrome");
+    expect(streamSettings.realitySettings.spiderX).toBe("/");
+  });
+
+  it("loads REALITY server name from the allow-list when legacy serverName is absent", () => {
+    const inbound: Inbound = {
+      id: 1,
+      tag: "vless-reality",
+      listen: "0.0.0.0",
+      port: 443,
+      protocol: "vless",
+      enabled: true,
+      transport: "reality",
+      settings: "{}",
+      streamSettings: JSON.stringify({
+        network: "tcp",
+        security: "reality",
+        realitySettings: {
+          dest: "93.184.216.34:443",
+          serverNames: ["www.microsoft.com"],
+          maxTimeDiffSeconds: 60
+        }
+      }),
+      sniffing: "{}",
+      limits: "{}",
+      createdAt: "",
+      updatedAt: ""
+    };
+
+    const state = createInboundEditorState(inbound);
+
+    expect(state.realityServerName).toBe("www.microsoft.com");
+    expect(state.realityDest).toBe("93.184.216.34:443");
+  });
+
+  it("serializes websocket and TLS fields for common VLESS structured setups", () => {
+    const state = syncAfterStructuredChange({
+      ...createInboundEditorState(),
+      protocol: "vless",
+      network: "ws",
+      security: "tls",
+      wsPath: "/tls",
+      wsHost: "tls.example.com",
+      tlsServerName: "tls.example.com",
+      tlsAlpn: "h2, http/1.1",
+      tlsCertificateFile: "/etc/blackwire/fullchain.pem",
+      tlsKeyFile: "/etc/blackwire/privkey.pem"
+    });
+
+    const built = buildInboundInput(state);
+    const streamSettings = parseObject(built.streamSettings);
+
+    expect(built.transport).toBe("ws");
+    expect(streamSettings).toEqual({
+      network: "ws",
+      security: "tls",
+      wsSettings: {
+        path: "/tls",
+        headers: {
+          Host: "tls.example.com"
+        }
+      },
+      tlsSettings: {
+        serverName: "tls.example.com",
+        alpn: ["h2", "http/1.1"],
+        certificateFile: "/etc/blackwire/fullchain.pem",
+        keyFile: "/etc/blackwire/privkey.pem"
+      }
+    });
+  });
+
+  it("serializes gRPC, HTTPUpgrade, and SplitHTTP transport helpers", () => {
+    const grpcBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState(),
+        network: "grpc",
+        grpcServiceName: "GunService"
+      })
+    );
+    const httpUpgradeBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState(),
+        network: "httpupgrade",
+        httpupgradePath: "/upgrade",
+        httpupgradeHost: "edge.example.com"
+      })
+    );
+    const splitHttpBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState(),
+        network: "splithttp",
+        splitHttpPath: "/packet"
+      })
+    );
+
+    expect(parseObject(grpcBuilt.streamSettings)).toMatchObject({
+      network: "grpc",
+      grpcSettings: { serviceName: "GunService" }
+    });
+    expect(parseObject(httpUpgradeBuilt.streamSettings)).toMatchObject({
+      network: "httpupgrade",
+      httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" }
+    });
+    expect(parseObject(splitHttpBuilt.streamSettings)).toMatchObject({
+      network: "splithttp",
+      splithttpSettings: { path: "/packet" }
+    });
+  });
+
+  it("serializes KCP tuning and preserves QUIC as a direct network selection", () => {
+    const kcpBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState(),
+        network: "kcp",
+        kcpHeader: "srtp",
+        kcpMtu: "1350",
+        kcpTti: "20",
+        kcpUplinkCapacity: "5",
+        kcpDownlinkCapacity: "20",
+        kcpCongestion: true,
+        kcpReadBufferSize: "2",
+        kcpWriteBufferSize: "2"
+      })
+    );
+    const quicBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState(),
+        network: "quic",
+        security: "tls",
+        tlsServerName: "quic.example.com"
+      })
+    );
+
+    expect(parseObject(kcpBuilt.streamSettings)).toMatchObject({
+      network: "kcp",
+      security: "none",
+      kcpSettings: {
+        header: "srtp",
+        mtu: 1350,
+        tti: 20,
+        uplink_capacity: 5,
+        downlink_capacity: 20,
+        congestion: true,
+        read_buffer_size: 2,
+        write_buffer_size: 2
+      }
+    });
+    expect(parseObject(quicBuilt.streamSettings)).toMatchObject({
+      network: "quic",
+      security: "tls",
+      tlsSettings: { serverName: "quic.example.com" }
+    });
+  });
+
+  it("covers the structured inbound transport and security matrix", () => {
+    const networks = [
+      { network: "tcp", settings: {}, extras: {} },
+      { network: "ws", settings: { wsSettings: { path: "/ws", headers: { Host: "ws.example.com" } } }, extras: { wsPath: "/ws", wsHost: "ws.example.com" } },
+      { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
+      { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
+      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
+      { network: "kcp", settings: { kcpSettings: { header: "srtp", mtu: 1350 } }, extras: { kcpHeader: "srtp", kcpMtu: "1350" } },
+      { network: "quic", settings: {}, extras: {} }
+    ] as const;
+
+    const securities = [
+      { security: "none", patch: {}, settings: {} },
+      { security: "tls", patch: { tlsServerName: "tls.example.com" }, settings: { tlsSettings: { serverName: "tls.example.com" } } },
+      {
+        security: "reality",
+        patch: {
+          realityServerName: "www.microsoft.com",
+          realityPrivateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+          realityPublicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
+          realityShortId: "feedbeef",
+          realityDest: "93.184.216.34:443"
+        },
+        settings: {
+          realitySettings: {
+            serverName: "www.microsoft.com",
+            shortId: "feedbeef",
+            shortIds: ["feedbeef"],
+            serverNames: ["www.microsoft.com"],
+            privateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+            publicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142"
+          }
+        }
+      }
+    ] as const;
+
+    for (const network of networks) {
+      for (const security of securities) {
+        const label = `${network.network}-${security.security}`;
+        const built = buildInboundInput(
+          syncAfterStructuredChange({
+            ...createInboundEditorState(),
+            ...network.extras,
+            ...security.patch,
+            network: network.network,
+            security: security.security
+          })
+        );
+        const streamSettings = parseObject(built.streamSettings);
+
+        expect(streamSettings, label).toMatchObject({
+          network: network.network,
+          security: security.security,
+          ...network.settings,
+          ...security.settings
+        });
+
+        if (security.security === "none") {
+          expect(streamSettings.tlsSettings).toBeUndefined();
+          expect(streamSettings.realitySettings).toBeUndefined();
+        } else if (security.security === "tls") {
+          expect(streamSettings.realitySettings).toBeUndefined();
+        } else {
+          expect(streamSettings.tlsSettings).toBeUndefined();
+        }
+      }
+    }
+  });
+
+  it("covers inbounds protocol, transport, and security matrix", () => {
+    const protocols = ["vless", "vmess", "trojan", "shadowsocks", "hysteria2", "socks", "http"] as const;
+    const networks = [
+      { network: "tcp", settings: {}, extras: {} },
+      { network: "ws", settings: { wsSettings: { path: "/ws", headers: { Host: "ws.example.com" } } }, extras: { wsPath: "/ws", wsHost: "ws.example.com" } },
+      { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
+      { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
+      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
+      { network: "kcp", settings: { kcpSettings: { header: "srtp", mtu: 1350 } }, extras: { kcpHeader: "srtp", kcpMtu: "1350" } },
+      { network: "quic", settings: {}, extras: {} }
+    ] as const;
+    const securities = [
+      { security: "none", patch: {}, settings: {} },
+      { security: "tls", patch: { tlsServerName: "tls.example.com" }, settings: { tlsSettings: { serverName: "tls.example.com" } } },
+      {
+        security: "reality",
+        patch: {
+          realityServerName: "www.microsoft.com",
+          realityPrivateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+          realityPublicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142",
+          realityShortId: "feedbeef",
+          realityDest: "93.184.216.34:443"
+        },
+        settings: {
+          realitySettings: {
+            serverName: "www.microsoft.com",
+            shortId: "feedbeef",
+            shortIds: ["feedbeef"],
+            serverNames: ["www.microsoft.com"],
+            privateKey: "769aa4a053f2c8af7a27bb1d79fc0067f39b6c1ce6743543bb3f7584aa68223c",
+            publicKey: "e1df9c8812b5ce9b3bd36da542896be856ad0a6c6e6df9d910a4040c07268142"
+          }
+        }
+      }
+    ] as const;
+
+    for (const protocol of protocols) {
+      for (const network of networks) {
+        for (const security of securities) {
+          const label = `${protocol}-${network.network}-${security.security}`;
+          const built = buildInboundInput(
+            syncAfterStructuredChange({
+              ...createInboundEditorState(),
+              protocol,
+              shadowsocksMethod: protocol === "shadowsocks" ? "2022-blake3-aes-128-gcm" : "",
+              network: network.network,
+              security: security.security,
+              ...network.extras,
+              ...security.patch
+            })
+          );
+          const parsed = parseObject(built.streamSettings);
+
+          expect(built.protocol).toBe(protocol);
+          expect(parsed, label).toMatchObject({
+            network: network.network,
+            security: security.security,
+            ...network.settings,
+            ...security.settings
+          });
+
+          if (protocol === "vless") {
+            const settings = parseObject(built.settings);
+            expect(settings.decryption || "none").toBe("none");
+          }
+
+          if (protocol !== "shadowsocks") {
+            const settings = parseObject(built.settings);
+            expect(settings.method).toBeUndefined();
+          }
+
+          if (security.security === "none") {
+            expect(parsed.tlsSettings).toBeUndefined();
+            expect(parsed.realitySettings).toBeUndefined();
+          } else if (security.security === "tls") {
+            expect(parsed.realitySettings).toBeUndefined();
+          } else {
+            expect(parsed.tlsSettings).toBeUndefined();
+          }
+        }
+      }
+    }
+  });
+
+  it("rejects loopback listen hosts for public client inbounds", () => {
+    const issues = validateInboundState({
+      ...createInboundEditorState(),
+      protocol: "hysteria2",
+      network: "quic",
+      listen: "127.0.0.1"
+    });
+
+    expect(issues).toContainEqual({
+      field: "listen",
+      message: "hysteria2 over quic must use a public bind address such as 0.0.0.0 or ::. 127.0.0.1 is local-only."
+    });
+
+    expect(
+      validateInboundState({
+        ...createInboundEditorState(),
+        protocol: "hysteria2",
+        network: "quic",
+        listen: "0.0.0.0"
+      }).some((issue) => issue.field === "listen")
+    ).toBe(false);
+
+    expect(
+      validateInboundState({
+        ...createInboundEditorState(),
+        protocol: "vless",
+        network: "tcp",
+        listen: "127.0.0.1"
+      }).some((issue) => issue.field === "listen")
+    ).toBe(true);
+
+    expect(
+      validateInboundState({
+        ...createInboundEditorState(),
+        protocol: "socks",
+        network: "tcp",
+        listen: "127.0.0.1"
+      }).some((issue) => issue.field === "listen")
+    ).toBe(false);
+  });
+
+  it("serializes sniffing and limits while clearing them when no longer needed", () => {
+    const enabledState = syncAfterStructuredChange({
+      ...createInboundEditorState(),
+      sniffingEnabled: true,
+      sniffingDestOverride: ["http", "tls"],
+      sniffingMetadataOnly: true,
+      maxConnections: "8000",
+      maxHandshakeSeconds: "12"
+    });
+    const enabledBuilt = buildInboundInput(enabledState);
+
+    expect(parseObject(enabledBuilt.sniffing)).toEqual({
+      enabled: true,
+      destOverride: ["http", "tls"],
+      metadataOnly: true
+    });
+    expect(parseObject(enabledBuilt.limits)).toEqual({
+      maxConnections: 8000,
+      maxHandshakeSeconds: 12
+    });
+
+    const clearedBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...enabledState,
+        sniffingEnabled: false,
+        sniffingDestOverride: [],
+        sniffingMetadataOnly: false,
+        sniffingRouteOnly: false,
+        maxConnections: "",
+        maxHandshakeSeconds: ""
+      })
+    );
+
+    expect(clearedBuilt.sniffing).toBe("");
+    expect(clearedBuilt.limits).toBe("");
+  });
+
+  it("keeps Shadowsocks method only for shadowsocks protocol", () => {
+    const ssBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState(),
+        protocol: "shadowsocks",
+        shadowsocksMethod: "2022-blake3-aes-128-gcm"
+      })
+    );
+    const switchedBuilt = buildInboundInput(
+      syncAfterStructuredChange({
+        ...createInboundEditorState({
+          id: 9,
+          tag: "ss-main",
+          listen: "0.0.0.0",
+          port: 443,
+          protocol: "shadowsocks",
+          enabled: true,
+          transport: "tcp",
+          settings: JSON.stringify({ method: "2022-blake3-aes-128-gcm", extra: "keep-me" }),
+          streamSettings: "{}",
+          sniffing: "{}",
+          limits: "{}",
+          createdAt: "",
+          updatedAt: ""
+        }),
+        protocol: "vless"
+      })
+    );
+
+    expect(parseObject(ssBuilt.settings).method).toBe("2022-blake3-aes-128-gcm");
+    expect(parseObject(switchedBuilt.settings).method).toBeUndefined();
+    expect(parseObject(switchedBuilt.settings).extra).toBe("keep-me");
+  });
+});

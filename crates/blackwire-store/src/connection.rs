@@ -7,7 +7,7 @@ use crate::{
     ActivationClass, ActivationState, ConfigurationState, RevisionSummary, StoreError, StoreResult,
 };
 
-pub const EXPECTED_SCHEMA_VERSION: i64 = 3;
+pub const EXPECTED_SCHEMA_VERSION: i64 = 4;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -22,6 +22,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
         3,
         include_str!("../migrations/0003_runtime_state_and_retention.sql"),
     ),
+    (4, include_str!("../migrations/0004_endpoint_tuning.sql")),
 ];
 
 #[derive(Debug, Clone)]
@@ -475,6 +476,7 @@ async fn copy_revision_rows(
         "INSERT INTO transport_headers SELECT ?, endpoint_kind, endpoint_id, transport_kind, header_name, header_value FROM transport_headers WHERE revision_id=?",
         "INSERT INTO grpc_settings SELECT ?, endpoint_kind, endpoint_id, service_name, multi_mode FROM grpc_settings WHERE revision_id=?",
         "INSERT INTO kcp_settings SELECT ?, endpoint_kind, endpoint_id, header_type, mtu, tti_ms, uplink_capacity, downlink_capacity, congestion, read_buffer_size, write_buffer_size FROM kcp_settings WHERE revision_id=?",
+        "INSERT INTO endpoint_tuning SELECT ?, endpoint_kind, endpoint_id, congestion_mode, min_ack_rate, max_queue_delay_ms, pacing_gain, loss_compensation, quic_reuse_port, quic_endpoints, quic_recv_buffer_bytes, quic_send_buffer_bytes, datagram_enabled, udp_over_datagram, datagram_policy, fec_mode, fec_max_overhead_percent FROM endpoint_tuning WHERE revision_id=?",
         "INSERT INTO sniffing_settings SELECT ?, inbound_id, enabled, metadata_only, route_only FROM sniffing_settings WHERE revision_id=?",
         "INSERT INTO sniffing_overrides SELECT ?, inbound_id, position, protocol FROM sniffing_overrides WHERE revision_id=?",
         "INSERT INTO inbound_limits SELECT ?, inbound_id, max_connections, max_handshake_seconds, max_idle_seconds FROM inbound_limits WHERE revision_id=?",

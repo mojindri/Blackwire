@@ -7,16 +7,19 @@ use axum::{
 use base64::Engine as _;
 use blackwire_store::{InboundWrite, OutboundWrite, PanelSettings, UserWrite};
 use chrono::{DateTime, Utc};
+use rand::RngExt;
 use serde::Deserialize;
 use serde_json::json;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::{
     capabilities,
     error::{ApiResult, AppError},
     models::{
         ApplyResult, BulkUserInput, CurrentAdmin, GeneratedUuid, Inbound, InboundInput, LoginInput,
-        LoginResponse, MaintenanceResult, ManagedUser, Outbound, OutboundInput, ServiceStatus,
-        Settings, SetupInput, Status, TrafficSnapshot, UserInput,
+        LoginResponse, MaintenanceResult, ManagedUser, Outbound, OutboundInput,
+        RealityClientValues, RealityGeneratedValues, ServiceStatus, Settings, SetupInput, Status,
+        TlsSelfSignedInput, TlsSelfSignedResult, TlsServerValues, TrafficSnapshot, UserInput,
     },
     mysql_auth as auth,
     mysql_state::AppState,
@@ -171,7 +174,48 @@ pub async fn list_inbounds(
         .list_inbounds(revision)
         .await
         .map_err(store_error)?;
-    Ok(Json(records.into_iter().map(Inbound::from).collect()))
+    let snapshot = state
+        .store
+        .load_config(revision)
+        .await
+        .map_err(store_error)?;
+    let mut result = Vec::with_capacity(records.len());
+    for record in records {
+        let mut model = Inbound::from(record);
+        if let Some(config) = snapshot
+            .config
+            .inbounds
+            .iter()
+            .find(|item| item.tag == model.tag)
+        {
+            let mut settings = config.settings.clone();
+            // Managed users have their own authenticated API. Do not duplicate
+            // their credentials inside the endpoint editor payload.
+            settings.clients.clear();
+            settings.users.clear();
+            model.settings = json_text(&settings)?;
+            model.stream_settings = config
+                .stream_settings
+                .as_ref()
+                .map(json_text)
+                .transpose()?
+                .unwrap_or_else(|| "{}".into());
+            model.sniffing = config
+                .sniffing
+                .as_ref()
+                .map(json_text)
+                .transpose()?
+                .unwrap_or_else(|| "{}".into());
+            model.limits = config
+                .limits
+                .as_ref()
+                .map(json_text)
+                .transpose()?
+                .unwrap_or_else(|| "{}".into());
+        }
+        result.push(model);
+    }
+    Ok(Json(result))
 }
 
 pub async fn create_inbound(
@@ -185,7 +229,7 @@ pub async fn create_inbound(
     Ok(Json(
         state
             .store
-            .save_inbound("black-ui", expected, inbound_write(None, input))
+            .save_inbound("black-ui", expected, inbound_write(None, input)?)
             .await
             .map_err(store_error)?
             .into(),
@@ -204,7 +248,7 @@ pub async fn update_inbound(
     Ok(Json(
         state
             .store
-            .save_inbound("black-ui", expected, inbound_write(Some(id), input))
+            .save_inbound("black-ui", expected, inbound_write(Some(id), input)?)
             .await
             .map_err(store_error)?
             .into(),
@@ -244,7 +288,31 @@ pub async fn list_outbounds(
         .list_outbounds(revision)
         .await
         .map_err(store_error)?;
-    Ok(Json(records.into_iter().map(Outbound::from).collect()))
+    let snapshot = state
+        .store
+        .load_config(revision)
+        .await
+        .map_err(store_error)?;
+    let mut result = Vec::with_capacity(records.len());
+    for record in records {
+        let mut model = Outbound::from(record);
+        if let Some(config) = snapshot
+            .config
+            .outbounds
+            .iter()
+            .find(|item| item.tag == model.tag)
+        {
+            model.settings = json_text(&config.settings)?;
+            model.stream_settings = config
+                .stream_settings
+                .as_ref()
+                .map(json_text)
+                .transpose()?
+                .unwrap_or_else(|| "{}".into());
+        }
+        result.push(model);
+    }
+    Ok(Json(result))
 }
 
 pub async fn create_outbound(
@@ -258,7 +326,7 @@ pub async fn create_outbound(
     Ok(Json(
         state
             .store
-            .save_outbound("black-ui", expected, outbound_write(None, input))
+            .save_outbound("black-ui", expected, outbound_write(None, input)?)
             .await
             .map_err(store_error)?
             .into(),
@@ -277,7 +345,7 @@ pub async fn update_outbound(
     Ok(Json(
         state
             .store
-            .save_outbound("black-ui", expected, outbound_write(Some(id), input))
+            .save_outbound("black-ui", expected, outbound_write(Some(id), input)?)
             .await
             .map_err(store_error)?
             .into(),
@@ -609,6 +677,129 @@ pub async fn runtime_traffic(
     }))
 }
 
+pub async fn reality_client_values(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<RealityClientValues>> {
+    auth::require(&headers, &state).await?;
+    let revision = state
+        .store
+        .state()
+        .await
+        .map_err(store_error)?
+        .desired_revision;
+    let snapshot = state
+        .store
+        .load_config(revision)
+        .await
+        .map_err(store_error)?;
+    let source = format!("MySQL revision {revision}");
+    let values = snapshot
+        .config
+        .inbounds
+        .iter()
+        .filter_map(|inbound| {
+            let reality = inbound
+                .stream_settings
+                .as_ref()?
+                .reality_settings
+                .as_ref()?;
+            Some(RealityClientValues {
+                source: source.clone(),
+                tag: Some(inbound.tag.clone()),
+                address: None,
+                port: Some(inbound.port),
+                uuid: inbound
+                    .settings
+                    .clients
+                    .first()
+                    .and_then(|user| user.identifier())
+                    .map(str::to_owned),
+                private_key: (!reality.private_key.is_empty()).then(|| reality.private_key.clone()),
+                public_key: reality.public_key.clone(),
+                short_id: reality
+                    .short_ids
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| reality.short_id.clone()),
+                server_name: reality
+                    .server_names
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| reality.server_name.clone()),
+                dest: (!reality.dest.is_empty()).then(|| reality.dest.clone()),
+            })
+        })
+        .collect();
+    Ok(Json(values))
+}
+
+pub async fn reality_generate_values(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<RealityGeneratedValues> {
+    auth::require(&headers, &state).await?;
+    let secret = StaticSecret::random();
+    let public = PublicKey::from(&secret);
+    let mut short_id = [0u8; 8];
+    rand::rng().fill(&mut short_id);
+    Ok(Json(RealityGeneratedValues {
+        private_key: hex::encode(secret.to_bytes()),
+        public_key: hex::encode(public.as_bytes()),
+        short_id: hex::encode(short_id),
+    }))
+}
+
+pub async fn tls_server_values(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Vec<TlsServerValues>> {
+    auth::require(&headers, &state).await?;
+    let revision = state
+        .store
+        .state()
+        .await
+        .map_err(store_error)?
+        .desired_revision;
+    let snapshot = state
+        .store
+        .load_config(revision)
+        .await
+        .map_err(store_error)?;
+    let source = format!("MySQL revision {revision}");
+    let values = snapshot
+        .config
+        .inbounds
+        .iter()
+        .filter_map(|inbound| {
+            let tls = inbound.stream_settings.as_ref()?.tls_settings.as_ref()?;
+            Some(TlsServerValues {
+                source: source.clone(),
+                tag: Some(inbound.tag.clone()),
+                port: Some(inbound.port),
+                server_name: (!tls.server_name.is_empty()).then(|| tls.server_name.clone()),
+                alpn: tls.alpn.clone(),
+                certificate_file: (!tls.certificate_file.is_empty())
+                    .then(|| tls.certificate_file.clone()),
+                key_file: (!tls.key_file.is_empty()).then(|| tls.key_file.clone()),
+                allow_insecure: tls.allow_insecure,
+            })
+        })
+        .collect();
+    Ok(Json(values))
+}
+
+pub async fn tls_generate_self_signed(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<TlsSelfSignedInput>,
+) -> ApiResult<TlsSelfSignedResult> {
+    auth::require(&headers, &state).await?;
+    crate::tls_cert::generate_self_signed(input)
+        .map(Json)
+        .map_err(|error| AppError::bad_request(error))
+}
+
 pub async fn get_routing_dns(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -904,8 +1095,12 @@ fn url_escape(value: &str) -> String {
         .collect()
 }
 
-fn inbound_write(id: Option<i64>, input: InboundInput) -> InboundWrite {
-    InboundWrite {
+fn json_text<T: serde::Serialize>(value: &T) -> Result<String, AppError> {
+    serde_json::to_string(value).map_err(|error| AppError::internal(error.into()))
+}
+
+fn inbound_write(id: Option<i64>, input: InboundInput) -> Result<InboundWrite, AppError> {
+    Ok(InboundWrite {
         id,
         tag: input.tag,
         listen: input.listen,
@@ -914,20 +1109,50 @@ fn inbound_write(id: Option<i64>, input: InboundInput) -> InboundWrite {
         enabled: input.enabled,
         transport: input.transport,
         security: input.security,
-    }
+        settings: parse_typed_slice(input.settings, "protocol settings")?,
+        stream_settings: parse_typed_slice(input.stream_settings, "stream settings")?,
+        sniffing: parse_typed_slice(input.sniffing, "sniffing settings")?,
+        limits: parse_typed_slice(input.limits, "inbound limits")?,
+    })
 }
 
-fn outbound_write(id: Option<i64>, input: OutboundInput) -> OutboundWrite {
-    OutboundWrite {
+fn outbound_write(id: Option<i64>, input: OutboundInput) -> Result<OutboundWrite, AppError> {
+    let settings = parse_typed_slice(input.settings, "protocol settings")?;
+    let address = input.address.or_else(|| {
+        settings
+            .as_ref()
+            .and_then(|settings: &blackwire_config::schema::EndpointSettings| {
+                settings.address.clone().or_else(|| settings.server.clone())
+            })
+    });
+    let port = input
+        .port
+        .or_else(|| settings.as_ref().and_then(|settings| settings.port));
+    Ok(OutboundWrite {
         id,
         tag: input.tag,
         protocol: input.protocol,
         enabled: input.enabled,
-        address: input.address,
-        port: input.port,
+        address,
+        port,
         transport: input.transport,
         security: input.security,
-    }
+        settings,
+        stream_settings: parse_typed_slice(input.stream_settings, "stream settings")?,
+    })
+}
+
+fn parse_typed_slice<T: serde::de::DeserializeOwned>(
+    value: Option<String>,
+    label: &str,
+) -> Result<Option<T>, AppError> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            serde_json::from_str(&value)
+                .map_err(|error| AppError::bad_request(format!("invalid {label}: {error}")))
+        })
+        .transpose()
 }
 
 fn user_write(id: Option<i64>, input: UserInput) -> Result<UserWrite, AppError> {
@@ -941,6 +1166,31 @@ fn user_write(id: Option<i64>, input: UserInput) -> Result<UserWrite, AppError> 
         .transpose()
         .map_err(|_| AppError::bad_request("expiry must be RFC 3339"))?
         .map(|value| value.with_timezone(&Utc));
+    let credential = input.credential.unwrap_or_default();
+    let credential_string = |key: &str| {
+        credential
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let password = input.password.or_else(|| credential_string("password"));
+    let method = input.method.or_else(|| credential_string("method"));
+    let auth = input.auth.or_else(|| credential_string("auth"));
+    let uuid = if input.uuid.trim().is_empty() {
+        credential_string("id").unwrap_or_default()
+    } else {
+        input.uuid
+    };
+    let credential_kind = input.credential_kind.unwrap_or_else(|| {
+        if auth.is_some() {
+            "auth"
+        } else if password.is_some() {
+            "password"
+        } else {
+            "uuid"
+        }
+        .into()
+    });
     Ok(UserWrite {
         id,
         inbound_id: input.inbound_id,
@@ -953,11 +1203,11 @@ fn user_write(id: Option<i64>, input: UserInput) -> Result<UserWrite, AppError> 
         subscription_token: input
             .subscription_token
             .unwrap_or_else(|| util::random_token(24)),
-        credential_kind: input.credential_kind.unwrap_or_else(|| "uuid".into()),
-        uuid: Some(input.uuid),
-        password: input.password,
-        method: input.method,
-        auth: input.auth,
+        credential_kind,
+        uuid: (!uuid.is_empty()).then_some(uuid),
+        password,
+        method,
+        auth,
     })
 }
 
