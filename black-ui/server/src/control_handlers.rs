@@ -767,6 +767,29 @@ async fn subscription_link(
     if !user.flow.is_empty() {
         params.push(format!("flow={}", url_escape(&user.flow)));
     }
+    if let Some(server_name) = user.server_name.as_deref() {
+        params.push(format!("sni={}", url_escape(server_name)));
+    }
+    if user.security == "reality" {
+        if let Some(public_key) = user.reality_public_key.as_deref() {
+            params.push(format!("pbk={}", url_escape(public_key)));
+        }
+        if let Some(short_id) = user.reality_short_id.as_deref() {
+            params.push(format!("sid={}", url_escape(short_id)));
+        }
+        if let Some(fingerprint) = user.reality_fingerprint.as_deref() {
+            params.push(format!("fp={}", url_escape(fingerprint)));
+        }
+    }
+    if let Some(path) = user.transport_path.as_deref() {
+        params.push(format!("path={}", url_escape(path)));
+    }
+    if let Some(host) = user.transport_host.as_deref() {
+        params.push(format!("host={}", url_escape(host)));
+    }
+    if let Some(service_name) = user.grpc_service_name.as_deref() {
+        params.push(format!("serviceName={}", url_escape(service_name)));
+    }
     let uuid = user.uuid.as_deref().unwrap_or_default();
     match user.protocol.as_str() {
         "vless" => Ok(format!(
@@ -782,8 +805,10 @@ async fn subscription_link(
                 "v": "2", "ps": user.email, "add": host, "port": user.port.to_string(),
                 "id": uuid, "aid": "0", "scy": "auto", "security": "auto",
                 "net": network, "type": if network == "grpc" { "gun" } else { "none" },
-                "host": "", "path": "", "tls": if user.security == "tls" { "tls" } else { "" },
-                "sni": "", "alpn": ""
+                "host": user.transport_host.as_deref().unwrap_or_default(),
+                "path": if network == "grpc" { user.grpc_service_name.as_deref().unwrap_or_default() } else { user.transport_path.as_deref().unwrap_or_default() },
+                "tls": if user.security == "none" { "" } else { &user.security },
+                "sni": user.server_name.as_deref().unwrap_or_default(), "alpn": ""
             });
             Ok(format!(
                 "vmess://{}",

@@ -64,6 +64,13 @@ pub struct SubscriptionRecord {
     pub port: u16,
     pub transport: String,
     pub security: String,
+    pub server_name: Option<String>,
+    pub reality_public_key: Option<String>,
+    pub reality_short_id: Option<String>,
+    pub reality_fingerprint: Option<String>,
+    pub transport_path: Option<String>,
+    pub transport_host: Option<String>,
+    pub grpc_service_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,7 +125,7 @@ impl Database {
     ) -> StoreResult<Option<SubscriptionRecord>> {
         let revision = self.state().await?.desired_revision;
         let row = sqlx::query(
-            "SELECT u.email,u.enabled,u.expiry_at,u.flow,c.uuid_value,c.password_value,c.method,c.auth_value,i.protocol,i.listen_port,COALESCE(s.network,'tcp') network,COALESCE(s.security,'none') security FROM users u JOIN user_credentials c ON c.revision_id=u.revision_id AND c.user_id=u.user_id JOIN inbounds i ON i.revision_id=u.revision_id AND i.inbound_id=u.inbound_id LEFT JOIN stream_settings s ON s.revision_id=i.revision_id AND s.endpoint_kind='inbound' AND s.endpoint_id=i.inbound_id LEFT JOIN user_traffic t ON t.user_id=u.user_id WHERE u.revision_id=? AND u.subscription_token=? AND u.enabled=TRUE AND i.enabled=TRUE AND (u.traffic_limit_bytes IS NULL OR COALESCE(t.upload_bytes,0)+COALESCE(t.download_bytes,0)<u.traffic_limit_bytes) LIMIT 1",
+            "SELECT u.email,u.enabled,u.expiry_at,u.flow,c.uuid_value,c.password_value,c.method,c.auth_value,i.protocol,i.listen_port,COALESCE(s.network,'tcp') network,COALESCE(s.security,'none') security,COALESCE(NULLIF(tls.server_name,''),NULLIF(r.server_name,'')) server_name,NULLIF(r.public_key,'') reality_public_key,COALESCE(NULLIF(r.short_id,''),(SELECT NULLIF(rs.short_id,'') FROM reality_short_ids rs WHERE rs.revision_id=i.revision_id AND rs.endpoint_kind='inbound' AND rs.endpoint_id=i.inbound_id ORDER BY rs.position LIMIT 1)) reality_short_id,NULLIF(r.fingerprint,'') reality_fingerprint,NULLIF(w.request_path,'') transport_path,(SELECT NULLIF(h.header_value,'') FROM transport_headers h WHERE h.revision_id=i.revision_id AND h.endpoint_kind='inbound' AND h.endpoint_id=i.inbound_id AND h.transport_kind=COALESCE(s.network,'tcp') AND LOWER(h.header_name)='host' LIMIT 1) transport_host,NULLIF(g.service_name,'') grpc_service_name FROM users u JOIN user_credentials c ON c.revision_id=u.revision_id AND c.user_id=u.user_id JOIN inbounds i ON i.revision_id=u.revision_id AND i.inbound_id=u.inbound_id LEFT JOIN stream_settings s ON s.revision_id=i.revision_id AND s.endpoint_kind='inbound' AND s.endpoint_id=i.inbound_id LEFT JOIN tls_settings tls ON tls.revision_id=i.revision_id AND tls.endpoint_kind='inbound' AND tls.endpoint_id=i.inbound_id LEFT JOIN reality_settings r ON r.revision_id=i.revision_id AND r.endpoint_kind='inbound' AND r.endpoint_id=i.inbound_id LEFT JOIN websocket_settings w ON w.revision_id=i.revision_id AND w.endpoint_kind='inbound' AND w.endpoint_id=i.inbound_id AND w.transport_kind=COALESCE(s.network,'tcp') LEFT JOIN grpc_settings g ON g.revision_id=i.revision_id AND g.endpoint_kind='inbound' AND g.endpoint_id=i.inbound_id LEFT JOIN user_traffic t ON t.user_id=u.user_id WHERE u.revision_id=? AND u.subscription_token=? AND u.enabled=TRUE AND i.enabled=TRUE AND (u.traffic_limit_bytes IS NULL OR COALESCE(t.upload_bytes,0)+COALESCE(t.download_bytes,0)<u.traffic_limit_bytes) LIMIT 1",
         )
         .bind(revision)
         .bind(token)
@@ -149,6 +156,13 @@ impl Database {
                     .map_err(|error| sqlx::Error::Decode(Box::new(error)))?,
                 transport: row.try_get("network")?,
                 security: row.try_get("security")?,
+                server_name: row.try_get("server_name")?,
+                reality_public_key: row.try_get("reality_public_key")?,
+                reality_short_id: row.try_get("reality_short_id")?,
+                reality_fingerprint: row.try_get("reality_fingerprint")?,
+                transport_path: row.try_get("transport_path")?,
+                transport_host: row.try_get("transport_host")?,
+                grpc_service_name: row.try_get("grpc_service_name")?,
             })
         })
         .transpose()
