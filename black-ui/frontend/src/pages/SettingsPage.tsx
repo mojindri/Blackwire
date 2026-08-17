@@ -3,8 +3,9 @@ import { ChevronDown, Gauge, Network, Save, Settings2, Shield, Terminal } from "
 import type { CoreSettings, Settings } from "../lib/types";
 import { Button } from "../components/atoms/Button";
 import { Input, Select, Textarea } from "../components/atoms/Input";
-import { Switch } from "../components/atoms/Switch";
-import { Field } from "../components/molecules/Field";
+import { Switch as BaseSwitch } from "../components/atoms/Switch";
+import { Field as BaseField } from "../components/molecules/Field";
+import { getSettingsHelp } from "../lib/settingsHelp";
 
 const optionalNumber = (value: string) => value === "" ? null : Number(value);
 const lines = (value: string) => value.split("\n").map((item) => item.trim()).filter(Boolean);
@@ -16,6 +17,9 @@ const defaultFast: NonNullable<CoreSettings["fast"]> = { strictProduction: true,
 const defaultBudget: NonNullable<CoreSettings["budget"]> = { maxProtocolLayers: 3, allowSniffing: false, allowFakeIp: false, maxRouteRules: 50, maxHandshakeMs: 300, preferDirectCopy: true, preferDatagramForUdp: true };
 const defaultVision: NonNullable<CoreSettings["vision"]> = { directCopy: "auto", maxPacketsToFilter: 8, allowSpliceAfterDirect: true };
 const defaultBoost: NonNullable<CoreSettings["firstPacketBoost"]> = { enabled: false, dns: true, tlsClientHello: true, sendEarlyPayload: true, duplicateControlOnBadnet: false, priority: "high" };
+
+function Field(props: React.ComponentProps<typeof BaseField>) { return <BaseField {...props} help={props.help ?? getSettingsHelp(props.label)} />; }
+function Switch(props: React.ComponentProps<typeof BaseSwitch>) { return <BaseSwitch {...props} help={props.help ?? getSettingsHelp(props.label)} />; }
 
 export function SettingsPage({ settings, coreSettings, busy, onSave, onSaveCore }: { settings: Settings | null; coreSettings: CoreSettings | null; busy: boolean; onSave: (settings: Settings) => void; onSaveCore: (settings: CoreSettings) => void }) {
   const [panel, setPanel] = useState(settings);
