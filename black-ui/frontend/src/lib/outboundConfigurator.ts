@@ -1,4 +1,5 @@
 import type { Outbound, OutboundInput } from "./types";
+import { buildSplitHttp, readSplitHttp, type SplitHttpEditorState } from "./splitHttpConfigurator";
 
 export type JsonObject = Record<string, unknown>;
 export type OutboundSliceKey = "settings" | "streamSettings";
@@ -46,6 +47,7 @@ export interface OutboundEditorState {
   grpcServiceName: string;
   httpupgradePath: string;
   httpupgradeHost: string;
+  splitHttp: SplitHttpEditorState;
   splitHttpPath: string;
   kcpHeader: string;
   kcpMtu: string;
@@ -64,6 +66,9 @@ export interface OutboundEditorState {
   realityShortId: string;
   realityFingerprint: string;
   realitySpiderX: string;
+  shadowTlsPassword: string;
+  shadowTlsDest: string;
+  shadowTlsVersion: string;
   settings: SliceState;
   streamSettings: SliceState;
 }
@@ -136,6 +141,7 @@ export function createOutboundEditorState(outbound?: Outbound | null): OutboundE
     grpcServiceName: stringValue(objectValue(streamSettings.value.grpcSettings)?.serviceName) ?? "",
     httpupgradePath: stringValue(objectValue(streamSettings.value.httpupgradeSettings)?.path) ?? "",
     httpupgradeHost: stringValue(objectValue(streamSettings.value.httpupgradeSettings)?.host) ?? "",
+    splitHttp: readSplitHttp(streamSettings.value.splithttpSettings),
     splitHttpPath: stringValue(objectValue(streamSettings.value.splithttpSettings)?.path) ?? "",
     kcpHeader: stringValue(objectValue(streamSettings.value.kcpSettings)?.header) ?? "",
     kcpMtu: numberString(objectValue(streamSettings.value.kcpSettings)?.mtu),
@@ -157,6 +163,9 @@ export function createOutboundEditorState(outbound?: Outbound | null): OutboundE
       "",
     realityFingerprint: stringValue(objectValue(streamSettings.value.realitySettings)?.fingerprint) ?? "chrome",
     realitySpiderX: stringValue(objectValue(streamSettings.value.realitySettings)?.spiderX) ?? "/",
+    shadowTlsPassword: stringValue(objectValue(streamSettings.value.shadowTlsSettings)?.password) ?? "",
+    shadowTlsDest: stringValue(objectValue(streamSettings.value.shadowTlsSettings)?.dest) ?? "",
+    shadowTlsVersion: numberString(objectValue(streamSettings.value.shadowTlsSettings)?.version) || "3",
     settings,
     streamSettings
   };
@@ -305,9 +314,7 @@ export function buildOutboundInput(state: OutboundEditorState): OutboundInput {
   }
 
   if (state.network === "splithttp") {
-    const splitHttpSettings = cloneObject(objectValue(streamSettings.splithttpSettings));
-    splitHttpSettings.path = state.splitHttpPath.trim() || "/";
-    streamSettings.splithttpSettings = pruneEmpty(splitHttpSettings);
+    streamSettings.splithttpSettings = pruneEmpty(buildSplitHttp({ ...state.splitHttp, path: state.splitHttp.path || state.splitHttpPath }, streamSettings.splithttpSettings));
   } else {
     delete streamSettings.splithttpSettings;
   }
@@ -360,6 +367,13 @@ export function buildOutboundInput(state: OutboundEditorState): OutboundInput {
     delete streamSettings.tlsSettings;
   } else {
     delete streamSettings.realitySettings;
+  }
+  if (state.security === "shadowtls") {
+    streamSettings.shadowTlsSettings = { password: state.shadowTlsPassword.trim(), dest: state.shadowTlsDest.trim(), version: Number(state.shadowTlsVersion || 3) };
+    delete streamSettings.tlsSettings;
+    delete streamSettings.realitySettings;
+  } else {
+    delete streamSettings.shadowTlsSettings;
   }
 
   settings = pruneEmpty(settings);
@@ -514,6 +528,7 @@ function syncStructuredFields(state: OutboundEditorState): OutboundEditorState {
     grpcServiceName: next.grpcServiceName,
     httpupgradePath: next.httpupgradePath,
     httpupgradeHost: next.httpupgradeHost,
+    splitHttp: next.splitHttp,
     splitHttpPath: next.splitHttpPath,
     kcpHeader: next.kcpHeader,
     kcpMtu: next.kcpMtu,
@@ -531,7 +546,10 @@ function syncStructuredFields(state: OutboundEditorState): OutboundEditorState {
     realityPublicKey: next.realityPublicKey,
     realityShortId: next.realityShortId,
     realityFingerprint: next.realityFingerprint,
-    realitySpiderX: next.realitySpiderX
+    realitySpiderX: next.realitySpiderX,
+    shadowTlsPassword: next.shadowTlsPassword,
+    shadowTlsDest: next.shadowTlsDest,
+    shadowTlsVersion: next.shadowTlsVersion
   };
 }
 

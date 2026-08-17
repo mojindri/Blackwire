@@ -7,7 +7,7 @@ use crate::{
     ActivationClass, ActivationState, ConfigurationState, RevisionSummary, StoreError, StoreResult,
 };
 
-pub const EXPECTED_SCHEMA_VERSION: i64 = 4;
+pub const EXPECTED_SCHEMA_VERSION: i64 = 6;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -23,6 +23,14 @@ const MIGRATIONS: &[(i64, &str)] = &[
         include_str!("../migrations/0003_runtime_state_and_retention.sql"),
     ),
     (4, include_str!("../migrations/0004_endpoint_tuning.sql")),
+    (
+        5,
+        include_str!("../migrations/0005_runtime_control_surface.sql"),
+    ),
+    (
+        6,
+        include_str!("../migrations/0006_performance_control_surface.sql"),
+    ),
 ];
 
 #[derive(Debug, Clone)]
@@ -460,8 +468,13 @@ async fn copy_revision_rows(
 ) -> StoreResult<()> {
     // Parent tables must be copied before their foreign-key children.
     let statements = [
-        "INSERT INTO global_config SELECT ?, profile, metrics_enabled, metrics_address, api_enabled, api_listen_address, log_level, log_structured, log_file FROM global_config WHERE revision_id=?",
+        "INSERT INTO global_config SELECT ?, profile, metrics_enabled, metrics_address, api_enabled, api_listen_address, api_token_value, stats_enabled, log_level, log_structured, log_file FROM global_config WHERE revision_id=?",
         "INSERT INTO global_limits SELECT ?, max_connections, max_connections_per_inbound, max_connections_per_user, max_handshake_seconds, max_idle_seconds FROM global_limits WHERE revision_id=?",
+        "INSERT INTO global_api_services SELECT ?, position, service_name FROM global_api_services WHERE revision_id=?",
+        "INSERT INTO global_transport_settings SELECT ?, quic_configured, quic_reuse_port, quic_endpoints, quic_recv_buffer_bytes, quic_send_buffer_bytes, quic_max_datagram_size, datagram_configured, datagram_enabled, udp_over_datagram, tun_packets_over_datagram, datagram_policy, datagram_max_queue_delay_ms, fast_dns_retry, fast_dns_retry_delay_ms, fec_configured, fec_mode, fec_max_overhead_percent, fec_avoid_bulk_tcp, fec_disable_for_sequential_dns, fec_min_concurrency, fec_max_generation_packets, fec_max_generation_delay_ms, fec_recovery_deadline_ms, fec_dedup_window_packets FROM global_transport_settings WHERE revision_id=?",
+        "INSERT INTO global_performance_settings SELECT ?, fast_configured, fast_strict_production, fast_pool, fast_splice, fast_relay_engine, fast_relay_flush, fast_relay_initial_buffer, fast_relay_max_buffer, fast_linux_zerocopy, fast_linux_zerocopy_min_bytes, fast_linux_io_uring, fast_linux_af_xdp, budget_configured, budget_max_protocol_layers, budget_allow_sniffing, budget_allow_fake_ip, budget_max_route_rules, budget_max_handshake_ms, budget_prefer_direct_copy, budget_prefer_datagram_for_udp, vision_configured, vision_direct_copy, vision_max_packets_to_filter, vision_allow_splice_after_direct, first_packet_boost_configured, first_packet_boost_enabled, first_packet_boost_dns, first_packet_boost_tls_client_hello, first_packet_boost_send_early_payload, first_packet_boost_duplicate_control_on_badnet, first_packet_boost_priority FROM global_performance_settings WHERE revision_id=?",
+        "INSERT INTO global_fec_protect_classes SELECT ?, position, packet_class FROM global_fec_protect_classes WHERE revision_id=?",
+        "INSERT INTO tun_settings SELECT ?, interface_name, address_value, netmask, mtu, bypass_mark, outbound_interface, redirect_port, dns_port, wintun_file, batch_enabled, batch_max_packets, batch_max_delay_us, batch_latency_flush_bytes, udp_max_sessions, udp_idle_timeout_sec, tcp_max_sessions, linux_configured, linux_backend, af_xdp_interface, af_xdp_queue_id, af_xdp_ring_entries, af_xdp_frame_count, af_xdp_frame_size, af_xdp_force_copy, af_xdp_force_zerocopy FROM tun_settings WHERE revision_id=?",
         "INSERT INTO inbounds SELECT ?, inbound_id, tag, listen_address, listen_port, protocol, enabled, position FROM inbounds WHERE revision_id=?",
         "INSERT INTO outbounds SELECT ?, outbound_id, tag, protocol, enabled, position, server_address, server_port, domain_strategy, deny_loopback, reject_ipv6_literal FROM outbounds WHERE revision_id=?",
         "INSERT INTO stream_settings SELECT ?, endpoint_kind, endpoint_id, network, security FROM stream_settings WHERE revision_id=?",
@@ -470,10 +483,13 @@ async fn copy_revision_rows(
         "INSERT INTO reality_settings SELECT ?, endpoint_kind, endpoint_id, show_details, destination, private_key, public_key, short_id, fingerprint, server_name, max_time_diff_seconds FROM reality_settings WHERE revision_id=?",
         "INSERT INTO reality_server_names SELECT ?, endpoint_kind, endpoint_id, position, server_name FROM reality_server_names WHERE revision_id=?",
         "INSERT INTO reality_short_ids SELECT ?, endpoint_kind, endpoint_id, position, short_id FROM reality_short_ids WHERE revision_id=?",
+        "INSERT INTO shadowtls_settings SELECT ?, endpoint_kind, endpoint_id, password_value, destination, version FROM shadowtls_settings WHERE revision_id=?",
         "INSERT INTO inbound_protocol_settings SELECT ?, inbound_id, decryption, method, auth_value, up_mbps, down_mbps, endpoint_shards FROM inbound_protocol_settings WHERE revision_id=?",
         "INSERT INTO outbound_protocol_settings SELECT ?, outbound_id, password_value, auth_value, method, uuid_value, flow, server_name, skip_certificate_verify, endpoint_shards FROM outbound_protocol_settings WHERE revision_id=?",
         "INSERT INTO websocket_settings SELECT ?, endpoint_kind, endpoint_id, transport_kind, request_path FROM websocket_settings WHERE revision_id=?",
         "INSERT INTO transport_headers SELECT ?, endpoint_kind, endpoint_id, transport_kind, header_name, header_value FROM transport_headers WHERE revision_id=?",
+        "INSERT INTO splithttp_settings SELECT ?, endpoint_kind, endpoint_id, method_value, mode_value, uplink_http_method, padding_kind, padding_fixed, padding_range, padding_min, padding_max, padding_from, padding_to, padding_method, padding_header, padding_key, padding_placement, session_placement, session_key, seq_placement, seq_key, uplink_data_placement, uplink_data_key, uplink_chunk_size, sc_max_buffered_posts, xmux_configured, xmux_max_concurrency, xmux_max_connections, xmux_c_max_reuse_times, xmux_h_max_request_times, xmux_h_max_reusable_secs, xmux_h_keep_alive_period, download_configured, download_network, download_security FROM splithttp_settings WHERE revision_id=?",
+        "INSERT INTO splithttp_hosts SELECT ?, endpoint_kind, endpoint_id, position, host_value FROM splithttp_hosts WHERE revision_id=?",
         "INSERT INTO grpc_settings SELECT ?, endpoint_kind, endpoint_id, service_name, multi_mode FROM grpc_settings WHERE revision_id=?",
         "INSERT INTO kcp_settings SELECT ?, endpoint_kind, endpoint_id, header_type, mtu, tti_ms, uplink_capacity, downlink_capacity, congestion, read_buffer_size, write_buffer_size FROM kcp_settings WHERE revision_id=?",
         "INSERT INTO endpoint_tuning SELECT ?, endpoint_kind, endpoint_id, congestion_mode, min_ack_rate, max_queue_delay_ms, pacing_gain, loss_compensation, quic_reuse_port, quic_endpoints, quic_recv_buffer_bytes, quic_send_buffer_bytes, datagram_enabled, udp_over_datagram, datagram_policy, fec_mode, fec_max_overhead_percent FROM endpoint_tuning WHERE revision_id=?",

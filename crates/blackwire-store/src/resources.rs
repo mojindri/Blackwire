@@ -1,6 +1,7 @@
 use crate::sqlx;
 use blackwire_config::schema::{
-    EndpointSettings, InboundLimitsConfig, SniffingConfig, StreamSettingsConfig,
+    EndpointSettings, InboundLimitsConfig, NetworkType, PaddingBytes, SecurityType, SniffingConfig,
+    SplitHttpConfig, StreamSettingsConfig,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -619,6 +620,14 @@ async fn write_stream_details(
         .execute(&mut **tx)
         .await?;
     }
+    if let Some(shadow) = &stream.shadow_tls_settings {
+        sqlx::query("INSERT INTO shadowtls_settings (revision_id,endpoint_kind,endpoint_id,password_value,destination,version) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE password_value=VALUES(password_value),destination=VALUES(destination),version=VALUES(version)")
+            .bind(revision).bind(kind).bind(id).bind(shadow.password.as_bytes()).bind(shadow.dest.trim()).bind(shadow.version)
+            .execute(&mut **tx).await?;
+    } else {
+        sqlx::query("DELETE FROM shadowtls_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
+            .bind(revision).bind(kind).bind(id).execute(&mut **tx).await?;
+    }
     if let Some(reality) = &stream.reality_settings {
         sqlx::query("INSERT INTO reality_settings (revision_id,endpoint_kind,endpoint_id,show_details,destination,private_key,public_key,short_id,fingerprint,server_name,max_time_diff_seconds) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE show_details=VALUES(show_details),destination=VALUES(destination),private_key=VALUES(private_key),public_key=VALUES(public_key),short_id=VALUES(short_id),fingerprint=VALUES(fingerprint),server_name=VALUES(server_name),max_time_diff_seconds=VALUES(max_time_diff_seconds)")
             .bind(revision).bind(kind).bind(id).bind(reality.show).bind(&reality.dest).bind(&reality.private_key)
@@ -663,6 +672,7 @@ async fn write_stream_details(
             .map(|config| config.path.as_str()),
     )
     .await?;
+    write_splithttp(tx, revision, kind, id, stream.splithttp_settings.as_ref()).await?;
     if let Some(grpc) = &stream.grpc_settings {
         sqlx::query("INSERT INTO grpc_settings (revision_id,endpoint_kind,endpoint_id,service_name,multi_mode) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE service_name=VALUES(service_name),multi_mode=VALUES(multi_mode)")
             .bind(revision).bind(kind).bind(id).bind(&grpc.service_name).bind(grpc.multi_mode).execute(&mut **tx).await?;
@@ -692,6 +702,113 @@ async fn write_stream_details(
         .await?;
     }
     Ok(())
+}
+
+async fn write_splithttp(
+    tx: &mut Transaction<'_, MySql>,
+    revision: i64,
+    kind: &str,
+    id: i64,
+    config: Option<&SplitHttpConfig>,
+) -> StoreResult<()> {
+    let Some(config) = config else {
+        sqlx::query("DELETE FROM splithttp_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
+            .bind(revision).bind(kind).bind(id).execute(&mut **tx).await?;
+        sqlx::query("DELETE FROM transport_headers WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? AND transport_kind='splithttp'")
+            .bind(revision).bind(kind).bind(id).execute(&mut **tx).await?;
+        return Ok(());
+    };
+    let (
+        padding_kind,
+        padding_fixed,
+        padding_range,
+        padding_min,
+        padding_max,
+        padding_from,
+        padding_to,
+    ) = match config.x_padding_bytes.as_ref() {
+        Some(PaddingBytes::Fixed(value)) => (
+            Some("fixed"),
+            Some(*value as u64),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        Some(PaddingBytes::Range(value)) => (
+            Some("range"),
+            None,
+            Some(value.as_str()),
+            None,
+            None,
+            None,
+            None,
+        ),
+        Some(PaddingBytes::Bounds(value)) => (
+            Some("bounds"),
+            None,
+            None,
+            value.min.map(|v| v as u64),
+            value.max.map(|v| v as u64),
+            value.from.map(|v| v as u64),
+            value.to.map(|v| v as u64),
+        ),
+        None => (None, None, None, None, None, None, None),
+    };
+    let xmux = config.xmux.as_ref();
+    let download = config.download_settings.as_ref();
+    sqlx::query("INSERT INTO splithttp_settings (revision_id,endpoint_kind,endpoint_id,method_value,mode_value,uplink_http_method,padding_kind,padding_fixed,padding_range,padding_min,padding_max,padding_from,padding_to,padding_method,padding_header,padding_key,padding_placement,session_placement,session_key,seq_placement,seq_key,uplink_data_placement,uplink_data_key,uplink_chunk_size,sc_max_buffered_posts,xmux_configured,xmux_max_concurrency,xmux_max_connections,xmux_c_max_reuse_times,xmux_h_max_request_times,xmux_h_max_reusable_secs,xmux_h_keep_alive_period,download_configured,download_network,download_security) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE method_value=VALUES(method_value),mode_value=VALUES(mode_value),uplink_http_method=VALUES(uplink_http_method),padding_kind=VALUES(padding_kind),padding_fixed=VALUES(padding_fixed),padding_range=VALUES(padding_range),padding_min=VALUES(padding_min),padding_max=VALUES(padding_max),padding_from=VALUES(padding_from),padding_to=VALUES(padding_to),padding_method=VALUES(padding_method),padding_header=VALUES(padding_header),padding_key=VALUES(padding_key),padding_placement=VALUES(padding_placement),session_placement=VALUES(session_placement),session_key=VALUES(session_key),seq_placement=VALUES(seq_placement),seq_key=VALUES(seq_key),uplink_data_placement=VALUES(uplink_data_placement),uplink_data_key=VALUES(uplink_data_key),uplink_chunk_size=VALUES(uplink_chunk_size),sc_max_buffered_posts=VALUES(sc_max_buffered_posts),xmux_configured=VALUES(xmux_configured),xmux_max_concurrency=VALUES(xmux_max_concurrency),xmux_max_connections=VALUES(xmux_max_connections),xmux_c_max_reuse_times=VALUES(xmux_c_max_reuse_times),xmux_h_max_request_times=VALUES(xmux_h_max_request_times),xmux_h_max_reusable_secs=VALUES(xmux_h_max_reusable_secs),xmux_h_keep_alive_period=VALUES(xmux_h_keep_alive_period),download_configured=VALUES(download_configured),download_network=VALUES(download_network),download_security=VALUES(download_security)")
+        .bind(revision).bind(kind).bind(id).bind(&config.method).bind(&config.mode).bind(&config.uplink_http_method)
+        .bind(padding_kind).bind(padding_fixed).bind(padding_range).bind(padding_min).bind(padding_max).bind(padding_from).bind(padding_to)
+        .bind(&config.x_padding_method).bind(&config.x_padding_header).bind(&config.x_padding_key).bind(&config.x_padding_placement)
+        .bind(&config.session_placement).bind(&config.session_key).bind(&config.seq_placement).bind(&config.seq_key).bind(&config.uplink_data_placement).bind(&config.uplink_data_key)
+        .bind(u64::from(config.uplink_chunk_size)).bind(config.sc_max_buffered_posts as u64)
+        .bind(xmux.is_some()).bind(xmux.and_then(|v| v.max_concurrency).map(|v| v as u64)).bind(xmux.and_then(|v| v.max_connections).map(|v| v as u64)).bind(xmux.and_then(|v| v.c_max_reuse_times).map(|v| v as u64)).bind(xmux.and_then(|v| v.h_max_request_times).map(|v| v as u64)).bind(xmux.and_then(|v| v.h_max_reusable_secs)).bind(xmux.and_then(|v| v.h_keep_alive_period))
+        .bind(download.is_some()).bind(download.and_then(|v| v.network.as_ref()).map(network_name)).bind(download.and_then(|v| v.security.as_ref()).map(security_name))
+        .execute(&mut **tx).await?;
+    sqlx::query(
+        "DELETE FROM splithttp_hosts WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?",
+    )
+    .bind(revision)
+    .bind(kind)
+    .bind(id)
+    .execute(&mut **tx)
+    .await?;
+    for (position, host) in config
+        .host
+        .iter()
+        .filter(|value| !value.trim().is_empty())
+        .enumerate()
+    {
+        sqlx::query("INSERT INTO splithttp_hosts (revision_id,endpoint_kind,endpoint_id,position,host_value) VALUES (?,?,?,?,?)").bind(revision).bind(kind).bind(id).bind(position as u32).bind(host.trim()).execute(&mut **tx).await?;
+    }
+    sqlx::query("DELETE FROM transport_headers WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? AND transport_kind='splithttp'").bind(revision).bind(kind).bind(id).execute(&mut **tx).await?;
+    for (name, value) in &config.headers {
+        sqlx::query("INSERT INTO transport_headers (revision_id,endpoint_kind,endpoint_id,transport_kind,header_name,header_value) VALUES (?,?,?,'splithttp',?,?)").bind(revision).bind(kind).bind(id).bind(name).bind(value).execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
+fn network_name(value: &NetworkType) -> &'static str {
+    match value {
+        NetworkType::Tcp => "tcp",
+        NetworkType::Ws => "ws",
+        NetworkType::HttpUpgrade => "httpupgrade",
+        NetworkType::Grpc => "grpc",
+        NetworkType::Quic => "quic",
+        NetworkType::Kcp => "kcp",
+        NetworkType::SplitHttp => "splithttp",
+    }
+}
+
+fn security_name(value: &SecurityType) -> &'static str {
+    match value {
+        SecurityType::None => "none",
+        SecurityType::Tls => "tls",
+        SecurityType::Reality => "reality",
+        SecurityType::ShadowTls => "shadowtls",
+    }
 }
 
 async fn write_endpoint_tuning(

@@ -25,11 +25,23 @@ pub fn blackwire_status() -> ServiceStatus {
 }
 
 pub fn restart_blackwire() -> anyhow::Result<ServiceStatus> {
+    control_blackwire("restart")
+}
+
+pub fn start_blackwire() -> anyhow::Result<ServiceStatus> {
+    control_blackwire("start")
+}
+
+pub fn stop_blackwire() -> anyhow::Result<ServiceStatus> {
+    control_blackwire("stop")
+}
+
+fn control_blackwire(action: &str) -> anyhow::Result<ServiceStatus> {
     let status = Command::new("systemctl")
-        .args(["restart", "blackwire"])
+        .args([action, "blackwire"])
         .status()?;
     if !status.success() {
-        anyhow::bail!("systemctl restart blackwire failed with {status}");
+        anyhow::bail!("systemctl {action} blackwire failed with {status}");
     }
     Ok(blackwire_status())
 }

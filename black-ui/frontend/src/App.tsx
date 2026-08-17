@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, clearToken, getToken, setToken } from "./lib/api";
-import type { AppData, InboundInput, ManagedUser, OutboundInput, PageKey, Settings, UserInput } from "./lib/types";
+import type { AppData, CoreSettings, InboundInput, ManagedUser, OutboundInput, PageKey, Settings, UserInput } from "./lib/types";
 import { AppShell } from "./components/templates/AppShell";
 import { AuthPage } from "./pages/AuthPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -21,7 +21,8 @@ const emptyData: AppData = {
   capabilities: null,
   service: null,
   revisions: [],
-  routingDns: { domainStrategy: "AsIs", dnsServers: [], rules: [] }
+  routingDns: { domainStrategy: "AsIs", geoipFile: null, geositeFile: null, dnsServers: [], fakeIpEnabled: false, fakeIpPool: "198.18.0.0/15", rules: [], balancers: [] },
+  coreSettings: null
 };
 
 export default function App() {
@@ -64,7 +65,7 @@ export default function App() {
       setData((current) => ({ ...current, status }));
       return;
     }
-    const [settings, inbounds, outbounds, users, traffic, capabilities, service, revisions, routingDns] = await Promise.all([
+    const [settings, inbounds, outbounds, users, traffic, capabilities, service, revisions, routingDns, coreSettings] = await Promise.all([
       api.settings(),
       api.inbounds(),
       api.outbounds(),
@@ -73,9 +74,10 @@ export default function App() {
       api.capabilities(),
       api.serviceStatus().catch(() => null),
       api.revisions(),
-      api.routingDns()
+      api.routingDns(),
+      api.coreSettings()
     ]);
-    setData({ status, settings, inbounds, outbounds, users, traffic, capabilities, service, revisions, routingDns });
+    setData({ status, settings, inbounds, outbounds, users, traffic, capabilities, service, revisions, routingDns, coreSettings });
   }, []);
 
   useEffect(() => {
@@ -158,9 +160,12 @@ export default function App() {
       updateOutbound: (id: number, input: OutboundInput) => run(() => api.updateOutbound(id, input), "Outbound saved", "Saving outbound..."),
       deleteOutbound: (id: number) => run(() => api.deleteOutbound(id), "Outbound deleted", "Deleting outbound..."),
       restartBlackwire: () => run(api.serviceRestartBlackwire, "Blackwire restarted", "Restarting Blackwire..."),
+      startBlackwire: () => run(api.serviceStartBlackwire, "Blackwire started", "Starting Blackwire..."),
+      stopBlackwire: () => run(api.serviceStopBlackwire, "Blackwire stopped", "Stopping Blackwire..."),
       rollback: (revision: number) => run(() => api.rollback(revision), "Rollback revision created", "Creating rollback revision..."),
       activateMaintenance: (revision: number) => run(() => api.activateMaintenance(revision), "Maintenance activation confirmed", "Confirming maintenance..."),
       saveSettings: (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved", "Saving settings..."),
+      saveCoreSettings: (settings: CoreSettings) => run(() => api.updateCoreSettings(settings), "Core settings saved", "Saving core settings..."),
       saveRoutingDns: (value: typeof data.routingDns) => run(() => api.updateRoutingDns(value), "Routing and DNS saved", "Saving routing and DNS..."),
       uuid: async () => (await api.uuid()).uuid
     }),
@@ -219,8 +224,8 @@ export default function App() {
       {page === "sections" ? (
         <SectionsPage value={data.routingDns} outbounds={data.outbounds} busy={busy || databaseReadOnly} onSave={actions.saveRoutingDns} />
       ) : null}
-      {page === "service" ? <ServicePage status={data.status} revisions={data.revisions} busy={busy || databaseReadOnly} onRollback={actions.rollback} onActivateMaintenance={actions.activateMaintenance} /> : null}
-      {page === "settings" ? <SettingsPage settings={data.settings} busy={busy || databaseReadOnly} onSave={actions.saveSettings} /> : null}
+      {page === "service" ? <ServicePage status={data.status} service={data.service} revisions={data.revisions} busy={busy || databaseReadOnly} onStart={actions.startBlackwire} onStop={actions.stopBlackwire} onRestart={actions.restartBlackwire} onRollback={actions.rollback} onActivateMaintenance={actions.activateMaintenance} /> : null}
+      {page === "settings" ? <SettingsPage settings={data.settings} coreSettings={data.coreSettings} busy={busy || databaseReadOnly} onSave={actions.saveSettings} onSaveCore={actions.saveCoreSettings} /> : null}
     </AppShell>
   );
 }

@@ -2,11 +2,16 @@ use std::net::IpAddr;
 
 use crate::sqlx;
 use blackwire_config::schema::{
-    ApiConfig, Config, CongestionSettings, DatagramOverrides, DnsConfig, EndpointCount,
-    EndpointSettings, EndpointUser, FakeIpConfig, FecOverrides, GrpcConfig, InboundConfig,
-    InboundLimitsConfig, KcpConfig, LimitsConfig, LogConfig, NetworkType, OutboundConfig,
-    ProfileMode, Protocol, QuicSocketOverrides, RealityConfig, RoutingConfig, RoutingRule,
-    SecurityType, SniffingConfig, SplitHttpConfig, StreamSettingsConfig, TlsConfig, WsConfig,
+    AdaptiveBalancerConfig, ApiConfig, BalancerConfig, BalancerProfileConfig, BudgetConfig, Config,
+    CongestionSettings, DatagramConfig, DatagramOverrides, DatagramSize, DnsConfig,
+    DownloadSettings, EndpointCount, EndpointSettings, EndpointUser, FakeIpConfig, FastConfig,
+    FastLinuxConfig, FastRelayConfig, FecConfig, FecOverrides, FirstPacketBoostConfig, GrpcConfig,
+    HealthCheckConfig, InboundConfig, InboundLimitsConfig, KcpConfig, LimitsConfig, LogConfig,
+    NetworkType, OutboundConfig, PaddingBounds, PaddingBytes, ProfileMode, Protocol, QuicConfig,
+    QuicSocketOverrides, RealityConfig, RoutingConfig, RoutingRule, SecurityType, ShadowTlsConfig,
+    SniffingConfig, SplitHttpConfig, StatsConfig, StreamSettingsConfig, TlsConfig, TunAfXdpConfig,
+    TunBatchConfig, TunConfig, TunLinuxConfig, TunSessionConfig, VisionConfig, WsConfig,
+    XmuxConfig,
 };
 use sqlx::{MySqlPool, Row};
 
@@ -27,7 +32,7 @@ impl Database {
 
     pub async fn load_config(&self, revision: i64) -> StoreResult<StoredConfig> {
         let global = sqlx::query(
-            "SELECT profile, metrics_enabled, metrics_address, api_enabled, api_listen_address, log_level, log_structured, log_file FROM global_config WHERE revision_id = ?",
+            "SELECT profile, metrics_enabled, metrics_address, api_enabled, api_listen_address, api_token_value, stats_enabled, log_level, log_structured, log_file FROM global_config WHERE revision_id = ?",
         )
         .bind(revision)
         .fetch_one(self.pool())
@@ -36,17 +41,18 @@ impl Database {
         let api_enabled: bool = global.try_get("api_enabled")?;
         let api_address: Option<String> = global.try_get("api_listen_address")?;
         let metrics_enabled: bool = global.try_get("metrics_enabled")?;
-        Ok(StoredConfig {
+        let performance = load_performance(self.pool(), revision).await?;
+        StoredConfig {
             revision,
             config: Config {
                 profile: parse_profile(&profile)?,
-                fast: None,
-                budget: None,
-                vision: None,
-                first_packet_boost: None,
-                quic: None,
-                datagram: None,
-                fec: None,
+                fast: performance.fast,
+                budget: performance.budget,
+                vision: performance.vision,
+                first_packet_boost: performance.first_packet_boost,
+                quic: load_quic(self.pool(), revision).await?,
+                datagram: load_datagram(self.pool(), revision).await?,
+                fec: load_fec(self.pool(), revision).await?,
                 log: LogConfig {
                     level: global.try_get("log_level")?,
                     json: global.try_get("log_structured")?,
@@ -54,15 +60,17 @@ impl Database {
                 },
                 dns: load_dns(self.pool(), revision).await?,
                 routing: load_routing(self.pool(), revision).await?,
-                tun: None,
+                tun: load_tun(self.pool(), revision).await?,
                 limits: load_limits(self.pool(), revision).await?,
                 inbounds: load_inbounds(self.pool(), revision).await?,
                 outbounds: load_outbounds(self.pool(), revision).await?,
-                stats: None,
+                stats: global
+                    .try_get::<Option<bool>, _>("stats_enabled")?
+                    .map(|enabled| StatsConfig { enabled }),
                 api: api_enabled.then(|| ApiConfig {
                     listen: api_address.unwrap_or_else(|| "127.0.0.1:62789".into()),
-                    token: None,
-                    services: vec!["HandlerService".into(), "StatsService".into()],
+                    token: bytes_string(&global, "api_token_value").ok().flatten(),
+                    services: Vec::new(),
                 }),
                 metrics_addr: if metrics_enabled {
                     global.try_get("metrics_address")?
@@ -70,8 +78,245 @@ impl Database {
                     None
                 },
             },
-        })
+        }
+        .with_api_services(self.pool())
+        .await
     }
+}
+
+struct PerformanceSettings {
+    fast: Option<FastConfig>,
+    budget: Option<BudgetConfig>,
+    vision: Option<VisionConfig>,
+    first_packet_boost: Option<FirstPacketBoostConfig>,
+}
+
+async fn load_performance(pool: &MySqlPool, revision: i64) -> StoreResult<PerformanceSettings> {
+    let row = sqlx::query("SELECT * FROM global_performance_settings WHERE revision_id=?")
+        .bind(revision)
+        .fetch_one(pool)
+        .await?;
+    let fast = row
+        .try_get::<bool, _>("fast_configured")?
+        .then(|| {
+            Ok::<_, StoreError>(FastConfig {
+                strict_production: row.try_get("fast_strict_production")?,
+                pool: parse_string_enum(&row.try_get::<String, _>("fast_pool")?)?,
+                splice: parse_string_enum(&row.try_get::<String, _>("fast_splice")?)?,
+                relay: FastRelayConfig {
+                    engine: parse_string_enum(&row.try_get::<String, _>("fast_relay_engine")?)?,
+                    flush: parse_string_enum(&row.try_get::<String, _>("fast_relay_flush")?)?,
+                    initial_buffer: usize::try_from(
+                        row.try_get::<u64, _>("fast_relay_initial_buffer")?,
+                    )
+                    .map_err(decode_error)?,
+                    max_buffer: usize::try_from(row.try_get::<u64, _>("fast_relay_max_buffer")?)
+                        .map_err(decode_error)?,
+                },
+                linux: FastLinuxConfig {
+                    zerocopy: parse_string_enum(&row.try_get::<String, _>("fast_linux_zerocopy")?)?,
+                    zerocopy_min_bytes: usize::try_from(
+                        row.try_get::<u64, _>("fast_linux_zerocopy_min_bytes")?,
+                    )
+                    .map_err(decode_error)?,
+                    io_uring: parse_string_enum(&row.try_get::<String, _>("fast_linux_io_uring")?)?,
+                    af_xdp: parse_string_enum(&row.try_get::<String, _>("fast_linux_af_xdp")?)?,
+                },
+            })
+        })
+        .transpose()?;
+    let budget = row
+        .try_get::<bool, _>("budget_configured")?
+        .then(|| {
+            Ok::<_, StoreError>(BudgetConfig {
+                max_protocol_layers: usize::try_from(
+                    row.try_get::<u64, _>("budget_max_protocol_layers")?,
+                )
+                .map_err(decode_error)?,
+                allow_sniffing: row.try_get("budget_allow_sniffing")?,
+                allow_fake_ip: row.try_get("budget_allow_fake_ip")?,
+                max_route_rules: usize::try_from(row.try_get::<u64, _>("budget_max_route_rules")?)
+                    .map_err(decode_error)?,
+                max_handshake_ms: row.try_get("budget_max_handshake_ms")?,
+                prefer_direct_copy: row.try_get("budget_prefer_direct_copy")?,
+                prefer_datagram_for_udp: row.try_get("budget_prefer_datagram_for_udp")?,
+            })
+        })
+        .transpose()?;
+    let vision = row
+        .try_get::<bool, _>("vision_configured")?
+        .then(|| {
+            Ok::<_, StoreError>(VisionConfig {
+                direct_copy: parse_string_enum(&row.try_get::<String, _>("vision_direct_copy")?)?,
+                max_packets_to_filter: row.try_get("vision_max_packets_to_filter")?,
+                allow_splice_after_direct: row.try_get("vision_allow_splice_after_direct")?,
+            })
+        })
+        .transpose()?;
+    let first_packet_boost = row
+        .try_get::<bool, _>("first_packet_boost_configured")?
+        .then(|| {
+            Ok::<_, StoreError>(FirstPacketBoostConfig {
+                enabled: row.try_get("first_packet_boost_enabled")?,
+                dns: row.try_get("first_packet_boost_dns")?,
+                tls_client_hello: row.try_get("first_packet_boost_tls_client_hello")?,
+                send_early_payload: row.try_get("first_packet_boost_send_early_payload")?,
+                duplicate_control_on_badnet: row
+                    .try_get("first_packet_boost_duplicate_control_on_badnet")?,
+                priority: parse_string_enum(
+                    &row.try_get::<String, _>("first_packet_boost_priority")?,
+                )?,
+            })
+        })
+        .transpose()?;
+    Ok(PerformanceSettings {
+        fast,
+        budget,
+        vision,
+        first_packet_boost,
+    })
+}
+
+impl StoredConfig {
+    async fn with_api_services(mut self, pool: &MySqlPool) -> StoreResult<Self> {
+        if let Some(api) = self.config.api.as_mut() {
+            api.services = sqlx::query_scalar("SELECT service_name FROM global_api_services WHERE revision_id=? ORDER BY position")
+                .bind(self.revision).fetch_all(pool).await?;
+        }
+        Ok(self)
+    }
+}
+
+async fn global_transport_row(
+    pool: &MySqlPool,
+    revision: i64,
+) -> StoreResult<sqlx::mysql::MySqlRow> {
+    sqlx::query("SELECT * FROM global_transport_settings WHERE revision_id=?")
+        .bind(revision)
+        .fetch_one(pool)
+        .await
+        .map_err(StoreError::Sql)
+}
+
+async fn load_quic(pool: &MySqlPool, revision: i64) -> StoreResult<Option<QuicConfig>> {
+    let row = global_transport_row(pool, revision).await?;
+    if !row.try_get::<bool, _>("quic_configured")? {
+        return Ok(None);
+    }
+    Ok(Some(QuicConfig {
+        reuse_port: row.try_get("quic_reuse_port")?,
+        endpoints: parse_number_or_string(&row.try_get::<String, _>("quic_endpoints")?)?,
+        recv_buffer_bytes: usize::try_from(row.try_get::<u64, _>("quic_recv_buffer_bytes")?)
+            .map_err(decode_error)?,
+        send_buffer_bytes: usize::try_from(row.try_get::<u64, _>("quic_send_buffer_bytes")?)
+            .map_err(decode_error)?,
+        max_datagram_size: parse_number_or_string::<DatagramSize>(
+            &row.try_get::<String, _>("quic_max_datagram_size")?,
+        )?,
+    }))
+}
+
+async fn load_datagram(pool: &MySqlPool, revision: i64) -> StoreResult<Option<DatagramConfig>> {
+    let row = global_transport_row(pool, revision).await?;
+    if !row.try_get::<bool, _>("datagram_configured")? {
+        return Ok(None);
+    }
+    Ok(Some(DatagramConfig {
+        enabled: row.try_get("datagram_enabled")?,
+        udp_over_datagram: row.try_get("udp_over_datagram")?,
+        tun_packets_over_datagram: row.try_get("tun_packets_over_datagram")?,
+        policy: parse_string_enum(&row.try_get::<String, _>("datagram_policy")?)?,
+        max_queue_delay_ms: row.try_get("datagram_max_queue_delay_ms")?,
+        fast_dns_retry: row.try_get("fast_dns_retry")?,
+        fast_dns_retry_delay_ms: row.try_get("fast_dns_retry_delay_ms")?,
+    }))
+}
+
+async fn load_fec(pool: &MySqlPool, revision: i64) -> StoreResult<Option<FecConfig>> {
+    let row = global_transport_row(pool, revision).await?;
+    if !row.try_get::<bool, _>("fec_configured")? {
+        return Ok(None);
+    }
+    let protect_classes = sqlx::query_scalar(
+        "SELECT packet_class FROM global_fec_protect_classes WHERE revision_id=? ORDER BY position",
+    )
+    .bind(revision)
+    .fetch_all(pool)
+    .await?;
+    Ok(Some(FecConfig {
+        mode: parse_string_enum(&row.try_get::<String, _>("fec_mode")?)?,
+        max_overhead_percent: row.try_get("fec_max_overhead_percent")?,
+        protect_classes,
+        avoid_bulk_tcp: row.try_get("fec_avoid_bulk_tcp")?,
+        disable_for_sequential_dns: row.try_get("fec_disable_for_sequential_dns")?,
+        min_concurrency_for_block_fec: usize::try_from(
+            row.try_get::<u64, _>("fec_min_concurrency")?,
+        )
+        .map_err(decode_error)?,
+        max_generation_packets: row.try_get("fec_max_generation_packets")?,
+        max_generation_delay_ms: row.try_get("fec_max_generation_delay_ms")?,
+        recovery_deadline_ms: row.try_get("fec_recovery_deadline_ms")?,
+        dedup_window_packets: usize::try_from(row.try_get::<u64, _>("fec_dedup_window_packets")?)
+            .map_err(decode_error)?,
+    }))
+}
+
+async fn load_tun(pool: &MySqlPool, revision: i64) -> StoreResult<Option<TunConfig>> {
+    let Some(row) = sqlx::query("SELECT * FROM tun_settings WHERE revision_id=?")
+        .bind(revision)
+        .fetch_optional(pool)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let linux = row
+        .try_get::<bool, _>("linux_configured")?
+        .then(|| TunLinuxConfig {
+            backend: parse_string_enum(
+                &row.try_get::<String, _>("linux_backend")
+                    .unwrap_or_else(|_| "tun".into()),
+            )
+            .unwrap_or_default(),
+            af_xdp: TunAfXdpConfig {
+                interface: row.try_get("af_xdp_interface").ok().flatten(),
+                queue_id: row.try_get::<u64, _>("af_xdp_queue_id").unwrap_or(0) as u32,
+                ring_entries: row.try_get::<u64, _>("af_xdp_ring_entries").unwrap_or(2048) as u32,
+                frame_count: row.try_get::<u64, _>("af_xdp_frame_count").unwrap_or(4096) as u32,
+                frame_size: row.try_get::<u64, _>("af_xdp_frame_size").unwrap_or(2048) as u32,
+                force_copy: row.try_get("af_xdp_force_copy").unwrap_or(true),
+                force_zerocopy: row.try_get("af_xdp_force_zerocopy").unwrap_or(false),
+            },
+        });
+    Ok(Some(TunConfig {
+        name: row.try_get("interface_name")?,
+        address: row.try_get("address_value")?,
+        netmask: row.try_get("netmask")?,
+        mtu: u16::try_from(row.try_get::<u32, _>("mtu")?).map_err(decode_error)?,
+        bypass_mark: u32::try_from(row.try_get::<u64, _>("bypass_mark")?).map_err(decode_error)?,
+        outbound_interface: row.try_get("outbound_interface")?,
+        redirect_port: u16::try_from(row.try_get::<u32, _>("redirect_port")?)
+            .map_err(decode_error)?,
+        dns_port: u16::try_from(row.try_get::<u32, _>("dns_port")?).map_err(decode_error)?,
+        wintun_file: row.try_get("wintun_file")?,
+        batch: TunBatchConfig {
+            enabled: row.try_get("batch_enabled")?,
+            max_packets: usize::try_from(row.try_get::<u64, _>("batch_max_packets")?)
+                .map_err(decode_error)?,
+            max_delay_us: row.try_get("batch_max_delay_us")?,
+            latency_flush_bytes: usize::try_from(
+                row.try_get::<u64, _>("batch_latency_flush_bytes")?,
+            )
+            .map_err(decode_error)?,
+        },
+        sessions: TunSessionConfig {
+            udp_max: usize::try_from(row.try_get::<u64, _>("udp_max_sessions")?)
+                .map_err(decode_error)?,
+            udp_idle_timeout_sec: row.try_get("udp_idle_timeout_sec")?,
+            tcp_max: usize::try_from(row.try_get::<u64, _>("tcp_max_sessions")?)
+                .map_err(decode_error)?,
+        },
+        linux,
+    }))
 }
 
 async fn load_limits(pool: &MySqlPool, revision: i64) -> StoreResult<LimitsConfig> {
@@ -275,6 +520,13 @@ async fn load_stream(
             .bind(revision).bind(kind).bind(id).fetch_all(pool).await?;
         stream.reality_settings = Some(RealityConfig { show: reality.try_get("show_details")?, dest: reality.try_get("destination")?, private_key: reality.try_get("private_key")?, short_ids, public_key: reality.try_get("public_key")?, short_id: reality.try_get("short_id")?, fingerprint: reality.try_get("fingerprint")?, server_name: reality.try_get("server_name")?, server_names: names, max_time_diff: 0, max_time_diff_seconds: reality.try_get("max_time_diff_seconds")? });
     }
+    if let Some(shadow) = sqlx::query("SELECT password_value,destination,version FROM shadowtls_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
+        .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {
+        stream.shadow_tls_settings = Some(ShadowTlsConfig {
+            password: bytes_string(&shadow, "password_value")?.unwrap_or_default(),
+            dest: shadow.try_get("destination")?, version: shadow.try_get("version")?,
+        });
+    }
     for transport_kind in ["ws", "httpupgrade"] {
         if let Some(transport) = sqlx::query("SELECT request_path FROM websocket_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? AND transport_kind=?")
             .bind(revision).bind(kind).bind(id).bind(transport_kind).fetch_optional(pool).await? {
@@ -288,11 +540,30 @@ async fn load_stream(
             if transport_kind == "ws" { stream.ws_settings = Some(config); } else { stream.httpupgrade_settings = Some(config); }
         }
     }
-    if let Some(transport) = sqlx::query("SELECT request_path FROM websocket_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? AND transport_kind='splithttp'")
+    if let Some(transport) = sqlx::query("SELECT w.request_path,s.* FROM websocket_settings w JOIN splithttp_settings s ON s.revision_id=w.revision_id AND s.endpoint_kind=w.endpoint_kind AND s.endpoint_id=w.endpoint_id WHERE w.revision_id=? AND w.endpoint_kind=? AND w.endpoint_id=? AND w.transport_kind='splithttp'")
         .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {
+        let host = sqlx::query_scalar("SELECT host_value FROM splithttp_hosts WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? ORDER BY position").bind(revision).bind(kind).bind(id).fetch_all(pool).await?;
+        let header_rows = sqlx::query("SELECT header_name,header_value FROM transport_headers WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=? AND transport_kind='splithttp'").bind(revision).bind(kind).bind(id).fetch_all(pool).await?;
+        let mut headers = std::collections::HashMap::new();
+        for header in header_rows { headers.insert(header.try_get("header_name")?, header.try_get("header_value")?); }
+        let x_padding_bytes = match transport.try_get::<Option<String>, _>("padding_kind")?.as_deref() {
+            Some("fixed") => transport.try_get::<Option<u64>, _>("padding_fixed")?.map(|v| PaddingBytes::Fixed(v as usize)),
+            Some("range") => transport.try_get::<Option<String>, _>("padding_range")?.map(PaddingBytes::Range),
+            Some("bounds") => Some(PaddingBytes::Bounds(PaddingBounds { min: optional_usize(&transport, "padding_min")?, max: optional_usize(&transport, "padding_max")?, from: optional_usize(&transport, "padding_from")?, to: optional_usize(&transport, "padding_to")? })),
+            _ => None,
+        };
+        let xmux = transport.try_get::<bool, _>("xmux_configured")?.then(|| XmuxConfig {
+            max_concurrency: optional_usize(&transport, "xmux_max_concurrency").ok().flatten(), max_connections: optional_usize(&transport, "xmux_max_connections").ok().flatten(), c_max_reuse_times: optional_usize(&transport, "xmux_c_max_reuse_times").ok().flatten(), h_max_request_times: optional_usize(&transport, "xmux_h_max_request_times").ok().flatten(), h_max_reusable_secs: transport.try_get("xmux_h_max_reusable_secs").ok().flatten(), h_keep_alive_period: transport.try_get("xmux_h_keep_alive_period").ok().flatten(),
+        });
+        let download_settings = transport.try_get::<bool, _>("download_configured")?.then(|| -> StoreResult<DownloadSettings> { Ok(DownloadSettings {
+            network: transport.try_get::<Option<String>, _>("download_network")?.map(|v| parse_network(&v)).transpose()?,
+            security: transport.try_get::<Option<String>, _>("download_security")?.map(|v| parse_security(&v)).transpose()?,
+        }) }).transpose()?;
         stream.splithttp_settings = Some(SplitHttpConfig {
-            path: transport.try_get("request_path")?,
-            ..Default::default()
+            path: transport.try_get("request_path")?, host, method: transport.try_get("method_value")?, mode: transport.try_get("mode_value")?, uplink_http_method: transport.try_get("uplink_http_method")?, headers, x_padding_bytes,
+            x_padding_method: transport.try_get("padding_method")?, x_padding_header: transport.try_get("padding_header")?, x_padding_key: transport.try_get("padding_key")?, x_padding_placement: transport.try_get("padding_placement")?,
+            session_placement: transport.try_get("session_placement")?, session_key: transport.try_get("session_key")?, seq_placement: transport.try_get("seq_placement")?, seq_key: transport.try_get("seq_key")?, uplink_data_placement: transport.try_get("uplink_data_placement")?, uplink_data_key: transport.try_get("uplink_data_key")?,
+            uplink_chunk_size: u32::try_from(transport.try_get::<u64, _>("uplink_chunk_size")?).map_err(decode_error)?, sc_max_buffered_posts: usize::try_from(transport.try_get::<u64, _>("sc_max_buffered_posts")?).map_err(decode_error)?, xmux, download_settings,
         });
     }
     if let Some(grpc) = sqlx::query("SELECT service_name, multi_mode FROM grpc_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
@@ -492,12 +763,72 @@ async fn load_routing(pool: &MySqlPool, revision: i64) -> StoreResult<Option<Rou
         .await?;
         rules.push(rule);
     }
+    let balancer_rows = sqlx::query("SELECT balancer_id,tag,strategy,failure_threshold,cooldown_seconds,ewma_alpha,switch_margin,health_url,health_interval_seconds,health_timeout_seconds,health_max_failures FROM routing_balancers WHERE revision_id=? ORDER BY position")
+        .bind(revision).fetch_all(pool).await?;
+    let mut balancers = Vec::with_capacity(balancer_rows.len());
+    for row in balancer_rows {
+        let balancer_id: i64 = row.try_get("balancer_id")?;
+        let member_rows = sqlx::query("SELECT o.tag outbound_tag,m.profile_name FROM routing_balancer_members m JOIN outbounds o ON o.revision_id=m.revision_id AND o.outbound_id=m.outbound_id WHERE m.revision_id=? AND m.balancer_id=? ORDER BY m.position")
+            .bind(revision).bind(balancer_id).fetch_all(pool).await?;
+        let mut selector = Vec::new();
+        let mut profiles = Vec::new();
+        for member in member_rows {
+            let outbound_tag: String = member.try_get("outbound_tag")?;
+            if let Some(name) = member.try_get::<Option<String>, _>("profile_name")? {
+                profiles.push(BalancerProfileConfig { name, outbound_tag });
+            } else {
+                selector.push(outbound_tag);
+            }
+        }
+        let adaptive =
+            row.try_get::<Option<u32>, _>("failure_threshold")?
+                .map(|failure_threshold| AdaptiveBalancerConfig {
+                    failure_threshold,
+                    cooldown_secs: row
+                        .try_get::<Option<u64>, _>("cooldown_seconds")
+                        .unwrap_or(None)
+                        .unwrap_or(30),
+                    ewma_alpha: row
+                        .try_get::<Option<f64>, _>("ewma_alpha")
+                        .unwrap_or(None)
+                        .unwrap_or(0.2),
+                    switch_margin: row
+                        .try_get::<Option<f64>, _>("switch_margin")
+                        .unwrap_or(None)
+                        .unwrap_or(0.15),
+                });
+        let health_check =
+            row.try_get::<Option<String>, _>("health_url")?
+                .map(|url| HealthCheckConfig {
+                    url,
+                    interval_secs: row
+                        .try_get::<Option<u64>, _>("health_interval_seconds")
+                        .unwrap_or(None)
+                        .unwrap_or(30),
+                    timeout_secs: row
+                        .try_get::<Option<u64>, _>("health_timeout_seconds")
+                        .unwrap_or(None)
+                        .unwrap_or(5),
+                    max_failures: row
+                        .try_get::<Option<u32>, _>("health_max_failures")
+                        .unwrap_or(None)
+                        .unwrap_or(3),
+                });
+        balancers.push(BalancerConfig {
+            tag: row.try_get("tag")?,
+            selector,
+            strategy: row.try_get("strategy")?,
+            profiles,
+            adaptive,
+            health_check,
+        });
+    }
     Ok(Some(RoutingConfig {
         domain_strategy: config.try_get("domain_strategy")?,
         geoip_file: config.try_get("geoip_file")?,
         geosite_file: config.try_get("geosite_file")?,
         rules,
-        balancers: Vec::new(),
+        balancers,
     }))
 }
 
@@ -515,6 +846,20 @@ fn bytes_string(row: &sqlx::mysql::MySqlRow, name: &str) -> StoreResult<Option<S
 }
 fn decode_error(error: impl std::error::Error + Send + Sync + 'static) -> StoreError {
     StoreError::Sql(sqlx::Error::Decode(Box::new(error)))
+}
+
+fn parse_string_enum<T: serde::de::DeserializeOwned>(value: &str) -> StoreResult<T> {
+    serde_json::from_value(serde_json::Value::String(value.to_owned())).map_err(decode_error)
+}
+
+fn parse_number_or_string<T: serde::de::DeserializeOwned>(value: &str) -> StoreResult<T> {
+    let value = value
+        .parse::<u64>()
+        .ok()
+        .map(serde_json::Number::from)
+        .map(serde_json::Value::Number)
+        .unwrap_or_else(|| serde_json::Value::String(value.to_owned()));
+    serde_json::from_value(value).map_err(decode_error)
 }
 
 fn parse_profile(value: &str) -> StoreResult<ProfileMode> {

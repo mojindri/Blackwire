@@ -837,6 +837,43 @@ pub async fn update_routing_dns(
     ))
 }
 
+pub async fn get_core_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<blackwire_store::CoreSettings> {
+    auth::require(&headers, &state).await?;
+    let revision = state
+        .store
+        .state()
+        .await
+        .map_err(store_error)?
+        .desired_revision;
+    Ok(Json(
+        state
+            .store
+            .core_settings(revision)
+            .await
+            .map_err(store_error)?,
+    ))
+}
+
+pub async fn update_core_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<blackwire_store::CoreSettings>,
+) -> ApiResult<ApplyResult> {
+    auth::require(&headers, &state).await?;
+    let expected = expected_revision(&headers)?;
+    Ok(Json(
+        state
+            .store
+            .save_core_settings("black-ui", expected, input)
+            .await
+            .map_err(store_error)?
+            .into(),
+    ))
+}
+
 pub async fn revision_history(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -900,6 +937,24 @@ pub async fn service_restart_blackwire(
     Ok(Json(
         service::restart_blackwire().map_err(AppError::internal)?,
     ))
+}
+
+pub async fn service_start_blackwire(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<ServiceStatus> {
+    auth::require(&headers, &state).await?;
+    Ok(Json(
+        service::start_blackwire().map_err(AppError::internal)?,
+    ))
+}
+
+pub async fn service_stop_blackwire(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<ServiceStatus> {
+    auth::require(&headers, &state).await?;
+    Ok(Json(service::stop_blackwire().map_err(AppError::internal)?))
 }
 
 pub async fn service_logs(

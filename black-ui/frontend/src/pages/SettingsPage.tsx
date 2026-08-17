@@ -1,76 +1,110 @@
-import { useEffect, useRef, useState } from "react";
-import { Save } from "lucide-react";
-import type { Settings } from "../lib/types";
+import { useEffect, useState } from "react";
+import { Gauge, Network, Save, Settings2, Shield, Terminal } from "lucide-react";
+import type { CoreSettings, Settings } from "../lib/types";
 import { Button } from "../components/atoms/Button";
-import { Input } from "../components/atoms/Input";
+import { Input, Select, Textarea } from "../components/atoms/Input";
 import { Switch } from "../components/atoms/Switch";
 import { Field } from "../components/molecules/Field";
 
-export function SettingsPage({
-  settings,
-  busy,
-  onSave
-}: {
-  settings: Settings | null;
-  busy: boolean;
-  onSave: (settings: Settings) => void;
-}) {
-  const [form, setForm] = useState<Settings | null>(settings);
-  const formRef = useRef(form);
-  useEffect(() => {
-    formRef.current = settings;
-    setForm(settings);
-  }, [settings]);
-  if (!form) return <div className="page">Loading settings...</div>;
+const optionalNumber = (value: string) => value === "" ? null : Number(value);
+const lines = (value: string) => value.split("\n").map((item) => item.trim()).filter(Boolean);
+const defaultQuic = { reusePort: false, endpoints: 1, recvBufferBytes: 8388608, sendBufferBytes: 8388608, maxDatagramSize: "auto" as number | string };
+const defaultDatagram = { enabled: true, udpOverDatagram: true, tunPacketsOverDatagram: true, policy: "standard" as const, maxQueueDelayMs: 25, fastDnsRetry: false, fastDnsRetryDelayMs: 20 };
+const defaultFec = { mode: "off" as const, maxOverheadPercent: 20, protectClasses: ["dns", "interactive", "control"], avoidBulkTcp: true, disableForSequentialDns: true, minConcurrencyForBlockFec: 4, maxGenerationPackets: 4, maxGenerationDelayMs: 20, recoveryDeadlineMs: 100, dedupWindowPackets: 1024 };
+const defaultTun: NonNullable<CoreSettings["tun"]> = { name: "blackwire-tun", address: "198.18.0.1", netmask: "255.255.0.0", mtu: 1500, bypassMark: 4660, outboundInterface: null, redirectPort: 12345, dnsPort: 53, wintunFile: null, batch: { enabled: true, maxPackets: 64, maxDelayUs: 200, latencyFlushBytes: 8192 }, sessions: { udpMax: 4096, udpIdleTimeoutSec: 60, tcpMax: 16384 }, linux: null };
+const defaultFast: NonNullable<CoreSettings["fast"]> = { strictProduction: true, pool: "adaptive", splice: "adaptive", relay: { engine: "v2", flush: "adaptive", initialBuffer: 16384, maxBuffer: 262144 }, linux: { zerocopy: "disabled", zerocopyMinBytes: 16384, ioUring: "disabled", afXdp: "auto" } };
+const defaultBudget: NonNullable<CoreSettings["budget"]> = { maxProtocolLayers: 3, allowSniffing: false, allowFakeIp: false, maxRouteRules: 50, maxHandshakeMs: 300, preferDirectCopy: true, preferDatagramForUdp: true };
+const defaultVision: NonNullable<CoreSettings["vision"]> = { directCopy: "auto", maxPacketsToFilter: 8, allowSpliceAfterDirect: true };
+const defaultBoost: NonNullable<CoreSettings["firstPacketBoost"]> = { enabled: false, dns: true, tlsClientHello: true, sendEarlyPayload: true, duplicateControlOnBadnet: false, priority: "high" };
 
-  const updateForm = (patch: Partial<Settings>) => {
-    const current = formRef.current;
-    if (!current) return;
-    const next = { ...current, ...patch };
-    formRef.current = next;
-    setForm(next);
-  };
+export function SettingsPage({ settings, coreSettings, busy, onSave, onSaveCore }: { settings: Settings | null; coreSettings: CoreSettings | null; busy: boolean; onSave: (settings: Settings) => void; onSaveCore: (settings: CoreSettings) => void }) {
+  const [panel, setPanel] = useState(settings);
+  const [core, setCore] = useState(coreSettings);
+  useEffect(() => setPanel(settings), [settings]);
+  useEffect(() => setCore(coreSettings), [coreSettings]);
+  if (!panel || !core) return <div className="page">Loading settings...</div>;
 
-  const save = () => {
-    const latest = formRef.current;
-    if (latest) onSave(latest);
-  };
+  return <div className="page settings-page">
+    <div className="page-title"><h1>Settings</h1><p>Control Black UI automation and the Blackwire runtime from one place.</p></div>
 
-  return (
-    <div className="page">
-      <div className="page-title">
-        <h1>Settings</h1>
-        <p>Public access, firewall automation, subscriptions, and enforcement.</p>
+    <SettingsSection icon={<Settings2 size={19} />} title="Control panel" copy="Panel access, subscriptions, and adaptive automation.">
+      <div className="settings-grid">
+        <Switch checked={panel.firewallAutoOpen} onChange={(firewallAutoOpen) => setPanel({ ...panel, firewallAutoOpen })} label="Auto-open UFW ports" />
+        <Switch checked={panel.adaptiveRoutingEnabled} onChange={(adaptiveRoutingEnabled) => setPanel({ ...panel, adaptiveRoutingEnabled })} label="Auto adaptive routing" />
+        <Field label="Public base URL"><Input value={panel.publicBaseUrl} onChange={(e) => setPanel({ ...panel, publicBaseUrl: e.target.value })} /></Field>
+        <Field label="Subscription host"><Input value={panel.subscriptionHost} onChange={(e) => setPanel({ ...panel, subscriptionHost: e.target.value })} /></Field>
+        <NumberField label="Enforcement interval (seconds)" value={panel.enforcementIntervalSeconds} onChange={(value) => setPanel({ ...panel, enforcementIntervalSeconds: value })} />
+        <Field label="Adaptive tuning mode"><Select value={panel.adaptiveTuningMode} onChange={(e) => setPanel({ ...panel, adaptiveTuningMode: e.target.value })}><option value="off">Off</option><option value="recommend">Recommend only</option><option value="auto">Apply automatically</option></Select></Field>
+        <NumberField label="Tuning interval (seconds)" value={panel.adaptiveTuningIntervalSeconds} onChange={(value) => setPanel({ ...panel, adaptiveTuningIntervalSeconds: value })} />
+        <NumberField label="Tuning cooldown (seconds)" value={panel.adaptiveTuningCooldownSeconds} onChange={(value) => setPanel({ ...panel, adaptiveTuningCooldownSeconds: value })} />
+        <NumberField label="Maximum Hysteria2 Mbps" value={panel.adaptiveTuningMaxHysteria2Mbps} onChange={(value) => setPanel({ ...panel, adaptiveTuningMaxHysteria2Mbps: value })} />
       </div>
-      <section className="work-panel settings-panel">
-        <Switch
-          checked={form.firewallAutoOpen}
-          onChange={(firewallAutoOpen) => updateForm({ firewallAutoOpen })}
-          label="Auto-open UFW ports for public enabled inbounds"
-        />
-        <Switch
-          checked={form.adaptiveRoutingEnabled}
-          onChange={(adaptiveRoutingEnabled) => updateForm({ adaptiveRoutingEnabled })}
-          label="Auto adaptive routing for enabled outbounds"
-        />
-        <Field label="Public base URL">
-          <Input value={form.publicBaseUrl} onChange={(e) => updateForm({ publicBaseUrl: e.target.value })} />
-        </Field>
-        <Field label="Subscription host">
-          <Input value={form.subscriptionHost} onChange={(e) => updateForm({ subscriptionHost: e.target.value })} />
-        </Field>
-        <Field label="Enforcement interval seconds">
-          <Input
-            type="number"
-            min={5}
-            value={form.enforcementIntervalSeconds}
-            onChange={(e) => updateForm({ enforcementIntervalSeconds: Number(e.target.value) })}
-          />
-        </Field>
-        <Button variant="primary" icon={<Save size={16} />} onClick={save} disabled={busy}>
-          Save Settings
-        </Button>
-      </section>
-    </div>
-  );
+      <Button variant="primary" icon={<Save size={16} />} onClick={() => onSave(panel)} disabled={busy}>Save panel settings</Button>
+    </SettingsSection>
+
+    <SettingsSection icon={<Terminal size={19} />} title="Runtime & observability" copy="Profile, logs, metrics, statistics, API, and connection limits.">
+      <div className="settings-grid settings-grid-3">
+        <Field label="Runtime profile"><Select value={core.profile} onChange={(e) => setCore({ ...core, profile: e.target.value as CoreSettings["profile"] })}>{["compat", "fast", "latency", "throughput", "badnet", "mobile", "stealth"].map((value) => <option key={value}>{value}</option>)}</Select></Field>
+        <Field label="Log level"><Select value={core.log.level} onChange={(e) => setCore({ ...core, log: { ...core.log, level: e.target.value } })}>{["debug", "info", "warn", "error"].map((value) => <option key={value}>{value}</option>)}</Select></Field>
+        <Field label="Log file" hint="Empty uses stderr."><Input value={core.log.file} onChange={(e) => setCore({ ...core, log: { ...core.log, file: e.target.value } })} /></Field>
+        <Switch checked={core.log.json} onChange={(json) => setCore({ ...core, log: { ...core.log, json } })} label="Structured JSON logs" />
+        <Switch checked={core.stats?.enabled ?? false} onChange={(enabled) => setCore({ ...core, stats: { enabled } })} label="Traffic statistics" />
+        <Field label="Metrics listen address" hint="Empty disables metrics."><Input value={core.metricsAddr ?? ""} onChange={(e) => setCore({ ...core, metricsAddr: e.target.value || null })} /></Field>
+      </div>
+      <div className="settings-divider" />
+      <Switch checked={core.api !== null} onChange={(enabled) => setCore({ ...core, api: enabled ? { listen: "127.0.0.1:62789", token: null, services: ["HandlerService", "StatsService"] } : null })} label="Enable management API" />
+      {core.api ? <div className="settings-grid settings-grid-3"><Field label="API listen address"><Input value={core.api.listen} onChange={(e) => setCore({ ...core, api: { ...core.api!, listen: e.target.value } })} /></Field><Field label="Bearer token"><Input type="password" value={core.api.token ?? ""} onChange={(e) => setCore({ ...core, api: { ...core.api!, token: e.target.value || null } })} /></Field><Field label="Exposed services"><Textarea rows={3} value={core.api.services.join("\n")} onChange={(e) => setCore({ ...core, api: { ...core.api!, services: lines(e.target.value) } })} /></Field></div> : null}
+      <div className="settings-divider" />
+      <div className="settings-grid settings-grid-3">{([['maxConnections','Process connections'],['maxConnectionsPerInbound','Per-inbound connections'],['maxConnectionsPerUser','Per-user connections'],['maxHandshakeSeconds','Handshake timeout (s)'],['maxIdleSeconds','Idle timeout (s)']] as const).map(([key, label]) => <Field key={key} label={label}><Input type="number" value={core.limits[key] ?? ""} placeholder="Unlimited" onChange={(e) => setCore({ ...core, limits: { ...core.limits, [key]: optionalNumber(e.target.value) } })} /></Field>)}</div>
+    </SettingsSection>
+
+    <SettingsSection icon={<Gauge size={19} />} title="Performance policies" copy="Fast-path relay, cost budgets, Vision direct copy, and first-packet acceleration.">
+      <div className="settings-toggle-strip"><Switch checked={core.fast !== null} onChange={(enabled) => setCore({ ...core, fast: enabled ? defaultFast : null })} label="Fast-path tuning" /><Switch checked={core.budget !== null} onChange={(enabled) => setCore({ ...core, budget: enabled ? defaultBudget : null })} label="Performance budget" /><Switch checked={core.vision !== null} onChange={(enabled) => setCore({ ...core, vision: enabled ? defaultVision : null })} label="Vision optimization" /><Switch checked={core.firstPacketBoost !== null} onChange={(enabled) => setCore({ ...core, firstPacketBoost: enabled ? defaultBoost : null })} label="First-packet boost" /></div>
+      {core.fast ? <FastEditor value={core.fast} onChange={(fast) => setCore({ ...core, fast })} /> : null}
+      {core.budget ? <BudgetEditor value={core.budget} onChange={(budget) => setCore({ ...core, budget })} /> : null}
+      {core.vision ? <div className="settings-subsection"><h3>Vision optimization</h3><div className="settings-grid settings-grid-3"><Field label="Direct-copy policy"><Select value={core.vision.directCopy} onChange={(e) => setCore({ ...core, vision: { ...core.vision!, directCopy: e.target.value as typeof core.vision.directCopy } })}>{["auto", "disabled", "require"].map((value) => <option key={value}>{value}</option>)}</Select></Field><NumberField label="Packets to filter" value={core.vision.maxPacketsToFilter} onChange={(maxPacketsToFilter) => setCore({ ...core, vision: { ...core.vision!, maxPacketsToFilter } })} /><Switch checked={core.vision.allowSpliceAfterDirect} onChange={(allowSpliceAfterDirect) => setCore({ ...core, vision: { ...core.vision!, allowSpliceAfterDirect } })} label="Allow splice after direct copy" /></div></div> : null}
+      {core.firstPacketBoost ? <BoostEditor value={core.firstPacketBoost} onChange={(firstPacketBoost) => setCore({ ...core, firstPacketBoost })} /> : null}
+    </SettingsSection>
+
+    <SettingsSection icon={<Gauge size={19} />} title="QUIC, datagrams & FEC" copy="Global unreliable-traffic and lossy-network tuning.">
+      <div className="settings-toggle-strip"><Switch checked={core.quic !== null} onChange={(enabled) => setCore({ ...core, quic: enabled ? defaultQuic : null })} label="QUIC sockets" /><Switch checked={core.datagram !== null} onChange={(enabled) => setCore({ ...core, datagram: enabled ? defaultDatagram : null })} label="Datagram lane" /><Switch checked={core.fec !== null} onChange={(enabled) => setCore({ ...core, fec: enabled ? defaultFec : null })} label="Forward error correction" /></div>
+      {core.quic ? <div className="settings-subsection"><h3>QUIC sockets</h3><div className="settings-grid settings-grid-3"><Switch checked={core.quic.reusePort} onChange={(reusePort) => setCore({ ...core, quic: { ...core.quic!, reusePort } })} label="Reuse UDP port" /><ScalarField label="Endpoint shards" value={core.quic.endpoints} keyword="cpu" onChange={(endpoints) => setCore({ ...core, quic: { ...core.quic!, endpoints } })} /><ScalarField label="Max datagram size" value={core.quic.maxDatagramSize} keyword="auto" onChange={(maxDatagramSize) => setCore({ ...core, quic: { ...core.quic!, maxDatagramSize } })} /><NumberField label="Receive buffer bytes" value={core.quic.recvBufferBytes} onChange={(recvBufferBytes) => setCore({ ...core, quic: { ...core.quic!, recvBufferBytes } })} /><NumberField label="Send buffer bytes" value={core.quic.sendBufferBytes} onChange={(sendBufferBytes) => setCore({ ...core, quic: { ...core.quic!, sendBufferBytes } })} /></div></div> : null}
+      {core.datagram ? <div className="settings-subsection"><h3>Datagram lane</h3><div className="settings-grid settings-grid-3"><Switch checked={core.datagram.enabled} onChange={(enabled) => setCore({ ...core, datagram: { ...core.datagram!, enabled } })} label="Enable datagrams" /><Switch checked={core.datagram.udpOverDatagram} onChange={(udpOverDatagram) => setCore({ ...core, datagram: { ...core.datagram!, udpOverDatagram } })} label="UDP over datagrams" /><Switch checked={core.datagram.tunPacketsOverDatagram} onChange={(tunPacketsOverDatagram) => setCore({ ...core, datagram: { ...core.datagram!, tunPacketsOverDatagram } })} label="TUN packets over datagrams" /><Field label="Policy"><Select value={core.datagram.policy} onChange={(e) => setCore({ ...core, datagram: { ...core.datagram!, policy: e.target.value as "standard" | "h2-plus" } })}><option value="standard">Standard</option><option value="h2-plus">H2+</option></Select></Field><NumberField label="Queue delay (ms)" value={core.datagram.maxQueueDelayMs} onChange={(maxQueueDelayMs) => setCore({ ...core, datagram: { ...core.datagram!, maxQueueDelayMs } })} /><Switch checked={core.datagram.fastDnsRetry} onChange={(fastDnsRetry) => setCore({ ...core, datagram: { ...core.datagram!, fastDnsRetry } })} label="Fast DNS retry" /><NumberField label="DNS retry delay (ms)" value={core.datagram.fastDnsRetryDelayMs} onChange={(fastDnsRetryDelayMs) => setCore({ ...core, datagram: { ...core.datagram!, fastDnsRetryDelayMs } })} /></div></div> : null}
+      {core.fec ? <FecEditor value={core.fec} onChange={(fec) => setCore({ ...core, fec })} /> : null}
+    </SettingsSection>
+
+    <SettingsSection icon={<Network size={19} />} title="TUN interception" copy="Interface, batching, sessions, and Linux AF_XDP controls.">
+      <Switch checked={core.tun !== null} onChange={(enabled) => setCore({ ...core, tun: enabled ? defaultTun : null })} label="Enable TUN configuration" />
+      {core.tun ? <TunEditor value={core.tun} onChange={(tun) => setCore({ ...core, tun })} /> : null}
+    </SettingsSection>
+
+    <div className="settings-core-save"><div><Shield size={18} /><span><strong>Core changes require maintenance activation.</strong><small>Save here, then activate from Runtime.</small></span></div><Button variant="primary" icon={<Save size={16} />} onClick={() => onSaveCore(core)} disabled={busy}>Save Blackwire core</Button></div>
+  </div>;
+}
+
+function SettingsSection({ icon, title, copy, children }: { icon: React.ReactNode; title: string; copy: string; children: React.ReactNode }) { return <section className="settings-section"><div className="settings-section-head">{icon}<div><h2>{title}</h2><p>{copy}</p></div></div>{children}</section>; }
+function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) { return <Field label={label}><Input type="number" min={0} value={value} onChange={(e) => onChange(Number(e.target.value))} /></Field>; }
+function ScalarField({ label, value, keyword, onChange }: { label: string; value: number | string; keyword: string; onChange: (value: number | string) => void }) { return <Field label={label}><Input value={value} onChange={(e) => onChange(e.target.value === keyword ? keyword : Number(e.target.value))} /></Field>; }
+
+function FastEditor({ value, onChange }: { value: NonNullable<CoreSettings["fast"]>; onChange: (value: NonNullable<CoreSettings["fast"]>) => void }) {
+  return <div className="settings-subsection"><h3>Fast-path relay</h3><div className="settings-grid settings-grid-3"><Switch checked={value.strictProduction} onChange={(strictProduction) => onChange({ ...value, strictProduction })} label="Strict production mode" /><EnumField label="Pool policy" value={value.pool} options={["adaptive", "disabled", "fixed"]} onChange={(pool) => onChange({ ...value, pool: pool as typeof value.pool })} /><EnumField label="Splice policy" value={value.splice} options={["adaptive", "disabled", "always"]} onChange={(splice) => onChange({ ...value, splice: splice as typeof value.splice })} /><EnumField label="Relay engine" value={value.relay.engine} options={["legacy", "v2"]} onChange={(engine) => onChange({ ...value, relay: { ...value.relay, engine: engine as typeof value.relay.engine } })} /><EnumField label="Flush policy" value={value.relay.flush} options={["immediate", "deferred", "adaptive"]} onChange={(flush) => onChange({ ...value, relay: { ...value.relay, flush: flush as typeof value.relay.flush } })} /><NumberField label="Initial relay buffer" value={value.relay.initialBuffer} onChange={(initialBuffer) => onChange({ ...value, relay: { ...value.relay, initialBuffer } })} /><NumberField label="Maximum relay buffer" value={value.relay.maxBuffer} onChange={(maxBuffer) => onChange({ ...value, relay: { ...value.relay, maxBuffer } })} /><EnumField label="Linux zero-copy" value={value.linux.zerocopy} options={["disabled", "bulk", "always"]} onChange={(zerocopy) => onChange({ ...value, linux: { ...value.linux, zerocopy: zerocopy as typeof value.linux.zerocopy } })} /><NumberField label="Zero-copy minimum bytes" value={value.linux.zerocopyMinBytes} onChange={(zerocopyMinBytes) => onChange({ ...value, linux: { ...value.linux, zerocopyMinBytes } })} /><EnumField label="io_uring" value={value.linux.ioUring} options={["disabled", "auto", "require"]} onChange={(ioUring) => onChange({ ...value, linux: { ...value.linux, ioUring: ioUring as typeof value.linux.ioUring } })} /><EnumField label="AF_XDP" value={value.linux.afXdp} options={["disabled", "auto", "require"]} onChange={(afXdp) => onChange({ ...value, linux: { ...value.linux, afXdp: afXdp as typeof value.linux.afXdp } })} /></div></div>;
+}
+
+function BudgetEditor({ value, onChange }: { value: NonNullable<CoreSettings["budget"]>; onChange: (value: NonNullable<CoreSettings["budget"]>) => void }) {
+  return <div className="settings-subsection"><h3>Performance budget</h3><div className="settings-grid settings-grid-3"><NumberField label="Maximum protocol layers" value={value.maxProtocolLayers} onChange={(maxProtocolLayers) => onChange({ ...value, maxProtocolLayers })} /><NumberField label="Maximum route rules" value={value.maxRouteRules} onChange={(maxRouteRules) => onChange({ ...value, maxRouteRules })} /><NumberField label="Maximum handshake (ms)" value={value.maxHandshakeMs} onChange={(maxHandshakeMs) => onChange({ ...value, maxHandshakeMs })} /><Switch checked={value.allowSniffing} onChange={(allowSniffing) => onChange({ ...value, allowSniffing })} label="Allow sniffing" /><Switch checked={value.allowFakeIp} onChange={(allowFakeIp) => onChange({ ...value, allowFakeIp })} label="Allow FakeIP" /><Switch checked={value.preferDirectCopy} onChange={(preferDirectCopy) => onChange({ ...value, preferDirectCopy })} label="Prefer direct copy" /><Switch checked={value.preferDatagramForUdp} onChange={(preferDatagramForUdp) => onChange({ ...value, preferDatagramForUdp })} label="Prefer datagrams for UDP" /></div></div>;
+}
+
+function BoostEditor({ value, onChange }: { value: NonNullable<CoreSettings["firstPacketBoost"]>; onChange: (value: NonNullable<CoreSettings["firstPacketBoost"]>) => void }) {
+  return <div className="settings-subsection"><h3>First-packet acceleration</h3><div className="settings-grid settings-grid-3"><Switch checked={value.enabled} onChange={(enabled) => onChange({ ...value, enabled })} label="Enable acceleration" /><Switch checked={value.dns} onChange={(dns) => onChange({ ...value, dns })} label="Pre-resolve DNS" /><Switch checked={value.tlsClientHello} onChange={(tlsClientHello) => onChange({ ...value, tlsClientHello })} label="Boost TLS ClientHello" /><Switch checked={value.sendEarlyPayload} onChange={(sendEarlyPayload) => onChange({ ...value, sendEarlyPayload })} label="Send early payload" /><Switch checked={value.duplicateControlOnBadnet} onChange={(duplicateControlOnBadnet) => onChange({ ...value, duplicateControlOnBadnet })} label="Duplicate bad-network control" /><EnumField label="Scheduling priority" value={value.priority} options={["normal", "high", "critical"]} onChange={(priority) => onChange({ ...value, priority: priority as typeof value.priority })} /></div></div>;
+}
+
+function EnumField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) { return <Field label={label}><Select value={value} onChange={(e) => onChange(e.target.value)}>{options.map((option) => <option key={option}>{option}</option>)}</Select></Field>; }
+
+function FecEditor({ value, onChange }: { value: NonNullable<CoreSettings["fec"]>; onChange: (value: NonNullable<CoreSettings["fec"]>) => void }) {
+  return <div className="settings-subsection"><h3>Forward error correction</h3><div className="settings-grid settings-grid-3"><Field label="Mode"><Select value={value.mode} onChange={(e) => onChange({ ...value, mode: e.target.value as typeof value.mode })}>{["off", "xor1-of-n", "reed-solomon", "raptor-like", "auto"].map((mode) => <option key={mode}>{mode}</option>)}</Select></Field><NumberField label="Maximum overhead %" value={value.maxOverheadPercent} onChange={(maxOverheadPercent) => onChange({ ...value, maxOverheadPercent })} /><Field label="Protected packet classes"><Textarea rows={3} value={value.protectClasses.join("\n")} onChange={(e) => onChange({ ...value, protectClasses: lines(e.target.value) })} /></Field><Switch checked={value.avoidBulkTcp} onChange={(avoidBulkTcp) => onChange({ ...value, avoidBulkTcp })} label="Avoid bulk TCP" /><Switch checked={value.disableForSequentialDns} onChange={(disableForSequentialDns) => onChange({ ...value, disableForSequentialDns })} label="Skip sequential DNS" />{([['minConcurrencyForBlockFec','Minimum concurrency'],['maxGenerationPackets','Generation packets'],['maxGenerationDelayMs','Generation delay (ms)'],['recoveryDeadlineMs','Recovery deadline (ms)'],['dedupWindowPackets','Dedup window']] as const).map(([key, label]) => <NumberField key={key} label={label} value={value[key]} onChange={(next) => onChange({ ...value, [key]: next })} />)}</div></div>;
+}
+
+function TunEditor({ value, onChange }: { value: NonNullable<CoreSettings["tun"]>; onChange: (value: NonNullable<CoreSettings["tun"]>) => void }) {
+  const batch = value.batch, sessions = value.sessions, linux = value.linux;
+  return <div className="settings-subsection"><div className="settings-grid settings-grid-3"><Field label="Interface name"><Input value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })} /></Field><Field label="Address"><Input value={value.address} onChange={(e) => onChange({ ...value, address: e.target.value })} /></Field><Field label="Netmask"><Input value={value.netmask} onChange={(e) => onChange({ ...value, netmask: e.target.value })} /></Field>{([['mtu','MTU'],['bypassMark','Bypass mark'],['redirectPort','Redirect port'],['dnsPort','DNS port']] as const).map(([key,label]) => <NumberField key={key} label={label} value={value[key]} onChange={(next) => onChange({ ...value, [key]: next })} />)}<Field label="Outbound interface"><Input value={value.outboundInterface ?? ""} onChange={(e) => onChange({ ...value, outboundInterface: e.target.value || null })} /></Field><Field label="Wintun DLL"><Input value={value.wintunFile ?? ""} onChange={(e) => onChange({ ...value, wintunFile: e.target.value || null })} /></Field></div><h3>Batching &amp; sessions</h3><div className="settings-grid settings-grid-3"><Switch checked={batch.enabled} onChange={(enabled) => onChange({ ...value, batch: { ...batch, enabled } })} label="Batch packet writeback" />{([['maxPackets','Maximum batch packets'],['maxDelayUs','Maximum delay (µs)'],['latencyFlushBytes','Latency flush bytes']] as const).map(([key,label]) => <NumberField key={key} label={label} value={batch[key]} onChange={(next) => onChange({ ...value, batch: { ...batch, [key]: next } })} />)}{([['udpMax','Maximum UDP sessions'],['udpIdleTimeoutSec','UDP idle timeout (s)'],['tcpMax','Maximum TCP sessions']] as const).map(([key,label]) => <NumberField key={key} label={label} value={sessions[key]} onChange={(next) => onChange({ ...value, sessions: { ...sessions, [key]: next } })} />)}</div><div className="settings-divider" /><Switch checked={linux !== null} onChange={(enabled) => onChange({ ...value, linux: enabled ? { backend: "tun", afXdp: { interface: null, queueId: 0, ringEntries: 2048, frameCount: 4096, frameSize: 2048, forceCopy: true, forceZerocopy: false } } : null })} label="Configure Linux packet backend" />{linux ? <div className="settings-grid settings-grid-3"><Field label="Linux backend"><Select value={linux.backend} onChange={(e) => onChange({ ...value, linux: { ...linux, backend: e.target.value as "tun" | "afxdp" } })}><option value="tun">TUN</option><option value="afxdp">AF_XDP</option></Select></Field>{linux.backend === "afxdp" ? <><Field label="AF_XDP interface"><Input value={linux.afXdp.interface ?? ""} onChange={(e) => onChange({ ...value, linux: { ...linux, afXdp: { ...linux.afXdp, interface: e.target.value || null } } })} /></Field>{([['queueId','Queue ID'],['ringEntries','Ring entries'],['frameCount','Frame count'],['frameSize','Frame size']] as const).map(([key,label]) => <NumberField key={key} label={label} value={linux.afXdp[key]} onChange={(next) => onChange({ ...value, linux: { ...linux, afXdp: { ...linux.afXdp, [key]: next } } })} />)}<Switch checked={linux.afXdp.forceCopy} onChange={(forceCopy) => onChange({ ...value, linux: { ...linux, afXdp: { ...linux.afXdp, forceCopy } } })} label="Force copy mode" /><Switch checked={linux.afXdp.forceZerocopy} onChange={(forceZerocopy) => onChange({ ...value, linux: { ...linux, afXdp: { ...linux.afXdp, forceZerocopy } } })} label="Force zero-copy mode" /></> : null}</div> : null}</div>;
 }

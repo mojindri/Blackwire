@@ -14,6 +14,7 @@ import { IconButton } from "../atoms/IconButton";
 import { Input, Select } from "../atoms/Input";
 import { Switch } from "../atoms/Switch";
 import { Field } from "../molecules/Field";
+import { SplitHttpFields } from "./SplitHttpFields";
 
 type TabKey = "basic" | "protocol" | "transport" | "security";
 
@@ -114,10 +115,11 @@ export function OutboundDrawer({
   );
   const securityOptions = useMemo(
     () =>
-      capabilities?.security.filter((item) => ["none", "tls", "reality"].includes(item.key)) ?? [
+      capabilities?.security.filter((item) => ["none", "tls", "reality", "shadowtls"].includes(item.key)) ?? [
         { key: "none", label: "No security", status: "supported", notes: "" },
         { key: "tls", label: "TLS", status: "supported", notes: "" },
-        { key: "reality", label: "REALITY", status: "supported", notes: "" }
+        { key: "reality", label: "REALITY", status: "supported", notes: "" },
+        { key: "shadowtls", label: "ShadowTLS v3", status: "supported", notes: "" }
       ],
     [capabilities]
   );
@@ -405,9 +407,7 @@ export function OutboundDrawer({
             ) : null}
 
             {state.network === "splithttp" ? (
-              <Field label="Path">
-                <Input value={state.splitHttpPath} onChange={(e) => updateStructured({ splitHttpPath: e.target.value })} placeholder="/packet" />
-              </Field>
+              <SplitHttpFields value={state.splitHttp} onChange={(splitHttp) => updateStructured({ splitHttp })} />
             ) : null}
 
             {state.network === "kcp" ? (
@@ -531,6 +531,8 @@ export function OutboundDrawer({
                 </Field>
               </div>
             ) : null}
+
+            {state.security === "shadowtls" ? <div className="configurator-grid"><Field label="Password"><Input type="password" value={state.shadowTlsPassword} onChange={(e) => updateStructured({ shadowTlsPassword: e.target.value })} /></Field><Field label="TLS camouflage destination"><Input value={state.shadowTlsDest} onChange={(e) => updateStructured({ shadowTlsDest: e.target.value })} placeholder="www.apple.com:443" /></Field><Field label="Version"><Input type="number" min={3} max={3} value={state.shadowTlsVersion} onChange={(e) => updateStructured({ shadowTlsVersion: e.target.value })} /></Field></div> : null}
 
             {state.security === "none" ? <p className="field-hint">No extra security wrapper. TLS or REALITY is usually the better fit for remote proxy outbounds.</p> : null}
           </section>
