@@ -187,7 +187,7 @@ pub fn encode_udp_datagram_into(
 async fn expect_crlf<R: AsyncRead + Unpin>(reader: &mut R, ctx: &str) -> Result<(), ProxyError> {
     let mut crlf = [0u8; 2];
     reader.read_exact(&mut crlf).await?;
-    if crlf != [b'\r', b'\n'] {
+    if crlf != *b"\r\n" {
         return Err(ProxyError::Protocol(format!("Trojan: expected CRLF {ctx}")));
     }
     Ok(())

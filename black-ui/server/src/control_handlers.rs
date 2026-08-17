@@ -797,7 +797,7 @@ pub async fn tls_generate_self_signed(
     auth::require(&headers, &state).await?;
     crate::tls_cert::generate_self_signed(input)
         .map(Json)
-        .map_err(|error| AppError::bad_request(error))
+        .map_err(AppError::bad_request)
 }
 
 pub async fn get_routing_dns(
