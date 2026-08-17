@@ -17,6 +17,15 @@ pub struct InboundTrafficRecord {
 }
 
 impl Database {
+    pub async fn reset_user_traffic(&self, user_id: i64) -> StoreResult<()> {
+        sqlx::query("INSERT INTO user_traffic (user_id,upload_bytes,download_bytes,last_runtime_upload_bytes,last_runtime_download_bytes,updated_at) VALUES (?,0,0,0,0,UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE upload_bytes=0,download_bytes=0,last_runtime_upload_bytes=0,last_runtime_download_bytes=0,updated_at=UTC_TIMESTAMP(6)")
+            .bind(user_id).execute(self.pool()).await?;
+        sqlx::query("DELETE FROM enforcement_state WHERE user_id=?")
+            .bind(user_id)
+            .execute(self.pool())
+            .await?;
+        Ok(())
+    }
     pub async fn heartbeat(&self, instance_id: &str, active_revision: i64) -> StoreResult<()> {
         sqlx::query("INSERT INTO runtime_instances (instance_id,active_revision,state,last_error,heartbeat_at) VALUES (?,?,'running',NULL,UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE active_revision=VALUES(active_revision),state='running',last_error=NULL,heartbeat_at=UTC_TIMESTAMP(6)")
             .bind(instance_id).bind(active_revision).execute(self.pool()).await?;

@@ -115,7 +115,10 @@ fn api_router() -> Router<AppState> {
         .route("/runtime/traffic", get(handlers::runtime_traffic))
         .route("/runtime/revisions", get(handlers::revision_history))
         .route("/runtime/rollback", post(handlers::rollback_revision))
-        .route("/runtime/activate-maintenance", post(handlers::activate_maintenance))
+        .route(
+            "/runtime/activate-maintenance",
+            post(handlers::activate_maintenance),
+        )
         .route("/service/status", get(handlers::service_status))
         .route(
             "/service/restart-blackwire",
@@ -148,6 +151,13 @@ fn api_router() -> Router<AppState> {
         )
         .route("/users/{id}/enable", post(handlers::enable_user))
         .route("/users/{id}/disable", post(handlers::disable_user))
+        .route("/users/{id}/reset-usage", post(handlers::reset_user_usage))
+        .route("/users/{id}/rotate-uuid", post(handlers::rotate_user_uuid))
+        .route(
+            "/users/{id}/rotate-sub-token",
+            post(handlers::rotate_user_token),
+        )
+        .route("/users/bulk", post(handlers::bulk_users))
         .route("/uuid", post(handlers::generate_uuid))
 }
 
