@@ -69,20 +69,27 @@ RUN_DB_MIGRATIONS=1 INSTALL_BLACK_UI=1 VERSION=v0.2.2 ./install.sh
 ```
 
 Black UI is private on `127.0.0.1:18080` by default. To expose it on the
-network, make that choice explicit rather than tying it to one VPS address:
+network, make that choice explicit. Provide the externally reachable panel
+origin and the hostname or IP that proxy clients should use:
 
 ```sh
-BLACK_UI_EXPOSURE=public INSTALL_BLACK_UI=1 ... ./install.sh
+BLACK_UI_EXPOSURE=public \
+BLACK_UI_PUBLIC_BASE_URL=http://PUBLIC_IP:18080 \
+BLACK_UI_SUBSCRIPTION_HOST=PUBLIC_IP \
+INSTALL_BLACK_UI=1 ... ./install.sh
 ```
 
 This listens on `0.0.0.0:18080` by default; set `BLACK_UI_LISTEN` when you
-need a specific interface or port. Put a public panel behind HTTPS and access
-control. MySQL is unrelated and should remain private.
+need a specific interface or port. The public values are runtime overrides, so
+an upgrade cannot leak an older loopback database default into copied or QR
+subscription URLs. Put a public panel behind HTTPS and access control. MySQL
+is unrelated and should remain private.
 
 For Docker, use [the Compose deployment](deploy/docker/docker-compose.yml).
-Create its documented secret files before bringing the stack up. For a
-development-only local URL, you can use `BLACKWIRE_DATABASE_URL`; use protected
-`*_DATABASE_URL_FILE` credentials for deployed services.
+Create its documented secret files and export `BLACK_UI_PUBLIC_BASE_URL` and
+`BLACK_UI_SUBSCRIPTION_HOST` before bringing the stack up. For a
+development-only local URL, you can use `BLACKWIRE_DATABASE_URL`; use
+protected `*_DATABASE_URL_FILE` credentials for deployed services.
 
 ## After Install
 

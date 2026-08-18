@@ -19,6 +19,8 @@ INSTALL_BLACK_UI="${INSTALL_BLACK_UI:-0}"
 # also used by unattended provisioning.
 BLACK_UI_EXPOSURE="${BLACK_UI_EXPOSURE:-private}"
 BLACK_UI_LISTEN="${BLACK_UI_LISTEN:-}"
+BLACK_UI_PUBLIC_BASE_URL="${BLACK_UI_PUBLIC_BASE_URL:-}"
+BLACK_UI_SUBSCRIPTION_HOST="${BLACK_UI_SUBSCRIPTION_HOST:-}"
 BLACK_UI_STATIC_DIR="${BLACK_UI_STATIC_DIR:-/usr/local/share/black-ui/frontend/dist}"
 BLACK_UI_DATA_DIR="${BLACK_UI_DATA_DIR:-/var/lib/black-ui}"
 RUNTIME_DATABASE_URL_FILE="${RUNTIME_DATABASE_URL_FILE:-}"
@@ -45,6 +47,25 @@ configure_black_ui_exposure() {
             ;;
         *) die "BLACK_UI_EXPOSURE must be private or public" ;;
     esac
+
+    if [ -n "$BLACK_UI_PUBLIC_BASE_URL" ]; then
+        case "$BLACK_UI_PUBLIC_BASE_URL" in
+            http://*|https://*) ;;
+            *) die "BLACK_UI_PUBLIC_BASE_URL must start with http:// or https://" ;;
+        esac
+        case "$BLACK_UI_PUBLIC_BASE_URL" in
+            *[[:space:]%?#]*) die "BLACK_UI_PUBLIC_BASE_URL must be an origin without whitespace, percent escapes, query, or fragment" ;;
+        esac
+        BLACK_UI_PUBLIC_BASE_URL="${BLACK_UI_PUBLIC_BASE_URL%/}"
+    fi
+    if [ -n "$BLACK_UI_SUBSCRIPTION_HOST" ]; then
+        case "$BLACK_UI_SUBSCRIPTION_HOST" in
+            *[[:space:]/%?#]*) die "BLACK_UI_SUBSCRIPTION_HOST must be a hostname or IP address without a scheme, port, or path" ;;
+        esac
+    fi
+    if [ "$BLACK_UI_EXPOSURE" = public ] && { [ -z "$BLACK_UI_PUBLIC_BASE_URL" ] || [ -z "$BLACK_UI_SUBSCRIPTION_HOST" ]; }; then
+        die "public Black UI requires BLACK_UI_PUBLIC_BASE_URL and BLACK_UI_SUBSCRIPTION_HOST"
+    fi
 }
 
 detect_asset() {
@@ -162,6 +183,8 @@ LoadCredential=database-url:${CONFIG_DIR}/ui-database-url
 WorkingDirectory=${BLACK_UI_DATA_DIR}
 Environment=BLACK_UI_LISTEN=${BLACK_UI_LISTEN}
 Environment=BLACK_UI_STATIC_DIR=${BLACK_UI_STATIC_DIR}
+Environment=BLACK_UI_PUBLIC_BASE_URL=${BLACK_UI_PUBLIC_BASE_URL}
+Environment=BLACK_UI_SUBSCRIPTION_HOST=${BLACK_UI_SUBSCRIPTION_HOST}
 Restart=on-failure
 RestartSec=5s
 ProtectSystem=strict

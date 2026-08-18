@@ -8,6 +8,17 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+### Fixed
+
+- Black UI subscription actions now copy and encode the public subscription
+  URL for Hiddify instead of exporting the fetched base64 response body as if
+  it were an import URL.
+- Black UI now honors `BLACK_UI_PUBLIC_BASE_URL` and
+  `BLACK_UI_SUBSCRIPTION_HOST` as runtime overrides, preventing stale loopback
+  values in MySQL from reappearing in subscription URLs after an upgrade.
+- Native and Docker installers now carry the public URL settings consistently;
+  public native installs require both values explicitly.
+
 ## 0.2.2 - 2026-08-18
 
 ### Fixed

@@ -87,5 +87,13 @@ fi
 rg -q '^Environment=BLACK_UI_STATIC_DIR=/usr/local/share/black-ui/frontend/dist$' \
     deploy/systemd/black-ui.service \
     || fail "checked-in Black UI unit disagrees with the native installer static path"
+for variable in BLACK_UI_PUBLIC_BASE_URL BLACK_UI_SUBSCRIPTION_HOST; do
+    rg -q "^Environment=${variable}=" deploy/systemd/black-ui.service \
+        || fail "checked-in Black UI unit is missing ${variable}"
+    rg -q "Environment=${variable}=\\\$\{${variable}\}" scripts/install.sh \
+        || fail "native installer service is missing ${variable}"
+    rg -q "^[[:space:]]+${variable}:" deploy/docker/docker-compose.yml \
+        || fail "Docker Compose Black UI service is missing ${variable}"
+done
 
 echo "MySQL-only consistency checks passed"

@@ -1,15 +1,10 @@
 import { AlertCircle, LoaderCircle, ShieldCheck, X } from "lucide-react";
-import { lazy, Suspense, useEffect, useState } from "react";
-import { fetchSubscriptionContent, subscriptionQrPayload } from "../../lib/subscription";
+import { lazy, Suspense, useEffect, useMemo } from "react";
+import { subscriptionQrPayload } from "../../lib/subscription";
 import { Button } from "../atoms/Button";
 import { IconButton } from "../atoms/IconButton";
 
 const QRCodeSVG = lazy(() => import("qrcode.react").then((module) => ({ default: module.QRCodeSVG })));
-
-type QrState =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; content: string; bytes: number };
 
 export function SubscriptionQrDialog({
   url,
@@ -20,28 +15,7 @@ export function SubscriptionQrDialog({
   label: string;
   onClose: () => void;
 }) {
-  const [state, setState] = useState<QrState>({ status: "loading" });
-
-  useEffect(() => {
-    let active = true;
-    setState({ status: "loading" });
-    void fetchSubscriptionContent(url).then((result) => {
-      if (!active) return;
-      if (!result.ok) {
-        setState({ status: "error", message: result.message });
-        return;
-      }
-      const payload = subscriptionQrPayload(result.content);
-      setState(
-        payload.ok
-          ? { status: "ready", content: payload.content, bytes: payload.bytes }
-          : { status: "error", message: payload.message }
-      );
-    });
-    return () => {
-      active = false;
-    };
-  }, [url]);
+  const payload = useMemo(() => subscriptionQrPayload(url), [url]);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -56,7 +30,7 @@ export function SubscriptionQrDialog({
       <section className="dialog-panel subscription-qr-dialog" role="dialog" aria-modal="true" aria-labelledby="subscription-qr-title">
         <div className="dialog-head">
           <div>
-            <h3 id="subscription-qr-title">Scan subscription content</h3>
+            <h3 id="subscription-qr-title">Scan subscription URL</h3>
             <p>{label}</p>
           </div>
           <IconButton label="Close subscription QR code" onClick={onClose}>
@@ -64,32 +38,25 @@ export function SubscriptionQrDialog({
           </IconButton>
         </div>
         <div className="dialog-body subscription-qr-body" aria-live="polite">
-          {state.status === "loading" ? (
-            <div className="subscription-qr-status">
-              <LoaderCircle size={24} className="spinner" />
-              <strong>Preparing secure QR code…</strong>
-              <span>Fetching the current managed subscription content.</span>
-            </div>
-          ) : null}
-          {state.status === "error" ? (
+          {!payload.ok ? (
             <div className="subscription-qr-error">
               <AlertCircle size={20} />
               <div>
                 <strong>QR code unavailable</strong>
-                <span>{state.message}</span>
+                <span>{payload.message}</span>
               </div>
             </div>
           ) : null}
-          {state.status === "ready" ? (
+          {payload.ok ? (
             <>
               <div className="subscription-qr-stage">
                 <Suspense fallback={<LoaderCircle size={24} className="spinner" />}>
                   <QRCodeSVG
-                    value={state.content}
+                    value={payload.content}
                     size={320}
                     level="L"
                     marginSize={4}
-                    title={`Hiddify subscription content for ${label}`}
+                    title={`Hiddify subscription URL for ${label}`}
                   />
                 </Suspense>
               </div>
@@ -97,10 +64,10 @@ export function SubscriptionQrDialog({
                 <ShieldCheck size={18} />
                 <div>
                   <strong>Open Hiddify, tap +, then Scan QR code</strong>
-                  <span>This QR contains the fetched subscription content—not the panel URL. Treat it like a credential.</span>
+                  <span>This QR contains the public subscription URL. Hiddify will fetch the current profile from Blackwire.</span>
                 </div>
               </div>
-              <span className="subscription-qr-size">{state.bytes.toLocaleString()} byte payload</span>
+              <span className="subscription-qr-size">{payload.bytes.toLocaleString()} byte URL</span>
             </>
           ) : null}
         </div>

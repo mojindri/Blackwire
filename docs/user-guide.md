@@ -47,14 +47,27 @@ The installer copies service credentials into protected locations under
 
 Black UI defaults to `127.0.0.1:18080`. For an intentionally public panel,
 set `BLACK_UI_EXPOSURE=public`; the installer then listens on `0.0.0.0:18080`
-unless you supply `BLACK_UI_LISTEN`. Use a hardened HTTPS reverse proxy and
-access controls for a public panel. Keep MySQL private regardless of the panel
-choice.
+unless you supply `BLACK_UI_LISTEN`. Set `BLACK_UI_PUBLIC_BASE_URL` to the
+externally reachable panel origin and `BLACK_UI_SUBSCRIPTION_HOST` to the
+hostname or IP clients use for proxy connections:
+
+```sh
+BLACK_UI_EXPOSURE=public \
+BLACK_UI_PUBLIC_BASE_URL=http://PUBLIC_IP:18080 \
+BLACK_UI_SUBSCRIPTION_HOST=PUBLIC_IP \
+INSTALL_BLACK_UI=1 ... ./install.sh
+```
+
+The service treats those values as runtime overrides, which prevents an old
+loopback value in MySQL from reappearing in copied or QR subscription URLs.
+Use a hardened HTTPS reverse proxy and access controls for a public panel. Keep
+MySQL private regardless of the panel choice.
 
 For a container deployment, use [Docker Compose](../deploy/docker/docker-compose.yml).
 Create the secret files referenced by that Compose file before starting the
-stack. It creates MySQL, migration, runtime, and Black UI services with
-separate credentials.
+stack, then export `BLACK_UI_PUBLIC_BASE_URL` and
+`BLACK_UI_SUBSCRIPTION_HOST`. It creates MySQL, migration, runtime, and Black
+UI services with separate credentials.
 
 ## Database Setup And First Run
 

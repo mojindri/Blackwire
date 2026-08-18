@@ -143,14 +143,17 @@ pub async fn get_settings(
     headers: HeaderMap,
 ) -> ApiResult<Settings> {
     auth::require(&headers, &state).await?;
-    Ok(Json(
-        state
-            .store
-            .panel_settings()
-            .await
-            .map_err(store_error)?
-            .into(),
-    ))
+    let settings = state
+        .store
+        .panel_settings()
+        .await
+        .map_err(store_error)?
+        .into();
+    Ok(Json(apply_public_settings_overrides(
+        settings,
+        public_setting_override("BLACK_UI_PUBLIC_BASE_URL").as_deref(),
+        public_setting_override("BLACK_UI_SUBSCRIPTION_HOST").as_deref(),
+    )))
 }
 
 pub async fn update_settings(
@@ -165,7 +168,11 @@ pub async fn update_settings(
         .save_panel_settings(&stored)
         .await
         .map_err(store_error)?;
-    Ok(Json(stored.into()))
+    Ok(Json(apply_public_settings_overrides(
+        stored.into(),
+        public_setting_override("BLACK_UI_PUBLIC_BASE_URL").as_deref(),
+        public_setting_override("BLACK_UI_SUBSCRIPTION_HOST").as_deref(),
+    )))
 }
 
 pub async fn list_inbounds(
@@ -1007,7 +1014,9 @@ async fn subscription_link(
         return Err(AppError::not_found("subscription not found"));
     }
     let panel = state.store.panel_settings().await.map_err(store_error)?;
-    let host = public_subscription_host(&panel.subscription_host, headers);
+    let configured_host =
+        public_setting_override("BLACK_UI_SUBSCRIPTION_HOST").unwrap_or(panel.subscription_host);
+    let host = public_subscription_host(&configured_host, headers);
     build_subscription_link(&user, &host)
         .ok_or_else(|| AppError::not_found("subscription not available for this protocol"))
 }
@@ -1208,6 +1217,33 @@ fn public_subscription_host(configured: &str, headers: &HeaderMap) -> String {
         .unwrap_or_else(|| configured.trim().to_string())
 }
 
+fn public_setting_override(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn apply_public_settings_overrides(
+    mut settings: Settings,
+    public_base_url: Option<&str>,
+    subscription_host: Option<&str>,
+) -> Settings {
+    if let Some(value) = public_base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        settings.public_base_url = value.trim_end_matches('/').to_string();
+    }
+    if let Some(value) = subscription_host
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        settings.subscription_host = value.to_string();
+    }
+    settings
+}
+
 fn url_escape(value: &str) -> String {
     value
         .bytes()
@@ -1394,8 +1430,11 @@ mod tests {
     use blackwire_store::SubscriptionRecord;
     use url::Url;
 
+    use crate::models::Settings;
+
     use super::{
-        build_subscription_link, encode_subscription_content, reality_public_key_base64url,
+        apply_public_settings_overrides, build_subscription_link, encode_subscription_content,
+        reality_public_key_base64url,
     };
 
     fn record(protocol: &str) -> SubscriptionRecord {
@@ -1428,6 +1467,34 @@ mod tests {
 
     fn query(url: &Url) -> HashMap<String, String> {
         url.query_pairs().into_owned().collect()
+    }
+
+    #[test]
+    fn installer_public_overrides_replace_loopback_panel_defaults() {
+        let settings = apply_public_settings_overrides(
+            Settings::default(),
+            Some(" http://203.0.113.10:18080/ "),
+            Some(" 203.0.113.10 "),
+        );
+        assert_eq!(settings.public_base_url, "http://203.0.113.10:18080");
+        assert_eq!(settings.subscription_host, "203.0.113.10");
+    }
+
+    #[test]
+    fn empty_installer_public_overrides_preserve_database_settings() {
+        let stored = Settings {
+            public_base_url: "https://panel.example.com".into(),
+            subscription_host: "proxy.example.com".into(),
+            ..Settings::default()
+        };
+        assert_eq!(
+            apply_public_settings_overrides(stored.clone(), Some(" "), None).public_base_url,
+            stored.public_base_url
+        );
+        assert_eq!(
+            apply_public_settings_overrides(stored.clone(), None, Some("")).subscription_host,
+            stored.subscription_host
+        );
     }
 
     #[test]

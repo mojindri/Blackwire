@@ -125,6 +125,8 @@ services:
       BLACKWIRE_DATABASE_URL_FILE: /run/secrets/ui_database_url
       BLACK_UI_LISTEN: 0.0.0.0:18080
       BLACK_UI_STATIC_DIR: /usr/share/black-ui/frontend/dist
+      BLACK_UI_PUBLIC_BASE_URL: ${BLACK_UI_PUBLIC_BASE_URL:?set the externally reachable Black UI origin}
+      BLACK_UI_SUBSCRIPTION_HOST: ${BLACK_UI_SUBSCRIPTION_HOST:?set the public proxy hostname or IP}
     secrets:
       - ui_database_url
     depends_on:
