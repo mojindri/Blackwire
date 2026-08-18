@@ -530,3 +530,24 @@ fn parse_activation_class(value: &str) -> StoreResult<ActivationClass> {
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{EXPECTED_SCHEMA_VERSION, MIGRATIONS};
+
+    #[test]
+    fn embedded_migrations_advance_the_schema_version() {
+        assert_eq!(
+            MIGRATIONS.last().map(|(version, _)| *version),
+            Some(EXPECTED_SCHEMA_VERSION)
+        );
+        for (version, script) in MIGRATIONS {
+            let update_marker = format!("version = {version}");
+            let initial_insert_marker = format!("VALUES (1, {version},");
+            assert!(
+                script.contains(&update_marker) || script.contains(&initial_insert_marker),
+                "migration {version} does not advance blackwire_schema_version"
+            );
+        }
+    }
+}
