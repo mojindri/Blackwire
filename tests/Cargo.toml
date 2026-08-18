@@ -9,7 +9,10 @@ authors.workspace = true
 [features]
 default = []
 heavy-tests = []
-loom-tests = []
+loom-tests = ["dep:loom"]
+
+[dependencies]
+loom = { version = "0.7", optional = true }
 
 # This crate only contains tests — the binary is empty.
 # `cargo test -p integration-tests` runs all tests in this crate.
@@ -34,7 +37,6 @@ rand.workspace         = true
 uuid.workspace         = true
 http.workspace         = true
 h2.workspace           = true
-loom = "0.7"
 async-trait.workspace = true
 bytes.workspace = true
 socket2.workspace = true
