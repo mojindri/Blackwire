@@ -46,6 +46,7 @@ serde.workspace         = true
 serde_json.workspace    = true
 lru.workspace           = true
 parking_lot.workspace   = true
+futures.workspace       = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace          = true

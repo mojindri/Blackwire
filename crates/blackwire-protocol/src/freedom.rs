@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
+use futures::stream::{self, StreamExt};
 use parking_lot::Mutex;
 use tokio::net::{TcpStream, UdpSocket};
 use tracing::debug;
@@ -29,6 +30,7 @@ use blackwire_common::{
 
 const UDP_ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(3);
 const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(250);
+const HAPPY_EYEBALLS_MAX_CONCURRENT: usize = 4;
 
 /// Address-family policy for direct Freedom connects.
 ///
@@ -660,31 +662,12 @@ impl FreedomOutbound {
         }
     }
 
-    fn ordered_addrs(&self, mut addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
-        match self.ip_strategy {
-            FreedomIpStrategy::PreferIpv6 | FreedomIpStrategy::UseIpv6 => {
-                addrs.sort_by_key(SocketAddr::is_ipv4)
-            }
-            FreedomIpStrategy::Auto
-            | FreedomIpStrategy::UseIp
-            | FreedomIpStrategy::PreferIpv4
-            | FreedomIpStrategy::UseIpv4 => addrs.sort_by_key(SocketAddr::is_ipv6),
-        }
-        addrs
-    }
-
-    fn should_race_happy_eyeballs(&self) -> bool {
-        matches!(
+    fn ordered_addrs(&self, addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
+        let prefer_ipv6 = matches!(
             self.ip_strategy,
-            FreedomIpStrategy::Auto
-                | FreedomIpStrategy::UseIp
-                | FreedomIpStrategy::PreferIpv4
-                | FreedomIpStrategy::PreferIpv6
-        )
-    }
-
-    fn happy_eyeballs_prefers_ipv6(&self) -> bool {
-        matches!(self.ip_strategy, FreedomIpStrategy::PreferIpv6)
+            FreedomIpStrategy::PreferIpv6 | FreedomIpStrategy::UseIpv6
+        );
+        interleave_address_families(addrs, prefer_ipv6)
     }
 
     async fn connect_resolved(
@@ -765,36 +748,33 @@ impl FreedomOutbound {
         Ok(Box::new(stream))
     }
 
-    async fn connect_happy_eyeballs_pair(
+    async fn connect_happy_eyeballs(
         &self,
         dest: &Address,
-        first: SocketAddr,
-        second: SocketAddr,
+        addrs: Vec<SocketAddr>,
     ) -> Result<BoxedStream, ProxyError> {
-        let first_connect = self.connect_resolved(dest, first);
-        let second_connect = async {
-            tokio::time::sleep(HAPPY_EYEBALLS_DELAY).await;
-            self.connect_resolved(dest, second).await
-        };
-        tokio::pin!(first_connect);
-        tokio::pin!(second_connect);
+        let started = tokio::time::Instant::now();
+        let attempts =
+            stream::iter(addrs.into_iter().enumerate()).map(|(index, addr)| async move {
+                if index != 0 {
+                    let delay = HAPPY_EYEBALLS_DELAY.saturating_mul(index as u32);
+                    tokio::time::sleep_until(started + delay).await;
+                }
+                self.connect_resolved(dest, addr).await
+            });
+        let mut attempts = attempts.buffer_unordered(HAPPY_EYEBALLS_MAX_CONCURRENT);
+        let mut last_err = None;
 
-        tokio::select! {
-            first = &mut first_connect => match first {
-                Ok(stream) => Ok(stream),
-                Err(first_err) => match second_connect.await {
-                    Ok(stream) => Ok(stream),
-                    Err(_) => Err(first_err),
-                },
-            },
-            second = &mut second_connect => match second {
-                Ok(stream) => Ok(stream),
-                Err(second_err) => match first_connect.await {
-                    Ok(stream) => Ok(stream),
-                    Err(_) => Err(second_err),
-                },
-            },
+        while let Some(result) = attempts.next().await {
+            match result {
+                Ok(stream) => return Ok(stream),
+                Err(err) => last_err = Some(err),
+            }
         }
+
+        Err(last_err.unwrap_or_else(|| {
+            ProxyError::Transport("TCP connect failed: address resolved to no endpoints".into())
+        }))
     }
 
     async fn udp_roundtrip_resolved(
@@ -836,28 +816,9 @@ impl OutboundHandler for FreedomOutbound {
     }
 
     async fn connect(&self, _ctx: &Context, dest: &Address) -> Result<BoxedStream, ProxyError> {
-        let mut addrs = self.ordered_addrs(self.resolve_all(dest).await?);
-        if self.should_race_happy_eyeballs() {
-            if let Some(v4_index) = addrs.iter().position(SocketAddr::is_ipv4) {
-                if let Some(v6_index) = addrs.iter().position(SocketAddr::is_ipv6) {
-                    let v4 = addrs[v4_index];
-                    let v6 = addrs[v6_index];
-                    addrs.retain(|addr| *addr != v4 && *addr != v6);
-                    let (first, second) = if self.happy_eyeballs_prefers_ipv6() {
-                        (v6, v4)
-                    } else {
-                        (v4, v6)
-                    };
-                    match self.connect_happy_eyeballs_pair(dest, first, second).await {
-                        Ok(stream) => return Ok(stream),
-                        Err(err) => debug!(
-                            dest = %dest,
-                            error = %err,
-                            "freedom: happy-eyeballs pair failed; trying remaining addresses"
-                        ),
-                    }
-                }
-            }
+        let addrs = self.ordered_addrs(self.resolve_all(dest).await?);
+        if addrs.len() > 1 {
+            return self.connect_happy_eyeballs(dest, addrs).await;
         }
 
         let mut last_err = None;
@@ -910,6 +871,30 @@ impl OutboundHandler for FreedomOutbound {
             ProxyError::Transport("UDP send failed: address resolved to no endpoints".into())
         }))
     }
+}
+
+fn interleave_address_families(addrs: Vec<SocketAddr>, prefer_ipv6: bool) -> Vec<SocketAddr> {
+    let mut ipv4 = VecDeque::new();
+    let mut ipv6 = VecDeque::new();
+    for addr in addrs {
+        if addr.is_ipv6() {
+            ipv6.push_back(addr);
+        } else {
+            ipv4.push_back(addr);
+        }
+    }
+
+    let mut ordered = Vec::with_capacity(ipv4.len() + ipv6.len());
+    while !ipv4.is_empty() || !ipv6.is_empty() {
+        if prefer_ipv6 {
+            ordered.extend(ipv6.pop_front());
+            ordered.extend(ipv4.pop_front());
+        } else {
+            ordered.extend(ipv4.pop_front());
+            ordered.extend(ipv6.pop_front());
+        }
+    }
+    ordered
 }
 
 #[cfg(test)]
@@ -967,6 +952,53 @@ mod tests {
         assert_eq!(ordered.len(), 2);
         assert!(ordered[0].is_ipv6());
         assert!(ordered[1].is_ipv4());
+    }
+
+    #[test]
+    fn happy_eyeballs_interleaves_each_address_family() {
+        let v4_first = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)), 443);
+        let v4_second = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 11)), 443);
+        let v6_first = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 443);
+        let v6_second = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 443);
+
+        assert_eq!(
+            interleave_address_families(vec![v4_first, v4_second, v6_first, v6_second], false,),
+            vec![v4_first, v6_first, v4_second, v6_second]
+        );
+        assert_eq!(
+            interleave_address_families(vec![v4_first, v4_second, v6_first, v6_second], true,),
+            vec![v6_first, v4_first, v6_second, v4_second]
+        );
+    }
+
+    #[tokio::test]
+    async fn happy_eyeballs_reaches_later_same_family_address() {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let reachable = listener.local_addr().unwrap();
+        let unused_listener_one = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let unused_one = unused_listener_one.local_addr().unwrap();
+        let unused_listener_two = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let unused_two = unused_listener_two.local_addr().unwrap();
+        drop(unused_listener_one);
+        drop(unused_listener_two);
+        let outbound = FreedomOutbound::new("direct");
+        let dest = Address::Domain("example.test".into(), reachable.port());
+
+        let connected = outbound
+            .connect_happy_eyeballs(&dest, vec![unused_one, unused_two, reachable])
+            .await
+            .expect("a later address should be attempted");
+        drop(connected);
+        let _ = tokio::time::timeout(Duration::from_secs(1), listener.accept())
+            .await
+            .expect("listener should receive the winning connection")
+            .unwrap();
     }
 
     #[tokio::test]

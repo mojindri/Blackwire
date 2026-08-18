@@ -5,9 +5,9 @@ mod common;
 
 use std::io::Cursor;
 
-use libfuzzer_sys::fuzz_target;
 use blackwire_transport::hysteria2::proto::{decode_tcp_request, decode_tcp_response};
 use blackwire_transport::hysteria2::udp::decode_udp_datagram;
+use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     let data = common::bounded(data, 8192);

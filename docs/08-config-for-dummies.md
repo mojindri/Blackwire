@@ -114,6 +114,14 @@ database-derived client content that Hiddify can scan or import.
 This is not a server-configuration export. Blackwire does not accept or emit
 Xray, sing-box, or Blackwire server configuration files.
 
+Standard VLESS subscription links describe the proxy endpoint; they cannot
+change Hiddify's app-wide DNS or IPv6 policy. Keep destination resolution set
+to preserve domains in Hiddify when possible. When Blackwire receives a
+domain, Freedom can resolve all A and AAAA records and race them with bounded
+Happy Eyeballs. When a client sends a literal IP address, the original domain
+is no longer available, so neither Blackwire nor Xray can derive an equivalent
+address from the other family.
+
 ## Runtime And Settings
 
 The Settings page controls shared runtime behavior: profile, logs, metrics,

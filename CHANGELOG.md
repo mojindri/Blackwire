@@ -8,6 +8,16 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.2.2 - 2026-08-18
+
+### Fixed
+
+- Freedom TCP dialing now applies bounded RFC 8305-style Happy Eyeballs across
+  every resolved address, interleaves IPv4 and IPv6 candidates, staggers new
+  attempts by 250 ms, and caps concurrent dials at four. This avoids waiting
+  serially when the first addresses for a domain are unreachable while keeping
+  the established connection hot path unchanged.
+
 ## 0.2.1 - 2026-08-18
 
 ### Fixed

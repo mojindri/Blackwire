@@ -5,8 +5,8 @@ mod common;
 
 use std::io::Cursor;
 
-use libfuzzer_sys::fuzz_target;
 use blackwire_protocol::vless::codec::decode_request;
+use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     let data = common::bounded(data, 4096);

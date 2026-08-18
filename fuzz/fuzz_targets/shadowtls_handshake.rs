@@ -3,8 +3,8 @@
 #[path = "common.rs"]
 mod common;
 
-use libfuzzer_sys::fuzz_target;
 use blackwire_transport::shadowtls::{compute_marker, validate_first_application_record};
+use libfuzzer_sys::fuzz_target;
 
 const SERVER_RANDOM: [u8; 32] = [0x42; 32];
 

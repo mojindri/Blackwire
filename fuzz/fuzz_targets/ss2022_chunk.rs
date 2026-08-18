@@ -3,8 +3,8 @@
 #[path = "common.rs"]
 mod common;
 
-use libfuzzer_sys::fuzz_target;
 use blackwire_protocol::ss2022::try_decrypt_chunk_for_fuzz;
+use libfuzzer_sys::fuzz_target;
 
 const SUBKEY: [u8; 32] = [0x33; 32];
 
