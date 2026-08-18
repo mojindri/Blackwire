@@ -79,7 +79,7 @@ async function main() {
   await page.getByRole("button", { name: "Add rule", exact: true }).click();
   await page.getByLabel("Domains", { exact: true }).last().fill("domain:example.com");
   await page.getByRole("button", { name: "Save revision", exact: true }).click();
-  await strip(page, /Routing and DNS saved/);
+  await strip(page, /Routing and DNS revision saved/);
 
   await nav(page, "Runtime");
   await page.getByText(/Revision history/i).waitFor();
