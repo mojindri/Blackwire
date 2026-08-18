@@ -114,18 +114,18 @@ done
 )
 
 cat > "$OUT_DIR/hiddify/vless-reality.txt" <<EOF
-vless://${VLESS_UUID}@${SERVER_HOST}:10443?encryption=none&security=reality&type=tcp&sni=${REALITY_SERVER_NAME}&fp=chrome&pbk=${REALITY_PUBLIC_KEY_XRAY}&sid=${REALITY_SHORT_ID}#blackwire-vless-reality
+vless://${VLESS_UUID}@${EXTERNAL_SERVER_ADDRESS}:10443?encryption=none&security=reality&type=tcp&sni=${REALITY_SERVER_NAME}&fp=chrome&pbk=${REALITY_PUBLIC_KEY_XRAY}&sid=${REALITY_SHORT_ID}#blackwire-vless-reality
 EOF
 
 cat > "$OUT_DIR/hiddify/trojan-tls.txt" <<EOF
-trojan://${TROJAN_PASSWORD}@${SERVER_HOST}:8445?security=tls&sni=${TEST_DOMAIN}&type=tcp#blackwire-trojan-tls
+trojan://${TROJAN_PASSWORD}@${EXTERNAL_SERVER_ADDRESS}:8445?security=tls&sni=${TEST_DOMAIN}&type=tcp#blackwire-trojan-tls
 EOF
 
 cat > "$OUT_DIR/hiddify/ss2022.txt" <<EOF
-ss://$(printf '2022-blake3-aes-256-gcm:%s' "$SS2022_PASSWORD" | base64 | tr -d '\n')@${SERVER_HOST}:8388#blackwire-ss2022
+ss://$(printf '2022-blake3-aes-256-gcm:%s' "$SS2022_PASSWORD" | base64 | tr -d '\n')@${EXTERNAL_SERVER_ADDRESS}:8388#blackwire-ss2022
 EOF
 
-python3 - "$OUT_DIR" "$REALITY_SERVER_NAME" "$REALITY_DEST" <<'PY'
+python3 - "$OUT_DIR" "$REALITY_SERVER_NAME" "$REALITY_DEST" "$EXTERNAL_SERVER_ADDRESS" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -134,6 +134,7 @@ from urllib.parse import parse_qs, urlsplit
 root = Path(sys.argv[1])
 expected_name = sys.argv[2]
 expected_dest = sys.argv[3]
+expected_server = sys.argv[4]
 
 for filename in ("server-vless-reality.json", "server-vless-vision.json"):
     data = json.loads((root / "blackwire" / filename).read_text())
@@ -151,7 +152,10 @@ for filename in ("vless-reality.json", "vless-vision.json"):
         raise SystemExit(f"{filename}: client SNI disagrees with the server REALITY cover")
 
 hiddify = (root / "hiddify" / "vless-reality.txt").read_text().strip()
-if parse_qs(urlsplit(hiddify).query).get("sni") != [expected_name]:
+parsed_hiddify = urlsplit(hiddify)
+if parsed_hiddify.hostname != expected_server:
+    raise SystemExit("Hiddify REALITY subscription address disagrees with the matrix server")
+if parse_qs(parsed_hiddify.query).get("sni") != [expected_name]:
     raise SystemExit("Hiddify REALITY subscription SNI disagrees with the server cover")
 PY
 

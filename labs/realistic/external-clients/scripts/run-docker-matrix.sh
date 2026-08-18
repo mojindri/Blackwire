@@ -217,7 +217,20 @@ start_sing_box() {
 }
 
 stop_hiddify() {
-    "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c 'pkill -x hiddify-core 2>/dev/null || true' \
+    "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c '
+        if test -s /tmp/hiddify-matrix.pid; then
+            pid=$(cat /tmp/hiddify-matrix.pid)
+            kill "$pid" 2>/dev/null || true
+            i=0
+            while kill -0 "$pid" 2>/dev/null && test "$i" -lt 20; do
+                sleep 0.1
+                i=$((i + 1))
+            done
+            kill -9 "$pid" 2>/dev/null || true
+            rm -f /tmp/hiddify-matrix.pid
+        fi
+        pkill -x hiddify-core 2>/dev/null || true
+    ' \
         </dev/null >/dev/null 2>&1 || true
     sleep 0.2
 }
@@ -231,7 +244,7 @@ start_hiddify() {
         command="exec /hiddify/hiddify-core-linux-*/hiddify-core run -c /generated/${client_cfg} --full-config --in-proxy-port 1080 --fragment --fragment-size 2-4 --fragment-sleep 2-4"
     fi
     "${COMPOSE[@]}" exec -d hiddify-sing-box-client sh -c \
-        ": > /tmp/hiddify-matrix.log; ${command} >> /tmp/hiddify-matrix.log 2>&1" \
+        ": > /tmp/hiddify-matrix.log; echo \$\$ > /tmp/hiddify-matrix.pid; ${command} >> /tmp/hiddify-matrix.log 2>&1" \
         </dev/null >> "$REPORT_DIR/compose.log" 2>&1
 }
 
