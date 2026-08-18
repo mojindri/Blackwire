@@ -34,6 +34,11 @@ This project is pre-1.0. The support contract is owned by
 - Fast deterministic subscription tests now validate every supported exported
   parameter, decoded VMess payloads, URL-safe SIP002 credentials, TLS/insecure
   modes, and unsupported-protocol rejection without network or Docker startup.
+- VPS bootstrap scripts now install and verify their actual dependencies,
+  populate TUIC TLS names, discover Caddy certificates across issuer storage
+  layouts, restart only real services after renewal, expand local fixtures from
+  the selected environment file, ship an executable APT publisher, and document
+  exact ports.
 - External-client Docker scenarios now bootstrap fresh relational MySQL
   revisions instead of invoking the removed file-config runtime interface.
 - REALITY and Vision Docker interoperability scenarios now use the lab's live

@@ -22,7 +22,8 @@ echo "==> Installing system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null
 apt-get install -y --no-install-recommends -qq \
-    curl ca-certificates socat gettext-base ufw iproute2 rustc cargo >/dev/null
+    curl ca-certificates gnupg openssl python3 socat gettext-base ufw iproute2 \
+    rustc cargo >/dev/null
 
 echo "==> Installing Caddy"
 if ! command -v caddy &>/dev/null; then
@@ -54,8 +55,10 @@ systemctl reload caddy || systemctl restart caddy
 
 echo "==> Waiting for Caddy to obtain TLS certificate (up to 120s)"
 CERT_READY=0
+CADDY_DATA="${CADDY_DATA_DIR:-/var/lib/caddy/.local/share/caddy}"
 for i in $(seq 1 24); do
-    if caddy list-certificates 2>/dev/null | grep -q "$TEST_DOMAIN"; then
+    if find "$CADDY_DATA/certificates" -type f \
+        -path "*/$TEST_DOMAIN/$TEST_DOMAIN.crt" -print -quit 2>/dev/null | grep -q .; then
         CERT_READY=1
         break
     fi
@@ -123,9 +126,11 @@ ufw --force enable
 echo "==> Setting up weekly cert renewal sync"
 cat > /etc/cron.weekly/blackwire-cert-sync << EOF
 #!/bin/sh
-bash $SCRIPT_DIR/cert-sync.sh "$TEST_DOMAIN"
-for cfg in /etc/blackwire/generated/server-*.json; do
-    systemctl restart "blackwire-\$(basename \$cfg .json)" 2>/dev/null || true
+CADDY_DATA_DIR="$CADDY_DATA" bash $SCRIPT_DIR/cert-sync.sh "$TEST_DOMAIN"
+for unit in blackwire-server.service blackwire.service; do
+    if systemctl is-active --quiet "\$unit"; then
+        systemctl restart "\$unit"
+    fi
 done
 EOF
 chmod +x /etc/cron.weekly/blackwire-cert-sync

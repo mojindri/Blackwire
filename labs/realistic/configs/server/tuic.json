@@ -14,7 +14,7 @@
         "network": "quic",
         "security": "tls",
         "tlsSettings": {
-          "serverName": "${EXTERNAL_TLS_SERVER_NAME}",
+          "serverName": "${TEST_DOMAIN}",
           "certificateFile": "/etc/blackwire/certs/cert.pem",
           "keyFile": "/etc/blackwire/certs/key.pem"
         }

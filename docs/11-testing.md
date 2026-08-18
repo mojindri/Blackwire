@@ -370,10 +370,17 @@ Port layout after setup:
 | 8444/tcp | TLS | VMess gRPC |
 | 8445/tcp | TLS | Trojan |
 | 8388/tcp | TCP | Shadowsocks 2022 |
+| 8389/udp | UDP | Shadowsocks 2022 UDP |
 | 4433/udp | QUIC | Hysteria2 |
-| 8446–8448/tcp | TLS | Advanced VLESS rows (QUIC/SplitHTTP/ShadowTLS lab) |
-| 8450–8452/tcp | TCP/TLS | Sniffing and extended matrix ports |
-| 10081–10082/tcp | TCP | mKCP / auxiliary |
+| 9443/udp | QUIC | TUIC v5 |
+| 8446/tcp | TLS | VLESS HTTPUpgrade |
+| 8447/udp | QUIC | VLESS QUIC |
+| 8448/tcp | TLS | VLESS SplitHTTP |
+| 10081/tcp | TCP | VLESS UDP control channel |
+| 10082/tcp | TCP | VLESS Vision |
+| 8450/tcp | TLS | VLESS ShadowTLS |
+| 8451/udp | mKCP | VLESS mKCP |
+| 8452/tcp | TCP | VLESS with sniffing |
 
 ### Step 4 — Run the external-client matrix
 
