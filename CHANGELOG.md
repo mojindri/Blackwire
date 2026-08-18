@@ -8,6 +8,8 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.2.3 - 2026-08-19
+
 ### Fixed
 
 - Black UI subscription actions now copy and encode the public subscription
@@ -18,6 +20,8 @@ This project is pre-1.0. The support contract is owned by
   values in MySQL from reappearing in subscription URLs after an upgrade.
 - Native and Docker installers now carry the public URL settings consistently;
   public native installs require both values explicitly.
+- Black UI browser QA now follows the current subscription URL controls, so
+  its end-to-end check covers the public URL copy and QR flow again.
 
 ## 0.2.2 - 2026-08-18
 

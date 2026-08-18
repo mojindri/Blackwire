@@ -53,9 +53,9 @@ Download the current release installer, then provide the runtime credential
 file explicitly:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/mojindri/Blackwire/v0.2.2/scripts/install.sh
+curl -fsSLO https://raw.githubusercontent.com/mojindri/Blackwire/v0.2.3/scripts/install.sh
 chmod +x install.sh
-VERSION=v0.2.2 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url ./install.sh
+VERSION=v0.2.3 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url ./install.sh
 ```
 
 To have the installer apply migrations, opt in with a separate migrator
@@ -65,7 +65,7 @@ credential. To install Black UI, provide a separate UI credential as well:
 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url \
 MIGRATOR_DATABASE_URL_FILE=/secure/migrator-database-url \
 UI_DATABASE_URL_FILE=/secure/ui-database-url \
-RUN_DB_MIGRATIONS=1 INSTALL_BLACK_UI=1 VERSION=v0.2.2 ./install.sh
+RUN_DB_MIGRATIONS=1 INSTALL_BLACK_UI=1 VERSION=v0.2.3 ./install.sh
 ```
 
 Black UI is private on `127.0.0.1:18080` by default. To expose it on the

@@ -59,11 +59,11 @@ async function main() {
   await addInbound(page, "qa-main", "26320");
   await addUser(page, "qa@example.com", "qa-main");
   const userRow = page.locator("tr", { hasText: "qa@example.com" });
-  await userRow.getByRole("button", { name: "Copy subscription content", exact: true }).click();
+  await userRow.getByRole("button", { name: "Copy subscription URL", exact: true }).click();
   await page.getByText("Copied", { exact: true }).waitFor();
-  await userRow.getByRole("button", { name: "Show subscription content QR code", exact: true }).click();
-  const qrDialog = page.getByRole("dialog", { name: "Scan subscription content", exact: true });
-  await qrDialog.locator("svg").filter({ hasText: "Hiddify subscription content" }).waitFor();
+  await userRow.getByRole("button", { name: "Show subscription URL QR code", exact: true }).click();
+  const qrDialog = page.getByRole("dialog", { name: "Scan subscription URL", exact: true });
+  await qrDialog.locator("svg").filter({ hasText: "Hiddify subscription URL" }).waitFor();
   await qrDialog.getByText("Open Hiddify, tap +, then Scan QR code", { exact: true }).waitFor();
   await qrDialog.getByRole("button", { name: "Done", exact: true }).click();
   await qrDialog.waitFor({ state: "detached" });
