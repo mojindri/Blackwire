@@ -226,11 +226,12 @@ start_hiddify() {
     local client_cfg="$1"
     local mode="${2:-plain}"
     stop_hiddify
-    local command="/hiddify/hiddify-core-linux-*/hiddify-core srun -c /generated/${client_cfg}"
+    local command="exec /hiddify/hiddify-core-linux-*/hiddify-core srun -c /generated/${client_cfg}"
     if [[ "$mode" == *tcp-fragment* ]]; then
-        command="/hiddify/hiddify-core-linux-*/hiddify-core run -c /generated/${client_cfg} --full-config --fragment --fragment-size 2-4 --fragment-sleep 2-4"
+        command="exec /hiddify/hiddify-core-linux-*/hiddify-core run -c /generated/${client_cfg} --full-config --in-proxy-port 1080 --fragment --fragment-size 2-4 --fragment-sleep 2-4"
     fi
-    "${COMPOSE[@]}" exec -d hiddify-sing-box-client sh -c "$command" \
+    "${COMPOSE[@]}" exec -d hiddify-sing-box-client sh -c \
+        ": > /tmp/hiddify-matrix.log; ${command} >> /tmp/hiddify-matrix.log 2>&1" \
         </dev/null >> "$REPORT_DIR/compose.log" 2>&1
 }
 
@@ -384,6 +385,10 @@ append_logs() {
     "${COMPOSE[@]}" exec -T blackwire-server sh -c 'test -f /tmp/blackwire-matrix.log && cat /tmp/blackwire-matrix.log || true' >> "$log" 2>&1 || true
     if [[ "${2:-}" == "xray-client" ]]; then
         docker logs xray-client >> "$log" 2>&1 || true
+    elif [[ "${2:-}" == "hiddify-sing-box-client" ]]; then
+        "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c \
+            'test -f /tmp/hiddify-matrix.log && cat /tmp/hiddify-matrix.log || true' \
+            >> "$log" 2>&1 || true
     elif [[ -n "${2:-}" ]]; then
         "${COMPOSE[@]}" logs --no-color "$2" >> "$log" 2>&1 || true
     fi
@@ -556,7 +561,7 @@ run_protocol() {
     if [[ "$protocol" == "vless-reality" ]]; then
         stop_blackwire
         if start_blackwire "$server_cfg" && wait_for_server_port "$protocol"; then
-            run_client_case pass "hiddify-${protocol}-tcp-fragment" hiddify "$sing_cfg" \
+            run_client_case pass "hiddify-${protocol}-tcp-fragment" hiddify "hiddify/vless-reality.txt" \
                 "$REPORT_DIR/logs/hiddify-${protocol}-tcp-fragment.log" "$protocol" || overall=1
         else
             echo "FAIL hiddify-${protocol}-tcp-fragment (server restart)" | tee -a "$REPORT_DIR/summary.txt"
