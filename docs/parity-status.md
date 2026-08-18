@@ -62,7 +62,7 @@ See [roadmap.md](roadmap.md). Summary:
 
 | Item | Notes |
 |------|--------|
-| Vision TLS splice | Linux raw TCP handoff to the existing splice/adaptive-splice relay after Vision direct-copy negotiation; wrapped transports remain copy-path |
+| Vision direct handoff | Authenticated Vision direct mode removes supported outer TLS framing before raw destination TLS records; portable userspace copy is available on every platform, with optional Linux splice/adaptive splice |
 | Trojan UDP outbound | `connect_trojan_on_stream_udp()`; in-process e2e PASS; no external-client lab row |
 | XUDP vs Mux.Cool UDP | XUDP: session `0` + GlobalID; Mux.Cool UDP: non-zero session id |
 | Handler structural RPCs | `AddInbound`/`RemoveInbound` rebuild the running CLI instance using native blackwire endpoint JSON; in-place listener rebind remains backlog |

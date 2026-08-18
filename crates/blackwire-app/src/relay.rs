@@ -35,7 +35,6 @@ use blackwire_config::schema::{
 };
 #[cfg(target_os = "linux")]
 use bytes::BytesMut;
-#[cfg(target_os = "linux")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Minimum bytes transferred before the adaptive splice policy kicks in (Linux).
@@ -44,7 +43,6 @@ pub const ADAPTIVE_SPLICE_MIN_BYTES: u64 = 256 * 1024;
 /// Elapsed time after which a stream is considered long-lived and splice is preferred (Linux).
 #[cfg(target_os = "linux")]
 pub const ADAPTIVE_SPLICE_LONG_STREAM_AFTER: Duration = Duration::from_millis(30);
-#[cfg(target_os = "linux")]
 const ADAPTIVE_COPY_BUFFER_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "linux")]
 const ADAPTIVE_SPLICE_FULL_READ_STREAK: u8 = 4;
@@ -275,7 +273,105 @@ pub async fn relay_bidirectional_with_policies_and_recorder(
         let _ = splice_policy;
         let _ = linux_policy;
         let _ = vision_policy;
+        let inbound = match blackwire_common::try_into_vision_stream(inbound) {
+            Ok(vision) => {
+                return relay_vision_inbound_portable(
+                    vision,
+                    outbound,
+                    relay_policy,
+                    traffic_recorder,
+                )
+                .await;
+            }
+            Err(inbound) => inbound,
+        };
         userspace_copy_bidirectional(inbound, outbound, relay_policy, traffic_recorder).await
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn relay_vision_inbound_portable(
+    mut inbound: blackwire_common::VisionStream<BoxedStream>,
+    mut outbound: BoxedStream,
+    relay_policy: FastRelayConfig,
+    traffic_recorder: Option<RelayTrafficRecorder>,
+) -> io::Result<(u64, u64)> {
+    let mut up = 0u64;
+    let mut down = 0u64;
+    let mut up_eof = false;
+    let mut down_eof = false;
+    let mut up_buf = vec![0u8; ADAPTIVE_COPY_BUFFER_BYTES];
+    let mut down_buf = vec![0u8; ADAPTIVE_COPY_BUFFER_BYTES];
+
+    loop {
+        if inbound.is_direct_copy_ready()
+            && inbound.inner_can_unwrap_direct()
+            && !up_eof
+            && !down_eof
+        {
+            let inner = inbound.into_inner();
+            let (inner, prefix) = blackwire_common::try_unwrap_direct_copy_stream_with_prefix(
+                inner,
+            )
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Vision direct-copy stream was not ready to unwrap",
+                )
+            })?;
+            if !prefix.is_empty() {
+                outbound.write_all(&prefix).await?;
+                up += prefix.len() as u64;
+                if let Some(recorder) = &traffic_recorder {
+                    recorder.record(prefix.len() as u64, 0);
+                }
+            }
+            metrics::counter!("blackwire_vision_direct_copy_ready_total").increment(1);
+            metrics::counter!("blackwire_vision_direct_copy_active_total").increment(1);
+            let path =
+                userspace_relay_path(relay_policy, "vision_direct_copy", "vision_direct_copy_v2");
+            record_vision_decision(path, "balanced", false, false);
+            let (more_up, more_down) =
+                userspace_copy_bidirectional(inner, outbound, relay_policy, traffic_recorder)
+                    .await?;
+            record_relay_path_bytes(path, up + more_up, down + more_down);
+            return Ok((up + more_up, down + more_down));
+        }
+
+        if up_eof && down_eof {
+            record_relay_path_bytes("vision_copy", up, down);
+            return Ok((up, down));
+        }
+
+        tokio::select! {
+            biased;
+            read = outbound.read(&mut down_buf), if !down_eof => {
+                let n = read?;
+                if n == 0 {
+                    down_eof = true;
+                    inbound.shutdown().await?;
+                } else {
+                    inbound.write_all(&down_buf[..n]).await?;
+                    down += n as u64;
+                    if let Some(recorder) = &traffic_recorder {
+                        recorder.record(0, n as u64);
+                    }
+                }
+            }
+            read = inbound.read(&mut up_buf), if !up_eof => {
+                let n = read?;
+                if n == 0 {
+                    up_eof = true;
+                    outbound.shutdown().await?;
+                } else {
+                    outbound.write_all(&up_buf[..n]).await?;
+                    up += n as u64;
+                    if let Some(recorder) = &traffic_recorder {
+                        recorder.record(n as u64, 0);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -289,7 +385,9 @@ async fn relay_vision_inbound_with_splice_policy(
     vision_policy: VisionConfig,
     traffic_recorder: Option<RelayTrafficRecorder>,
 ) -> io::Result<(u64, u64)> {
-    use blackwire_common::try_into_tcp_stream_with_prefix;
+    use blackwire_common::{
+        try_into_direct_copy_tcp_stream_with_prefix, try_into_tcp_stream_with_prefix,
+    };
 
     record_vision_phase(inbound.lower_state());
 
@@ -339,7 +437,7 @@ async fn relay_vision_inbound_with_splice_policy(
             metrics::counter!("blackwire_vision_direct_copy_ready_total").increment(1);
 
             let inbound_inner = inbound.into_inner();
-            match try_into_tcp_stream_with_prefix(inbound_inner) {
+            match try_into_direct_copy_tcp_stream_with_prefix(inbound_inner) {
                 Ok((mut inbound_tcp, inbound_prefix)) => {
                     if !inbound_prefix.is_empty() {
                         outbound.write_all(&inbound_prefix).await?;
@@ -717,7 +815,6 @@ fn splice_backend_policy(
     }
 }
 
-#[cfg(target_os = "linux")]
 fn record_vision_decision(
     path: &'static str,
     profile: &'static str,
@@ -979,7 +1076,6 @@ async fn userspace_copy_bidirectional(
     }
 }
 
-#[cfg(target_os = "linux")]
 fn userspace_relay_path(
     relay_policy: FastRelayConfig,
     legacy_path: &'static str,

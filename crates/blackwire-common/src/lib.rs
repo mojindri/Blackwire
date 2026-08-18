@@ -46,6 +46,7 @@ pub use socks5_address::{
     decode_socks5_address, read_socks5_address, write_socks5_address, ATYP_DOMAIN, ATYP_IPV4,
     ATYP_IPV6,
 };
+pub use stream::try_unwrap_direct_copy_stream_with_prefix;
 pub use stream::{
     wrap_vision_inbound_stream, wrap_vision_stream, AsyncReadWrite, BoxedStream, DirectCopyStream,
     DirectCopyUnwrap, Link, LowerState, LowerableStream, PooledStream, PrependedStream,
@@ -59,10 +60,11 @@ pub use stream::{
 // socket that can use splice(2)?" Non-Linux builds do not export it because
 // they never compile the splice relay path.
 #[cfg(target_os = "linux")]
+pub use stream::try_into_direct_copy_tcp_stream_with_prefix;
+#[cfg(target_os = "linux")]
 pub use stream::try_into_tcp_stream;
 #[cfg(target_os = "linux")]
 pub use stream::try_into_tcp_stream_with_prefix;
-#[cfg(target_os = "linux")]
 pub use stream::try_into_vision_stream;
 #[cfg(target_os = "linux")]
 pub use stream::LoweredStream;

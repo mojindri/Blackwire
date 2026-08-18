@@ -108,7 +108,7 @@ Changes implemented to reduce per-connection cost on the VLESS→Freedom hot pat
 | 4 | Skip `RecordingReader` when no fallback configured | `vless/inbound.rs` | −Vec alloc + per-byte copy |
 | 5 | `Arc<str>` for `VlessUser.email` and `VmessUser.email` | `vless/registry.rs`, `vmess/inbound.rs`, `context.rs` | −String alloc/conn (both protocols) |
 | 6 | `SmallVec<[Address;4]>` for DNS IP results | `dispatcher.rs` | stack alloc ≤4 IPs |
-| 7 | Reuse 8 KiB Vision read buffer across polls | `vision.rs` | −8–128 KB/REALITY+Vision conn |
+| 7 | Reuse 8 KiB Vision read buffer across polls | `blackwire-common/src/stream.rs` | −8–128 KB/REALITY+Vision conn |
 | 8 | TCP connection pool in `FreedomOutbound` | `freedom.rs` | ~0 µs connect (was 86 ms avg) |
 | 9 | 2× Tokio worker threads | `main.rs` | fewer relay tasks per worker |
 | 10 | `yield_now()` after each splice chunk | `splice.rs` | fair scheduling under burst |

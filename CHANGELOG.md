@@ -12,8 +12,10 @@ This project is pre-1.0. The support contract is owned by
 
 - VLESS Reality Vision now performs Xray-compatible direct-copy handoff as
   soon as the authenticated Vision command arrives, removing the outer TLS
-  record layer before raw destination TLS records are relayed. Splice remains
-  policy-controlled, and buffered plaintext is preserved across the handoff.
+  record layer before raw destination TLS records are relayed on every
+  platform. Splice remains Linux- and policy-controlled, ordinary non-Vision
+  REALITY streams cannot trigger the handoff, and buffered plaintext is
+  preserved in wire order.
 - Targeted debug logging now correlates Reality authentication and TLS stages,
   sniffed destination rewrites, outbound selection, relay connection IDs,
   duration, byte counts, and close errors without exposing credentials or

@@ -4,12 +4,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum VisionDirectCopyPolicy {
-    /// Enable direct-copy lowering when the stream state proves it is safe.
+    /// Enable splice/zero-copy lowering after the required Vision handoff.
     #[default]
     Auto,
-    /// Keep Vision processing on the wrapped userspace relay path.
+    /// Use portable userspace copying after the required Vision handoff.
     Disabled,
-    /// Require direct-copy lowering for eligible Vision streams.
+    /// Require optimized lowering for eligible Vision streams.
     Require,
 }
 
@@ -17,7 +17,7 @@ pub enum VisionDirectCopyPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VisionConfig {
-    /// Direct-copy lowering policy.
+    /// Optimization policy after Vision's protocol-required direct handoff.
     #[serde(default)]
     pub direct_copy: VisionDirectCopyPolicy,
 

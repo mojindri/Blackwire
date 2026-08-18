@@ -125,7 +125,6 @@ impl DirectCopyStream {
         self.inner.direct_copy_ready()
     }
 
-    #[cfg(target_os = "linux")]
     fn try_unwrap(self) -> Result<(BoxedStream, Vec<u8>), Self> {
         match self.inner.try_unwrap_direct() {
             Ok(parts) => Ok(parts),
@@ -457,11 +456,31 @@ impl<S> VisionStream<S> {
 }
 
 impl VisionStream<BoxedStream> {
+    /// True when the wrapped stream is ready for an authenticated direct-copy
+    /// unwrap, including through an exhausted prepended-byte adapter.
+    pub fn inner_can_unwrap_direct(&self) -> bool {
+        boxed_stream_can_unwrap_direct(&self.inner)
+    }
+
     /// True when the wrapped erased stream can still be recovered as raw TCP.
     #[cfg(target_os = "linux")]
     pub fn inner_is_tcp_like(&self) -> bool {
         boxed_stream_is_tcp_like(&self.inner)
     }
+}
+
+fn boxed_stream_can_unwrap_direct(stream: &BoxedStream) -> bool {
+    if let Some(direct) = (*stream).as_any().downcast_ref::<DirectCopyStream>() {
+        return direct.inner.direct_copy_ready();
+    }
+    if let Some(prepended) = (*stream)
+        .as_any()
+        .downcast_ref::<PrependedStream<BoxedStream>>()
+    {
+        return prepended.prefix_pos >= prepended.prefix.len()
+            && boxed_stream_can_unwrap_direct(&prepended.inner);
+    }
+    false
 }
 
 impl LowerableStream for VisionStream<BoxedStream> {
@@ -848,23 +867,6 @@ pub fn try_into_tcp_stream_with_prefix(
         return Ok((tcp, Vec::new()));
     }
 
-    if (*stream).as_any().is::<DirectCopyStream>() {
-        let any = stream.into_any();
-        let direct = any
-            .downcast::<DirectCopyStream>()
-            .expect("stream type checked as DirectCopyStream before downcast");
-        return match direct.try_unwrap() {
-            Ok((inner, mut prefix)) => match try_into_tcp_stream_with_prefix(inner) {
-                Ok((tcp, mut inner_prefix)) => {
-                    prefix.append(&mut inner_prefix);
-                    Ok((tcp, prefix))
-                }
-                Err(inner) => Err(Box::new(PrependedStream::new(inner, prefix))),
-            },
-            Err(direct) => Err(Box::new(direct)),
-        };
-    }
-
     if (*stream).as_any().is::<PrependedStream<BoxedStream>>() {
         let any = stream.into_any();
         let prepended = any
@@ -892,6 +894,62 @@ pub fn try_into_tcp_stream_with_prefix(
     Err(stream)
 }
 
+/// Explicitly remove a direct-copy-capable framing layer and preserve any
+/// plaintext already buffered above its underlying transport.
+///
+/// Unlike the generic `try_into_tcp_stream_with_prefix` recovery path, this is never used by the
+/// generic raw-TCP optimizer. The caller must first authenticate a protocol
+/// transition such as XTLS Vision's `direct` command.
+pub fn try_unwrap_direct_copy_stream_with_prefix(
+    stream: BoxedStream,
+) -> Result<(BoxedStream, Vec<u8>), BoxedStream> {
+    if (*stream).as_any().is::<DirectCopyStream>() {
+        let any = stream.into_any();
+        let direct = any
+            .downcast::<DirectCopyStream>()
+            .expect("stream type checked as DirectCopyStream before downcast");
+        return direct
+            .try_unwrap()
+            .map_err(|direct| Box::new(direct) as BoxedStream);
+    }
+
+    if (*stream).as_any().is::<PrependedStream<BoxedStream>>() {
+        let any = stream.into_any();
+        let prepended = any
+            .downcast::<PrependedStream<BoxedStream>>()
+            .expect("stream type checked as PrependedStream<BoxedStream> before downcast");
+        let (inner, mut prefix) = prepended.into_parts();
+        return match try_unwrap_direct_copy_stream_with_prefix(inner) {
+            Ok((inner, mut inner_prefix)) => {
+                prefix.append(&mut inner_prefix);
+                Ok((inner, prefix))
+            }
+            Err(inner) => Err(Box::new(PrependedStream::new(inner, prefix))),
+        };
+    }
+
+    Err(stream)
+}
+
+/// Perform an authenticated direct-copy unwrap and then recover raw TCP.
+#[cfg(target_os = "linux")]
+pub fn try_into_direct_copy_tcp_stream_with_prefix(
+    stream: BoxedStream,
+) -> Result<(TcpStream, Vec<u8>), BoxedStream> {
+    match try_unwrap_direct_copy_stream_with_prefix(stream) {
+        Ok((inner, mut prefix)) => match try_into_tcp_stream_with_prefix(inner) {
+            Ok((tcp, mut inner_prefix)) => {
+                prefix.append(&mut inner_prefix);
+                Ok((tcp, prefix))
+            }
+            Err(inner) => Err(Box::new(PrependedStream::new(inner, prefix))),
+        },
+        // A raw-TCP Vision stream has no outer framing to remove; the explicit
+        // Vision call site is still allowed to recover it directly.
+        Err(stream) => try_into_tcp_stream_with_prefix(stream),
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn boxed_stream_is_tcp_like(stream: &BoxedStream) -> bool {
     (*stream).as_any().is::<TcpStream>()
@@ -904,8 +962,7 @@ fn boxed_stream_is_tcp_like(stream: &BoxedStream) -> bool {
             .is_some_and(DirectCopyStream::is_ready)
 }
 
-/// Recover a Vision wrapper from a boxed stream for Linux relay infrastructure.
-#[cfg(target_os = "linux")]
+/// Recover a Vision wrapper from a boxed stream for relay infrastructure.
 pub fn try_into_vision_stream(
     stream: BoxedStream,
 ) -> Result<VisionStream<BoxedStream>, BoxedStream> {
@@ -1105,6 +1162,52 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    struct ReadyDirectStream {
+        inner: std::io::Cursor<Vec<u8>>,
+        prefix: Vec<u8>,
+    }
+
+    impl AsyncRead for ReadyDirectStream {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_read(cx, buf)
+        }
+    }
+
+    impl AsyncWrite for ReadyDirectStream {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Pin::new(&mut self.inner).poll_write(cx, buf)
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
+    }
+
+    impl DirectCopyUnwrap for ReadyDirectStream {
+        fn direct_copy_ready(&self) -> bool {
+            true
+        }
+
+        fn try_unwrap_direct(
+            self: Box<Self>,
+        ) -> Result<(BoxedStream, Vec<u8>), Box<dyn DirectCopyUnwrap>> {
+            let this = *self;
+            Ok((Box::new(this.inner), this.prefix))
+        }
+    }
+
     struct PartialPendingWriter {
         calls: usize,
         written: Arc<Mutex<Vec<u8>>>,
@@ -1176,6 +1279,44 @@ mod tests {
             .unwrap();
 
         assert_eq!(out, b"data");
+    }
+
+    #[tokio::test]
+    async fn explicit_direct_unwrap_preserves_nested_prefix_order() {
+        let direct = DirectCopyStream::new(ReadyDirectStream {
+            inner: std::io::Cursor::new(b"raw".to_vec()),
+            prefix: b"inner-".to_vec(),
+        });
+        let stream = Box::new(PrependedStream::new(
+            Box::new(direct) as BoxedStream,
+            b"outer-".to_vec(),
+        )) as BoxedStream;
+
+        let (mut inner, prefix) = match try_unwrap_direct_copy_stream_with_prefix(stream) {
+            Ok(parts) => parts,
+            Err(_) => panic!("explicit direct-copy unwrap should succeed"),
+        };
+        assert_eq!(prefix, b"outer-inner-");
+        let mut raw = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut inner, &mut raw)
+            .await
+            .unwrap();
+        assert_eq!(raw, b"raw");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn generic_tcp_recovery_never_triggers_direct_unwrap() {
+        let stream = Box::new(DirectCopyStream::new(ReadyDirectStream {
+            inner: std::io::Cursor::new(b"raw".to_vec()),
+            prefix: Vec::new(),
+        })) as BoxedStream;
+
+        let returned = match try_into_tcp_stream_with_prefix(stream) {
+            Ok(_) => panic!("generic recovery must not unwrap protocol framing"),
+            Err(stream) => stream,
+        };
+        assert!((*returned).as_any().is::<DirectCopyStream>());
     }
 
     #[test]

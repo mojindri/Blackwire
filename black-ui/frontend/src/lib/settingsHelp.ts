@@ -48,7 +48,7 @@ const help: Record<string, HelpContent> = {
   "Allow FakeIP": { description: "Permits FakeIP DNS within the performance budget.", recommended: "Off unless FakeIP routing is required." },
   "Prefer direct copy": { description: "Marks zero-copy or splice paths as preferred during cost evaluation.", recommended: "On." },
   "Prefer datagrams for UDP": { description: "Prefers QUIC datagram lanes for eligible UDP flows.", recommended: "On when datagram support is verified end to end." },
-  "Direct-copy policy": { description: "Auto lowers eligible Vision streams; disabled keeps wrapped relay; require demands direct-copy eligibility.", recommended: "Auto.", warning: "Require can reject incompatible streams." },
+  "Direct-copy policy": { description: "Controls optimization after Vision's required direct handoff: auto may lower to splice, while disabled uses portable userspace copying.", recommended: "Auto.", warning: "Require can reject streams that cannot use the optimized path." },
   "Packets to filter": { description: "Maximum early Vision packets inspected before falling back to wrapped relay.", recommended: "8 packets." },
   "Allow splice after direct copy": { description: "Permits Linux splice after Vision safely lowers both sides to raw TCP.", recommended: "On." },
   "Enable acceleration": { description: "Master switch for first-packet acceleration policies.", recommended: "Off until tested with your protocols." },
