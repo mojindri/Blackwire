@@ -101,7 +101,7 @@ async function addInbound(page, tag, port) {
   await nav(page, "Inbounds");
   await page.getByRole("button", { name: "New Inbound", exact: true }).click();
   await page.getByLabel("Tag", { exact: true }).fill(tag);
-  await page.getByLabel("Listen host", { exact: true }).fill("127.0.0.1");
+  await page.getByLabel("Listen host", { exact: true }).fill("0.0.0.0");
   await page.getByLabel("Port", { exact: true }).fill(port);
   const saveButton = page.getByRole("button", { name: "Save Inbound", exact: true });
   if (await saveButton.isDisabled()) {
