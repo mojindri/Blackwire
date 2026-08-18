@@ -30,7 +30,7 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
 fi
 
 EXTERNAL_REALITY_SERVER_NAME="${EXTERNAL_REALITY_SERVER_NAME:-blackwire.local}" \
-EXTERNAL_REALITY_DEST="${EXTERNAL_REALITY_DEST:-tls-cover:443}" \
+EXTERNAL_REALITY_DEST="${EXTERNAL_REALITY_DEST:-10.203.0.10:443}" \
     bash "$LAB_DIR/scripts/render-configs.sh" "$ENV_FILE" "$LAB_DIR/generated" \
     > "$REPORT_DIR/render.log" 2>&1
 
