@@ -25,9 +25,10 @@ invocations.
 - `docker compose up -d` once (MySQL, target, probe, server, clients).
 - Each scenario resets the disposable lab database, imports its validated lab
   fixture as relational rows, and starts Blackwire from that MySQL revision.
-- Docker REALITY and Vision scenarios use the internal TLS cover's stable lab
-  address (`10.203.0.10:443`) with SNI `blackwire.local`; VPS renders retain
-  the cover configured in the private matrix environment.
+- Docker clients use the Blackwire server's stable lab address
+  (`10.203.0.11`), and REALITY/Vision use the internal TLS cover at
+  `10.203.0.10:443` with SNI `blackwire.local`; VPS renders retain the server
+  and cover configured in the private matrix environment.
 - Reused `matrix-probe` container for `nc` / `curl` (no `docker run --rm` per check).
 - `compose exec` to start/stop `blackwire` and sing-box per case.
 - **Xray** uses `compose run` per case (distroless image has no `/bin/sh` for idle holders).
