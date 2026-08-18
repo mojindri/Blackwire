@@ -43,6 +43,9 @@ services:
   blackwire-server:
     image: blackwire:latest
     hostname: blackwire-server
+    networks:
+      default:
+        ipv4_address: 10.203.0.11
     dns:
       - 127.0.0.11
     entrypoint: ["/bin/sh", "-c"]
