@@ -9,6 +9,7 @@ const uiBase = "http://127.0.0.1:18094";
 const frontendDir = `${repoRoot}/black-ui/frontend`;
 const processes = [];
 const databaseUrl = process.env.BLACKWIRE_QA_DATABASE_URL;
+let browser = null;
 
 async function main() {
   if (!databaseUrl) throw new Error("BLACKWIRE_QA_DATABASE_URL must point to an empty MySQL 8.4 database");
@@ -27,7 +28,7 @@ async function main() {
   );
   await waitForHttp(`${uiBase}/api/status`);
 
-  const browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     viewport: { width: 1440, height: 980 },
     permissions: ["clipboard-read", "clipboard-write"],
@@ -51,7 +52,7 @@ async function main() {
   await nav(page, "Settings");
   await page.getByLabel("Public base URL", { exact: true }).fill(uiBase);
   await page.getByLabel("Subscription host", { exact: true }).fill("127.0.0.1");
-  await page.getByRole("button", { name: "Save Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Save panel settings", exact: true }).click();
   await strip(page, /Settings saved/);
   await waitForIdle(page);
 
@@ -90,6 +91,7 @@ async function main() {
   await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
 
   await browser.close();
+  browser = null;
   const relevantConsole = consoleMessages.filter((message) => !message.includes("401"));
   if (relevantConsole.length) throw new Error(`console issues: ${relevantConsole.join("; ")}`);
   console.log("black-ui QA flow passed");
@@ -166,11 +168,20 @@ async function run(command, args, options = {}) {
   if (code !== 0) throw new Error(`${command} ${args.join(" ")} failed with ${code}`);
 }
 
+async function stopProcess(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  child.kill("SIGINT");
+  await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 3000))]);
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+}
+
 main()
   .catch((error) => {
     console.error(error);
     process.exitCode = 1;
   })
-  .finally(() => {
-    for (const child of processes.reverse()) child.kill("SIGINT");
+  .finally(async () => {
+    if (browser) await browser.close().catch(() => undefined);
+    await Promise.all(processes.reverse().map(stopProcess));
   });
