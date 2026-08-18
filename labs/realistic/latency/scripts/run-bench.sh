@@ -19,9 +19,10 @@
 #   DRY_RUN        Set to 1 to print commands without running them
 #   BW_BIN         Path to blackwire binary (default: blackwire in PATH)
 #   BENCH_UPSTREAM Upstream identity label for reports, e.g. native-nginx
-#   SERVER_CMD     Full command to start server, e.g. "xray run -config"
-#                  (default: "$BW_BIN run -c")
-#   CLIENT_CMD     Full command to start client (default: "$BW_BIN run -c")
+#   SERVER_CMD     External runtime command, e.g. "xray run -config". Omit for Blackwire.
+#   CLIENT_CMD     External runtime command. Omit for Blackwire.
+#   BLACKWIRE_SERVER_DATABASE_URL / BLACKWIRE_CLIENT_DATABASE_URL
+#                  Separate disposable MySQL databases for Blackwire endpoints.
 #   CONFIG_ENVSUBST  Set to 1 to run envsubst on config files before use
 #                    (for configs with ${SERVER_ADDR}, ${SERVER_PORT}, etc.)
 set -euo pipefail
@@ -45,9 +46,8 @@ BENCH_DISABLE_KEEPALIVE="${BENCH_DISABLE_KEEPALIVE:-0}"
 CONFIG_ENVSUBST="${CONFIG_ENVSUBST:-0}"
 BENCH_UPSTREAM="${BENCH_UPSTREAM:-}"
 
-_DEFAULT_CMD="${BW_BIN:-blackwire} run -c"
-SERVER_CMD="${SERVER_CMD:-$_DEFAULT_CMD}"
-CLIENT_CMD="${CLIENT_CMD:-$_DEFAULT_CMD}"
+SERVER_CMD="${SERVER_CMD:-}"
+CLIENT_CMD="${CLIENT_CMD:-}"
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 REPORT_STEM="${VARIANT}-c${BENCH_CONC}-${TS}"
@@ -125,9 +125,15 @@ fi
 SERVER_PID=
 if [ -n "$SERVER_CONFIG" ]; then
     _SERVER_CFG="$(maybe_envsubst "$SERVER_CONFIG")"
-    log "starting server: $SERVER_CMD $_SERVER_CFG"
+    log "starting server fixture: $_SERVER_CFG"
     if [ "$DRY_RUN" != "1" ]; then
-        $SERVER_CMD "$_SERVER_CFG" >/tmp/bw-server-$VARIANT.log 2>&1 &
+        if [ -n "$SERVER_CMD" ]; then
+            $SERVER_CMD "$_SERVER_CFG" >/tmp/bw-server-$VARIANT.log 2>&1 &
+        else
+            server_database_url="${BLACKWIRE_SERVER_DATABASE_URL:?set BLACKWIRE_SERVER_DATABASE_URL for the Blackwire server fixture}"
+            bash "$(dirname "$0")/../../scripts/prepare-mysql-fixture.sh" "$BW_BIN" "$_SERVER_CFG" "$server_database_url"
+            BLACKWIRE_DATABASE_URL="$server_database_url" "$BW_BIN" run >/tmp/bw-server-$VARIANT.log 2>&1 &
+        fi
         SERVER_PID=$!
         if [ -n "$SERVER_PORT" ]; then
             for i in $(seq 1 20); do
@@ -147,9 +153,15 @@ fi
 CLIENT_PID=
 if [ -n "$CLIENT_CONFIG" ]; then
     _CLIENT_CFG="$(maybe_envsubst "$CLIENT_CONFIG")"
-    log "starting client: $CLIENT_CMD $_CLIENT_CFG"
+    log "starting client fixture: $_CLIENT_CFG"
     if [ "$DRY_RUN" != "1" ]; then
-        $CLIENT_CMD "$_CLIENT_CFG" >/tmp/bw-client-$VARIANT.log 2>&1 &
+        if [ -n "$CLIENT_CMD" ]; then
+            $CLIENT_CMD "$_CLIENT_CFG" >/tmp/bw-client-$VARIANT.log 2>&1 &
+        else
+            client_database_url="${BLACKWIRE_CLIENT_DATABASE_URL:?set BLACKWIRE_CLIENT_DATABASE_URL for the Blackwire client fixture}"
+            bash "$(dirname "$0")/../../scripts/prepare-mysql-fixture.sh" "$BW_BIN" "$_CLIENT_CFG" "$client_database_url"
+            BLACKWIRE_DATABASE_URL="$client_database_url" "$BW_BIN" run >/tmp/bw-client-$VARIANT.log 2>&1 &
+        fi
         CLIENT_PID=$!
         POLL_PORT="${CLIENT_PORT:-${PROXY_ADDR##*:}}"
         if [ -n "$POLL_PORT" ]; then

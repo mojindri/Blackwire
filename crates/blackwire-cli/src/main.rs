@@ -158,6 +158,9 @@ enum DbCommand {
     ImportFixture {
         #[arg(value_name = "FILE")]
         path: PathBuf,
+        /// Replace existing endpoints in this explicitly disposable lab database.
+        #[arg(long)]
+        replace: bool,
     },
     /// Create a maintenance revision restoring a historical snapshot.
     Rollback {
@@ -945,8 +948,8 @@ async fn cmd_db(command: DbCommand) -> Result<()> {
                 other => anyhow::bail!("unknown seed preset '{other}'; available: socks-local, vless-local, trojan-local, shadowsocks-local"),
             }
         }
-        DbCommand::ImportFixture { path } => {
-            import_bootstrap_fixture(&database, &path).await?;
+        DbCommand::ImportFixture { path, replace } => {
+            import_bootstrap_fixture(&database, &path, replace).await?;
         }
         DbCommand::Rollback { revision } => {
             database.verify_schema().await?;
@@ -962,15 +965,15 @@ async fn cmd_db(command: DbCommand) -> Result<()> {
     Ok(())
 }
 
-async fn import_bootstrap_fixture(database: &Database, path: &std::path::Path) -> Result<()> {
+async fn import_bootstrap_fixture(
+    database: &Database,
+    path: &std::path::Path,
+    replace: bool,
+) -> Result<()> {
     use blackwire_config::schema::{EndpointUser, Protocol};
     use blackwire_store::{CoreSettings, InboundWrite, OutboundWrite, UserWrite};
 
     database.verify_schema().await?;
-    let existing = database.state().await?.desired_revision;
-    if !database.list_inbounds(existing).await?.is_empty() {
-        anyhow::bail!("db import requires an empty control plane; initialize a fresh database");
-    }
     let bytes = std::fs::read(path)
         .with_context(|| format!("reading bootstrap fixture {}", path.display()))?;
     let config: Config = serde_json::from_slice(&bytes)
@@ -984,6 +987,27 @@ async fn import_bootstrap_fixture(database: &Database, path: &std::path::Path) -
         );
     }
 
+    let existing = database.state().await?.desired_revision;
+    let existing_inbounds = database.list_inbounds(existing).await?;
+    let existing_outbounds = database.list_outbounds(existing).await?;
+    let has_only_idle_baseline = existing_inbounds.is_empty()
+        && existing_outbounds.len() == 1
+        && existing_outbounds[0].tag == "freedom"
+        && existing_outbounds[0].protocol == "freedom";
+    if !replace && !has_only_idle_baseline {
+        anyhow::bail!(
+            "db import-fixture requires an empty control plane; use a fresh lab database or pass --replace"
+        );
+    }
+    let mut revision = existing;
+    if replace {
+        for inbound in existing_inbounds {
+            revision = database
+                .delete_inbound("blackwire-db-import", revision, inbound.id)
+                .await?
+                .revision;
+        }
+    }
     let core = CoreSettings {
         profile: config.profile,
         fast: config.fast.clone(),
@@ -1000,18 +1024,43 @@ async fn import_bootstrap_fixture(database: &Database, path: &std::path::Path) -
         fec: config.fec.clone(),
         tun: config.tun.clone(),
     };
-    let mut revision = database.state().await?.desired_revision;
     revision = database
         .save_core_settings("blackwire-db-import", revision, core)
         .await?
         .revision;
 
-    let existing_outbounds = database.list_outbounds(revision).await?;
+    // A new database contains a baseline `freedom` outbound. Remove all
+    // existing outbounds before recreating the fixture so its first outbound
+    // remains the runtime default. Clear routing references first so endpoint
+    // deletion cannot leave dangling foreign keys.
+    let mut routing = database.routing_dns(revision).await?;
+    routing.rules.clear();
+    routing.balancers.clear();
+    revision = database
+        .save_routing_dns(
+            "blackwire-db-import",
+            revision,
+            blackwire_store::RoutingDnsWrite {
+                domain_strategy: routing.domain_strategy.clone(),
+                geoip_file: routing.geoip_file.clone(),
+                geosite_file: routing.geosite_file.clone(),
+                dns_servers: routing.dns_servers.clone(),
+                fake_ip_enabled: routing.fake_ip_enabled,
+                fake_ip_pool: routing.fake_ip_pool.clone(),
+                rules: vec![],
+                balancers: vec![],
+            },
+        )
+        .await?
+        .revision;
+    for outbound in database.list_outbounds(revision).await? {
+        revision = database
+            .delete_outbound("blackwire-db-import", revision, outbound.id)
+            .await?
+            .revision;
+    }
+
     for outbound in &config.outbounds {
-        let id = existing_outbounds
-            .iter()
-            .find(|record| record.tag == outbound.tag)
-            .map(|record| record.id);
         let transport = outbound
             .stream_settings
             .as_ref()
@@ -1029,7 +1078,7 @@ async fn import_bootstrap_fixture(database: &Database, path: &std::path::Path) -
                 "blackwire-db-import",
                 revision,
                 OutboundWrite {
-                    id,
+                    id: None,
                     tag: outbound.tag.clone(),
                     protocol: enum_name(&outbound.protocol)?,
                     enabled: true,
@@ -1150,30 +1199,29 @@ async fn import_bootstrap_fixture(database: &Database, path: &std::path::Path) -
     }
 
     if let Some(dns) = &config.dns {
-        let mut routing = database.routing_dns(revision).await?;
         routing.dns_servers.clone_from(&dns.servers);
         if let Some(fake_ip) = &dns.fake_ip {
             routing.fake_ip_enabled = fake_ip.enabled;
             routing.fake_ip_pool.clone_from(&fake_ip.pool);
         }
-        revision = database
-            .save_routing_dns(
-                "blackwire-db-import",
-                revision,
-                blackwire_store::RoutingDnsWrite {
-                    domain_strategy: routing.domain_strategy,
-                    geoip_file: routing.geoip_file,
-                    geosite_file: routing.geosite_file,
-                    dns_servers: routing.dns_servers,
-                    fake_ip_enabled: routing.fake_ip_enabled,
-                    fake_ip_pool: routing.fake_ip_pool,
-                    rules: routing.rules,
-                    balancers: routing.balancers,
-                },
-            )
-            .await?
-            .revision;
     }
+    revision = database
+        .save_routing_dns(
+            "blackwire-db-import",
+            revision,
+            blackwire_store::RoutingDnsWrite {
+                domain_strategy: routing.domain_strategy,
+                geoip_file: routing.geoip_file,
+                geosite_file: routing.geosite_file,
+                dns_servers: routing.dns_servers,
+                fake_ip_enabled: routing.fake_ip_enabled,
+                fake_ip_pool: routing.fake_ip_pool,
+                rules: vec![],
+                balancers: vec![],
+            },
+        )
+        .await?
+        .revision;
 
     let stored = database.load_config(revision).await?;
     stored

@@ -49,6 +49,11 @@ if rg -n 'ConfigManager|blackwire-config/src/(manager|env)\.rs|file watch \+ val
     fail "legacy file-configuration architecture documentation remains"
 fi
 
+if rg -n '(blackwire(-candidate)?|\$(BIN|BINARY|BW_BIN|PROXY_BIN|BLACKWIRE_[A-Z_]*BIN))[^[:space:]]*[[:space:]]+run[[:space:]]+(-c|--config)' \
+    README.md docs labs scripts; then
+    fail "a Blackwire lab or documentation path still starts from a JSON config"
+fi
+
 if rg -n '/(Users|home)/[^/]+/' README.md docs examples; then
     fail "machine-specific absolute paths remain in repository documentation"
 fi

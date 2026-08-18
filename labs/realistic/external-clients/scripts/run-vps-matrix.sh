@@ -30,10 +30,12 @@ TARGET_URL="http://${SERVER_HOST}:18080"
 REMOTE_DIR="/root/lab/external-clients"
 GENERATED_DIR="$LAB_DIR/generated-vps"
 SUMMARY="$REPORT_DIR/summary.txt"
+VPS_DATABASE_URL_FILE="${BLACKWIRE_VPS_DATABASE_URL_FILE:-/etc/blackwire/lab-database-url}"
 
 PORT_WAIT_TRIES="${MATRIX_PORT_WAIT_TRIES:-15}"
 PORT_WAIT_SLEEP="${MATRIX_PORT_WAIT_SLEEP:-1}"
 SOCKS_WAIT_TRIES="${MATRIX_SOCKS_WAIT_TRIES:-20}"
+NEGATIVE_SOCKS_WAIT_TRIES="${MATRIX_NEGATIVE_SOCKS_WAIT_TRIES:-2}"
 SOCKS_WAIT_SLEEP="${MATRIX_SOCKS_WAIT_SLEEP:-1}"
 
 mkdir -p "$REPORT_DIR/logs"
@@ -185,7 +187,10 @@ wait_for_server_port() {
 start_server() {
     local protocol="$1" server_cfg="$2"
     stop_server
-    ssh_server "nohup /usr/local/bin/blackwire run -c '/etc/blackwire/generated/${server_cfg}' \
+    ssh_server "set -e; \
+        env BLACKWIRE_DATABASE_URL_FILE='${VPS_DATABASE_URL_FILE}' /usr/local/bin/blackwire db init; \
+        env BLACKWIRE_DATABASE_URL_FILE='${VPS_DATABASE_URL_FILE}' /usr/local/bin/blackwire db import-fixture --replace '/etc/blackwire/generated/${server_cfg}'; \
+        nohup env BLACKWIRE_DATABASE_URL_FILE='${VPS_DATABASE_URL_FILE}' /usr/local/bin/blackwire run \
         > '/tmp/blackwire-external-${protocol}.log' 2>&1 & echo \$! > /tmp/blackwire-external.pid"
 }
 
@@ -204,18 +209,20 @@ udp_only_protocol() {
 }
 
 wait_for_socks() {
-    ssh_client "for i in \$(seq 1 ${SOCKS_WAIT_TRIES}); do \
+    local tries="${1:-$SOCKS_WAIT_TRIES}"
+    ssh_client "for i in \$(seq 1 ${tries}); do \
         curl -fsS --max-time 3 --socks5-hostname 127.0.0.1:1080 '${TARGET_URL}' >/dev/null && exit 0; \
         sleep ${SOCKS_WAIT_SLEEP}; done; exit 1"
 }
 
 wait_for_socks_udp() {
+    local tries="${1:-$SOCKS_WAIT_TRIES}"
     ssh_client "cat > /tmp/udp-socks-probe.sh && chmod +x /tmp/udp-socks-probe.sh" \
         <"$LAB_DIR/scripts/udp-socks-probe.sh"
     ssh_client "command -v dig >/dev/null 2>&1 || \
         (apk add --no-cache bind-tools proxychains-ng 2>/dev/null || \
          (apt-get update && apt-get install -y dnsutils proxychains4)); \
-        for i in \$(seq 1 ${SOCKS_WAIT_TRIES}); do \
+        for i in \$(seq 1 ${tries}); do \
           /tmp/udp-socks-probe.sh 127.0.0.1 1080 && exit 0; \
           sleep ${SOCKS_WAIT_SLEEP}; done; exit 1"
 }
@@ -248,7 +255,8 @@ start_client() {
 
 run_client_case() {
     local expect_pass="$1" label="$2" client="$3" client_cfg="$4" log="$5" protocol="$6"
-    local neg_root=""
+    local probe_tries="$SOCKS_WAIT_TRIES"
+    [[ "$expect_pass" == "reject" ]] && probe_tries="$NEGATIVE_SOCKS_WAIT_TRIES"
 
     if [[ "$client_cfg" == "-" && "$label" != negative-* ]]; then
         echo "SKIP ${label}" | tee -a "$SUMMARY"
@@ -273,7 +281,7 @@ run_client_case() {
     assert_single_client
 
     if udp_only_protocol "$protocol"; then
-        if wait_for_socks_udp >>"$log" 2>&1; then
+        if wait_for_socks_udp "$probe_tries" >>"$log" 2>&1; then
             if [[ "$expect_pass" == "pass" ]]; then
                 echo "PASS ${label}" | tee -a "$SUMMARY"
                 stop_client
@@ -295,7 +303,7 @@ run_client_case() {
         return 0
     fi
 
-    if wait_for_socks >>"$log" 2>&1; then
+    if wait_for_socks "$probe_tries" >>"$log" 2>&1; then
         if [[ "$expect_pass" == "pass" ]]; then
             if requires_udp_probe "$protocol" && ! wait_for_socks_udp >>"$log" 2>&1; then
                 echo "FAIL ${label} (udp socks probe)" | tee -a "$SUMMARY"
@@ -368,9 +376,9 @@ ssh_client 'command -v docker >/dev/null && command -v curl >/dev/null && comman
     echo "ERROR: CLIENT VPS needs docker, curl, and nc." >&2
     exit 1
 }
-ssh_server 'test -x /usr/local/bin/blackwire && test -d /etc/blackwire/generated && test -f /etc/blackwire/certs/cert.pem' \
+ssh_server "test -x /usr/local/bin/blackwire && test -r '${VPS_DATABASE_URL_FILE}' && test -d /etc/blackwire/generated && test -f /etc/blackwire/certs/cert.pem" \
     > "$REPORT_DIR/preflight-server.log" 2>&1 || {
-    echo "ERROR: SERVER VPS needs blackwire binary, generated configs, and certs." >&2
+    echo "ERROR: SERVER VPS needs blackwire, ${VPS_DATABASE_URL_FILE}, generated fixtures, and certs." >&2
     exit 1
 }
 preflight_udp_port 8389 || {

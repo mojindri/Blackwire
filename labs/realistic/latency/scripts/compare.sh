@@ -30,6 +30,8 @@
 #   UPSTREAM_BASE_URL  HTTP upstream base URL (default http://127.0.0.1:18080)
 #   DRY_RUN         set to 1 for dry-run
 #   BW_BIN          blackwire binary path
+#   BLACKWIRE_SERVER_DATABASE_URL / BLACKWIRE_CLIENT_DATABASE_URL
+#                   Separate disposable MySQL databases for Blackwire endpoints
 set -euo pipefail
 
 SCENARIO="${1:-local-smoke}"
@@ -51,11 +53,14 @@ TARGET_URL="${TARGET_URL:-}"
 UPSTREAM_BASE_URL="${UPSTREAM_BASE_URL:-http://127.0.0.1:18080}"
 DRY_RUN="${DRY_RUN:-0}"
 BW_BIN="${BW_BIN:-blackwire}"
+BLACKWIRE_SERVER_DATABASE_URL="${BLACKWIRE_SERVER_DATABASE_URL:-}"
+BLACKWIRE_CLIENT_DATABASE_URL="${BLACKWIRE_CLIENT_DATABASE_URL:-}"
 
 XRAY_BIN="${XRAY_BIN:-xray}"
 SINGBOX_BIN="${SINGBOX_BIN:-sing-box}"
 
 export BENCH_DURATION BENCH_WARMUP BENCH_CONC REPORT_DIR DRY_RUN BW_BIN XRAY_BIN SINGBOX_BIN
+export BLACKWIRE_SERVER_DATABASE_URL BLACKWIRE_CLIENT_DATABASE_URL
 
 log() { echo "==> [compare] $*"; }
 

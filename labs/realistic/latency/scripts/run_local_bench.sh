@@ -8,13 +8,14 @@ LAT_DIR="$(cd "$HERE/.." && pwd)"
 ROOT="$(cd "$LAT_DIR/../../.." && pwd)"
 
 BIN="${BLACKWIRE_BIN:-$ROOT/target/release/blackwire}"
-CONFIG="${BLACKWIRE_CONFIG:-$LAT_DIR/configs/blackwire-socks-direct.json}"
+FIXTURE="${BLACKWIRE_FIXTURE:-$LAT_DIR/configs/blackwire-socks-direct.json}"
 ORIGIN_PORT="${ORIGIN_PORT:-18080}"
 PROXY_PORT="${PROXY_PORT:-1080}"
 DURATION="${DURATION:-10}"
 CONCURRENCY="${CONCURRENCY:-8}"
 PAYLOAD="${PAYLOAD:-1k}"
 LABEL="${LABEL:-blackwire}"
+LAB_DATABASE_URL="${BLACKWIRE_LAB_DATABASE_URL:?set BLACKWIRE_LAB_DATABASE_URL to a disposable MySQL database}"
 
 cleanup() {
     [ -n "${PROXY_PID:-}" ] && kill "$PROXY_PID" 2>/dev/null || true
@@ -29,7 +30,9 @@ python3 "$HERE/origin_static.py" --port "$ORIGIN_PORT" >/tmp/origin.log 2>&1 &
 ORIGIN_PID=$!
 sleep 0.5
 
-"$BIN" run -c "$CONFIG" >/tmp/blackwire-bench.log 2>&1 &
+bash "$ROOT/labs/realistic/scripts/prepare-mysql-fixture.sh" "$BIN" "$FIXTURE" "$LAB_DATABASE_URL"
+BLACKWIRE_DATABASE_URL="$LAB_DATABASE_URL" \
+    "$BIN" run >/tmp/blackwire-bench.log 2>&1 &
 PROXY_PID=$!
 
 # wait for proxy port

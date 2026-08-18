@@ -389,10 +389,10 @@ clients where configured, and records PASS/FAIL/SKIP like Docker.
 
 ---
 
-## Tier 10b — Legacy VPS blackwire client matrix (optional)
+## Tier 10b — Blackwire client VPS matrix (optional)
 
 Separate from the external-client lab: proves **blackwire as client** over SOCKS to the
-server VPS using seven standalone server configs.
+server VPS using seven lab fixtures imported into the MySQL control plane.
 
 ### Provision client VPS
 
@@ -409,12 +409,16 @@ SSH_CLIENT=5.6.7.8 make -C labs/realistic vps-test
 This runs `scripts/run-matrix.sh` on the client VPS (SOCKS5 on `127.0.0.1:1080`,
 `curl` to `http://<SERVER_HOST>:18080`). Reports go to `labs/realistic/reports/`.
 
-On the server VPS you still start each legacy inbound manually when using only Tier 10b:
+On the server VPS, use a dedicated disposable lab database and start one fixture
+at a time. The credential must be able to create/migrate the schema and replace
+lab configuration; do not use the restricted production runtime credential.
 
 ```sh
-blackwire run -c /etc/blackwire/generated/server-vless-tcp.json &
-blackwire run -c /etc/blackwire/generated/server-vless-reality.json &
-# ... remaining base protocols
+export BLACKWIRE_DATABASE_URL_FILE=/etc/blackwire/lab-database-url
+blackwire db init
+blackwire db import-fixture --replace /etc/blackwire/generated/server-vless-tcp.json
+blackwire run
+# Stop it, import the next fixture, and repeat for the remaining protocols.
 ```
 
 ---

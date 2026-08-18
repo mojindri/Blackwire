@@ -6,6 +6,8 @@ Target:
 - Native `systemd` services for `blackwire`.
 - Real DNS name for TLS/SNI-facing tests.
 - Caddy owns ACME certificate issuance.
+- MySQL 8.4 stores each host's desired Blackwire revision. The service account
+  reads its protected URL from `/etc/blackwire/runtime-database-url`.
 
 ## Host Roles
 
@@ -31,6 +33,18 @@ sudo useradd --system --home /var/lib/blackwire --shell /usr/sbin/nologin blackw
 sudo mkdir -p /etc/blackwire /etc/blackwire/certs /var/lib/blackwire
 sudo chown -R blackwire:blackwire /var/lib/blackwire
 ```
+
+Provision MySQL separately, put the runtime URL in the protected credential
+file, then initialize and configure the database before starting systemd:
+
+```sh
+sudo install -o blackwire -g blackwire -m 0400 runtime-database-url /etc/blackwire/runtime-database-url
+sudo -u blackwire env BLACKWIRE_DATABASE_URL_FILE=/etc/blackwire/runtime-database-url \
+  /usr/local/bin/blackwire db init
+```
+
+Use Black UI/control-plane APIs for normal configuration. Lab fixtures may be
+loaded only into a disposable database with `db import-fixture --replace`.
 
 Build or install `blackwire`, then place it at:
 

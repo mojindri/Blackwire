@@ -51,6 +51,8 @@ PROXY_CPU="${PROXY_CPU:-}"
 ORIGIN_CPU="${ORIGIN_CPU:-}"
 PERF="${PERF:-0}"
 OUT="${OUT:-/tmp/bw-exp}"
+SERVER_DATABASE_URL="${BLACKWIRE_SERVER_DATABASE_URL:?set BLACKWIRE_SERVER_DATABASE_URL to a disposable MySQL database}"
+CLIENT_DATABASE_URL="${BLACKWIRE_CLIENT_DATABASE_URL:?set BLACKWIRE_CLIENT_DATABASE_URL to a different disposable MySQL database}"
 HEY_BIN="${HEY_BIN:-hey}"
 CLK="$(getconf CLK_TCK)"
 mkdir -p "$OUT"
@@ -78,7 +80,14 @@ start_origin() {
 # start_proxy <config> <listen_port> -> echoes the pid
 start_proxy() {
     local config="$1" port="$2"
-    $(pin "$PROXY_CPU") "$BIN" run -c "$config" >"$OUT/proxy.log" 2>&1 &
+    bash "$HERE/../../scripts/prepare-mysql-fixture.sh" "$BIN" "$config" "$SERVER_DATABASE_URL"
+    if [ -n "$PROXY_CPU" ]; then
+        env BLACKWIRE_DATABASE_URL="$SERVER_DATABASE_URL" taskset -c "$PROXY_CPU" \
+            "$BIN" run >"$OUT/proxy.log" 2>&1 &
+    else
+        env BLACKWIRE_DATABASE_URL="$SERVER_DATABASE_URL" \
+            "$BIN" run >"$OUT/proxy.log" 2>&1 &
+    fi
     local pid=$!
     PIDS+=("$pid")
     for _ in $(seq 1 60); do
@@ -189,7 +198,9 @@ exp_relay() {
                    server-copy-immediate server-copy-deferred server-copy-adaptive; do
         local spid cpid
         spid="$(start_proxy "$KNOBS/$variant.json" 10080)"
-        $(pin "") "$BIN" run -c "$OUT/client.json" >"$OUT/client.log" 2>&1 & cpid=$!; PIDS+=("$cpid")
+        bash "$HERE/../../scripts/prepare-mysql-fixture.sh" "$BIN" "$OUT/client.json" "$CLIENT_DATABASE_URL"
+        env BLACKWIRE_DATABASE_URL="$CLIENT_DATABASE_URL" \
+            "$BIN" run >"$OUT/client.log" 2>&1 & cpid=$!; PIDS+=("$cpid")
         for _ in $(seq 1 60); do python3 -c "import socket;socket.create_connection(('127.0.0.1',1081),0.2)" 2>/dev/null && break; sleep 0.1; done
         # measure via the client's socks port 1081 (proxy-under-test CPU = server spid)
         local ka bulk

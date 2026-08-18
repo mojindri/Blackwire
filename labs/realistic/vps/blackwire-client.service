@@ -6,12 +6,14 @@ Wants=network-online.target
 [Service]
 User=blackwire
 Group=blackwire
-ExecStart=/usr/local/bin/blackwire run -c /etc/blackwire/client.json
+Environment=BLACKWIRE_DATABASE_URL_FILE=/etc/blackwire/runtime-database-url
+ExecStart=/usr/local/bin/blackwire run
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
+ReadOnlyPaths=/etc/blackwire
 ReadWritePaths=/var/lib/blackwire
 
 [Install]

@@ -13,6 +13,7 @@ mkdir -p "$REPORT_DIR"
 cd "$PROJECT_ROOT"
 
 PROXY_PORT="${PROXY_PORT:-1080}"
+LAB_DATABASE_URL="${BLACKWIRE_LAB_DATABASE_URL:?set BLACKWIRE_LAB_DATABASE_URL to a disposable MySQL database}"
 TARGET_PORT="${TARGET_PORT:-18080}"
 LOAD_REQUESTS="${LOAD_REQUESTS:-250}"
 LOAD_CONCURRENCY="${LOAD_CONCURRENCY:-50}"
@@ -54,13 +55,15 @@ JSON
 
 echo "==> building blackwire"
 cargo build --release --bin blackwire
+bash "$SCRIPT_DIR/prepare-mysql-fixture.sh" target/release/blackwire "$CONFIG" "$LAB_DATABASE_URL"
 
 echo "==> starting local target HTTP server on 127.0.0.1:$TARGET_PORT"
 python3 -m http.server "$TARGET_PORT" --bind 127.0.0.1 > "$REPORT_DIR/load-target-http.log" 2>&1 &
 HTTP_PID=$!
 
 echo "==> starting blackwire on 127.0.0.1:$PROXY_PORT"
-RUST_LOG="${RUST_LOG:-info}" target/release/blackwire run -c "$CONFIG" > "$REPORT_DIR/load-proxy.log" 2>&1 &
+BLACKWIRE_DATABASE_URL="$LAB_DATABASE_URL" \
+  RUST_LOG="${RUST_LOG:-info}" target/release/blackwire run > "$REPORT_DIR/load-proxy.log" 2>&1 &
 PROXY_PID=$!
 
 cleanup() {

@@ -60,7 +60,7 @@ is no raw server-configuration editor.
 
 The user Copy subscription action remains supported. It copies database-derived
 client subscription content suitable for Hiddify. This is deliberately separate
-from server configuration import/export, which is not supported.
+from production server configuration import/export, which is not supported.
 
 ## Deployment
 
@@ -88,3 +88,8 @@ cd black-ui/frontend && npm run qa
 ```
 
 MySQL integration tests must run against MySQL 8.4; SQLite is not a substitute.
+
+Repository lab JSON files are bootstrap fixtures only. Lab scripts load them
+into explicitly disposable MySQL databases with `blackwire db import-fixture`
+before starting the normal database-backed runtime. This command is not an
+automatic legacy migration path and should not be used against production data.
