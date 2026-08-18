@@ -19,6 +19,10 @@ set +a
 export EXTERNAL_SERVER_ADDRESS="${EXTERNAL_SERVER_ADDRESS:-blackwire-server}"
 export EXTERNAL_TLS_SERVER_NAME="${EXTERNAL_TLS_SERVER_NAME:-blackwire.local}"
 export SHADOWTLS_DEST="${SHADOWTLS_DEST:-tls-cover:443}"
+# Docker supplies its internal TLS cover here; VPS renders preserve the values
+# from matrix.env so they can use the host's local Caddy/NGINX cover listener.
+export REALITY_SERVER_NAME="${EXTERNAL_REALITY_SERVER_NAME:-$REALITY_SERVER_NAME}"
+export REALITY_DEST="${EXTERNAL_REALITY_DEST:-$REALITY_DEST}"
 
 REALITY_PUBLIC_KEY_XRAY="$REALITY_PUBLIC_KEY"
 if [[ "$REALITY_PUBLIC_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
@@ -120,5 +124,35 @@ EOF
 cat > "$OUT_DIR/hiddify/ss2022.txt" <<EOF
 ss://$(printf '2022-blake3-aes-256-gcm:%s' "$SS2022_PASSWORD" | base64 | tr -d '\n')@${SERVER_HOST}:8388#blackwire-ss2022
 EOF
+
+python3 - "$OUT_DIR" "$REALITY_SERVER_NAME" "$REALITY_DEST" <<'PY'
+import json
+import sys
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+
+root = Path(sys.argv[1])
+expected_name = sys.argv[2]
+expected_dest = sys.argv[3]
+
+for filename in ("server-vless-reality.json", "server-vless-vision.json"):
+    data = json.loads((root / "blackwire" / filename).read_text())
+    reality = data["inbounds"][0]["streamSettings"]["realitySettings"]
+    names = reality.get("serverNames") or [reality.get("serverName")]
+    if expected_name not in names or reality.get("dest") != expected_dest:
+        raise SystemExit(f"{filename}: rendered REALITY cover does not match requested cover")
+
+for filename in ("vless-reality.json", "vless-vision.json"):
+    xray = json.loads((root / "xray" / filename).read_text())
+    xray_name = xray["outbounds"][0]["streamSettings"]["realitySettings"]["serverName"]
+    sing_box = json.loads((root / "sing-box" / filename).read_text())
+    sing_box_name = sing_box["outbounds"][0]["tls"]["server_name"]
+    if xray_name != expected_name or sing_box_name != expected_name:
+        raise SystemExit(f"{filename}: client SNI disagrees with the server REALITY cover")
+
+hiddify = (root / "hiddify" / "vless-reality.txt").read_text().strip()
+if parse_qs(urlsplit(hiddify).query).get("sni") != [expected_name]:
+    raise SystemExit("Hiddify REALITY subscription SNI disagrees with the server cover")
+PY
 
 echo "Rendered external-client configs under $OUT_DIR"

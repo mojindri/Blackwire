@@ -30,6 +30,8 @@ This project is pre-1.0. The support contract is owned by
 
 - External-client Docker scenarios now bootstrap fresh relational MySQL
   revisions instead of invoking the removed file-config runtime interface.
+- REALITY and Vision Docker interoperability scenarios now use the lab's live
+  TLS cover and keep Blackwire, Xray, sing-box, and Hiddify cover names aligned.
 - Realistic, latency, competitive, and VPS lab runners now import fixtures into
   disposable MySQL databases, preserve fixture outbound order, and start the
   normal database-backed runtime.
