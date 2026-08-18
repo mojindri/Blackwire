@@ -75,7 +75,7 @@ matrix_bootstrap() {
     fi
     if (( include_hiddify )); then
         if ! "${COMPOSE[@]}" up -d mysql target-http tls-cover matrix-probe blackwire-server sing-box-client \
-            hiddify-sing-box-client \
+            hiddify-sing-box-client hiddify-probe \
             >> "$REPORT_DIR/compose.log" 2>&1; then
             echo "WARN: failed to start hiddify-sing-box-client; retrying without it" | tee -a "$REPORT_DIR/compose.log" >&2
             "${COMPOSE[@]}" down -v >> "$REPORT_DIR/compose.log" 2>&1 || true
@@ -93,11 +93,18 @@ matrix_bootstrap() {
     if (( include_hiddify )); then
         "${COMPOSE[@]}" up -d --force-recreate hiddify-sing-box-client \
             >> "$REPORT_DIR/compose.log" 2>&1 || true
+        "${COMPOSE[@]}" up -d --force-recreate hiddify-probe \
+            >> "$REPORT_DIR/compose.log" 2>&1 || true
     fi
 
     "${COMPOSE[@]}" exec -T matrix-probe sh -c \
         'command -v python3 >/dev/null 2>&1 || apk add --no-cache curl netcat-openbsd bind-tools python3 >/dev/null' \
         </dev/null >> "$REPORT_DIR/compose.log" 2>&1 || true
+    if (( include_hiddify )); then
+        "${COMPOSE[@]}" exec -T hiddify-probe sh -c \
+            'command -v curl >/dev/null 2>&1 || apk add --no-cache curl >/dev/null' \
+            </dev/null >> "$REPORT_DIR/compose.log" 2>&1 || true
+    fi
 
     local i
     for i in $(seq 1 30); do
@@ -351,9 +358,10 @@ should_run_protocol() {
 wait_for_socks() {
     local client_host="$1"
     local tries="${2:-$SOCKS_WAIT_TRIES}"
+    local probe_service="${3:-matrix-probe}"
     local i
     for i in $(seq 1 "$tries"); do
-        if "${COMPOSE[@]}" exec -T matrix-probe \
+        if "${COMPOSE[@]}" exec -T "$probe_service" \
             curl -fsS --max-time "$CURL_MAX_TIME" --socks5-hostname "${client_host}:1080" "$TARGET_URL" \
             </dev/null >/dev/null 2>&1; then
             return 0
@@ -366,9 +374,10 @@ wait_for_socks() {
 wait_for_socks_udp() {
     local client_host="$1"
     local tries="${2:-$SOCKS_WAIT_TRIES}"
+    local probe_service="${3:-matrix-probe}"
     local i
     for i in $(seq 1 "$tries"); do
-        if "${COMPOSE[@]}" exec -T matrix-probe \
+        if "${COMPOSE[@]}" exec -T "$probe_service" \
             sh /scripts/udp-socks-probe.sh "$client_host" 1080 \
             </dev/null >/dev/null 2>&1; then
             return 0
@@ -483,14 +492,18 @@ run_client_case() {
     assert_single_client
 
     local client_host="$client_service"
-    [[ "$client" == "hiddify" ]] && client_host="hiddify-sing-box-client"
+    local probe_service="matrix-probe"
+    if [[ "$client" == "hiddify" ]]; then
+        client_host="127.0.0.1"
+        probe_service="hiddify-probe"
+    fi
     local probe_tries="$SOCKS_WAIT_TRIES"
     [[ "$expect_pass" == "reject" ]] && probe_tries="$NEGATIVE_SOCKS_WAIT_TRIES"
 
     stop_client() { case "$client" in xray) stop_xray ;; hiddify) stop_hiddify ;; *) stop_sing_box ;; esac; }
 
     if udp_only_protocol "$protocol"; then
-        if wait_for_socks_udp "$client_host" "$probe_tries"; then
+        if wait_for_socks_udp "$client_host" "$probe_tries" "$probe_service"; then
             if [[ "$expect_pass" == "pass" ]]; then
                 echo "PASS ${label}" | tee -a "$REPORT_DIR/summary.txt"
                 stop_client; return 0
@@ -508,7 +521,7 @@ run_client_case() {
         stop_client; return 0
     fi
 
-    if wait_for_socks "$client_host" "$probe_tries"; then
+    if wait_for_socks "$client_host" "$probe_tries" "$probe_service"; then
         if [[ "$expect_pass" == "pass" ]]; then
             if requires_udp_probe "$protocol" && ! wait_for_socks_udp "$client_host"; then
                 echo "FAIL ${label} (udp socks probe)" | tee -a "$REPORT_DIR/summary.txt"
