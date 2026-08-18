@@ -10,7 +10,7 @@ REPORT_DIR="${1:-$REALISTIC_DIR/reports/external-clients}"
 ENV_FILE="${2:-$REALISTIC_DIR/configs/matrix.env}"
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-blackwire-external-clients}"
 COMPOSE=(docker compose -p "$PROJECT_NAME" -f "$LAB_DIR/docker-compose.yml")
-TARGET_URL="http://target-http:8080"
+TARGET_URL="http://10.203.0.12:8080"
 
 PORT_WAIT_TRIES="${MATRIX_PORT_WAIT_TRIES:-40}"
 PORT_WAIT_SLEEP="${MATRIX_PORT_WAIT_SLEEP:-0.15}"
