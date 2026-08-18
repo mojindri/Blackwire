@@ -37,6 +37,7 @@ id_hetzner
 # passwords, or private keys. Keep them out of version control.
 labs/realistic/configs/matrix.env
 labs/realistic/external-clients/generated-packet-up-check/
+examples/hysteria2-client-server/
 
 # Local benchmark/profiling artifacts (never commit).
 benches/reports/*.log
