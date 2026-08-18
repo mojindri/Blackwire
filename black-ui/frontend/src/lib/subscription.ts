@@ -2,7 +2,11 @@ import type { Settings } from "./types";
 import { copyText } from "./clipboard";
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+export const MAX_SUBSCRIPTION_QR_BYTES = 1800;
 type CopyResult = { ok: boolean; message: string };
+export type SubscriptionQrPayload =
+  | { ok: true; content: string; bytes: number }
+  | { ok: false; message: string };
 
 export function subscriptionUrl(settings: Settings | null, token: string): string {
   if (!settings || !token) return "";
@@ -31,6 +35,20 @@ export async function fetchSubscriptionContent(url: string): Promise<{ ok: boole
 export async function copySubscriptionContent(url: string): Promise<CopyResult> {
   const subscription = await fetchSubscriptionContent(url);
   return subscription.ok ? copyText(subscription.content) : subscription;
+}
+
+export function subscriptionQrPayload(content: string): SubscriptionQrPayload {
+  const normalized = content.trim();
+  if (!normalized) return { ok: false, message: "Subscription is empty" };
+
+  const bytes = new TextEncoder().encode(normalized).byteLength;
+  if (bytes > MAX_SUBSCRIPTION_QR_BYTES) {
+    return {
+      ok: false,
+      message: `Subscription content is ${bytes.toLocaleString()} bytes. Keep it under ${MAX_SUBSCRIPTION_QR_BYTES.toLocaleString()} bytes for a reliably scannable QR code.`
+    };
+  }
+  return { ok: true, content: normalized, bytes };
 }
 
 function subscriptionBaseUrl(settings: Settings): string {

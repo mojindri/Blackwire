@@ -60,6 +60,12 @@ async function main() {
   const userRow = page.locator("tr", { hasText: "qa@example.com" });
   await userRow.getByRole("button", { name: "Copy subscription content", exact: true }).click();
   await page.getByText("Copied", { exact: true }).waitFor();
+  await userRow.getByRole("button", { name: "Show subscription content QR code", exact: true }).click();
+  const qrDialog = page.getByRole("dialog", { name: "Scan subscription content", exact: true });
+  await qrDialog.locator("svg").filter({ hasText: "Hiddify subscription content" }).waitFor();
+  await qrDialog.getByText("Open Hiddify, tap +, then Scan QR code", { exact: true }).waitFor();
+  await qrDialog.getByRole("button", { name: "Done", exact: true }).click();
+  await qrDialog.waitFor({ state: "detached" });
 
   await nav(page, "Inbounds");
   await addInbound(page, "qa-delete", "26321");
@@ -93,10 +99,9 @@ async function addInbound(page, tag, port) {
   await nav(page, "Inbounds");
   await page.getByRole("button", { name: "New Inbound", exact: true }).click();
   await page.getByLabel("Tag", { exact: true }).fill(tag);
-  await page.getByLabel("Listen address", { exact: true }).fill("127.0.0.1");
+  await page.getByLabel("Listen host", { exact: true }).fill("127.0.0.1");
   await page.getByLabel("Port", { exact: true }).fill(port);
-  await page.getByLabel("Transport", { exact: true }).selectOption("tcp");
-  const saveButton = page.getByRole("button", { name: "Save revision", exact: true });
+  const saveButton = page.getByRole("button", { name: "Save Inbound", exact: true });
   if (await saveButton.isDisabled()) {
     const inlineErrors = await page.locator(".inline-error, .field-error").allTextContents();
     throw new Error(`Save Inbound is disabled for ${tag}: ${inlineErrors.join(" | ") || "no validation message found"}`);
@@ -116,9 +121,9 @@ async function addUser(page, email, inboundLabel) {
   );
   if (!inboundValue) throw new Error(`inbound option not found for ${inboundLabel}`);
   await inboundSelect.selectOption(inboundValue);
-  await page.getByRole("button", { name: "Generate", exact: true }).click();
+  await page.getByRole("button", { name: "Generate UUID", exact: true }).click();
   await page.waitForFunction(() => Array.from(document.querySelectorAll("input")).some((input) => input.value.includes("-")));
-  await page.getByRole("button", { name: "Save revision", exact: true }).click();
+  await page.getByRole("button", { name: "Save User", exact: true }).click();
   await page.locator("tr", { hasText: email }).waitFor({ timeout: 30000 });
 }
 
