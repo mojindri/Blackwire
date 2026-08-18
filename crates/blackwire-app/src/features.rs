@@ -71,7 +71,7 @@ impl OutboundConnectResult {
 /// authentication failure. Handlers without a fallback may fail closed.
 #[async_trait]
 pub trait InboundHandler: Send + Sync + 'static {
-    /// The unique tag for this inbound, as configured in config.json.
+    /// The unique tag for this inbound in the active database revision.
     /// Used in routing rules and log messages.
     fn tag(&self) -> &str;
 
@@ -103,7 +103,7 @@ pub trait InboundHandler: Send + Sync + 'static {
 ///   3. Return a `BoxedStream` that the dispatcher can use to relay data.
 #[async_trait]
 pub trait OutboundHandler: Send + Sync + 'static {
-    /// The unique tag for this outbound, as configured in config.json.
+    /// The unique tag for this outbound in the active database revision.
     fn tag(&self) -> &str;
 
     /// Connect to `dest` and return a stream ready for bidirectional data relay.

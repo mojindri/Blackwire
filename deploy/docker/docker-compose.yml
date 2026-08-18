@@ -10,14 +10,57 @@
 #   # Stop:
 #   docker-compose down
 #
-# Prerequisites:
-#   - Create /etc/blackwire/config.json on the host before starting.
-#   - The config should use metricsAddr: "0.0.0.0:8080" to expose the
-#     Prometheus metrics endpoint (port 8080 is mapped below).
-
-version: "3.9"
+# Configuration is stored exclusively in MySQL. Create the secret files under
+# deploy/docker/secrets before starting this stack.
 
 services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: blackwire
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+    secrets:
+      - mysql_root_password
+      - mysql_runtime_password
+      - mysql_ui_password
+      - mysql_migrator_password
+    volumes:
+      - blackwire-mysql:/var/lib/mysql
+      - ./mysql-init-accounts.sh:/docker-entrypoint-initdb.d/10-blackwire-accounts.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot --password=$$(cat /run/secrets/mysql_root_password) --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: blackwire:latest
+    command: ["db", "init"]
+    environment:
+      BLACKWIRE_DATABASE_URL_FILE: /run/secrets/migrator_database_url
+    secrets:
+      - migrator_database_url
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  grant-accounts:
+    image: mysql:8.4
+    command: ["sh", "/grant-accounts.sh"]
+    volumes:
+      - ./mysql-grant-accounts.sh:/grant-accounts.sh:ro
+    secrets:
+      - mysql_root_password
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
   blackwire:
     build:
       context: ../..
@@ -28,11 +71,6 @@ services:
     # Restart automatically unless explicitly stopped.
     restart: unless-stopped
 
-    # Mount the config directory from the host.
-    # Place your config.json at /etc/blackwire/config.json on the host.
-    volumes:
-      - /etc/blackwire:/etc/blackwire:ro
-
     # Expose the main proxy port (443) and the metrics/health endpoint (8080).
     ports:
       - "443:443"
@@ -40,7 +78,13 @@ services:
 
     # Environment
     environment:
-      - RUST_LOG=info
+      RUST_LOG: info
+      BLACKWIRE_DATABASE_URL_FILE: /run/secrets/runtime_database_url
+    secrets:
+      - runtime_database_url
+    depends_on:
+      grant-accounts:
+        condition: service_completed_successfully
 
     # Security: drop all capabilities except what's needed for binding to :443.
     cap_drop:
@@ -68,3 +112,40 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  black-ui:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.ui
+    image: black-ui:latest
+    restart: unless-stopped
+    ports:
+      - "18080:18080"
+    environment:
+      BLACKWIRE_DATABASE_URL_FILE: /run/secrets/ui_database_url
+      BLACK_UI_LISTEN: 0.0.0.0:18080
+      BLACK_UI_STATIC_DIR: /usr/share/black-ui/frontend/dist
+    secrets:
+      - ui_database_url
+    depends_on:
+      grant-accounts:
+        condition: service_completed_successfully
+
+volumes:
+  blackwire-mysql:
+
+secrets:
+  runtime_database_url:
+    file: ./secrets/runtime-database-url
+  ui_database_url:
+    file: ./secrets/ui-database-url
+  migrator_database_url:
+    file: ./secrets/migrator-database-url
+  mysql_runtime_password:
+    file: ./secrets/mysql-runtime-password
+  mysql_ui_password:
+    file: ./secrets/mysql-ui-password
+  mysql_migrator_password:
+    file: ./secrets/mysql-migrator-password
+  mysql_root_password:
+    file: ./secrets/mysql-root-password

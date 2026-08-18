@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, clearToken, getToken, setToken } from "./lib/api";
-import type { AppData, InboundInput, ManagedUser, OutboundInput, PageKey, Settings, UserInput } from "./lib/types";
+import type { AppData, CoreSettings, InboundInput, ManagedUser, OutboundInput, PageKey, Settings, UserInput } from "./lib/types";
 import { AppShell } from "./components/templates/AppShell";
 import { AuthPage } from "./pages/AuthPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -8,7 +8,6 @@ import { UsersPage } from "./pages/UsersPage";
 import { InboundsPage } from "./pages/InboundsPage";
 import { OutboundsPage } from "./pages/OutboundsPage";
 import { SectionsPage } from "./pages/SectionsPage";
-import { ConfigPage } from "./pages/ConfigPage";
 import { ServicePage } from "./pages/ServicePage";
 import { SettingsPage } from "./pages/SettingsPage";
 
@@ -17,11 +16,13 @@ const emptyData: AppData = {
   settings: null,
   inbounds: [],
   outbounds: [],
-  sections: [],
   users: [],
   traffic: { users: [], inbounds: [] },
   capabilities: null,
-  service: null
+  service: null,
+  revisions: [],
+  routingDns: { domainStrategy: "AsIs", geoipFile: null, geositeFile: null, dnsServers: [], fakeIpEnabled: false, fakeIpPool: "198.18.0.0/15", rules: [], balancers: [] },
+  coreSettings: null
 };
 
 export default function App() {
@@ -35,6 +36,16 @@ export default function App() {
   const statusKnown = data.status !== null;
   const setupRequired = data.status?.setupRequired ?? false;
   const authenticated = Boolean(token) && !setupRequired;
+  const databaseReadOnly = data.status?.databaseConnected === false;
+
+  const markDatabaseUnavailable = useCallback(() => {
+    setData((current) => ({
+      ...current,
+      status: current.status
+        ? { ...current.status, databaseConnected: false, runtimeReachable: false }
+        : current.status
+    }));
+  }, []);
 
   const refresh = useCallback(async () => {
     const status = await api.status();
@@ -54,28 +65,31 @@ export default function App() {
       setData((current) => ({ ...current, status }));
       return;
     }
-    const [settings, inbounds, outbounds, sections, users, traffic, capabilities, service] = await Promise.all([
+    const [settings, inbounds, outbounds, users, traffic, capabilities, service, revisions, routingDns, coreSettings] = await Promise.all([
       api.settings(),
       api.inbounds(),
       api.outbounds(),
-      api.sections(),
       api.users(),
       api.traffic().catch(() => ({ users: [], inbounds: [] })),
       api.capabilities(),
-      api.serviceStatus().catch(() => null)
+      api.serviceStatus().catch(() => null),
+      api.revisions(),
+      api.routingDns(),
+      api.coreSettings()
     ]);
-    setData({ status, settings, inbounds, outbounds, sections, users, traffic, capabilities, service });
+    setData({ status, settings, inbounds, outbounds, users, traffic, capabilities, service, revisions, routingDns, coreSettings });
   }, []);
 
   useEffect(() => {
     refresh().catch((err: Error) => {
       setError(err.message);
+      markDatabaseUnavailable();
       if (err.message.includes("authentication")) {
         clearToken();
         setTokenState("");
       }
     });
-  }, [refresh, token]);
+  }, [markDatabaseUnavailable, refresh, token]);
 
   const run = useCallback(
     async (action: () => Promise<unknown>, success: string, pending = "Working...") => {
@@ -93,13 +107,14 @@ export default function App() {
           await refresh();
         } catch {
           // Keep the original mutation error visible; refresh is best-effort after partial writes.
+          markDatabaseUnavailable();
         }
         setError(errorMessage);
       } finally {
         setBusy(false);
       }
     },
-    [refresh]
+    [markDatabaseUnavailable, refresh]
   );
 
   const login = (username: string, password: string) => {
@@ -115,7 +130,7 @@ export default function App() {
     api.logout().catch(() => undefined);
     clearToken();
     setTokenState("");
-    setData((current) => ({ ...current, settings: null, inbounds: [], outbounds: [], sections: [], users: [] }));
+    setData((current) => ({ ...current, settings: null, inbounds: [], outbounds: [], users: [] }));
   };
 
   const actions = useMemo(
@@ -144,11 +159,14 @@ export default function App() {
       createOutbound: (input: OutboundInput) => run(() => api.createOutbound(input), "Outbound saved", "Creating outbound..."),
       updateOutbound: (id: number, input: OutboundInput) => run(() => api.updateOutbound(id, input), "Outbound saved", "Saving outbound..."),
       deleteOutbound: (id: number) => run(() => api.deleteOutbound(id), "Outbound deleted", "Deleting outbound..."),
-      saveSection: (name: string, enabled: boolean, value: string) =>
-        run(() => api.updateSection(name, { enabled, value }), "Advanced config saved", "Saving advanced config..."),
-      importConfig: (value: unknown) => run(() => api.configImport(value), "Config imported", "Importing config..."),
       restartBlackwire: () => run(api.serviceRestartBlackwire, "Blackwire restarted", "Restarting Blackwire..."),
+      startBlackwire: () => run(api.serviceStartBlackwire, "Blackwire started", "Starting Blackwire..."),
+      stopBlackwire: () => run(api.serviceStopBlackwire, "Blackwire stopped", "Stopping Blackwire..."),
+      rollback: (revision: number) => run(() => api.rollback(revision), "Rollback revision created", "Creating rollback revision..."),
+      activateMaintenance: (revision: number) => run(() => api.activateMaintenance(revision), "Maintenance activation confirmed", "Confirming maintenance..."),
       saveSettings: (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved", "Saving settings..."),
+      saveCoreSettings: (settings: CoreSettings) => run(() => api.updateCoreSettings(settings), "Core settings saved", "Saving core settings..."),
+      saveRoutingDns: (value: typeof data.routingDns) => run(() => api.updateRoutingDns(value), "Routing and DNS saved", "Saving routing and DNS..."),
       uuid: async () => (await api.uuid()).uuid
     }),
     [run]
@@ -166,14 +184,13 @@ export default function App() {
       busy={busy}
       onPage={setPage}
       onRefresh={() => run(refresh, "Refreshed", "Refreshing...")}
-      onApply={() => run(api.configApply, "Config applied", "Applying config...")}
       onLogout={logout}
     >
       {page === "dashboard" ? <DashboardPage data={data} /> : null}
       {page === "users" ? (
         <UsersPage
           data={data}
-          busy={busy}
+          busy={busy || databaseReadOnly}
           onSave={actions.saveUser}
           onUuid={actions.uuid}
           onToggle={actions.toggleUser}
@@ -188,7 +205,7 @@ export default function App() {
         <InboundsPage
           inbounds={data.inbounds}
           capabilities={data.capabilities}
-          busy={busy}
+          busy={busy || databaseReadOnly}
           onCreate={actions.createInbound}
           onUpdate={actions.updateInbound}
           onDelete={actions.deleteInbound}
@@ -198,32 +215,17 @@ export default function App() {
         <OutboundsPage
           outbounds={data.outbounds}
           capabilities={data.capabilities}
-          busy={busy}
+          busy={busy || databaseReadOnly}
           onCreate={actions.createOutbound}
           onUpdate={actions.updateOutbound}
           onDelete={actions.deleteOutbound}
         />
       ) : null}
       {page === "sections" ? (
-        <SectionsPage
-          sections={data.sections}
-          capabilities={data.capabilities}
-          outbounds={data.outbounds}
-          busy={busy}
-          onSave={actions.saveSection}
-        />
+        <SectionsPage value={data.routingDns} outbounds={data.outbounds} busy={busy || databaseReadOnly} onSave={actions.saveRoutingDns} />
       ) : null}
-      {page === "config" ? (
-        <ConfigPage
-          busy={busy}
-          onValidate={() => run(api.configValidate, "Config valid", "Validating config...")}
-          onWrite={() => run(api.configWrite, "Config written", "Writing config...")}
-          onApply={() => run(api.configApply, "Config applied", "Applying config...")}
-          onImport={actions.importConfig}
-        />
-      ) : null}
-      {page === "service" ? <ServicePage service={data.service} busy={busy} onRestart={actions.restartBlackwire} /> : null}
-      {page === "settings" ? <SettingsPage settings={data.settings} busy={busy} onSave={actions.saveSettings} /> : null}
+      {page === "service" ? <ServicePage status={data.status} service={data.service} revisions={data.revisions} busy={busy || databaseReadOnly} onStart={actions.startBlackwire} onStop={actions.stopBlackwire} onRestart={actions.restartBlackwire} onRollback={actions.rollback} onActivateMaintenance={actions.activateMaintenance} /> : null}
+      {page === "settings" ? <SettingsPage settings={data.settings} coreSettings={data.coreSettings} busy={busy || databaseReadOnly} onSave={actions.saveSettings} onSaveCore={actions.saveCoreSettings} /> : null}
     </AppShell>
   );
 }

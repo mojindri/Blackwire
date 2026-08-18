@@ -1,4 +1,4 @@
-import { Cable, FileJson, Gauge, Route, ServerCog, Settings, SlidersHorizontal, Users, Waypoints } from "lucide-react";
+import { Cable, Gauge, Route, ServerCog, Settings, SlidersHorizontal, Users, Waypoints } from "lucide-react";
 import packageInfo from "../../../package.json";
 import type { PageKey } from "../../lib/types";
 
@@ -7,9 +7,8 @@ const items: Array<{ key: PageKey; label: string; icon: typeof Gauge }> = [
   { key: "users", label: "Users", icon: Users },
   { key: "inbounds", label: "Inbounds", icon: Waypoints },
   { key: "outbounds", label: "Outbounds", icon: Route },
-  { key: "sections", label: "Advanced Config", icon: SlidersHorizontal },
-  { key: "config", label: "Config", icon: FileJson },
-  { key: "service", label: "Service", icon: ServerCog },
+  { key: "sections", label: "Routing & DNS", icon: SlidersHorizontal },
+  { key: "service", label: "Runtime", icon: ServerCog },
   { key: "settings", label: "Settings", icon: Settings }
 ];
 

@@ -1,4 +1,4 @@
-//! Configuration schema — Rust structs that map to the JSON config file.
+//! Typed runtime configuration reconstructed from relational MySQL revisions.
 //!
 //! The schema is split by responsibility so each file stays small:
 //! - `logging_dns` handles logging and DNS/FakeIP settings.
@@ -15,7 +15,11 @@ mod routing;
 mod transport;
 mod vision;
 
-pub use endpoint::{InboundConfig, InboundLimitsConfig, OutboundConfig};
+pub use endpoint::{
+    CongestionSettings, DatagramOverrides, EndpointCount, EndpointSettings, EndpointUser,
+    FallbackSettings, FecOverrides, InboundConfig, InboundLimitsConfig, OutboundConfig,
+    PoolSettings, QuicSocketOverrides,
+};
 pub use logging_dns::{DnsConfig, FakeIpConfig, LogConfig};
 pub use profile::{
     explain_cost, validate_fast_profile, BudgetConfig, CopyMode, CostClass, CostReport, FastConfig,
@@ -29,8 +33,9 @@ pub use routing::{
     RoutingConfig, RoutingRule,
 };
 pub use transport::{
-    GrpcConfig, Hysteria2Config, KcpConfig, RealityConfig, ShadowTlsConfig, SniffingConfig,
-    SplitHttpConfig, StreamSettingsConfig, TlsConfig, WsConfig,
+    DownloadSettings, GrpcConfig, Hysteria2Config, KcpConfig, PaddingBounds, PaddingBytes,
+    RealityConfig, RealityFallbackLimitConfig, ShadowTlsConfig, SniffingConfig, SplitHttpConfig,
+    StreamSettingsConfig, TlsConfig, WsConfig, XmuxConfig,
 };
 pub use vision::{VisionConfig, VisionDirectCopyPolicy};
 
@@ -39,8 +44,8 @@ use validator::Validate;
 
 /// The top-level configuration object.
 ///
-/// This is what gets deserialised from the JSON config file. Every field is
-/// optional except `inbounds` and `outbounds`.
+/// The MySQL store reconstructs this snapshot before validation and activation.
+/// Every field is optional except `inbounds` and `outbounds`.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct Config {
     /// Operating profile. `"compat"` (default) enables all features.
@@ -107,7 +112,8 @@ pub struct Config {
     pub limits: LimitsConfig,
 
     /// Ports and protocols the proxy listens on.
-    #[validate(length(min = 1, message = "at least one inbound is required"), nested)]
+    // Zero inbounds is a valid idle control-plane state.
+    #[validate(nested)]
     pub inbounds: Vec<InboundConfig>,
 
     /// Protocols used to forward traffic.
@@ -116,11 +122,11 @@ pub struct Config {
 
     /// Statistics collection settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stats: Option<serde_json::Value>,
+    pub stats: Option<StatsConfig>,
 
     /// Management API settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api: Option<serde_json::Value>,
+    pub api: Option<ApiConfig>,
 
     /// Metrics/health HTTP server listen address, e.g. `"127.0.0.1:8080"`.
     ///
@@ -132,6 +138,29 @@ pub struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub metrics_addr: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+/// Controls whether runtime traffic statistics are collected.
+pub struct StatsConfig {
+    /// Enables statistics collection.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Management API listener and authentication settings.
+pub struct ApiConfig {
+    /// Socket address on which the management API listens.
+    pub listen: String,
+    /// Optional bearer token required by API clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// Management service names exposed by the API.
+    #[serde(default)]
+    pub services: Vec<String>,
 }
 
 /// Runtime safety limits.
@@ -198,7 +227,7 @@ pub struct QuicConfig {
 
     /// Endpoint shard count: integer string/number or "cpu".
     #[serde(default = "QuicConfig::default_endpoints")]
-    pub endpoints: serde_json::Value,
+    pub endpoints: EndpointCount,
 
     /// Requested UDP receive buffer size.
     #[serde(default = "QuicConfig::default_buffer_bytes")]
@@ -210,35 +239,35 @@ pub struct QuicConfig {
 
     /// Maximum datagram size hint. Current transport accepts the field for config parity.
     #[serde(default = "QuicConfig::default_max_datagram_size")]
-    pub max_datagram_size: serde_json::Value,
+    pub max_datagram_size: DatagramSize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+/// Maximum QUIC datagram size expressed as bytes or a named policy.
+pub enum DatagramSize {
+    /// Fixed datagram size in bytes.
+    Fixed(usize),
+    /// Named size policy such as `"auto"`.
+    Named(String),
 }
 
 impl QuicConfig {
-    fn default_endpoints() -> serde_json::Value {
-        serde_json::Value::String("1".into())
+    fn default_endpoints() -> EndpointCount {
+        EndpointCount::Fixed(1)
     }
 
     fn default_buffer_bytes() -> usize {
         8 * 1024 * 1024
     }
 
-    fn default_max_datagram_size() -> serde_json::Value {
-        serde_json::Value::String("auto".into())
+    fn default_max_datagram_size() -> DatagramSize {
+        DatagramSize::Named("auto".into())
     }
 
     /// Returns the number of QUIC endpoints, clamped to 1–64.
     pub fn endpoint_count(&self) -> usize {
-        match &self.endpoints {
-            serde_json::Value::String(s) if s.eq_ignore_ascii_case("cpu") => {
-                std::thread::available_parallelism()
-                    .map(usize::from)
-                    .unwrap_or(1)
-            }
-            serde_json::Value::String(s) => s.parse::<usize>().unwrap_or(1),
-            serde_json::Value::Number(n) => n.as_u64().unwrap_or(1) as usize,
-            _ => 1,
-        }
-        .clamp(1, 64)
+        self.endpoints.resolve()
     }
 }
 
@@ -947,14 +976,14 @@ mod tests {
     }
 
     #[test]
-    fn empty_inbounds_fails_validation() {
+    fn empty_inbounds_is_valid_idle_control_plane() {
         let json = r#"{
             "inbounds": [],
             "outbounds": [{"tag": "d", "protocol": "freedom"}]
         }"#;
 
         let cfg: Config = serde_json::from_str(json).unwrap();
-        assert!(cfg.validate().is_err());
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]

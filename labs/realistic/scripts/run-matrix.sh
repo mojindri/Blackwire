@@ -22,6 +22,7 @@ fi
 source "$ENV_FILE"
 
 PROXY_BIN="${PROXY_BIN:-/usr/local/bin/blackwire}"
+export BLACKWIRE_LAB_DATABASE_URL_FILE="${BLACKWIRE_LAB_DATABASE_URL_FILE:-/etc/blackwire/lab-database-url}"
 SOCKS_PORT=1080
 # target-http on the server VPS listens on 18080.
 TARGET_URL="http://${SERVER_HOST}:18080"
@@ -63,7 +64,9 @@ run_test() {
 
     cleanup
 
-    "$PROXY_BIN" run -c "$cfg" >/tmp/blackwire-"$name".log 2>&1 &
+    bash "$SCRIPT_DIR/prepare-mysql-fixture.sh" "$PROXY_BIN" "$cfg"
+    BLACKWIRE_DATABASE_URL_FILE="$BLACKWIRE_LAB_DATABASE_URL_FILE" \
+        "$PROXY_BIN" run >/tmp/blackwire-"$name".log 2>&1 &
     PROXY_PID=$!
 
     if ! wait_for_port "$SOCKS_PORT" 10; then

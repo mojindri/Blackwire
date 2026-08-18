@@ -29,8 +29,9 @@ install -m 0644 deploy/systemd/blackwire.deb.service "$root/lib/systemd/system/b
 install -m 0644 README.md CHANGELOG.md "$root/usr/share/doc/blackwire/"
 
 cat > "$root/etc/blackwire/README" <<'README'
-Place your blackwire JSON config at /etc/blackwire/config.json.
-Validate it with: blackwire test -c /etc/blackwire/config.json
+Store a protected runtime MySQL URL at /etc/blackwire/runtime-database-url.
+Apply schema changes explicitly with a separate migrator account and `blackwire db migrate`.
+Validate access with: blackwire db status
 Start with: systemctl enable --now blackwire
 README
 
@@ -49,20 +50,19 @@ CONTROL
 cat > "$root/DEBIAN/postinst" <<'POSTINST'
 #!/bin/sh
 set -e
-if ! getent group black-ui >/dev/null 2>&1; then
-    groupadd --system black-ui
+if ! getent group blackwire >/dev/null 2>&1; then
+    groupadd --system blackwire
+fi
+if ! id blackwire >/dev/null 2>&1; then
+    useradd --system --home /var/lib/blackwire --shell /usr/sbin/nologin --gid blackwire blackwire
 fi
 mkdir -p /etc/blackwire /var/lib/blackwire /run/blackwire
-chown root:black-ui /etc/blackwire
-chmod 0770 /etc/blackwire
-if [ -f /etc/blackwire/config.json ]; then
-    chown root:black-ui /etc/blackwire/config.json
-    chmod 0660 /etc/blackwire/config.json
-fi
-if [ -d /etc/blackwire/certs ]; then
-    chown -R root:black-ui /etc/blackwire/certs
-    find /etc/blackwire/certs -type d -exec chmod 0770 {} +
-    find /etc/blackwire/certs -type f -exec chmod 0640 {} +
+chown root:blackwire /etc/blackwire
+chmod 0750 /etc/blackwire
+chown blackwire:blackwire /var/lib/blackwire /run/blackwire
+if [ -f /etc/blackwire/runtime-database-url ]; then
+    chown root:blackwire /etc/blackwire/runtime-database-url
+    chmod 0640 /etc/blackwire/runtime-database-url
 fi
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true

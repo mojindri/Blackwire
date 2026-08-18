@@ -4,7 +4,6 @@ import { Button } from "../components/atoms/Button";
 import { Badge } from "../components/atoms/Badge";
 import { InboundDrawer } from "../components/organisms/InboundDrawer";
 import { SearchBar } from "../components/molecules/SearchBar";
-import { inboundCompatibilityNotice, inboundSummary } from "../lib/inboundConfigurator";
 import type { CapabilityMap, Inbound, InboundInput } from "../lib/types";
 
 export function InboundsPage({
@@ -30,8 +29,7 @@ export function InboundsPage({
     const needle = query.trim().toLowerCase();
     if (!needle) return inbounds;
     return inbounds.filter((inbound) => {
-      const summary = inboundSummary(inbound);
-      return [inbound.tag, inbound.listen, inbound.protocol, inbound.transport, summary.network, summary.security, summary.detail]
+      return [inbound.tag, inbound.listen, inbound.protocol, inbound.transport, inbound.security]
         .join(" ")
         .toLowerCase()
         .includes(needle);
@@ -47,7 +45,7 @@ export function InboundsPage({
     <div className="page">
       <div className="page-title">
         <h1>Inbounds</h1>
-        <p>Structured inbound definitions with guided protocol, transport, security, and advanced fallback only where it actually helps.</p>
+        <p>Typed listener definitions committed as validated database revisions.</p>
       </div>
 
       <section className="work-panel">
@@ -71,23 +69,20 @@ export function InboundsPage({
             </thead>
             <tbody>
               {filtered.map((inbound) => {
-                const summary = inboundSummary(inbound);
-                const notice = inboundCompatibilityNotice(inbound);
                 return (
                   <tr key={inbound.id}>
                     <td>
                       <button className="link-cell" onClick={() => openEditor(inbound)} type="button">
                         {inbound.tag}
                       </button>
-                      <small>{summary.detail || `${summary.network} transport`}</small>
+                      <small>{inbound.transport} transport</small>
                     </td>
                     <td>{inbound.listen}:{inbound.port}</td>
                     <td>{inbound.protocol}</td>
-                    <td>{summary.network}</td>
+                    <td>{inbound.transport}</td>
                     <td>
-                      <div className="table-chips" title={notice?.message ?? undefined}>
-                        <Badge tone={summary.security === "none" ? "gray" : "cyan"}>{summary.security}</Badge>
-                        {notice ? <Badge tone={notice.tone === "warning" ? "amber" : "cyan"}>{notice.tone === "warning" ? "client-sensitive" : "tune"}</Badge> : null}
+                      <div className="table-chips">
+                        <Badge tone={(inbound.security ?? "none") === "none" ? "gray" : "cyan"}>{inbound.security ?? "none"}</Badge>
                       </div>
                     </td>
                     <td>

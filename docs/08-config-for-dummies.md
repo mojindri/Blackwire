@@ -562,27 +562,13 @@ Use this order:
 
 That progression matches how the code is easiest to understand too.
 
-## Real Example Paths In This Repo
+## Real Examples In This Repo
 
-Good starter examples:
-
-- [examples/vless-client-server/client.json](/Users/mojnader/RustroverProjects/v2ray/examples/vless-client-server/client.json)
-- [examples/vless-client-server/server.json](/Users/mojnader/RustroverProjects/v2ray/examples/vless-client-server/server.json)
-
-REALITY examples:
-
-- [examples/reality-client-server/client.json](/Users/mojnader/RustroverProjects/v2ray/examples/reality-client-server/client.json)
-- [examples/reality-client-server/server.json](/Users/mojnader/RustroverProjects/v2ray/examples/reality-client-server/server.json)
-
-WebSocket examples:
-
-- [examples/vless-ws-local/client.json](/Users/mojnader/RustroverProjects/v2ray/examples/vless-ws-local/client.json)
-- [examples/vless-ws-local/server.json](/Users/mojnader/RustroverProjects/v2ray/examples/vless-ws-local/server.json)
-
-SS-2022 examples:
-
-- [examples/ss2022-local/client.json](/Users/mojnader/RustroverProjects/v2ray/examples/ss2022-local/client.json)
-- [examples/ss2022-local/server.json](/Users/mojnader/RustroverProjects/v2ray/examples/ss2022-local/server.json)
+Deployable JSON configuration examples were removed when Blackwire adopted its
+MySQL-only control plane. Use the named relational presets documented in
+[the database seed guide](../examples/README.md), then inspect and extend the
+created revision in Black UI. Focused protocol and transport fixtures remain in
+the workspace integration tests for debugging wire behavior.
 
 ## Common Beginner Mistakes
 

@@ -22,8 +22,17 @@ invocations.
 
 ### Fast harness (default)
 
-- `docker compose up -d` once (target, probe, server, clients).
+- `docker compose up -d` once (MySQL, target, probe, server, clients).
+- Each scenario resets the disposable lab database, imports its validated lab
+  fixture as relational rows, and starts Blackwire from that MySQL revision.
+- Docker clients use the Blackwire server's stable lab address
+  (`10.203.0.11`), and REALITY/Vision use the internal TLS cover at
+  `10.203.0.10:443` with SNI `blackwire.local`; VPS renders retain the server
+  and cover configured in the private matrix environment. Docker probes use
+  the isolated echo target at `10.203.0.12:8080`, avoiding client DNS variance.
 - Reused `matrix-probe` container for `nc` / `curl` (no `docker run --rm` per check).
+- Hiddify app-mode checks use a dedicated probe in its network namespace,
+  matching Hiddify's loopback-only mixed proxy without exposing an extra port.
 - `compose exec` to start/stop `blackwire` and sing-box per case.
 - **Xray** uses `compose run` per case (distroless image has no `/bin/sh` for idle holders).
 - **One server start per protocol** (four client cases reuse the same listener).
@@ -60,9 +69,14 @@ SSH_SERVER=1.2.3.4 SSH_CLIENT=5.6.7.8 SSH_KEY=~/.ssh/id_ed25519 make interop-ser
 ```
 
 The VPS runner assumes server/client setup already ran (`server-setup.sh` /
-`client-setup.sh`). It mirrors the Docker harness: **one blackwire start per
-protocol**, four sequential client cases (xray, sing-box, negatives), same
-`scenarios.env` and port-wait rules (including ShadowTLS cover on server `:443`).
+`client-setup.sh`) and that the server has a disposable MySQL 8.4 lab database.
+Its migration-capable lab URL defaults to `/etc/blackwire/lab-database-url`
+(override with `BLACKWIRE_VPS_DATABASE_URL_FILE`). Do not reuse the restricted
+production runtime credential. Each scenario imports its fixture into that
+database before starting the runtime. It mirrors the Docker
+harness: **one blackwire start per protocol**, four sequential client cases
+(xray, sing-box, negatives), same `scenarios.env` and port-wait rules (including
+ShadowTLS cover on server `:443`).
 Reports: `labs/realistic/reports/external-clients-vps/`.
 
 The runner keeps console output compact and writes full logs under:

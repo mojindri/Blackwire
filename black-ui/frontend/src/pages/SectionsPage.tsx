@@ -1,683 +1,168 @@
-import { Plus, Save, Trash2, Wand2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Badge } from "../components/atoms/Badge";
+import { Activity, ArrowDown, ArrowUp, Database, GitBranch, Globe2, Network, Plus, Route, Save, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import type { BalancerInput, Outbound, RouteInput, RoutingDns } from "../lib/types";
 import { Button } from "../components/atoms/Button";
 import { Input, Select, Textarea } from "../components/atoms/Input";
-import { Switch } from "../components/atoms/Switch";
 import { Field } from "../components/molecules/Field";
-import {
-  applyAdaptiveRoutingTemplate,
-  buildSectionValue,
-  createSectionEditorState,
-  isStructuredSection,
-  replaceSectionJson,
-  syncSectionState,
-  validateSectionState,
-  type AdvancedConfigEditorState,
-  type DnsServerEditor,
-  type RoutingBalancerEditor,
-  type RoutingBalancerProfileEditor,
-  type RoutingRuleEditor
-} from "../lib/advancedConfigConfigurator";
-import type { CapabilityMap, ConfigSection, Outbound } from "../lib/types";
 
-const profileOptions = ["compat", "fast", "latency", "throughput", "badnet", "mobile", "stealth"];
-const routingStrategies = ["adaptive", "random", "roundRobin", "latency"];
-const fastPoolOptions = ["", "disabled", "adaptive", "fixed"];
-const fastSpliceOptions = ["", "disabled", "adaptive", "always"];
-const fastRelayEngineOptions = ["", "legacy", "v2"];
-const fastRelayFlushOptions = ["", "immediate", "deferred", "adaptive"];
-const fastLinuxIoUringOptions = ["", "disabled", "auto", "require"];
+const lines = (value: string) => value.split("\n").map((item) => item.trim()).filter(Boolean);
+const text = (value: string[]) => value.join("\n");
+const emptyRule = (outboundTag = ""): RouteInput => ({ ruleType: "field", port: null, outboundTag, domains: [], ips: [], inboundTags: [], protocols: [], users: [] });
+const emptyBalancer = (outboundTag = ""): BalancerInput => ({ tag: "", strategy: "latency", members: outboundTag ? [{ outboundTag, profileName: null }] : [], adaptive: null, healthCheck: null });
 
-export function SectionsPage({
-  sections,
-  capabilities,
-  outbounds,
-  busy,
-  onSave
-}: {
-  sections: ConfigSection[];
-  capabilities: CapabilityMap | null;
-  outbounds: Outbound[];
-  busy: boolean;
-  onSave: (name: string, enabled: boolean, value: string) => void;
-}) {
-  const [selectedName, setSelectedName] = useState("");
-  const [editor, setEditor] = useState<AdvancedConfigEditorState | null>(null);
-  const editorRef = useRef(editor);
-  const notes = new Map((capabilities?.config ?? []).map((item) => [item.key, item]));
-  const selectedSection = sections.find((section) => section.name === selectedName) ?? null;
+function matcherCount(rule: RouteInput) {
+  return rule.domains.length + rule.ips.length + rule.inboundTags.length + rule.protocols.length + rule.users.length + (rule.port ? 1 : 0);
+}
 
-  useEffect(() => {
-    if (!selectedName && sections.length > 0) setSelectedName(sections[0].name);
-    else if (selectedName && !sections.some((section) => section.name === selectedName) && sections.length > 0) {
-      setSelectedName(sections[0].name);
-    }
-  }, [sections, selectedName]);
+function matcherSummary(rule: RouteInput) {
+  const count = matcherCount(rule);
+  if (count === 0) return "Matches all traffic";
+  const groups = [rule.domains.length && "domain", rule.ips.length && "IP", rule.port && "port", rule.inboundTags.length && "inbound", rule.protocols.length && "protocol", rule.users.length && "user"].filter(Boolean);
+  return `${count} ${count === 1 ? "matcher" : "matchers"} across ${groups.join(", ")}`;
+}
 
-  useEffect(() => {
-    const next = createSectionEditorState(selectedSection);
-    editorRef.current = next;
-    setEditor(next);
-  }, [selectedSection]);
+export function SectionsPage({ value, outbounds, busy, onSave }: { value: RoutingDns; outbounds: Outbound[]; busy: boolean; onSave: (value: RoutingDns) => void }) {
+  const [form, setForm] = useState(value);
+  useEffect(() => setForm(value), [value]);
+  const dirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(value), [form, value]);
+  const canAddRule = outbounds.length > 0;
+  const updateRule = (index: number, patch: Partial<RouteInput>) => setForm((current) => ({ ...current, rules: current.rules.map((rule, at) => at === index ? { ...rule, ...patch } : rule) }));
+  const moveRule = (index: number, direction: -1 | 1) => setForm((current) => {
+    const next = [...current.rules];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) return current;
+    [next[index], next[target]] = [next[target], next[index]];
+    return { ...current, rules: next };
+  });
 
-  const validationIssues = useMemo(() => (editor ? validateSectionState(editor) : []), [editor]);
-  const adaptiveTemplateAvailable = selectedName === "routing" && outbounds.filter((outbound) => outbound.enabled).length >= 2;
-  const saveDisabled = busy || !editor || validationIssues.length > 0;
-
-  const updateEditor = (next: AdvancedConfigEditorState) => {
-    const synced = syncSectionState(next);
-    editorRef.current = synced;
-    setEditor(synced);
-  };
-
-  const updateEditorWith = (updater: (current: AdvancedConfigEditorState) => AdvancedConfigEditorState) => {
-    const current = editorRef.current;
-    if (!current) return;
-    const next = updater(current);
-    editorRef.current = next;
-    setEditor(next);
-  };
-
-  const updateSyncedEditorWith = (updater: (current: AdvancedConfigEditorState) => AdvancedConfigEditorState) => {
-    const current = editorRef.current;
-    if (!current) return;
-    const next = syncSectionState(updater(current));
-    editorRef.current = next;
-    setEditor(next);
-  };
-
-  const save = () => {
-    const latest = editorRef.current;
-    if (!latest || busy || validateSectionState(latest).length > 0) return;
-    onSave(latest.name, latest.enabled, buildSectionValue(latest));
-  };
-
-  return (
-    <div className="page">
-      <div className="page-title">
-        <h1>Advanced Config</h1>
-        <p>Advanced top-level Blackwire JSON for routing, DNS, TUN, profiles, QUIC/datagram/FEC, and runtime controls. Everyday changes still belong in Users, Inbounds, Outbounds, and Settings.</p>
+  return <div className="page routing-page">
+    <header className="routing-page-head">
+      <div>
+        <span className="routing-eyebrow"><GitBranch size={14} /> Traffic policy</span>
+        <h1>Routing &amp; DNS</h1>
+        <p>Resolve destinations, then route traffic through the first matching rule.</p>
       </div>
-      <div className="two-column advanced-config-layout">
-        <section className="work-panel">
-          <div className="panel-toolbar">
-            <h2>Available sections</h2>
-          </div>
-          <div className="stack-list">
-            {sections.map((section) => {
-              const cap = notes.get(section.name);
-              const active = section.name === selectedName;
-              return (
-                <button className={`stack-row ${active ? "stack-row-active" : ""}`} key={section.name} onClick={() => setSelectedName(section.name)} type="button">
-                  <span>
-                    <strong>{section.name}</strong>
-                    <small>{cap?.notes ?? "Blackwire native config section"}</small>
-                  </span>
-                  <Badge tone={section.enabled ? "green" : "gray"}>{isStructuredSection(section.name) ? "structured" : "json"}</Badge>
-                </button>
-              );
-            })}
-          </div>
-        </section>
+      <div className="routing-save-cluster">
+        <span className={`routing-change-state ${dirty ? "routing-change-state-dirty" : ""}`}>{dirty ? "Unsaved changes" : "Revision is current"}</span>
+        <Button variant="primary" icon={<Save size={16} />} disabled={busy || !dirty} onClick={() => onSave(form)}>Save revision</Button>
+      </div>
+    </header>
 
-        <section className="work-panel editor-panel">
-          {editor ? (
-            <>
-              <div className="section-editor-head">
-                <div>
-                  <h2>{editor.name}</h2>
-                  <p className="field-hint">
-                    {isStructuredSection(editor.name)
-                      ? "Common fields are structured here. Advanced JSON stays available as an escape hatch."
-                      : "This section still uses raw JSON in this pass."}
-                  </p>
-                </div>
-                {editor.name === "routing" ? (
-                  <Button variant="secondary" icon={<Wand2 size={16} />} onClick={() => updateEditorWith((current) => applyAdaptiveRoutingTemplate(current, outbounds))} disabled={busy || !adaptiveTemplateAvailable}>
-                    Adaptive Template
-                  </Button>
-                ) : null}
+    <div className="routing-workspace">
+      <aside className="routing-dns-rail">
+        <div className="routing-section-head">
+          <span className="routing-section-icon"><Database size={18} /></span>
+          <div><h2>DNS resolver</h2><p>Upstreams are tried in this order.</p></div>
+        </div>
+        <Field label="Resolution strategy" hint="AsIs preserves domains; IP modes resolve before routing.">
+          <Select value={form.domainStrategy} onChange={(event) => setForm({ ...form, domainStrategy: event.target.value })}>
+            <option value="AsIs">Keep domains (AsIs)</option>
+            <option value="IPIfNonMatch">Resolve if no rule matches</option>
+            <option value="IPOnDemand">Resolve before matching</option>
+          </Select>
+        </Field>
+        <Field label="Upstream servers" hint="One address per line. Plain IP, DoH, and supported resolver URLs are accepted.">
+          <Textarea className="routing-dns-textarea" rows={7} value={text(form.dnsServers)} placeholder={"1.1.1.1\nhttps://dns.example/dns-query"} onChange={(event) => setForm({ ...form, dnsServers: lines(event.target.value) })} />
+        </Field>
+        <div className="routing-rail-divider" />
+        <label className="routing-switch-row">
+          <span><strong>FakeIP mapping</strong><small>Return synthetic addresses for domain-aware TUN routing.</small></span>
+          <input type="checkbox" checked={form.fakeIpEnabled} onChange={(event) => setForm({ ...form, fakeIpEnabled: event.target.checked })} />
+        </label>
+        {form.fakeIpEnabled ? <Field label="FakeIP address pool" hint="Use a private, non-routed CIDR range."><Input value={form.fakeIpPool} placeholder="198.18.0.0/15" onChange={(event) => setForm({ ...form, fakeIpPool: event.target.value })} /></Field> : null}
+        <div className="routing-rail-divider" />
+        <Field label="GeoIP database" hint="Optional path to geoip.dat on the Blackwire host."><Input value={form.geoipFile ?? ""} placeholder="/usr/share/blackwire/geoip.dat" onChange={(event) => setForm({ ...form, geoipFile: event.target.value || null })} /></Field>
+        <Field label="GeoSite database" hint="Optional path to geosite.dat on the Blackwire host."><Input value={form.geositeFile ?? ""} placeholder="/usr/share/blackwire/geosite.dat" onChange={(event) => setForm({ ...form, geositeFile: event.target.value || null })} /></Field>
+        <div className="routing-rail-stat"><Globe2 size={16} /><span><strong>{form.dnsServers.length}</strong> configured {form.dnsServers.length === 1 ? "resolver" : "resolvers"}</span></div>
+      </aside>
+
+      <main className="routing-rules-surface">
+        <div className="routing-rules-head">
+          <div>
+            <span className="routing-kicker">Ordered rules</span>
+            <h2>Traffic routes <small>{form.rules.length}</small></h2>
+            <p>Rules run top to bottom. The first match wins.</p>
+          </div>
+          <Button variant="secondary" icon={<Plus size={16} />} disabled={!canAddRule} onClick={() => setForm({ ...form, rules: [...form.rules, emptyRule(outbounds[0]?.tag)] })}>Add rule</Button>
+        </div>
+
+        <div className="routing-rule-list">
+          {form.rules.map((rule, index) => <article className="routing-rule" key={index}>
+            <header className="routing-rule-head">
+              <span className="routing-rule-number">{String(index + 1).padStart(2, "0")}</span>
+              <div className="routing-rule-title"><strong>{matcherSummary(rule)}</strong><span>Then send through <b>{rule.outboundTag || "an outbound"}</b></span></div>
+              <div className="routing-rule-actions">
+                <button type="button" className="routing-icon-action" aria-label={`Move rule ${index + 1} up`} disabled={index === 0} onClick={() => moveRule(index, -1)}><ArrowUp size={16} /></button>
+                <button type="button" className="routing-icon-action" aria-label={`Move rule ${index + 1} down`} disabled={index === form.rules.length - 1} onClick={() => moveRule(index, 1)}><ArrowDown size={16} /></button>
+                <button type="button" className="routing-icon-action routing-icon-action-danger" aria-label={`Remove rule ${index + 1}`} onClick={() => setForm({ ...form, rules: form.rules.filter((_, at) => at !== index) })}><Trash2 size={16} /></button>
               </div>
+            </header>
 
-              <section className="drawer-card">
-                <div className="summary-head">
-                  <div>
-                    <strong>{editor.name}</strong>
-                    <span>{isStructuredSection(editor.name) ? "Structured editor with advanced fallback" : "Raw JSON editor"}</span>
-                  </div>
-                  <Switch checked={editor.enabled} onChange={(enabled) => updateSyncedEditorWith((current) => ({ ...current, enabled }))} label={editor.enabled ? "Enabled" : "Disabled"} />
+            <div className="routing-rule-flow">
+              <section className="routing-matchers">
+                <div className="routing-subhead"><span>When</span><small>All populated groups must match</small></div>
+                <div className="routing-primary-grid">
+                  <Field label="Domains" hint="One domain expression per line."><Textarea rows={3} placeholder={"domain:example.com\ngeosite:private"} value={text(rule.domains)} onChange={(event) => updateRule(index, { domains: lines(event.target.value) })} /></Field>
+                  <Field label="IP or CIDR" hint="One address or network per line."><Textarea rows={3} placeholder={"10.0.0.0/8\ngeoip:private"} value={text(rule.ips)} onChange={(event) => updateRule(index, { ips: lines(event.target.value) })} /></Field>
                 </div>
-                <div className="summary-badges">
-                  <span className="summary-chip">{isStructuredSection(editor.name) ? "Structured" : "Raw JSON"}</span>
-                  <span className="summary-chip summary-chip-soft">{editor.enabled ? "Included in generated config" : "Excluded from generated config"}</span>
+                <div className="routing-secondary-grid">
+                  <Field label="Ports"><Input value={rule.port ?? ""} placeholder="80,443,1000-2000" onChange={(event) => updateRule(index, { port: event.target.value || null })} /></Field>
+                  <Field label="Protocols"><Textarea rows={2} placeholder={"http\ntls"} value={text(rule.protocols)} onChange={(event) => updateRule(index, { protocols: lines(event.target.value) })} /></Field>
+                  <Field label="Inbound tags"><Textarea rows={2} placeholder="public-vless" value={text(rule.inboundTags)} onChange={(event) => updateRule(index, { inboundTags: lines(event.target.value) })} /></Field>
+                  <Field label="Users"><Textarea rows={2} placeholder="user@example.com" value={text(rule.users)} onChange={(event) => updateRule(index, { users: lines(event.target.value) })} /></Field>
                 </div>
               </section>
+              <section className="routing-destination">
+                <div className="routing-subhead"><span>Route to</span></div>
+                <Field label="Outbound"><Select value={rule.outboundTag} onChange={(event) => updateRule(index, { outboundTag: event.target.value })}>{outbounds.map((outbound) => <option key={outbound.id} value={outbound.tag}>{outbound.tag}</option>)}</Select></Field>
+                <div className="routing-flow-note"><Route size={16} /><span>Stops evaluation when this rule matches.</span></div>
+              </section>
+            </div>
+          </article>)}
 
-              {isStructuredSection(editor.name) ? (
-                <StructuredSectionEditor editor={editor} onChange={updateEditor} />
-              ) : (
-                <section className="drawer-card">
-                  <Field label="Section JSON">
-                    <div className="advanced-slice">
-                      <Textarea rows={18} value={editor.rawText} onChange={(e) => updateEditorWith((current) => replaceSectionJson(current, e.target.value))} />
-                      {editor.rawError ? <div className="field-error">{editor.rawError}</div> : null}
-                    </div>
-                  </Field>
-                </section>
-              )}
-
-              {isStructuredSection(editor.name) ? (
-                <section className="drawer-card">
-                  <div className="section-editor-head">
-                    <div>
-                      <h3>Advanced JSON</h3>
-                      <p>Unknown keys are preserved. Use this only for section fields that do not have a dedicated control yet.</p>
-                    </div>
-                    <Button variant="ghost" onClick={() => updateEditorWith((current) => ({ ...current, advancedOpen: !current.advancedOpen }))}>
-                      {editor.advancedOpen ? "Hide JSON" : "Show JSON"}
-                    </Button>
-                  </div>
-                  {editor.advancedOpen ? (
-                    <Field label="Section JSON">
-                      <div className="advanced-slice">
-                        <Textarea rows={14} value={editor.rawText} onChange={(e) => updateEditorWith((current) => replaceSectionJson(current, e.target.value))} />
-                        {editor.rawError ? <div className="field-error">{editor.rawError}</div> : null}
-                      </div>
-                    </Field>
-                  ) : (
-                    <p className="field-hint">Advanced JSON is collapsed by default so the structured editor stays readable.</p>
-                  )}
-                </section>
-              ) : null}
-
-              {validationIssues.length > 0 ? <div className="error-line">{validationIssues[0].message}</div> : null}
-
-              <Button variant="primary" icon={<Save size={16} />} onClick={save} disabled={saveDisabled} loading={busy}>
-                Save Advanced Config
-              </Button>
-            </>
-          ) : (
-            <div className="empty">Select a section to edit.</div>
-          )}
-        </section>
-      </div>
+          {form.rules.length === 0 ? <div className="routing-empty">
+            <span><Route size={22} /></span><h3>{canAddRule ? "No custom routes" : "No outbound available"}</h3>
+            <p>{canAddRule ? "All traffic currently uses the default outbound." : "Connect MySQL and create an outbound before adding routing rules."}</p>
+            <Button variant="secondary" icon={<Plus size={16} />} disabled={!canAddRule} onClick={() => setForm({ ...form, rules: [emptyRule(outbounds[0]?.tag)] })}>Create first rule</Button>
+          </div> : null}
+        </div>
+      </main>
     </div>
-  );
-}
 
-function StructuredSectionEditor({
-  editor,
-  onChange
-}: {
-  editor: AdvancedConfigEditorState;
-  onChange: (next: AdvancedConfigEditorState) => void;
-}) {
-  if (editor.name === "routing") return <RoutingEditor editor={editor} onChange={onChange} />;
-  if (editor.name === "dns") return <DnsEditor editor={editor} onChange={onChange} />;
-  if (editor.name === "tun") return <TunEditor editor={editor} onChange={onChange} />;
-  if (editor.name === "api") return <ApiEditor editor={editor} onChange={onChange} />;
-  if (editor.name === "metricsAddr") return <MetricsEditor editor={editor} onChange={onChange} />;
-  if (editor.name === "profile") return <ProfileEditor editor={editor} onChange={onChange} />;
-  if (editor.name === "fast") return <FastEditor editor={editor} onChange={onChange} />;
-  return null;
-}
-
-function RoutingEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; onChange: (next: AdvancedConfigEditorState) => void }) {
-  const setRule = (index: number, patch: Partial<RoutingRuleEditor>) =>
-    onChange({
-      ...editor,
-      routingRules: editor.routingRules.map((rule, current) => (current === index ? { ...rule, ...patch } : rule))
-    });
-
-  const setBalancer = (index: number, patch: Partial<RoutingBalancerEditor>) =>
-    onChange({
-      ...editor,
-      routingBalancers: editor.routingBalancers.map((balancer, current) => (current === index ? { ...balancer, ...patch } : balancer))
-    });
-
-  const setProfile = (balancerIndex: number, profileIndex: number, patch: Partial<RoutingBalancerProfileEditor>) =>
-    onChange({
-      ...editor,
-      routingBalancers: editor.routingBalancers.map((balancer, current) =>
-        current === balancerIndex
-          ? {
-              ...balancer,
-              profiles: balancer.profiles.map((profile, profileCurrent) => (profileCurrent === profileIndex ? { ...profile, ...patch } : profile))
-            }
-          : balancer
-      )
-    });
-
-  return (
-    <>
-      <section className="drawer-card configurator-section">
-        <div className="section-editor-head">
-          <div>
-            <h3>Routing basics</h3>
-            <p>Common defaults and matching rules for where traffic should go.</p>
-          </div>
-        </div>
-        <Field label="Domain strategy" hint="Leave empty to keep the runtime default.">
-          <Input value={editor.routingDomainStrategy} onChange={(e) => onChange({ ...editor, routingDomainStrategy: e.target.value })} placeholder="AsIs" />
-        </Field>
-        <div className="configurator-grid">
-          <Field label="GeoIP file">
-            <Input value={editor.routingGeoipFile} onChange={(e) => onChange({ ...editor, routingGeoipFile: e.target.value })} placeholder="geoip.dat" />
-          </Field>
-          <Field label="Geosite file">
-            <Input value={editor.routingGeositeFile} onChange={(e) => onChange({ ...editor, routingGeositeFile: e.target.value })} placeholder="geosite.dat" />
-          </Field>
-        </div>
-      </section>
-
-      <section className="drawer-card configurator-section">
-        <div className="section-editor-head">
-          <div>
-            <h3>Rules</h3>
-            <p>Add common field-based routing rules without dropping into raw JSON.</p>
-          </div>
-          <Button
-            variant="secondary"
-            icon={<Plus size={16} />}
-            onClick={() =>
-              onChange({
-                ...editor,
-                routingRules: [...editor.routingRules, { type: "field", domain: "", ip: "", port: "", inboundTag: "", protocol: "", user: "", outboundTag: "" }]
-              })
-            }
-          >
-            Add Rule
-          </Button>
-        </div>
-        {editor.routingRules.length === 0 ? <p className="field-hint">No rules yet. Add one or rely on the fallback defaults in advanced JSON.</p> : null}
-        {editor.routingRules.map((rule, index) => (
-          <div className="drawer-card advanced-config-subcard" key={`rule-${index}`}>
-            <div className="section-editor-head">
-              <h3>Rule {index + 1}</h3>
-              <Button variant="ghost" icon={<Trash2 size={16} />} onClick={() => onChange({ ...editor, routingRules: editor.routingRules.filter((_, current) => current !== index) })}>
-                Remove
-              </Button>
-            </div>
-            <div className="configurator-grid">
-              <Field label="Type">
-                <Input value={rule.type} onChange={(e) => setRule(index, { type: e.target.value })} />
-              </Field>
-              <Field label="Outbound tag">
-                <Input value={rule.outboundTag} onChange={(e) => setRule(index, { outboundTag: e.target.value })} placeholder="freedom" />
-              </Field>
-              <Field label="Port">
-                <Input value={rule.port} onChange={(e) => setRule(index, { port: e.target.value })} placeholder="80,443" />
-              </Field>
-              <Field label="Domain CSV">
-                <Input value={rule.domain} onChange={(e) => setRule(index, { domain: e.target.value })} placeholder="geosite:google, example.com" />
-              </Field>
-              <Field label="IP CSV">
-                <Input value={rule.ip} onChange={(e) => setRule(index, { ip: e.target.value })} placeholder="geoip:private, 1.1.1.1" />
-              </Field>
-              <Field label="Inbound tag CSV">
-                <Input value={rule.inboundTag} onChange={(e) => setRule(index, { inboundTag: e.target.value })} placeholder="vless-main" />
-              </Field>
-              <Field label="Protocol CSV">
-                <Input value={rule.protocol} onChange={(e) => setRule(index, { protocol: e.target.value })} placeholder="http,tls,quic" />
-              </Field>
-              <Field label="User CSV">
-                <Input value={rule.user} onChange={(e) => setRule(index, { user: e.target.value })} placeholder="alice@example.com" />
-              </Field>
-            </div>
-          </div>
-        ))}
-      </section>
-
-      <section className="drawer-card configurator-section">
-        <div className="section-editor-head">
-          <div>
-            <h3>Balancers</h3>
-            <p>Define reusable balancers and health checks for outbound selection.</p>
-          </div>
-          <Button
-            variant="secondary"
-            icon={<Plus size={16} />}
-            onClick={() =>
-              onChange({
-                ...editor,
-                routingBalancers: [
-                  ...editor.routingBalancers,
-                  {
-                    tag: "",
-                    selector: "",
-                    strategy: "",
-                    adaptiveFailureThreshold: "",
-                    adaptiveCooldownSecs: "",
-                    adaptiveEwmaAlpha: "",
-                    adaptiveSwitchMargin: "",
-                    healthUrl: "",
-                    healthIntervalSecs: "",
-                    healthTimeoutSecs: "",
-                    healthMaxFailures: "",
-                    profiles: []
-                  }
-                ]
-              })
-            }
-          >
-            Add Balancer
-          </Button>
-        </div>
-        {editor.routingBalancers.length === 0 ? <p className="field-hint">No balancers defined. Add one for adaptive or load-based routing.</p> : null}
-        {editor.routingBalancers.map((balancer, index) => (
-          <div className="drawer-card advanced-config-subcard" key={`balancer-${index}`}>
-            <div className="section-editor-head">
-              <h3>Balancer {index + 1}</h3>
-              <Button variant="ghost" icon={<Trash2 size={16} />} onClick={() => onChange({ ...editor, routingBalancers: editor.routingBalancers.filter((_, current) => current !== index) })}>
-                Remove
-              </Button>
-            </div>
-            <div className="configurator-grid">
-              <Field label="Tag">
-                <Input value={balancer.tag} onChange={(e) => setBalancer(index, { tag: e.target.value })} placeholder="auto-proxy" />
-              </Field>
-              <Field label="Selector CSV">
-                <Input value={balancer.selector} onChange={(e) => setBalancer(index, { selector: e.target.value })} placeholder="proxy-a, proxy-b" />
-              </Field>
-              <Field label="Strategy">
-                <Select value={balancer.strategy} onChange={(e) => setBalancer(index, { strategy: e.target.value })}>
-                  {routingStrategies.map((item) => (
-                    <option key={item} value={item}>
-                      {item || "default"}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Failure threshold">
-                <Input value={balancer.adaptiveFailureThreshold} onChange={(e) => setBalancer(index, { adaptiveFailureThreshold: e.target.value })} placeholder="2" />
-              </Field>
-              <Field label="Cooldown seconds">
-                <Input value={balancer.adaptiveCooldownSecs} onChange={(e) => setBalancer(index, { adaptiveCooldownSecs: e.target.value })} placeholder="30" />
-              </Field>
-              <Field label="EWMA alpha">
-                <Input value={balancer.adaptiveEwmaAlpha} onChange={(e) => setBalancer(index, { adaptiveEwmaAlpha: e.target.value })} placeholder="0.2" />
-              </Field>
-              <Field label="Switch margin">
-                <Input value={balancer.adaptiveSwitchMargin} onChange={(e) => setBalancer(index, { adaptiveSwitchMargin: e.target.value })} placeholder="0.15" />
-              </Field>
-              <Field label="Health URL">
-                <Input value={balancer.healthUrl} onChange={(e) => setBalancer(index, { healthUrl: e.target.value })} placeholder="http://www.gstatic.com/generate_204" />
-              </Field>
-              <Field label="Health interval seconds">
-                <Input value={balancer.healthIntervalSecs} onChange={(e) => setBalancer(index, { healthIntervalSecs: e.target.value })} placeholder="30" />
-              </Field>
-              <Field label="Health timeout seconds">
-                <Input value={balancer.healthTimeoutSecs} onChange={(e) => setBalancer(index, { healthTimeoutSecs: e.target.value })} placeholder="5" />
-              </Field>
-              <Field label="Health max failures">
-                <Input value={balancer.healthMaxFailures} onChange={(e) => setBalancer(index, { healthMaxFailures: e.target.value })} placeholder="2" />
-              </Field>
-            </div>
-            <div className="section-editor-head">
-              <div>
-                <h3>Profiles</h3>
-                <p>Optional adaptive profile hints for this balancer.</p>
-              </div>
-              <Button
-                variant="secondary"
-                icon={<Plus size={16} />}
-                onClick={() =>
-                  onChange({
-                    ...editor,
-                    routingBalancers: editor.routingBalancers.map((item, current) =>
-                      current === index ? { ...item, profiles: [...item.profiles, { name: "", outboundTag: "" }] } : item
-                    )
-                  })
-                }
-              >
-                Add Profile
-              </Button>
-            </div>
-            {balancer.profiles.map((profile, profileIndex) => (
-              <div className="configurator-grid advanced-config-inline-row" key={`profile-${profileIndex}`}>
-                <Field label={`Profile ${profileIndex + 1} name`}>
-                  <Input value={profile.name} onChange={(e) => setProfile(index, profileIndex, { name: e.target.value })} placeholder="stable" />
-                </Field>
-                <Field label="Outbound tag">
-                  <Input value={profile.outboundTag} onChange={(e) => setProfile(index, profileIndex, { outboundTag: e.target.value })} placeholder="proxy-a" />
-                </Field>
-                <Button
-                  variant="ghost"
-                  icon={<Trash2 size={16} />}
-                  onClick={() =>
-                    onChange({
-                      ...editor,
-                      routingBalancers: editor.routingBalancers.map((item, current) =>
-                        current === index ? { ...item, profiles: item.profiles.filter((_, currentProfile) => currentProfile !== profileIndex) } : item
-                      )
-                    })
-                  }
-                >
-                  Remove
-                </Button>
-              </div>
-            ))}
-          </div>
-        ))}
-      </section>
-    </>
-  );
-}
-
-function DnsEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; onChange: (next: AdvancedConfigEditorState) => void }) {
-  const setServer = (index: number, patch: Partial<DnsServerEditor>) =>
-    onChange({
-      ...editor,
-      dnsServers: editor.dnsServers.map((server, current) => (current === index ? { ...server, ...patch } : server))
-    });
-
-  return (
-    <>
-      <section className="drawer-card configurator-section">
-        <div className="section-editor-head">
-          <div>
-            <h3>DNS servers</h3>
-            <p>Blackwire currently supports string server entries here. Rich per-server objects stay available through Advanced JSON.</p>
-          </div>
-          <div className="button-row">
-            <Button
-              variant="secondary"
-              icon={<Plus size={16} />}
-              onClick={() =>
-                onChange({
-                  ...editor,
-                  dnsServers: [
-                    ...editor.dnsServers,
-                    { mode: "string", value: "", address: "", port: "", domains: "", expectedIPs: "", tag: "", clientIP: "", queryStrategy: "", skipFallback: false, finalQuery: false, disableCache: false, timeoutMs: "", serveStale: false, serveExpiredTTL: "" }
-                  ]
-                })
-              }
-            >
-              Add Server
-            </Button>
-          </div>
-        </div>
-        {editor.dnsServers.length === 0 ? <p className="field-hint">No servers defined yet.</p> : null}
-        {editor.dnsServers.map((server, index) => (
-          <div className="drawer-card advanced-config-subcard" key={`dns-server-${index}`}>
-            <div className="section-editor-head">
-              <h3>Server {index + 1}</h3>
-              <Button variant="ghost" icon={<Trash2 size={16} />} onClick={() => onChange({ ...editor, dnsServers: editor.dnsServers.filter((_, current) => current !== index) })}>
-                Remove
-              </Button>
-            </div>
-            <Field label="Server value">
-              <Input value={server.mode === "string" ? server.value : server.address} onChange={(e) => setServer(index, { mode: "string", value: e.target.value })} placeholder="1.1.1.1" />
-            </Field>
-          </div>
-        ))}
-      </section>
-
-      <section className="drawer-card configurator-section">
-        <div className="section-editor-head">
-          <div>
-            <h3>Fake IP</h3>
-            <p>Use FakeIP mode when you want synthetic DNS answers for transparent proxy workflows.</p>
-          </div>
-        </div>
-        <div className="configurator-grid">
-          <Switch checked={editor.dnsFakeIpEnabled} onChange={(dnsFakeIpEnabled) => onChange({ ...editor, dnsFakeIpEnabled })} label="Enable FakeIP" />
-          <Field label="FakeIP pool">
-            <Input value={editor.dnsFakeIpPool} onChange={(e) => onChange({ ...editor, dnsFakeIpPool: e.target.value })} placeholder="198.18.0.0/15" />
-          </Field>
-        </div>
-      </section>
-    </>
-  );
-}
-
-function TunEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; onChange: (next: AdvancedConfigEditorState) => void }) {
-  return (
-    <section className="drawer-card configurator-section">
-      <div className="section-editor-head">
-        <div>
-          <h3>TUN runtime</h3>
-          <p>Common cross-platform TUN fields with advanced JSON fallback for anything platform-specific.</p>
-        </div>
+    <section className="routing-balancers-surface">
+      <div className="routing-rules-head">
+        <div><span className="routing-kicker">Outbound pools</span><h2>Load balancers <small>{form.balancers.length}</small></h2><p>Group outbounds, probe health, and select the best path.</p></div>
+        <Button variant="secondary" icon={<Plus size={16} />} disabled={!canAddRule} onClick={() => setForm({ ...form, balancers: [...form.balancers, emptyBalancer(outbounds[0]?.tag)] })}>Add balancer</Button>
       </div>
-      <div className="configurator-grid">
-        <Field label="Name">
-          <Input value={editor.tunName} onChange={(e) => onChange({ ...editor, tunName: e.target.value })} placeholder="blackwire-tun" />
-        </Field>
-        <Field label="Address">
-          <Input value={editor.tunAddress} onChange={(e) => onChange({ ...editor, tunAddress: e.target.value })} placeholder="198.18.0.1" />
-        </Field>
-        <Field label="Netmask">
-          <Input value={editor.tunNetmask} onChange={(e) => onChange({ ...editor, tunNetmask: e.target.value })} placeholder="255.255.0.0" />
-        </Field>
-        <Field label="MTU">
-          <Input value={editor.tunMtu} onChange={(e) => onChange({ ...editor, tunMtu: e.target.value })} placeholder="1500" />
-        </Field>
-        <Field label="Bypass mark">
-          <Input value={editor.tunBypassMark} onChange={(e) => onChange({ ...editor, tunBypassMark: e.target.value })} placeholder="4660" />
-        </Field>
-        <Field label="Redirect port">
-          <Input value={editor.tunRedirectPort} onChange={(e) => onChange({ ...editor, tunRedirectPort: e.target.value })} placeholder="7890" />
-        </Field>
-        <Field label="DNS port">
-          <Input value={editor.tunDnsPort} onChange={(e) => onChange({ ...editor, tunDnsPort: e.target.value })} placeholder="5300" />
-        </Field>
+      <div className="routing-balancer-grid">
+        {form.balancers.map((balancer, index) => <BalancerEditor key={index} value={balancer} outbounds={outbounds} onChange={(value) => setForm({ ...form, balancers: form.balancers.map((item, at) => at === index ? value : item) })} onRemove={() => setForm({ ...form, balancers: form.balancers.filter((_, at) => at !== index) })} />)}
+        {form.balancers.length === 0 ? <div className="routing-empty routing-balancer-empty"><Network size={24} /><h3>No outbound pools</h3><p>Direct rules keep working. Add a balancer when several outbounds should share traffic.</p></div> : null}
       </div>
     </section>
-  );
+
+    <div className="routing-mobile-save"><span>{dirty ? "Unsaved changes" : "Revision is current"}</span><Button variant="primary" icon={<Save size={16} />} disabled={busy || !dirty} onClick={() => onSave(form)}>Save revision</Button></div>
+  </div>;
 }
 
-function ApiEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; onChange: (next: AdvancedConfigEditorState) => void }) {
-  return (
-    <section className="drawer-card configurator-section">
-      <h3>gRPC API listener</h3>
-      <Field label="Listen">
-        <Input value={editor.apiListen} onChange={(e) => onChange({ ...editor, apiListen: e.target.value })} placeholder="127.0.0.1:62789" />
-      </Field>
-    </section>
-  );
-}
-
-function MetricsEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; onChange: (next: AdvancedConfigEditorState) => void }) {
-  return (
-    <section className="drawer-card configurator-section">
-      <h3>Prometheus metrics listener</h3>
-      <Field label="Metrics address">
-        <Input value={editor.metricsAddr} onChange={(e) => onChange({ ...editor, metricsAddr: e.target.value })} placeholder="127.0.0.1:9090" />
-      </Field>
-    </section>
-  );
-}
-
-function ProfileEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; onChange: (next: AdvancedConfigEditorState) => void }) {
-  return (
-    <section className="drawer-card configurator-section">
-      <h3>Runtime profile</h3>
-      <div className="configurator-grid">
-        <Field label="Profile">
-          <Select value={editor.profile} onChange={(e) => onChange({ ...editor, profile: e.target.value, profileCustom: e.target.value ? "" : editor.profileCustom })}>
-            <option value="">Custom</option>
-            {profileOptions.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        {!editor.profile ? (
-          <Field label="Custom profile value">
-            <Input value={editor.profileCustom} onChange={(e) => onChange({ ...editor, profileCustom: e.target.value })} placeholder="compat" />
-          </Field>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
-function FastEditor({ editor, onChange }: { editor: AdvancedConfigEditorState; onChange: (next: AdvancedConfigEditorState) => void }) {
-  return (
-    <section className="drawer-card configurator-section">
-      <div className="section-editor-head">
-        <div>
-          <h3>Fast tuning</h3>
-          <p>Common production tuning knobs for the Blackwire fast profile.</p>
-        </div>
-      </div>
-      <div className="configurator-grid">
-        <Switch checked={editor.fastStrictProduction} onChange={(fastStrictProduction) => onChange({ ...editor, fastStrictProduction })} label="Strict production" />
-        <Field label="Pool">
-          <Select value={editor.fastPool} onChange={(e) => onChange({ ...editor, fastPool: e.target.value })}>
-            {fastPoolOptions.map((item) => (
-              <option key={item} value={item}>
-                {item || "default (adaptive)"}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Splice">
-          <Select value={editor.fastSplice} onChange={(e) => onChange({ ...editor, fastSplice: e.target.value })}>
-            {fastSpliceOptions.map((item) => (
-              <option key={item} value={item}>
-                {item || "default (adaptive)"}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Relay engine">
-          <Select value={editor.fastRelayEngine} onChange={(e) => onChange({ ...editor, fastRelayEngine: e.target.value })}>
-            {fastRelayEngineOptions.map((item) => (
-              <option key={item} value={item}>
-                {item || "default (v2)"}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Relay flush">
-          <Select value={editor.fastRelayFlush} onChange={(e) => onChange({ ...editor, fastRelayFlush: e.target.value })}>
-            {fastRelayFlushOptions.map((item) => (
-              <option key={item} value={item}>
-                {item || "default (adaptive)"}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Relay initial buffer">
-          <Input value={editor.fastRelayInitialBuffer} onChange={(e) => onChange({ ...editor, fastRelayInitialBuffer: e.target.value })} placeholder="16384" type="number" min="1" />
-        </Field>
-        <Field label="Relay max buffer">
-          <Input value={editor.fastRelayMaxBuffer} onChange={(e) => onChange({ ...editor, fastRelayMaxBuffer: e.target.value })} placeholder="262144" type="number" min="1" />
-        </Field>
-        <Field label="Linux io_uring" hint="Leave empty to use the runtime default (disabled). Set to auto to opt in.">
-          <Select value={editor.fastLinuxIoUring} onChange={(e) => onChange({ ...editor, fastLinuxIoUring: e.target.value })}>
-            {fastLinuxIoUringOptions.map((item) => (
-              <option key={item} value={item}>
-                {item || "default (disabled)"}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      </div>
-    </section>
-  );
+function BalancerEditor({ value, outbounds, onChange, onRemove }: { value: BalancerInput; outbounds: Outbound[]; onChange: (value: BalancerInput) => void; onRemove: () => void }) {
+  const adaptive = value.adaptive;
+  const health = value.healthCheck;
+  return <article className="routing-balancer">
+    <header><div><span className="routing-section-icon"><Network size={17} /></span><strong>{value.tag || "New balancer"}</strong></div><button type="button" className="routing-icon-action routing-icon-action-danger" aria-label="Remove balancer" onClick={onRemove}><Trash2 size={16} /></button></header>
+    <div className="routing-balancer-fields">
+      <Field label="Balancer tag"><Input value={value.tag} placeholder="best-path" onChange={(event) => onChange({ ...value, tag: event.target.value })} /></Field>
+      <Field label="Selection strategy"><Select value={value.strategy} onChange={(event) => onChange({ ...value, strategy: event.target.value })}><option value="latency">Lowest latency</option><option value="roundRobin">Round robin</option><option value="random">Random</option><option value="adaptive">Adaptive</option></Select></Field>
+    </div>
+    <Field label="Outbound members" hint="Select one or more paths. Profile names enable adaptive profile metrics.">
+      <div className="routing-member-list">{value.members.map((member, index) => <div className="routing-member-row" key={index}><Select value={member.outboundTag} onChange={(event) => onChange({ ...value, members: value.members.map((item, at) => at === index ? { ...item, outboundTag: event.target.value } : item) })}>{outbounds.map((outbound) => <option key={outbound.id} value={outbound.tag}>{outbound.tag}</option>)}</Select><Input value={member.profileName ?? ""} placeholder="Profile name (optional)" onChange={(event) => onChange({ ...value, members: value.members.map((item, at) => at === index ? { ...item, profileName: event.target.value || null } : item) })} /><button type="button" className="routing-icon-action" aria-label="Remove member" onClick={() => onChange({ ...value, members: value.members.filter((_, at) => at !== index) })}><Trash2 size={15} /></button></div>)}</div>
+    </Field>
+    <Button variant="ghost" icon={<Plus size={15} />} disabled={outbounds.length === 0} onClick={() => onChange({ ...value, members: [...value.members, { outboundTag: outbounds[0]?.tag ?? "", profileName: null }] })}>Add member</Button>
+    <div className="routing-balancer-options">
+      <label className="routing-switch-row"><span><strong>Adaptive scoring</strong><small>Cooldown unhealthy or slower paths.</small></span><input type="checkbox" checked={adaptive !== null} onChange={(event) => onChange({ ...value, adaptive: event.target.checked ? { failureThreshold: 2, cooldownSecs: 30, ewmaAlpha: 0.2, switchMargin: 0.15 } : null })} /></label>
+      {adaptive ? <div className="routing-compact-grid"><Field label="Failure limit"><Input type="number" min={1} value={adaptive.failureThreshold} onChange={(event) => onChange({ ...value, adaptive: { ...adaptive, failureThreshold: Number(event.target.value) } })} /></Field><Field label="Cooldown (s)"><Input type="number" min={1} value={adaptive.cooldownSecs} onChange={(event) => onChange({ ...value, adaptive: { ...adaptive, cooldownSecs: Number(event.target.value) } })} /></Field><Field label="EWMA alpha"><Input type="number" min={0} max={1} step={0.05} value={adaptive.ewmaAlpha} onChange={(event) => onChange({ ...value, adaptive: { ...adaptive, ewmaAlpha: Number(event.target.value) } })} /></Field><Field label="Switch margin"><Input type="number" min={0} step={0.05} value={adaptive.switchMargin} onChange={(event) => onChange({ ...value, adaptive: { ...adaptive, switchMargin: Number(event.target.value) } })} /></Field></div> : null}
+      <label className="routing-switch-row"><span><strong>Health probes</strong><small>Periodically verify each outbound.</small></span><input type="checkbox" checked={health !== null} onChange={(event) => onChange({ ...value, healthCheck: event.target.checked ? { url: "http://www.gstatic.com/generate_204", intervalSecs: 30, timeoutSecs: 5, maxFailures: 3 } : null })} /></label>
+      {health ? <div className="routing-health-grid"><Field label="Probe URL"><Input value={health.url} onChange={(event) => onChange({ ...value, healthCheck: { ...health, url: event.target.value } })} /></Field><div className="routing-compact-grid"><Field label="Interval (s)"><Input type="number" min={1} value={health.intervalSecs} onChange={(event) => onChange({ ...value, healthCheck: { ...health, intervalSecs: Number(event.target.value) } })} /></Field><Field label="Timeout (s)"><Input type="number" min={1} value={health.timeoutSecs} onChange={(event) => onChange({ ...value, healthCheck: { ...health, timeoutSecs: Number(event.target.value) } })} /></Field><Field label="Max failures"><Input type="number" min={1} value={health.maxFailures} onChange={(event) => onChange({ ...value, healthCheck: { ...health, maxFailures: Number(event.target.value) } })} /></Field></div></div> : null}
+    </div>
+    <div className="routing-flow-note"><Activity size={16} /><span>{value.members.length} member{value.members.length === 1 ? "" : "s"} in this pool.</span></div>
+  </article>;
 }

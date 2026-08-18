@@ -8,6 +8,52 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.2.0 - 2026-08-18
+
+### Added
+
+- MySQL 8.4/InnoDB is now the sole persistent control plane for the runtime,
+  CLI, and Black UI, with explicit schema migrations and immutable revisions.
+- Black UI now provides typed control surfaces for users, endpoints, routing,
+  DNS, runtime activation, performance settings, and contextual field help.
+- Docker and native deployment flows now support separate least-privilege
+  runtime, UI, and migrator database credentials.
+
+### Changed
+
+- Runtime configuration files, SQLite persistence, raw server configuration
+  editing, and deployable JSON examples were removed.
+- Runtime activation now supports hot swap, listener handover, maintenance
+  confirmation, rollback, and database-outage reconciliation.
+
+### Fixed
+
+- Hiddify-compatible subscription exports now cover VLESS/REALITY transports,
+  VMess, Trojan, Shadowsocks 2022, Hysteria2, and TUIC with canonical URL
+  encoding, SNI parameters, IPv6 authorities, and base64 subscription content.
+- Fast deterministic subscription tests now validate every supported exported
+  parameter, decoded VMess payloads, URL-safe SIP002 credentials, TLS/insecure
+  modes, and unsupported-protocol rejection without network or Docker startup.
+- VPS bootstrap scripts now install and verify their actual dependencies,
+  populate TUIC TLS names, discover Caddy certificates across issuer storage
+  layouts, restart only real services after renewal, expand local fixtures from
+  the selected environment file, ship an executable APT publisher, and document
+  exact ports.
+- External-client Docker scenarios now bootstrap fresh relational MySQL
+  revisions instead of invoking the removed file-config runtime interface.
+- REALITY and Vision Docker interoperability scenarios now use the lab's live
+  TLS cover and keep Blackwire, Xray, sing-box, and Hiddify cover names aligned.
+- Realistic, latency, competitive, and VPS lab runners now import fixtures into
+  disposable MySQL databases, preserve fixture outbound order, and start the
+  normal database-backed runtime.
+- Inbound protocol network mode and authentication timeout now survive MySQL
+  revision persistence, restoring UDP-only Shadowsocks 2022 listeners.
+- Structured inbound and outbound editors preserve complete transport and
+  security settings, including SplitHTTP option groups and outbound TLS
+  certificate verification policy.
+- Black UI forms, Routing & DNS, responsive layouts, and strict Rust 1.97
+  lint compatibility were brought into alignment with the current core.
+
 ## 0.1.40 - 2026-06-28
 
 ### Fixed
@@ -154,7 +200,7 @@ This project is pre-1.0. The support contract is owned by
   `BLACK_UI_CONFIG_PATH`, and config writes now report clear permission/read-only
   path hints.
 - Black UI now validates duplicate inbound tags before insert/update so users
-  see a clear validation error instead of a raw SQLite constraint failure.
+  see a clear validation error instead of a raw persistence constraint failure.
 
 ### Changed
 
@@ -238,7 +284,7 @@ This project is pre-1.0. The support contract is owned by
 ### Fixed
 
 - Installer upgrades now re-own existing Black UI data files under
-  `BLACK_UI_DATA_DIR` when the service user/group changes, preventing SQLite
+  the panel data directory when the service user/group changes, preventing local database
   `attempt to write a readonly database` crash loops after migration from older
   `nobody:nogroup` installs.
 

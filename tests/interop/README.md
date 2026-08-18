@@ -66,24 +66,24 @@ This is the real compatibility check.
 
 `make up` renders the Xray configs and starts the Docker Compose stack:
 
-- `xray-server`: `ghcr.io/xtls/xray-core:latest`
+- `xray-server`: `ghcr.io/xtls/xray-core:26.7.28`
 - `nginx-fallback`: plain HTTP fallback service
 
 The Rust tests connect to `127.0.0.1:8443`.
 
 The Xray config template is:
 
-- [configs/xray-server.json.tmpl](/Users/mojnader/RustroverProjects/v2ray/tests/interop/configs/xray-server.json.tmpl)
+- [`configs/xray-server.json.tmpl`](configs/xray-server.json.tmpl)
 
 Important settings:
 
-- `dest` is `microsoft.com:443`
+- `dest` is `example.com:443`
 - `serverNames` includes `example.com`
 - `shortIds` is rendered from `keys/short_id.txt`
 
 The fallback nginx config is:
 
-- [configs/nginx.conf](/Users/mojnader/RustroverProjects/v2ray/tests/interop/configs/nginx.conf)
+- [`configs/nginx.conf`](configs/nginx.conf)
 
 It listens on plain HTTP intentionally so fallback is easy to detect in tests.
 
@@ -96,7 +96,7 @@ destination. That means `dest` must itself speak TLS. If it points at plain
 HTTP on port 80, there is no real certificate or `ServerHello` to relay, so
 the client cannot finish TLS 1.3.
 
-That is why the interop config uses `microsoft.com:443` instead of the local
+That is why the interop config uses `example.com:443` instead of the local
 nginx fallback.
 
 ## Known live-Xray behavior we had to match

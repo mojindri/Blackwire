@@ -180,6 +180,38 @@ pub struct RealityConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub max_time_diff_seconds: Option<u64>,
+
+    /// Optional pacing for unauthenticated bytes sent to the fallback.
+    #[serde(
+        default,
+        rename = "limitFallbackUpload",
+        alias = "limit_fallback_upload",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub limit_fallback_upload: Option<RealityFallbackLimitConfig>,
+
+    /// Optional pacing for fallback bytes returned to unauthenticated clients.
+    #[serde(
+        default,
+        rename = "limitFallbackDownload",
+        alias = "limit_fallback_download",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub limit_fallback_download: Option<RealityFallbackLimitConfig>,
+}
+
+/// Xray-compatible fallback pacing controls. Zero `bytesPerSec` disables it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct RealityFallbackLimitConfig {
+    /// Number of bytes relayed before pacing begins.
+    #[serde(default, rename = "afterBytes", alias = "after_bytes")]
+    pub after_bytes: u64,
+    /// Sustained bytes per second; zero disables pacing.
+    #[serde(default, rename = "bytesPerSec", alias = "bytes_per_sec")]
+    pub bytes_per_sec: u64,
+    /// Additional bytes allowed immediately before sustained pacing.
+    #[serde(default, rename = "burstBytesPerSec", alias = "burst_bytes_per_sec")]
+    pub burst_bytes_per_sec: u64,
 }
 
 fn default_fingerprint() -> String {
@@ -229,14 +261,13 @@ pub struct SplitHttpConfig {
     #[serde(default)]
     pub headers: std::collections::HashMap<String, String>,
 
-    /// Xray xHTTP padding byte range. Accepted as native JSON so string/range
-    /// forms remain config-compatible.
+    /// Xray xHTTP padding byte count or range.
     #[serde(
         default,
         rename = "xPaddingBytes",
         skip_serializing_if = "Option::is_none"
     )]
-    pub x_padding_bytes: Option<serde_json::Value>,
+    pub x_padding_bytes: Option<PaddingBytes>,
 
     /// Xray xHTTP padding method (`repeat-x`, `tokenish`, etc.).
     #[serde(default, rename = "xPaddingMethod")]
@@ -286,18 +317,73 @@ pub struct SplitHttpConfig {
     #[serde(default, rename = "scMaxBufferedPosts")]
     pub sc_max_buffered_posts: usize,
 
-    /// Xray Xmux settings. The current implementation supports h2 packet-up
-    /// multi-session multiplexing; this field is retained for config parity.
+    /// Xray Xmux settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub xmux: Option<serde_json::Value>,
+    pub xmux: Option<XmuxConfig>,
 
-    /// Xray downloadSettings. Retained as native JSON for config parity.
+    /// Xray download-side transport selection.
     #[serde(
         default,
         rename = "downloadSettings",
         skip_serializing_if = "Option::is_none"
     )]
-    pub download_settings: Option<serde_json::Value>,
+    pub download_settings: Option<DownloadSettings>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+/// SplitHTTP padding expressed as bytes, a range string, or explicit bounds.
+pub enum PaddingBytes {
+    /// Fixed padding size in bytes.
+    Fixed(usize),
+    /// Text range accepted for Xray configuration compatibility.
+    Range(String),
+    /// Structured minimum and maximum padding bounds.
+    Bounds(PaddingBounds),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Structured SplitHTTP padding bounds.
+pub struct PaddingBounds {
+    /// Minimum padding size in bytes.
+    #[serde(alias = "Min", alias = "minLength")]
+    pub min: Option<usize>,
+    /// Maximum padding size in bytes.
+    #[serde(alias = "Max", alias = "maxLength")]
+    pub max: Option<usize>,
+    /// Alternate lower bound accepted for compatibility.
+    pub from: Option<usize>,
+    /// Alternate upper bound accepted for compatibility.
+    pub to: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Xray Xmux connection and request reuse limits.
+pub struct XmuxConfig {
+    /// Maximum concurrent requests per multiplexed connection.
+    pub max_concurrency: Option<usize>,
+    /// Maximum number of multiplexed connections.
+    pub max_connections: Option<usize>,
+    /// Maximum reuse count for client connections.
+    pub c_max_reuse_times: Option<usize>,
+    /// Maximum requests served by one HTTP connection.
+    pub h_max_request_times: Option<usize>,
+    /// Maximum lifetime of a reusable HTTP connection in seconds.
+    pub h_max_reusable_secs: Option<u64>,
+    /// HTTP keep-alive interval in seconds.
+    pub h_keep_alive_period: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// SplitHTTP download-side transport selection.
+pub struct DownloadSettings {
+    /// Download transport network override.
+    pub network: Option<NetworkType>,
+    /// Download transport security override.
+    pub security: Option<SecurityType>,
 }
 
 fn default_splithttp_method() -> String {

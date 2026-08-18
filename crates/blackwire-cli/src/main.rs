@@ -1,15 +1,15 @@
 //! blackwire — command-line entry point.
 //!
-//! This binary is the "front door" to the entire proxy platform. Everything
-//! you do — start the proxy, test a config file, generate crypto keys — goes
-//! through one of the subcommands defined here.
+//! This binary is the "front door" to the entire proxy platform. Starting the
+//! proxy, validating a MySQL revision, and generating cryptographic keys all
+//! go through the subcommands defined here.
 //!
 //! # Subcommands
 //!
 //! | Command            | What it does                                              |
 //! |--------------------|-----------------------------------------------------------|
-//! | `run  -c PATH`     | Load the config file and start the proxy.                 |
-//! | `test -c PATH`     | Parse and validate the config; print OK or errors. Exit.  |
+//! | `run`              | Reconcile MySQL configuration and start the proxy.        |
+//! | `db validate`      | Reconstruct and validate the desired database revision.   |
 //! | `x25519`           | Generate a new X25519 key pair (for REALITY).             |
 //! | `uuid`             | Generate a random UUID v4 (for VLESS user IDs).           |
 //! | `version`          | Print the binary version and quit.                        |
@@ -18,8 +18,8 @@
 //!
 //! `run`:
 //!   1. Initialise the tracing/logging subsystem.
-//!   2. Load the config file via `ConfigManager::load()`.
-//!   3. Start the config file watcher (so SIGHUP / file changes hot-reload).
+//!   2. Load the desired typed revision from MySQL.
+//!   3. Start database reconciliation for later revisions.
 //!   4. Build the proxy `Instance` from the config.
 //!   5. Install signal handlers for SIGTERM / SIGINT.
 //!   6. Wait for either the instance to exit or a shutdown signal.
@@ -46,13 +46,12 @@ use clap::{Parser, Subcommand};
 use tracing::{error, info, warn};
 use validator::Validate;
 
-use blackwire_api::management::{InboundManagement, NativeEndpointConfig};
+use blackwire_api::management::InboundManagement;
 use blackwire_config::schema::{
-    explain_cost, validate_fast_profile, Config, InboundConfig, OutboundConfig, ProfileMode,
-    ProfileViolation,
+    explain_cost, validate_fast_profile, Config, ProfileMode, ProfileViolation,
 };
-use blackwire_config::ConfigManager;
-use blackwire_core::{inbound_listener_changes, requires_instance_restart, Instance};
+use blackwire_core::{requires_instance_restart, Instance};
+use blackwire_store::Database;
 
 struct RunningInstance {
     config: Arc<Config>,
@@ -62,7 +61,6 @@ struct RunningInstance {
 #[derive(Clone)]
 struct RuntimeControl {
     instance: Arc<tokio::sync::Mutex<Option<RunningInstance>>>,
-    profile_override: Option<ProfileMode>,
 }
 
 // ── Top-level CLI struct ──────────────────────────────────────────────────────
@@ -84,29 +82,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Start the proxy with the given config file.
+    /// Start the proxy from the desired MySQL configuration revision.
     ///
-    /// The proxy runs until you press Ctrl-C or send SIGTERM/SIGINT.
-    /// If the config file changes on disk while running, the proxy
-    /// automatically reloads it without dropping any live connections.
+    /// The proxy runs until you press Ctrl-C or send SIGTERM/SIGINT and
+    /// reconciles desired MySQL revisions while it is running.
     Run(RunArgs),
 
-    /// Parse and validate a config file, then exit.
-    ///
-    /// Prints "Config OK" and exits 0 if the config is valid.
-    /// Prints a detailed error and exits 1 if anything is wrong.
-    Test(TestArgs),
+    /// Initialize, migrate, inspect, validate, seed, or roll back MySQL state.
+    #[command(subcommand)]
+    Db(DbCommand),
 
     /// Generate a new X25519 key pair for use with REALITY transport.
     ///
     /// Prints the private key and public key as hex strings.
-    /// Copy them into your config.json under `realitySettings`.
     X25519,
 
     /// Generate a new random UUID v4 for use as a VLESS user ID.
     ///
-    /// Prints the UUID in the standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
-    /// format. Copy it into your config.json under `clients[n].id`.
+    /// Prints the UUID in the standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` format.
     Uuid,
 
     /// Inspect or close active in-process connections.
@@ -128,45 +121,62 @@ enum Command {
 /// Arguments for the `run` subcommand.
 #[derive(clap::Args)]
 struct RunArgs {
-    /// Path to the JSON config file.
-    ///
-    /// Example: `blackwire run -c /etc/blackwire/config.json`
-    #[arg(short = 'c', long = "config", value_name = "PATH")]
-    config: PathBuf,
-
     /// Override the operating profile (`compat` or `fast`).
     ///
-    /// Overrides the `profile` field in the config file. `fast` enforces a
+    /// Overrides the profile stored in MySQL. `fast` enforces a
     /// latency-first subset: VLESS+TCP only, no sniffing, no FakeIP.
     ///
-    /// Example: `blackwire run -c config.json --profile fast`
+    /// Example: `blackwire run --profile fast`
     #[arg(long = "profile", value_name = "PROFILE")]
     profile: Option<ProfileMode>,
 }
 
-/// Arguments for the `test` subcommand.
-#[derive(clap::Args)]
-struct TestArgs {
-    /// Path to the JSON config file to validate.
+#[derive(Subcommand)]
+enum DbCommand {
+    /// Create or migrate the MySQL schema and idle baseline revision.
+    Init,
+    /// Apply pending versioned schema migrations.
+    Migrate,
+    /// Validate the desired relational configuration revision.
+    Validate,
+    /// Print schema and desired/active revision status.
+    Status,
+    /// Print recent immutable configuration revisions.
+    History {
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    /// Create a new desired revision from a named relational preset.
+    Seed {
+        #[arg(value_name = "PRESET")]
+        preset: String,
+    },
+    /// Import a validated bootstrap fixture into an empty MySQL control plane.
     ///
-    /// Example: `blackwire test -c /etc/blackwire/config.json`
-    #[arg(short = 'c', long = "config", value_name = "PATH")]
-    config: PathBuf,
-
-    /// Override the operating profile (`compat` or `fast`).
-    ///
-    /// Validates the config against the given profile's constraints.
-    #[arg(long = "profile", value_name = "PROFILE")]
-    profile: Option<ProfileMode>,
+    /// This is intended for interoperability labs. The runtime still reads
+    /// only relational state from MySQL.
+    ImportFixture {
+        #[arg(value_name = "FILE")]
+        path: PathBuf,
+        /// Replace existing endpoints in this explicitly disposable lab database.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Create a maintenance revision restoring a historical snapshot.
+    Rollback {
+        #[arg(value_name = "REVISION")]
+        revision: i64,
+    },
+    /// Confirm activation of the current pending-maintenance revision.
+    ActivateMaintenance {
+        #[arg(value_name = "REVISION")]
+        revision: i64,
+    },
 }
 
 /// Arguments for the `explain-cost` subcommand.
 #[derive(clap::Args)]
 struct ExplainCostArgs {
-    /// Path to the JSON config file to inspect.
-    #[arg(short = 'c', long = "config", value_name = "PATH")]
-    config: PathBuf,
-
     /// Override the operating profile before calculating cost.
     #[arg(long = "profile", value_name = "PROFILE")]
     profile: Option<ProfileMode>,
@@ -372,7 +382,7 @@ fn main() {
             }
         }
 
-        Command::Test(args) => {
+        Command::Db(command) => {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -384,11 +394,10 @@ fn main() {
                 }
             };
 
-            if let Err(e) = rt.block_on(test_config(args)) {
-                eprintln!("Config error: {e:#}");
+            if let Err(e) = rt.block_on(cmd_db(command)) {
+                eprintln!("Database error: {e:#}");
                 std::process::exit(1);
             }
-            println!("Config OK");
         }
 
         Command::X25519 => cmd_x25519(),
@@ -464,40 +473,32 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
-        config  = %args.config.display(),
-        "blackwire starting"
+        "blackwire starting from MySQL control plane"
     );
 
-    // Step 2: Load and validate the config.
-    // `ConfigManager::load()` reads the file, substitutes ${ENV} vars,
-    // parses JSON, and runs the validator rules.
-    let manager: Arc<ConfigManager> = ConfigManager::load(&args.config)
+    // Step 2: Load and validate the desired immutable database revision.
+    let database = Database::connect_from_env()
         .await
-        .with_context(|| format!("loading config from {}", args.config.display()))?;
+        .context("connecting to MySQL control plane")?;
+    database
+        .verify_schema()
+        .await
+        .context("checking MySQL schema; run `blackwire db init` or `blackwire db migrate`")?;
+    let stored = database
+        .load_desired_config()
+        .await
+        .context("loading desired configuration revision")?;
+    let initial_revision = stored.revision;
+    let initial_config = Arc::new(stored.config);
 
     // Apply CLI profile override and run Fast Profile validation.
     let profile_override = args.profile;
-    apply_profile_override_and_validate(&manager.get(), profile_override)?;
-
-    // Step 3: Start the file watcher for hot-reload.
-    // The watcher runs in a background Tokio task. When the config file
-    // changes on disk, `ConfigManager::watch()` parses the new version and
-    // atomically swaps it in. This does NOT restart any listeners — only
-    // config values that are consulted per-connection (like routing rules)
-    // change immediately.
-    {
-        let manager_clone = Arc::clone(&manager);
-        tokio::spawn(async move {
-            if let Err(e) = manager_clone.watch().await {
-                error!(error = %e, "config watcher failed");
-            }
-        });
-    }
+    apply_profile_override_and_validate(&initial_config, profile_override)?;
 
     // Step 4: Build the proxy Instance.
     // `Instance::from_config()` reads the current config snapshot, builds
     // all inbound/outbound handlers, and starts all TCP listener tasks.
-    let config = effective_config(manager.get(), profile_override);
+    let config = effective_config(initial_config, profile_override);
     let api_config = config
         .api
         .as_ref()
@@ -509,16 +510,24 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
             .await
             .context("building proxy instance from config")?,
     })));
+    database
+        .mark_active(initial_revision)
+        .await
+        .context("recording active MySQL revision")?;
+    let runtime_id = std::env::var("BLACKWIRE_INSTANCE_ID")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+    database.heartbeat(&runtime_id, initial_revision).await?;
 
     if let Some(api_config) = api_config {
         let management: blackwire_api::management::ManagementHandle = Arc::new(RuntimeControl {
             instance: Arc::clone(&instance),
-            profile_override,
         });
         blackwire_api::server::start_api_server(
             &api_config.listen_addr,
             management,
             api_config.token.clone(),
+            &api_config.services,
         )
         .with_context(|| {
             format!(
@@ -529,18 +538,70 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
         info!(addr = %api_config.listen_addr, authenticated = api_config.token.is_some(), "blackwire-api gRPC server started");
     }
 
-    // Step 4b: Apply hot-reload when config file changes (routing + VLESS users).
-    // Listeners keep running; only per-connection lookup tables are refreshed.
+    // Reconcile desired revisions. Hot-swappable state uses atomic reload;
+    // listener changes prepare a replacement instance before old accept loops
+    // are stopped. Spawned connection tasks are not owned by the accept loop,
+    // so established connections continue draining after handover.
     {
         let live_instance = Arc::clone(&instance);
-        let mut reload_rx = manager.subscribe();
+        let database = database.clone();
+        let runtime_id = runtime_id.clone();
         tokio::spawn(async move {
+            let mut observed_revision = initial_revision;
+            let mut counter_tick = 0u8;
             loop {
-                if reload_rx.changed().await.is_err() {
-                    break;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let state = match database.state().await {
+                    Ok(state) => state,
+                    Err(error) => {
+                        warn!(%error, "MySQL unavailable; retaining active in-memory revision");
+                        continue;
+                    }
+                };
+                let active_revision = state.active_revision.unwrap_or(observed_revision);
+                if let Err(error) = database.heartbeat(&runtime_id, active_revision).await {
+                    warn!(%error, "failed to record runtime heartbeat");
                 }
-                let effective =
-                    effective_config(reload_rx.borrow_and_update().clone(), profile_override);
+                counter_tick = counter_tick.wrapping_add(1);
+                if counter_tick >= 5 {
+                    counter_tick = 0;
+                    let (users, inbounds) = runtime_counter_snapshots();
+                    if let Err(error) = database.persist_runtime_counters(&users, &inbounds).await {
+                        warn!(%error, "failed to persist runtime traffic counters");
+                    }
+                }
+                if state.desired_revision == observed_revision
+                    || state.pending_maintenance_revision == Some(state.desired_revision)
+                {
+                    continue;
+                }
+                let stored = match database.load_config(state.desired_revision).await {
+                    Ok(stored) => stored,
+                    Err(error) => {
+                        let _ = database
+                            .record_activation_failure(state.desired_revision, &error.to_string())
+                            .await;
+                        observed_revision = state.desired_revision;
+                        error!(revision = state.desired_revision, %error, "revision reconstruction failed");
+                        continue;
+                    }
+                };
+                if let Err(error) = stored
+                    .config
+                    .validate()
+                    .map_err(|error| anyhow::anyhow!(error))
+                    .and_then(|_| {
+                        apply_profile_override_and_validate(&stored.config, profile_override)
+                    })
+                {
+                    let _ = database
+                        .record_activation_failure(stored.revision, &error.to_string())
+                        .await;
+                    observed_revision = stored.revision;
+                    error!(revision = stored.revision, %error, "revision validation failed");
+                    continue;
+                }
+                let effective = effective_config(Arc::new(stored.config), profile_override);
                 let new_config = instance_runtime_config(&effective);
 
                 let should_restart = {
@@ -552,35 +613,71 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                 };
 
                 if should_restart {
-                    let changed_listeners = {
+                    let replacement = match Instance::from_config(Arc::clone(&new_config)).await {
+                        Ok(instance) => instance,
+                        Err(error) => {
+                            let is_maintenance = database
+                                .activation_class(stored.revision)
+                                .await
+                                .is_ok_and(|class| {
+                                    class == blackwire_store::ActivationClass::MaintenanceRequired
+                                });
+                            if is_maintenance {
+                                let _ = database
+                                    .restore_active_after_maintenance_failure(
+                                        stored.revision,
+                                        &error.to_string(),
+                                    )
+                                    .await;
+                            } else {
+                                let _ = database
+                                    .record_activation_failure(stored.revision, &error.to_string())
+                                    .await;
+                            }
+                            observed_revision = stored.revision;
+                            error!(revision = stored.revision, %error, "listener replacement preparation failed; active instance retained");
+                            continue;
+                        }
+                    };
+                    let old = {
+                        let mut guard = live_instance.lock().await;
+                        guard.replace(RunningInstance {
+                            config: Arc::clone(&new_config),
+                            instance: replacement,
+                        })
+                    };
+                    if let Some(old) = old {
+                        old.instance.shutdown();
+                        drop(old);
+                    }
+                } else {
+                    let reload = {
                         let guard = live_instance.lock().await;
-                        guard
-                            .as_ref()
-                            .map(|running| inbound_listener_changes(&running.config, &new_config))
-                            .unwrap_or_default()
+                        let Some(running) = guard.as_ref() else {
+                            break;
+                        };
+                        running.instance.reload.clone()
                     };
-                    warn!(
-                        changed_listeners = ?changed_listeners,
-                        "structural config change detected; keeping current listeners until service restart"
-                    );
-                    continue;
+                    if let Err(error) = reload.apply(&new_config) {
+                        let _ = database
+                            .record_activation_failure(stored.revision, &error.to_string())
+                            .await;
+                        observed_revision = stored.revision;
+                        error!(revision = stored.revision, %error, "atomic revision reload failed; active state retained");
+                        continue;
+                    }
+                    let mut guard = live_instance.lock().await;
+                    if let Some(running) = guard.as_mut() {
+                        running.config = new_config;
+                    }
                 }
-
-                let reload = {
-                    let guard = live_instance.lock().await;
-                    let Some(running) = guard.as_ref() else {
-                        break;
-                    };
-                    running.instance.reload.clone()
-                };
-                if let Err(e) = reload.apply(&new_config) {
-                    error!(error = %e, "config reload apply failed — keeping prior routing/users");
-                    continue;
+                if let Err(error) = database.mark_active(stored.revision).await {
+                    error!(revision = stored.revision, %error, "runtime activated but active revision marker could not be updated");
                 }
-                let mut guard = live_instance.lock().await;
-                if let Some(running) = guard.as_mut() {
-                    running.config = new_config;
+                if let Err(error) = database.prune_revision_history().await {
+                    warn!(%error, "failed to prune revision history");
                 }
+                observed_revision = stored.revision;
             }
         });
     }
@@ -592,6 +689,40 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
     shutdown_signal(instance).await;
 
     Ok(())
+}
+
+type RuntimeCounterSnapshot = Vec<(String, u64, u64)>;
+
+fn runtime_counter_snapshots() -> (RuntimeCounterSnapshot, RuntimeCounterSnapshot) {
+    let mut users = HashMap::<String, (u64, u64)>::new();
+    let mut inbounds = HashMap::<String, (u64, u64)>::new();
+    for (name, value) in blackwire_app::runtime_stats::query(">>>traffic>>>", false) {
+        let parts: Vec<_> = name.split(">>>").collect();
+        if parts.len() != 4 || parts[2] != "traffic" {
+            continue;
+        }
+        let value = value.max(0) as u64;
+        let target = match parts[0] {
+            "user" => users.entry(parts[1].to_string()).or_default(),
+            "inbound" => inbounds.entry(parts[1].to_string()).or_default(),
+            _ => continue,
+        };
+        match parts[3] {
+            "uplink" => target.0 = value,
+            "downlink" => target.1 = value,
+            _ => {}
+        }
+    }
+    (
+        users
+            .into_iter()
+            .map(|(name, (up, down))| (name, up, down))
+            .collect(),
+        inbounds
+            .into_iter()
+            .map(|(name, (up, down))| (name, up, down))
+            .collect(),
+    )
 }
 
 /// Wait for a shutdown signal or for all listeners to exit.
@@ -652,87 +783,6 @@ impl RuntimeControl {
             .ok_or_else(|| "no running instance is available".to_string())?;
         Ok(f(&running.instance.reload))
     }
-
-    async fn apply_reloadable_config(&self, new_config: Config) -> Result<(), String> {
-        let runtime_config = Arc::new(new_config);
-        runtime_config
-            .validate()
-            .map_err(|e| format!("config validation failed: {e}"))?;
-        apply_profile_override_and_validate(&runtime_config, self.profile_override)
-            .map_err(|e| format!("{e:#}"))?;
-
-        let reload = {
-            let guard = self.instance.lock().await;
-            let running = guard
-                .as_ref()
-                .ok_or_else(|| "no running instance is available".to_string())?;
-            if requires_instance_restart(&running.config, &runtime_config) {
-                let changed_listeners = inbound_listener_changes(&running.config, &runtime_config);
-                return Err(format!(
-                    "structural runtime changes require a blackwire service restart; changed listeners: {changed_listeners:?}"
-                ));
-            }
-            running.instance.reload.clone()
-        };
-
-        reload
-            .apply(&runtime_config)
-            .map_err(|e| format!("runtime reload failed: {e:#}"))?;
-
-        let mut guard = self.instance.lock().await;
-        let running = guard
-            .as_mut()
-            .ok_or_else(|| "no running instance is available".to_string())?;
-        running.config = runtime_config;
-        Ok(())
-    }
-
-    async fn mutate_config(
-        &self,
-        f: impl FnOnce(&mut Config) -> Result<(), String>,
-    ) -> Result<(), String> {
-        let mut new_config = {
-            let guard = self.instance.lock().await;
-            guard
-                .as_ref()
-                .ok_or_else(|| "no running instance is available".to_string())?
-                .config
-                .as_ref()
-                .clone()
-        };
-        f(&mut new_config)?;
-        self.apply_reloadable_config(new_config).await
-    }
-}
-
-fn parse_inbound_endpoint(config: NativeEndpointConfig) -> Result<InboundConfig, String> {
-    let endpoint: InboundConfig = serde_json::from_value(config.config)
-        .map_err(|e| format!("invalid inbound config JSON: {e}"))?;
-    if endpoint.tag != config.tag {
-        return Err(format!(
-            "inbound tag mismatch: request tag '{}' != config tag '{}'",
-            config.tag, endpoint.tag
-        ));
-    }
-    endpoint
-        .validate()
-        .map_err(|e| format!("inbound validation failed: {e}"))?;
-    Ok(endpoint)
-}
-
-fn parse_outbound_endpoint(config: NativeEndpointConfig) -> Result<OutboundConfig, String> {
-    let endpoint: OutboundConfig = serde_json::from_value(config.config)
-        .map_err(|e| format!("invalid outbound config JSON: {e}"))?;
-    if endpoint.tag != config.tag {
-        return Err(format!(
-            "outbound tag mismatch: request tag '{}' != config tag '{}'",
-            config.tag, endpoint.tag
-        ));
-    }
-    endpoint
-        .validate()
-        .map_err(|e| format!("outbound validation failed: {e}"))?;
-    Ok(endpoint)
 }
 
 #[async_trait]
@@ -790,112 +840,6 @@ impl InboundManagement for RuntimeControl {
         .await?
     }
 
-    async fn add_vless_user(
-        &self,
-        inbound_tag: &str,
-        email: &str,
-        uuid: &str,
-        flow: &str,
-    ) -> Result<(), String> {
-        self.with_reload(|r| {
-            r.vless_registries
-                .get(inbound_tag)
-                .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))
-                .and_then(|registry| {
-                    let uuid = uuid::Uuid::parse_str(uuid)
-                        .map_err(|e| format!("invalid UUID '{uuid}': {e}"))?
-                        .into_bytes();
-                    registry.add_user(blackwire_protocol::vless::VlessUser {
-                        email: email.into(),
-                        uuid,
-                        flow: flow.to_string(),
-                    });
-                    Ok(())
-                })
-        })
-        .await?
-    }
-
-    async fn remove_vless_user(&self, inbound_tag: &str, email: &str) -> Result<(), String> {
-        self.with_reload(|r| {
-            r.vless_registries
-                .get(inbound_tag)
-                .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))
-                .and_then(|registry| {
-                    if registry.remove_user_by_email(email) {
-                        Ok(())
-                    } else {
-                        Err(format!(
-                            "no VLESS user with email '{email}' on inbound '{inbound_tag}'"
-                        ))
-                    }
-                })
-        })
-        .await?
-    }
-
-    async fn add_inbound(&self, config: NativeEndpointConfig) -> Result<(), String> {
-        let endpoint = parse_inbound_endpoint(config)?;
-        self.mutate_config(|cfg| {
-            if cfg.inbounds.iter().any(|i| i.tag == endpoint.tag) {
-                return Err(format!("inbound '{}' already exists", endpoint.tag));
-            }
-            cfg.inbounds.push(endpoint);
-            Ok(())
-        })
-        .await
-    }
-
-    async fn remove_inbound(&self, tag: &str) -> Result<(), String> {
-        self.mutate_config(|cfg| {
-            let before = cfg.inbounds.len();
-            cfg.inbounds.retain(|i| i.tag != tag);
-            if cfg.inbounds.len() == before {
-                return Err(format!("inbound '{tag}' not found"));
-            }
-            Ok(())
-        })
-        .await
-    }
-
-    async fn add_outbound(&self, config: NativeEndpointConfig) -> Result<(), String> {
-        let endpoint = parse_outbound_endpoint(config)?;
-        self.mutate_config(|cfg| {
-            if cfg.outbounds.iter().any(|o| o.tag == endpoint.tag) {
-                return Err(format!("outbound '{}' already exists", endpoint.tag));
-            }
-            cfg.outbounds.push(endpoint);
-            Ok(())
-        })
-        .await
-    }
-
-    async fn remove_outbound(&self, tag: &str) -> Result<(), String> {
-        self.mutate_config(|cfg| {
-            let before = cfg.outbounds.len();
-            cfg.outbounds.retain(|o| o.tag != tag);
-            if cfg.outbounds.len() == before {
-                return Err(format!("outbound '{tag}' not found"));
-            }
-            Ok(())
-        })
-        .await
-    }
-
-    async fn alter_outbound(&self, config: NativeEndpointConfig) -> Result<(), String> {
-        let endpoint = parse_outbound_endpoint(config)?;
-        self.mutate_config(|cfg| {
-            let existing = cfg
-                .outbounds
-                .iter_mut()
-                .find(|o| o.tag == endpoint.tag)
-                .ok_or_else(|| format!("outbound '{}' not found", endpoint.tag))?;
-            *existing = endpoint;
-            Ok(())
-        })
-        .await
-    }
-
     async fn list_connections(&self) -> Vec<blackwire_connmgr::ConnectionSnapshot> {
         blackwire_connmgr::global_manager().list()
     }
@@ -908,22 +852,398 @@ impl InboundManagement for RuntimeControl {
     }
 }
 
-// ── `test` subcommand ─────────────────────────────────────────────────────────
-
-/// Parse and validate the config file; return Ok or an error.
-async fn test_config(args: TestArgs) -> Result<()> {
-    let manager = ConfigManager::load(&args.config)
+async fn cmd_db(command: DbCommand) -> Result<()> {
+    let database = Database::connect_from_env()
         .await
-        .with_context(|| format!("loading config from {}", args.config.display()))?;
-    apply_profile_override_and_validate(&manager.get(), args.profile)?;
+        .context("connecting to MySQL control plane")?;
+    match command {
+        DbCommand::Init | DbCommand::Migrate => {
+            database
+                .migrate()
+                .await
+                .context("applying MySQL migrations")?;
+            database.verify_schema().await?;
+            println!("MySQL schema is ready");
+        }
+        DbCommand::Validate => {
+            database.verify_schema().await?;
+            let stored = database.load_desired_config().await?;
+            stored
+                .config
+                .validate()
+                .map_err(|error| anyhow::anyhow!("configuration validation error: {error}"))?;
+            println!("Revision {} is valid", stored.revision);
+        }
+        DbCommand::Status => {
+            database.verify_schema().await?;
+            let state = database.state().await?;
+            println!("schema={}", blackwire_store::EXPECTED_SCHEMA_VERSION);
+            println!("desired_revision={}", state.desired_revision);
+            println!(
+                "active_revision={}",
+                state
+                    .active_revision
+                    .map_or_else(|| "none".into(), |v| v.to_string())
+            );
+            println!("state={:?}", state.activation_state);
+            if let Some(error) = state.last_error {
+                println!("last_error={error}");
+            }
+        }
+        DbCommand::History { limit } => {
+            database.verify_schema().await?;
+            for revision in database.history(limit).await? {
+                println!(
+                    "{}\t{}\t{:?}\t{}\t{}",
+                    revision.revision,
+                    revision.created_at.to_rfc3339(),
+                    revision.activation_class,
+                    revision.actor,
+                    revision.summary
+                );
+            }
+        }
+        DbCommand::Seed { preset } => {
+            database.verify_schema().await?;
+            match preset.as_str() {
+                "socks-local" => {
+                    let expected = database.state().await?.desired_revision;
+                    let result = database.save_inbound("blackwire-cli", expected, blackwire_store::InboundWrite {
+                        id: None, tag: "socks-local".into(), listen: "127.0.0.1".into(), port: 1080,
+                        protocol: "socks".into(), enabled: true, transport: "tcp".into(), security: "none".into(),
+                        settings: None, stream_settings: None, sniffing: None, limits: None,
+                    }).await?;
+                    println!("created revision {} ({:?})", result.revision, result.state);
+                }
+                "vless-local" | "trojan-local" | "shadowsocks-local" => {
+                    let (protocol, credential_kind, method, port) = match preset.as_str() {
+                        "vless-local" => ("vless", "uuid", None, 1081),
+                        "trojan-local" => ("trojan", "password", None, 1082),
+                        _ => ("shadowsocks", "password", Some("2022-blake3-aes-256-gcm".to_string()), 1083),
+                    };
+                    let tag = preset.clone();
+                    let expected = database.state().await?.desired_revision;
+                    database.save_inbound("blackwire-cli", expected, blackwire_store::InboundWrite {
+                        id: None, tag: tag.clone(), listen: "127.0.0.1".into(), port,
+                        protocol: protocol.into(), enabled: true, transport: "tcp".into(), security: "none".into(),
+                        settings: None, stream_settings: None, sniffing: None, limits: None,
+                    }).await?;
+                    let revision = database.state().await?.desired_revision;
+                    let inbound = database.list_inbounds(revision).await?.into_iter()
+                        .find(|inbound| inbound.tag == tag).context("seeded inbound missing")?;
+                    let uuid = uuid::Uuid::new_v4().to_string();
+                    let password = uuid::Uuid::new_v4().simple().to_string();
+                    let token = uuid::Uuid::new_v4().simple().to_string();
+                    let result = database.save_user("blackwire-cli", revision, blackwire_store::UserWrite {
+                        id: None, inbound_id: inbound.id, email: format!("{preset}@blackwire.local"), enabled: true,
+                        flow: String::new(), note: "Generated by db seed".into(), traffic_limit_bytes: None,
+                        expiry_at: None, subscription_token: token.clone(), credential_kind: credential_kind.into(),
+                        uuid: Some(uuid.clone()), password: (credential_kind == "password").then_some(password.clone()),
+                        method, auth: None,
+                    }).await?;
+                    println!("created revision {} ({:?})", result.revision, result.state);
+                    println!("subscription_token={token}");
+                    if credential_kind == "uuid" { println!("uuid={uuid}"); } else { println!("password={password}"); }
+                }
+                other => anyhow::bail!("unknown seed preset '{other}'; available: socks-local, vless-local, trojan-local, shadowsocks-local"),
+            }
+        }
+        DbCommand::ImportFixture { path, replace } => {
+            import_bootstrap_fixture(&database, &path, replace).await?;
+        }
+        DbCommand::Rollback { revision } => {
+            database.verify_schema().await?;
+            let result = database.rollback(revision, "blackwire-cli").await?;
+            println!("{}", result.message);
+        }
+        DbCommand::ActivateMaintenance { revision } => {
+            database.verify_schema().await?;
+            database.confirm_maintenance(revision).await?;
+            println!("revision {revision} released for maintenance activation");
+        }
+    }
     Ok(())
 }
 
+async fn import_bootstrap_fixture(
+    database: &Database,
+    path: &std::path::Path,
+    replace: bool,
+) -> Result<()> {
+    use blackwire_config::schema::{EndpointUser, Protocol};
+    use blackwire_store::{CoreSettings, InboundWrite, OutboundWrite, UserWrite};
+
+    database.verify_schema().await?;
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("reading bootstrap fixture {}", path.display()))?;
+    let config: Config = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parsing bootstrap fixture {}", path.display()))?;
+    config
+        .validate()
+        .map_err(|error| anyhow::anyhow!("configuration validation error: {error}"))?;
+    if config.routing.is_some() {
+        anyhow::bail!(
+            "db import-fixture does not accept custom routing; use the control-plane APIs"
+        );
+    }
+
+    let existing = database.state().await?.desired_revision;
+    let existing_inbounds = database.list_inbounds(existing).await?;
+    let existing_outbounds = database.list_outbounds(existing).await?;
+    let has_only_idle_baseline = existing_inbounds.is_empty()
+        && existing_outbounds.len() == 1
+        && existing_outbounds[0].tag == "freedom"
+        && existing_outbounds[0].protocol == "freedom";
+    if !replace && !has_only_idle_baseline {
+        anyhow::bail!(
+            "db import-fixture requires an empty control plane; use a fresh lab database or pass --replace"
+        );
+    }
+    let mut revision = existing;
+    if replace {
+        for inbound in existing_inbounds {
+            revision = database
+                .delete_inbound("blackwire-db-import", revision, inbound.id)
+                .await?
+                .revision;
+        }
+    }
+    let core = CoreSettings {
+        profile: config.profile,
+        fast: config.fast.clone(),
+        budget: config.budget,
+        vision: config.vision,
+        first_packet_boost: config.first_packet_boost,
+        log: config.log.clone(),
+        metrics_addr: config.metrics_addr.clone(),
+        api: config.api.clone(),
+        stats: config.stats.clone(),
+        limits: config.limits.clone(),
+        quic: config.quic.clone(),
+        datagram: config.datagram.clone(),
+        fec: config.fec.clone(),
+        tun: config.tun.clone(),
+    };
+    revision = database
+        .save_core_settings("blackwire-db-import", revision, core)
+        .await?
+        .revision;
+
+    // A new database contains a baseline `freedom` outbound. Remove all
+    // existing outbounds before recreating the fixture so its first outbound
+    // remains the runtime default. Clear routing references first so endpoint
+    // deletion cannot leave dangling foreign keys.
+    let mut routing = database.routing_dns(revision).await?;
+    routing.rules.clear();
+    routing.balancers.clear();
+    revision = database
+        .save_routing_dns(
+            "blackwire-db-import",
+            revision,
+            blackwire_store::RoutingDnsWrite {
+                domain_strategy: routing.domain_strategy.clone(),
+                geoip_file: routing.geoip_file.clone(),
+                geosite_file: routing.geosite_file.clone(),
+                dns_servers: routing.dns_servers.clone(),
+                fake_ip_enabled: routing.fake_ip_enabled,
+                fake_ip_pool: routing.fake_ip_pool.clone(),
+                rules: vec![],
+                balancers: vec![],
+            },
+        )
+        .await?
+        .revision;
+    for outbound in database.list_outbounds(revision).await? {
+        revision = database
+            .delete_outbound("blackwire-db-import", revision, outbound.id)
+            .await?
+            .revision;
+    }
+
+    for outbound in &config.outbounds {
+        let transport = outbound
+            .stream_settings
+            .as_ref()
+            .map(|stream| enum_name(&stream.network))
+            .transpose()?
+            .unwrap_or_else(|| "tcp".into());
+        let security = outbound
+            .stream_settings
+            .as_ref()
+            .map(|stream| enum_name(&stream.security))
+            .transpose()?
+            .unwrap_or_else(|| "none".into());
+        revision = database
+            .save_outbound(
+                "blackwire-db-import",
+                revision,
+                OutboundWrite {
+                    id: None,
+                    tag: outbound.tag.clone(),
+                    protocol: enum_name(&outbound.protocol)?,
+                    enabled: true,
+                    address: outbound
+                        .settings
+                        .address
+                        .clone()
+                        .or_else(|| outbound.settings.server.clone()),
+                    port: outbound.settings.port,
+                    transport,
+                    security,
+                    settings: Some(outbound.settings.clone()),
+                    stream_settings: outbound.stream_settings.clone(),
+                },
+            )
+            .await?
+            .revision;
+    }
+
+    for inbound in &config.inbounds {
+        let transport = inbound
+            .stream_settings
+            .as_ref()
+            .map(|stream| enum_name(&stream.network))
+            .transpose()?
+            .unwrap_or_else(|| "tcp".into());
+        let security = inbound
+            .stream_settings
+            .as_ref()
+            .map(|stream| enum_name(&stream.security))
+            .transpose()?
+            .unwrap_or_else(|| "none".into());
+        revision = database
+            .save_inbound(
+                "blackwire-db-import",
+                revision,
+                InboundWrite {
+                    id: None,
+                    tag: inbound.tag.clone(),
+                    listen: inbound.listen.to_string(),
+                    port: inbound.port,
+                    protocol: enum_name(&inbound.protocol)?,
+                    enabled: true,
+                    transport,
+                    security,
+                    settings: Some(inbound.settings.clone()),
+                    stream_settings: inbound.stream_settings.clone(),
+                    sniffing: inbound.sniffing.clone(),
+                    limits: inbound.limits.clone(),
+                },
+            )
+            .await?
+            .revision;
+        let inbound_id = database
+            .list_inbounds(revision)
+            .await?
+            .into_iter()
+            .find(|record| record.tag == inbound.tag)
+            .context("imported inbound is missing")?
+            .id;
+
+        let mut users: Vec<EndpointUser> = inbound
+            .settings
+            .clients
+            .iter()
+            .chain(&inbound.settings.users)
+            .cloned()
+            .collect();
+        if users.is_empty()
+            && (inbound.settings.uuid.is_some()
+                || inbound.settings.password.is_some()
+                || inbound.settings.auth.is_some())
+        {
+            users.push(EndpointUser {
+                id: inbound.settings.uuid.clone(),
+                password: inbound.settings.password.clone(),
+                auth: inbound.settings.auth.clone(),
+                email: inbound.settings.email.clone(),
+                name: inbound.settings.name.clone(),
+                flow: inbound.settings.flow.clone(),
+                up_mbps: inbound.settings.up_mbps,
+                down_mbps: inbound.settings.down_mbps,
+            });
+        }
+        for (position, user) in users.into_iter().enumerate() {
+            let credential_kind = match inbound.protocol {
+                Protocol::Vless | Protocol::Vmess | Protocol::Tuic => "uuid",
+                Protocol::Hysteria2 => "auth",
+                _ => "password",
+            };
+            revision = database
+                .save_user(
+                    "blackwire-db-import",
+                    revision,
+                    UserWrite {
+                        id: None,
+                        inbound_id,
+                        email: user
+                            .label()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("{}-{position}@interop.local", inbound.tag)),
+                        enabled: true,
+                        flow: user.flow,
+                        note: "Imported bootstrap fixture".into(),
+                        traffic_limit_bytes: None,
+                        expiry_at: None,
+                        subscription_token: uuid::Uuid::new_v4().simple().to_string(),
+                        credential_kind: credential_kind.into(),
+                        uuid: user.id,
+                        password: user.password,
+                        method: inbound.settings.method.clone(),
+                        auth: user.auth,
+                    },
+                )
+                .await?
+                .revision;
+        }
+    }
+
+    if let Some(dns) = &config.dns {
+        routing.dns_servers.clone_from(&dns.servers);
+        if let Some(fake_ip) = &dns.fake_ip {
+            routing.fake_ip_enabled = fake_ip.enabled;
+            routing.fake_ip_pool.clone_from(&fake_ip.pool);
+        }
+    }
+    revision = database
+        .save_routing_dns(
+            "blackwire-db-import",
+            revision,
+            blackwire_store::RoutingDnsWrite {
+                domain_strategy: routing.domain_strategy,
+                geoip_file: routing.geoip_file,
+                geosite_file: routing.geosite_file,
+                dns_servers: routing.dns_servers,
+                fake_ip_enabled: routing.fake_ip_enabled,
+                fake_ip_pool: routing.fake_ip_pool,
+                rules: vec![],
+                balancers: vec![],
+            },
+        )
+        .await?
+        .revision;
+
+    let stored = database.load_config(revision).await?;
+    stored
+        .config
+        .validate()
+        .map_err(|error| anyhow::anyhow!("imported configuration validation error: {error}"))?;
+    println!("imported revision {revision} from {}", path.display());
+    Ok(())
+}
+
+fn enum_name<T: serde::Serialize>(value: &T) -> Result<String> {
+    serde_json::to_value(value)?
+        .as_str()
+        .map(str::to_owned)
+        .context("expected a string-valued configuration enum")
+}
+
 async fn cmd_explain_cost(args: ExplainCostArgs) -> Result<()> {
-    let manager = ConfigManager::load(&args.config)
-        .await
-        .with_context(|| format!("loading config from {}", args.config.display()))?;
-    let config = effective_config(manager.get(), args.profile);
+    let database = Database::connect_from_env().await?;
+    database.verify_schema().await?;
+    let stored = database.load_desired_config().await?;
+    let config = effective_config(Arc::new(stored.config), args.profile);
     let report = explain_cost(&config);
     print!("{}", report.render_text());
     Ok(())
@@ -1519,8 +1839,8 @@ fn cmd_x25519() {
     let secret = StaticSecret::random();
     let public = PublicKey::from(&secret);
 
-    // Print as hex so the user can paste them into a JSON config file.
-    // The private key stays on the server; the public key goes in client configs.
+    // Print as hex for Black UI's typed REALITY fields and client profiles.
+    // The private key stays on the server; the public key goes to clients.
     println!(
         "Private key (server config): {}",
         hex::encode(secret.to_bytes())
@@ -1614,8 +1934,8 @@ fn print_connections(snapshots: Vec<blackwire_connmgr::ConnectionSnapshot>) {
 /// Default level is `info` if `RUST_LOG` is not set.
 ///
 /// Examples:
-///   `RUST_LOG=debug blackwire run -c config.json`   — very verbose
-///   `RUST_LOG=warn  blackwire run -c config.json`   — warnings only
+///   `RUST_LOG=debug blackwire run`   — very verbose
+///   `RUST_LOG=warn  blackwire run`   — warnings only
 fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
 

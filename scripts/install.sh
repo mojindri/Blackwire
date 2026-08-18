@@ -5,998 +5,107 @@ REPO="${BLACKWIRE_REPO:-mojindri/Blackwire}"
 VERSION="${VERSION:-latest}"
 DOWNLOAD_BASE="${BLACKWIRE_DOWNLOAD_BASE:-}"
 ACTION="${ACTION:-install}"
-SETUP="${SETUP:-}"
 PREFIX="${PREFIX:-/usr/local}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/blackwire}"
 STATE_DIR="${STATE_DIR:-/var/lib/blackwire}"
 RUN_DIR="${RUN_DIR:-/run/blackwire}"
-INSTALL_SYSTEMD="${INSTALL_SYSTEMD:-auto}"
-START_SERVICE="${START_SERVICE:-0}"
-CONFIG_PATH="${CONFIG_PATH:-}"
-CONFIG_URL="${CONFIG_URL:-}"
-INIT_SERVER="${INIT_SERVER:-}"
-SERVER_PORT="${SERVER_PORT:-443}"
-SERVER_LISTEN="${SERVER_LISTEN:-0.0.0.0}"
-DOMAIN="${DOMAIN:-}"
-TLS_CERT_FILE="${TLS_CERT_FILE:-}"
-TLS_KEY_FILE="${TLS_KEY_FILE:-}"
-ACME_EMAIL="${ACME_EMAIL:-}"
-ACME_STAGING="${ACME_STAGING:-0}"
-INSTALL_CERTBOT="${INSTALL_CERTBOT:-0}"
-INSTALL_NGINX="${INSTALL_NGINX:-0}"
-WS_PATH="${WS_PATH:-/blackwire}"
-PROXY_PATH="${PROXY_PATH:-$WS_PATH}"
-INTERNAL_PORT="${INTERNAL_PORT:-10080}"
-REALITY_DEST="${REALITY_DEST:-www.microsoft.com:443}"
-REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-www.microsoft.com}"
-HYSTERIA2_AUTH="${HYSTERIA2_AUTH:-}"
-PUBLIC_HOST="${PUBLIC_HOST:-<server-ip-or-domain>}"
-OPEN_FIREWALL="${OPEN_FIREWALL:-0}"
-BLACKWIRE_API_LISTEN="${BLACKWIRE_API_LISTEN:-127.0.0.1:62789}"
 SERVICE_USER="${SERVICE_USER:-blackwire}"
-SERVICE_GROUP="${SERVICE_GROUP:-}"
+SERVICE_GROUP="${SERVICE_GROUP:-blackwire}"
+START_SERVICE="${START_SERVICE:-0}"
+INSTALL_SYSTEMD="${INSTALL_SYSTEMD:-auto}"
 INSTALL_BLACK_UI="${INSTALL_BLACK_UI:-0}"
 BLACK_UI_LISTEN="${BLACK_UI_LISTEN:-127.0.0.1:18080}"
-BLACK_UI_DATA_DIR="${BLACK_UI_DATA_DIR:-/var/lib/black-ui}"
 BLACK_UI_STATIC_DIR="${BLACK_UI_STATIC_DIR:-/usr/local/share/black-ui/frontend/dist}"
-BLACK_UI_PUBLIC_BASE_URL="${BLACK_UI_PUBLIC_BASE_URL:-}"
-BLACK_UI_SUBSCRIPTION_HOST="${BLACK_UI_SUBSCRIPTION_HOST:-}"
-BLACK_UI_PANEL_PATH="${BLACK_UI_PANEL_PATH:-/panel}"
-BLACK_UI_COOKIE_SECURE="${BLACK_UI_COOKIE_SECURE:-}"
-BLACK_UI_GROUP="${BLACK_UI_GROUP:-black-ui}"
+BLACK_UI_DATA_DIR="${BLACK_UI_DATA_DIR:-/var/lib/black-ui}"
+RUNTIME_DATABASE_URL_FILE="${RUNTIME_DATABASE_URL_FILE:-}"
+UI_DATABASE_URL_FILE="${UI_DATABASE_URL_FILE:-}"
+MIGRATOR_DATABASE_URL_FILE="${MIGRATOR_DATABASE_URL_FILE:-}"
+RUN_DB_MIGRATIONS="${RUN_DB_MIGRATIONS:-0}"
 
-log() {
-    printf 'blackwire-install: %s\n' "$*"
-}
-
-die() {
-    printf 'blackwire-install: ERROR: %s\n' "$*" >&2
-    exit 1
-}
-
-need_cmd() {
-    command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
-}
-
-sudo_cmd() {
-    if [ "$(id -u)" -eq 0 ]; then
-        "$@"
-    else
-        sudo "$@"
-    fi
-}
-
-uninstall_blackwire() {
-    if command -v systemctl >/dev/null 2>&1; then
-        sudo_cmd systemctl disable --now blackwire >/dev/null 2>&1 || true
-    fi
-    sudo_cmd rm -f /etc/systemd/system/blackwire.service "$PREFIX/bin/blackwire"
-    if command -v systemctl >/dev/null 2>&1; then
-        sudo_cmd systemctl daemon-reload >/dev/null 2>&1 || true
-    fi
-    if [ "${REMOVE_CONFIG:-0}" = "1" ]; then
-        if [ -f "$CONFIG_DIR/nginx-site" ]; then
-            nginx_site="$(cat "$CONFIG_DIR/nginx-site" 2>/dev/null || true)"
-            if [ -n "$nginx_site" ]; then
-                sudo_cmd rm -f "/etc/nginx/sites-enabled/${nginx_site}" "/etc/nginx/sites-available/${nginx_site}"
-            fi
-        fi
-        sudo_cmd rm -rf "$CONFIG_DIR" "$STATE_DIR" "$RUN_DIR"
-        log "removed binary, systemd unit, config, state, and run directories"
-    else
-        log "removed binary and systemd unit; kept $CONFIG_DIR and $STATE_DIR"
-    fi
-}
+log() { printf 'blackwire-install: %s\n' "$*"; }
+die() { printf 'blackwire-install: ERROR: %s\n' "$*" >&2; exit 1; }
+need_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
+sudo_cmd() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 
 detect_asset() {
-    os="$(uname -s)"
-    arch="$(uname -m)"
-
-    [ "$os" = "Linux" ] || die "this installer supports Linux only; download release assets manually for $os"
-
-    case "$arch" in
-        x86_64|amd64) echo "blackwire-linux-x86_64.tar.gz" ;;
-        aarch64|arm64) echo "blackwire-linux-arm64.tar.gz" ;;
-        *) die "unsupported Linux architecture: $arch" ;;
+    case "$(uname -s):$(uname -m)" in
+        Linux:x86_64|Linux:amd64) echo "blackwire-linux-x86_64.tar.gz" ;;
+        Linux:aarch64|Linux:arm64) echo "blackwire-linux-arm64.tar.gz" ;;
+        *) die "native installer supports Linux x86_64 and arm64 only" ;;
     esac
 }
 
-detect_black_ui_asset() {
-    os="$(uname -s)"
-    arch="$(uname -m)"
-
-    [ "$os" = "Linux" ] || die "black-ui installer supports Linux only"
-
-    case "$arch" in
+detect_ui_asset() {
+    case "$(uname -m)" in
         x86_64|amd64) echo "black-ui-linux-x86_64.tar.gz" ;;
         aarch64|arm64) echo "black-ui-linux-arm64.tar.gz" ;;
-        *) die "unsupported Linux architecture for black-ui: $arch" ;;
+        *) die "unsupported architecture for Black UI" ;;
     esac
-}
-
-validate_port() {
-    port="$1"
-    name="$2"
-    case "$port" in
-        ''|*[!0-9]*) die "$name must be numeric" ;;
-    esac
-    [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "$name must be between 1 and 65535"
-}
-
-validate_server_port() {
-    validate_port "$SERVER_PORT" SERVER_PORT
-}
-
-validate_vless_tcp_listener() {
-    case "$SERVER_LISTEN" in
-        127.*|localhost|::1) ;;
-        *)
-            die "INIT_SERVER=vless-tcp is cleartext and only allowed on loopback listeners; use SETUP=reality or SETUP=domain for public VPS deployments"
-            ;;
-    esac
-    [ "$OPEN_FIREWALL" != "1" ] || die "OPEN_FIREWALL=1 is not allowed with cleartext INIT_SERVER=vless-tcp"
-}
-
-validate_ws_path() {
-    WS_PATH="$PROXY_PATH"
-    case "$WS_PATH" in
-        /*) ;;
-        *) die "WS_PATH must start with '/'" ;;
-    esac
-    [ "$WS_PATH" != "/" ] || die "WS_PATH must not be '/'"
-    case "$WS_PATH" in
-        *' '*|*'?'*|*'#'*|*'%'*) die "WS_PATH must not contain spaces, '?', '#', or '%'" ;;
-    esac
-}
-
-short_id() {
-    od -An -N8 -tx1 /dev/urandom | tr -d ' \n'
-}
-
-service_group() {
-    if [ -n "$SERVICE_GROUP" ]; then
-        echo "$SERVICE_GROUP"
-    elif getent group "$SERVICE_USER" >/dev/null 2>&1; then
-        echo "$SERVICE_USER"
-    else
-        echo "$SERVICE_USER"
-    fi
-}
-
-config_group() {
-    if [ "$INSTALL_BLACK_UI" = "1" ]; then
-        echo "$BLACK_UI_GROUP"
-    else
-        service_group
-    fi
-}
-
-ensure_black_ui_group() {
-    [ "$INSTALL_BLACK_UI" = "1" ] || return 0
-    if ! getent group "$BLACK_UI_GROUP" >/dev/null 2>&1; then
-        sudo_cmd groupadd --system "$BLACK_UI_GROUP"
-    fi
-}
-
-ensure_service_identity() {
-    group="$(config_group)"
-    if ! getent group "$group" >/dev/null 2>&1; then
-        sudo_cmd groupadd --system "$group" || die "failed to create service group '$group'"
-    fi
-
-    if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
-        home="$STATE_DIR"
-        shell="/usr/sbin/nologin"
-        [ -x "$shell" ] || shell="/sbin/nologin"
-        if command -v useradd >/dev/null 2>&1; then
-            sudo_cmd useradd --system --home-dir "$home" --no-create-home --shell "$shell" --gid "$group" "$SERVICE_USER" \
-                || die "failed to create service user '$SERVICE_USER'"
-        else
-            die "service user '$SERVICE_USER' is missing; create it before installing"
-        fi
-    fi
-}
-
-api_config_section() {
-    [ "$INSTALL_BLACK_UI" = "1" ] || return 0
-    cat <<JSON
-  "api": {
-    "listen": "$BLACKWIRE_API_LISTEN"
-  },
-JSON
-}
-
-dns_config_section() {
-    cat <<JSON
-  "dns": {
-    "servers": ["1.1.1.1", "8.8.8.8"]
-  },
-JSON
-}
-
-resolve_socket_addr() {
-    value="$1"
-    name="$2"
-    host="${value%:*}"
-    port="${value##*:}"
-
-    [ "$host" != "$value" ] || die "$name must be host:port"
-    validate_port "$port" "$name port"
-
-    case "$host" in
-        ''|*[!0-9.]*)
-            if command -v getent >/dev/null 2>&1; then
-                resolved="$(getent ahostsv4 "$host" | awk 'NR == 1 { print $1 }')"
-            else
-                resolved=""
-            fi
-            [ -n "$resolved" ] || die "$name host '$host' must resolve to an IPv4 address"
-            printf '%s:%s\n' "$resolved" "$port"
-            ;;
-        *)
-            printf '%s:%s\n' "$host" "$port"
-            ;;
-    esac
-}
-
-protect_config_for_service() {
-    path="$1"
-    group="$(config_group)"
-    if ! getent group "$group" >/dev/null 2>&1; then
-        if command -v groupadd >/dev/null 2>&1; then
-            sudo_cmd groupadd --system "$group" || die "failed to create service group '$group'"
-        else
-            die "service group '$group' is missing; create it before installing"
-        fi
-    fi
-
-    sudo_cmd chown "root:$group" "$path"
-    if [ "$INSTALL_BLACK_UI" = "1" ]; then
-        sudo_cmd chmod 0660 "$path"
-    else
-        sudo_cmd chmod 0640 "$path"
-    fi
-}
-
-protect_tls_material_for_service() {
-    cert_dir="$CONFIG_DIR/certs"
-    [ -d "$cert_dir" ] || return 0
-
-    group="$(config_group)"
-    if getent group "$group" >/dev/null 2>&1; then
-        sudo_cmd find "$cert_dir" -type d -exec chown "root:$group" {} +
-        sudo_cmd find "$cert_dir" -type d -exec chmod 0770 {} +
-        sudo_cmd find "$cert_dir" -type f -exec chown "root:$group" {} +
-        sudo_cmd find "$cert_dir" -type f -exec chmod 0640 {} +
-        log "protected TLS material in $cert_dir for service group '$group'"
-    else
-        log "group '$group' not found; left TLS material in $cert_dir unchanged"
-    fi
-}
-
-stage_tls_material_for_service() {
-    label="$1"
-    [ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ] || die "TLS material is not prepared"
-    [ -f "$TLS_CERT_FILE" ] || die "TLS_CERT_FILE does not exist: $TLS_CERT_FILE"
-    [ -f "$TLS_KEY_FILE" ] || die "TLS_KEY_FILE does not exist: $TLS_KEY_FILE"
-
-    group="$(config_group)"
-    if ! getent group "$group" >/dev/null 2>&1; then
-        if command -v groupadd >/dev/null 2>&1; then
-            sudo_cmd groupadd --system "$group" || die "failed to create service group '$group'"
-        else
-            die "service group '$group' is missing; create it before installing"
-        fi
-    fi
-
-    cert_dir="$CONFIG_DIR/certs"
-    staged_cert="$cert_dir/${label}.crt"
-    staged_key="$cert_dir/${label}.key"
-    sudo_cmd install -d -m 0770 -o root -g "$group" "$cert_dir"
-    sudo_cmd install -m 0640 -o root -g "$group" "$TLS_CERT_FILE" "$staged_cert"
-    sudo_cmd install -m 0640 -o root -g "$group" "$TLS_KEY_FILE" "$staged_key"
-    TLS_CERT_FILE="$staged_cert"
-    TLS_KEY_FILE="$staged_key"
-    log "staged TLS material in $cert_dir for service group '$group'"
-}
-
-prepare_runtime_dirs() {
-    ensure_black_ui_group
-    ensure_service_identity
-    group="$(config_group)"
-    sudo_cmd install -d -m 0755 "$PREFIX/bin"
-    if [ "$INSTALL_BLACK_UI" = "1" ]; then
-        sudo_cmd install -d -m 0770 -o root -g "$group" "$CONFIG_DIR"
-    else
-        sudo_cmd install -d -m 0755 "$CONFIG_DIR"
-    fi
-    sudo_cmd install -d -m 0750 -o "$SERVICE_USER" -g "$group" "$STATE_DIR" "$RUN_DIR"
-}
-
-generate_server_config() {
-    [ -z "$CONFIG_PATH" ] && [ -z "$CONFIG_URL" ] || die "INIT_SERVER cannot be combined with CONFIG_PATH or CONFIG_URL"
-    validate_server_port
-
-    uuid="$("$PREFIX/bin/blackwire" uuid)"
-    info_file="$CONFIG_DIR/client-info.txt"
-
-    case "$INIT_SERVER" in
-        vless-tcp)
-            validate_vless_tcp_listener
-            sudo_cmd sh -c "cat > '$CONFIG_DIR/config.json'" <<JSON
-{
-  "log": {
-    "level": "info",
-    "json": false
-  },
-$(api_config_section)
-$(dns_config_section)
-  "inbounds": [
-    {
-      "tag": "vless-in",
-      "protocol": "vless",
-      "listen": "$SERVER_LISTEN",
-      "port": $SERVER_PORT,
-      "settings": {
-        "clients": [
-          {
-            "id": "$uuid",
-            "email": "vps@example.local"
-          }
-        ]
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "tag": "freedom",
-      "protocol": "freedom",
-      "settings": {
-        "denyLoopback": true,
-        "domainStrategy": "PreferIPv4",
-        "rejectIpv6Literal": false
-      }
-    }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "outboundTag": "freedom"
-      }
-    ]
-  }
-}
-JSON
-            protect_config_for_service "$CONFIG_DIR/config.json"
-            sudo_cmd sh -c "cat > '$info_file'" <<INFO
-Generated VLESS TCP server config
-
-Address: $PUBLIC_HOST
-Port: $SERVER_PORT
-UUID: $uuid
-Network: tcp
-Security: none
-INFO
-            ;;
-        vless-reality)
-            REALITY_DEST="$(resolve_socket_addr "$REALITY_DEST" REALITY_DEST)"
-            x25519="$("$PREFIX/bin/blackwire" x25519)"
-            private_key="$(printf '%s\n' "$x25519" | awk -F': ' '/Private key/ { print $2 }')"
-            public_key="$(printf '%s\n' "$x25519" | awk -F': ' '/Public key/ { print $2 }')"
-            [ -n "$private_key" ] && [ -n "$public_key" ] || die "failed to generate REALITY key pair"
-            sid="$(short_id)"
-            sudo_cmd sh -c "cat > '$CONFIG_DIR/config.json'" <<JSON
-{
-  "log": {
-    "level": "info",
-    "json": false
-  },
-$(api_config_section)
-$(dns_config_section)
-  "limits": {
-    "maxConnections": 4096,
-    "maxConnectionsPerInbound": 2048,
-    "maxConnectionsPerUser": 64,
-    "maxHandshakeSeconds": 5
-  },
-  "inbounds": [
-    {
-      "tag": "vless-reality-in",
-      "protocol": "vless",
-      "listen": "$SERVER_LISTEN",
-      "port": $SERVER_PORT,
-      "limits": {
-        "maxHandshakeSeconds": 5
-      },
-      "settings": {
-        "clients": [
-          {
-            "id": "$uuid",
-            "email": "reality@example.local",
-            "flow": ""
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "dest": "$REALITY_DEST",
-          "privateKey": "$private_key",
-          "shortIds": ["$sid"],
-          "serverName": "$REALITY_SERVER_NAME",
-          "serverNames": ["$REALITY_SERVER_NAME"],
-          "maxTimeDiffSeconds": 60
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "tag": "freedom",
-      "protocol": "freedom",
-      "settings": {
-        "denyLoopback": true,
-        "domainStrategy": "PreferIPv4",
-        "rejectIpv6Literal": false
-      }
-    }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "outboundTag": "freedom"
-      }
-    ]
-  }
-}
-JSON
-            protect_config_for_service "$CONFIG_DIR/config.json"
-            sudo_cmd sh -c "cat > '$info_file'" <<INFO
-Generated VLESS REALITY server config
-
-Address: $PUBLIC_HOST
-Port: $SERVER_PORT
-UUID: $uuid
-Network: tcp
-Security: reality
-REALITY public key: $public_key
-REALITY short ID: $sid
-REALITY server name: $REALITY_SERVER_NAME
-REALITY destination: $REALITY_DEST
-INFO
-            ;;
-        vless-ws-nginx)
-            validate_port "$INTERNAL_PORT" INTERNAL_PORT
-            validate_ws_path
-            [ -n "$DOMAIN" ] || die "INIT_SERVER=vless-ws-nginx requires DOMAIN"
-            sudo_cmd sh -c "cat > '$CONFIG_DIR/config.json'" <<JSON
-{
-  "log": {
-    "level": "info",
-    "json": false
-  },
-$(api_config_section)
-$(dns_config_section)
-  "inbounds": [
-    {
-      "tag": "vless-ws-in",
-      "protocol": "vless",
-      "listen": "127.0.0.1",
-      "port": $INTERNAL_PORT,
-      "settings": {
-        "clients": [
-          {
-            "id": "$uuid",
-            "email": "ws@example.local"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "ws",
-        "security": "none",
-        "wsSettings": {
-          "path": "$WS_PATH"
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "tag": "freedom",
-      "protocol": "freedom",
-      "settings": {
-        "denyLoopback": true,
-        "domainStrategy": "PreferIPv4",
-        "rejectIpv6Literal": false
-      }
-    }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "outboundTag": "freedom"
-      }
-    ]
-  }
-}
-JSON
-            protect_config_for_service "$CONFIG_DIR/config.json"
-            setup_nginx_ws_proxy
-            sudo_cmd sh -c "cat > '$info_file'" <<INFO
-Generated VLESS WebSocket over nginx TLS server config
-
-Address: $DOMAIN
-Port: 443
-UUID: $uuid
-Network: ws
-Security: tls
-WebSocket path: $WS_PATH
-Internal Blackwire listen: 127.0.0.1:$INTERNAL_PORT
-INFO
-            ;;
-        trojan-tls)
-            prepare_tls_certificate
-            stage_tls_material_for_service "trojan-tls"
-            if [ "$SERVICE_USER" = "nobody" ] && [ "$SERVICE_GROUP" = "" ]; then
-                SERVICE_USER="root"
-                SERVICE_GROUP="root"
-                log "using root service user for TLS so certificate private key is readable"
-            fi
-            password="$(short_id)$(short_id)$(short_id)$(short_id)"
-            sudo_cmd sh -c "cat > '$CONFIG_DIR/config.json'" <<JSON
-{
-  "log": {
-    "level": "info",
-    "json": false
-  },
-$(api_config_section)
-$(dns_config_section)
-  "inbounds": [
-    {
-      "tag": "trojan-tls-in",
-      "protocol": "trojan",
-      "listen": "$SERVER_LISTEN",
-      "port": $SERVER_PORT,
-      "settings": {
-        "clients": [
-          {
-            "password": "$password"
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "tls",
-        "tlsSettings": {
-          "certificateFile": "$TLS_CERT_FILE",
-          "keyFile": "$TLS_KEY_FILE"
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "tag": "freedom",
-      "protocol": "freedom",
-      "settings": {
-        "denyLoopback": true,
-        "domainStrategy": "PreferIPv4",
-        "rejectIpv6Literal": false
-      }
-    }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "outboundTag": "freedom"
-      }
-    ]
-  }
-}
-JSON
-            protect_config_for_service "$CONFIG_DIR/config.json"
-            sudo_cmd sh -c "cat > '$info_file'" <<INFO
-Generated Trojan TLS server config
-
-Address: ${DOMAIN:-$PUBLIC_HOST}
-Port: $SERVER_PORT
-Password: $password
-Network: tcp
-Security: tls
-TLS certificate: $TLS_CERT_FILE
-TLS key: $TLS_KEY_FILE
-INFO
-            ;;
-        hysteria2)
-            prepare_tls_certificate
-            stage_tls_material_for_service "hysteria2"
-            if [ "$SERVICE_USER" = "nobody" ] && [ "$SERVICE_GROUP" = "" ]; then
-                SERVICE_USER="root"
-                SERVICE_GROUP="root"
-                log "using root service user for TLS so certificate private key is readable"
-            fi
-            auth="$HYSTERIA2_AUTH"
-            if [ -z "$auth" ]; then
-                auth="$(short_id)$(short_id)$(short_id)$(short_id)"
-            fi
-            sudo_cmd sh -c "cat > '$CONFIG_DIR/config.json'" <<JSON
-{
-  "log": {
-    "level": "info",
-    "json": false
-  },
-$(api_config_section)
-$(dns_config_section)
-  "inbounds": [
-    {
-      "tag": "hysteria2-in",
-      "protocol": "hysteria2",
-      "listen": "$SERVER_LISTEN",
-      "port": $SERVER_PORT,
-      "settings": {
-        "auth": "$auth"
-      },
-      "streamSettings": {
-        "network": "quic",
-        "security": "tls",
-        "tlsSettings": {
-          "serverName": "${DOMAIN:-$PUBLIC_HOST}",
-          "certificateFile": "$TLS_CERT_FILE",
-          "keyFile": "$TLS_KEY_FILE"
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "tag": "freedom",
-      "protocol": "freedom",
-      "settings": {
-        "denyLoopback": true,
-        "domainStrategy": "PreferIPv4",
-        "rejectIpv6Literal": false
-      }
-    }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "outboundTag": "freedom"
-      }
-    ]
-  }
-}
-JSON
-            protect_config_for_service "$CONFIG_DIR/config.json"
-            sudo_cmd sh -c "cat > '$info_file'" <<INFO
-Generated Hysteria2 TLS server config
-
-Address: ${DOMAIN:-$PUBLIC_HOST}
-Port: $SERVER_PORT
-Auth: $auth
-Network: quic
-Security: tls
-TLS certificate: $TLS_CERT_FILE
-TLS key: $TLS_KEY_FILE
-INFO
-            ;;
-        *) die "unsupported INIT_SERVER value: $INIT_SERVER (use vless-tcp, vless-reality, vless-ws-nginx, trojan-tls, or hysteria2)" ;;
-    esac
-
-    sudo_cmd chmod 0600 "$info_file"
-    log "generated $INIT_SERVER config at $CONFIG_DIR/config.json"
-    log "wrote client connection hints to $info_file"
-}
-
-resolve_setup() {
-    if [ -n "$SETUP" ] && [ -n "$INIT_SERVER" ]; then
-        die "set only one of SETUP or INIT_SERVER"
-    fi
-
-    case "$SETUP" in
-        "")
-            ;;
-        domain)
-            INIT_SERVER="vless-ws-nginx"
-            SERVER_PORT=443
-            INSTALL_NGINX="${INSTALL_NGINX:-1}"
-            INSTALL_CERTBOT="${INSTALL_CERTBOT:-1}"
-            ;;
-        reality)
-            INIT_SERVER="vless-reality"
-            ;;
-        direct)
-            die "SETUP=direct would generate cleartext VLESS; use SETUP=reality or SETUP=domain for public VPS deployments"
-            ;;
-        custom)
-            [ -n "$CONFIG_PATH" ] || [ -n "$CONFIG_URL" ] || die "SETUP=custom requires CONFIG_PATH or CONFIG_URL"
-            ;;
-        *) die "unsupported SETUP value: $SETUP (use domain, reality, direct, or custom)" ;;
-    esac
-}
-
-check_domain_preflight() {
-    [ "$SETUP" = "domain" ] || [ "$INIT_SERVER" = "vless-ws-nginx" ] || return 0
-    [ -n "$DOMAIN" ] || die "SETUP=domain requires DOMAIN"
-    validate_ws_path
-    validate_port "$INTERNAL_PORT" INTERNAL_PORT
-
-    if command -v ss >/dev/null 2>&1; then
-        for port in 80 443; do
-            if ss -ltnp 2>/dev/null | grep -Eq "[:.]${port}[[:space:]]"; then
-                if ! ss -ltnp 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | grep -q 'nginx'; then
-                    holder="$(ss -ltnp 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | head -n 1)"
-                    die "SETUP=domain needs tcp/${port} for nginx, but it is already in use: $holder"
-                fi
-            fi
-        done
-    else
-        log "ss not found; skipping tcp/80 and tcp/443 ownership preflight"
-    fi
-}
-
-install_package_if_possible() {
-    package="$1"
-    if command -v apt-get >/dev/null 2>&1; then
-        sudo_cmd apt-get update
-        sudo_cmd apt-get install -y "$package"
-    elif command -v dnf >/dev/null 2>&1; then
-        sudo_cmd dnf install -y "$package"
-    elif command -v yum >/dev/null 2>&1; then
-        sudo_cmd yum install -y "$package"
-    else
-        die "cannot install $package automatically; install it manually and rerun"
-    fi
-}
-
-prepare_tls_certificate() {
-    if [ -n "$TLS_CERT_FILE" ] || [ -n "$TLS_KEY_FILE" ]; then
-        [ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ] || die "set both TLS_CERT_FILE and TLS_KEY_FILE"
-        [ -f "$TLS_CERT_FILE" ] || die "TLS_CERT_FILE does not exist: $TLS_CERT_FILE"
-        [ -f "$TLS_KEY_FILE" ] || die "TLS_KEY_FILE does not exist: $TLS_KEY_FILE"
-        return 0
-    fi
-
-    [ -n "$DOMAIN" ] || die "TLS server setup requires DOMAIN, or set TLS_CERT_FILE and TLS_KEY_FILE"
-
-    if ! command -v certbot >/dev/null 2>&1; then
-        if [ "$INSTALL_CERTBOT" = "1" ]; then
-            install_package_if_possible certbot
-        else
-            die "certbot not found; install certbot, set INSTALL_CERTBOT=1, or provide TLS_CERT_FILE/TLS_KEY_FILE"
-        fi
-    fi
-
-    certbot_args=(certonly --standalone --non-interactive --agree-tos --domain "$DOMAIN")
-    if [ -n "$ACME_EMAIL" ]; then
-        certbot_args+=(--email "$ACME_EMAIL")
-    else
-        certbot_args+=(--register-unsafely-without-email)
-    fi
-    if [ "$ACME_STAGING" = "1" ]; then
-        certbot_args+=(--staging)
-    fi
-
-    log "requesting Let's Encrypt certificate for $DOMAIN with certbot standalone"
-    log "ensure DNS points to this VPS and tcp/80 is open before this step"
-    sudo_cmd certbot "${certbot_args[@]}"
-
-    TLS_CERT_FILE="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
-    TLS_KEY_FILE="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
-    [ -f "$TLS_CERT_FILE" ] || die "certbot did not create $TLS_CERT_FILE"
-    [ -f "$TLS_KEY_FILE" ] || die "certbot did not create $TLS_KEY_FILE"
-}
-
-setup_nginx_ws_proxy() {
-    if ! command -v nginx >/dev/null 2>&1; then
-        if [ "$INSTALL_NGINX" = "1" ]; then
-            install_package_if_possible nginx
-        else
-            die "nginx not found; install nginx or set INSTALL_NGINX=1"
-        fi
-    fi
-
-    for port in 80 443; do
-        if ss -ltnp 2>/dev/null | grep -Eq "[:.]${port}[[:space:]]"; then
-            if ! ss -ltnp 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | grep -q 'nginx'; then
-                holder="$(ss -ltnp 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | head -n 1)"
-                die "tcp/${port} is already in use by another service: $holder"
-            fi
-        fi
-    done
-
-    if [ -n "$TLS_CERT_FILE" ] || [ -n "$TLS_KEY_FILE" ]; then
-        [ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ] || die "set both TLS_CERT_FILE and TLS_KEY_FILE"
-        [ -f "$TLS_CERT_FILE" ] || die "TLS_CERT_FILE does not exist: $TLS_CERT_FILE"
-        [ -f "$TLS_KEY_FILE" ] || die "TLS_KEY_FILE does not exist: $TLS_KEY_FILE"
-        use_existing_cert=1
-    else
-        use_existing_cert=0
-        if [ "$INSTALL_CERTBOT" = "1" ] && command -v apt-get >/dev/null 2>&1; then
-            install_package_if_possible python3-certbot-nginx
-        elif ! command -v certbot >/dev/null 2>&1; then
-            if [ "$INSTALL_CERTBOT" != "1" ]; then
-                die "certbot not found; install certbot or set INSTALL_CERTBOT=1"
-            fi
-            install_package_if_possible certbot
-        fi
-        if ! certbot plugins 2>/dev/null | grep -Eq '^[*][[:space:]]+nginx$'; then
-            die "certbot nginx plugin not found; install python3-certbot-nginx or provide TLS_CERT_FILE/TLS_KEY_FILE"
-        fi
-    fi
-
-    webroot="/var/www/blackwire-${DOMAIN}"
-    sudo_cmd install -d -m 0755 "$webroot"
-    sudo_cmd sh -c "cat > '$webroot/index.html'" <<HTML
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Welcome</title>
-</head>
-<body>
-  <main>
-    <h1>Welcome</h1>
-    <p>This site is available.</p>
-  </main>
-</body>
-</html>
-HTML
-    sudo_cmd sh -c "cat > '$webroot/404.html'" <<HTML
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Not Found</title>
-</head>
-<body>
-  <main>
-    <h1>Not Found</h1>
-    <p>The requested page was not found.</p>
-  </main>
-</body>
-</html>
-HTML
-
-    nginx_available="/etc/nginx/sites-available/blackwire-${DOMAIN}.conf"
-    nginx_enabled="/etc/nginx/sites-enabled/blackwire-${DOMAIN}.conf"
-    sudo_cmd sh -c "cat > '$nginx_available'" <<NGINX
-server {
-    listen 80;
-    server_name $DOMAIN;
-    root $webroot;
-    index index.html;
-    error_page 404 /404.html;
-
-    location / {
-        try_files \$uri \$uri/ =404;
-    }
-}
-NGINX
-    sudo_cmd ln -sf "$nginx_available" "$nginx_enabled"
-    sudo_cmd nginx -t
-    sudo_cmd systemctl enable --now nginx
-    sudo_cmd systemctl reload nginx
-
-    if [ "$use_existing_cert" = "1" ]; then
-        cert_file="$TLS_CERT_FILE"
-        key_file="$TLS_KEY_FILE"
-        log "using provided TLS certificate for nginx"
-    else
-        certbot_args=(--nginx --non-interactive --agree-tos --domain "$DOMAIN")
-        if [ -n "$ACME_EMAIL" ]; then
-            certbot_args+=(--email "$ACME_EMAIL")
-        else
-            certbot_args+=(--register-unsafely-without-email)
-        fi
-        if [ "$ACME_STAGING" = "1" ]; then
-            certbot_args+=(--staging)
-        fi
-
-        log "requesting nginx-managed Let's Encrypt certificate for $DOMAIN"
-        sudo_cmd certbot "${certbot_args[@]}"
-        cert_file="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
-        key_file="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
-    fi
-
-    ui_nginx_location=""
-    if [ "$INSTALL_BLACK_UI" = "1" ]; then
-        case "$BLACK_UI_PANEL_PATH" in
-            /*) ;;
-            *) die "BLACK_UI_PANEL_PATH must start with '/'" ;;
-        esac
-        ui_nginx_location="
-    location ${BLACK_UI_PANEL_PATH}/ {
-        proxy_http_version 1.1;
-        proxy_set_header Host \\$host;
-        proxy_set_header X-Real-IP \\$remote_addr;
-        proxy_set_header X-Forwarded-For \\$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_pass http://${BLACK_UI_LISTEN}/;
-    }
-
-    location = ${BLACK_UI_PANEL_PATH} {
-        return 301 ${BLACK_UI_PANEL_PATH}/;
-    }"
-    fi
-
-    sudo_cmd sh -c "cat > '$nginx_available'" <<NGINX
-server {
-    listen 80;
-    server_name $DOMAIN;
-    return 301 https://\$host\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name $DOMAIN;
-
-    ssl_certificate $cert_file;
-    ssl_certificate_key $key_file;
-
-    root $webroot;
-    index index.html;
-    error_page 404 /404.html;
-
-    location / {
-        try_files \$uri \$uri/ =404;
-    }
-
-    location $WS_PATH {
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 300s;
-        proxy_pass http://127.0.0.1:$INTERNAL_PORT;
-    }
-${ui_nginx_location}
-}
-NGINX
-    sudo_cmd sh -c "printf '%s\n' 'blackwire-${DOMAIN}.conf' > '$CONFIG_DIR/nginx-site'"
-    sudo_cmd nginx -t
-    sudo_cmd systemctl reload nginx
-    log "installed nginx TLS reverse proxy for https://$DOMAIN$WS_PATH"
-    if [ "$INSTALL_BLACK_UI" = "1" ]; then
-        log "warning: ${BLACK_UI_PANEL_PATH}/ exposes a control panel path; protect it with external auth or an IP allow-list"
-    fi
 }
 
 download_url() {
-    asset="$1"
-    if [ -n "$DOWNLOAD_BASE" ]; then
-        echo "${DOWNLOAD_BASE%/}/${asset}"
-    elif [ "$VERSION" = "latest" ]; then
-        echo "https://github.com/${REPO}/releases/latest/download/${asset}"
-    else
-        echo "https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+    local asset="$1"
+    if [ -n "$DOWNLOAD_BASE" ]; then echo "${DOWNLOAD_BASE%/}/${asset}"
+    elif [ "$VERSION" = "latest" ]; then echo "https://github.com/${REPO}/releases/latest/download/${asset}"
+    else echo "https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
     fi
 }
 
-install_systemd_unit() {
-    command -v systemctl >/dev/null 2>&1 || return 0
-    [ -d /run/systemd/system ] || return 0
+download_verified_asset() {
+    local asset="$1" destination="$2" url
+    url="$(download_url "$asset")"
+    curl -fsSL "$url" -o "$destination/$asset"
+    curl -fsSL "$url.sha256" -o "$destination/$asset.sha256"
+    (cd "$destination" && awk -v asset="$asset" '{ print $1 "  " asset }' "$asset.sha256" | sha256sum -c -)
+    tar -xzf "$destination/$asset" -C "$destination"
+}
 
-    unit_path="/etc/systemd/system/blackwire.service"
-    tmp_unit="$(mktemp)"
-    group="$(config_group)"
-    cat > "$tmp_unit" <<UNIT
+detect_legacy_installation() {
+    local found=0 path
+    for path in "$CONFIG_DIR/config.json" "$BLACK_UI_DATA_DIR/black-ui.db" "$BLACK_UI_DATA_DIR/black-ui.sqlite"; do
+        if [ -e "$path" ]; then log "legacy file detected and left untouched: $path"; found=1; fi
+    done
+    if [ "$found" = 1 ]; then
+        log "legacy JSON/SQLite data is incompatible with this MySQL-only release and is not imported"
+    fi
+}
+
+reject_legacy_options() {
+    [ -z "${CONFIG_PATH:-}" ] || die "CONFIG_PATH is no longer supported; seed or edit MySQL through Black UI"
+    [ -z "${CONFIG_URL:-}" ] || die "CONFIG_URL is no longer supported; seed or edit MySQL through Black UI"
+    [ -z "${INIT_SERVER:-}" ] || die "INIT_SERVER is no longer supported; use 'blackwire db seed PRESET'"
+}
+
+install_credential() {
+    local source="$1" destination="$2"
+    [ -n "$source" ] || die "missing required protected database URL file"
+    [ -f "$source" ] || die "database URL file does not exist: $source"
+    sudo_cmd install -m 0600 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$source" "$destination"
+}
+
+prepare_accounts_and_dirs() {
+    if ! id "$SERVICE_USER" >/dev/null 2>&1; then
+        sudo_cmd useradd --system --home "$STATE_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+    fi
+    if ! getent group "$SERVICE_GROUP" >/dev/null 2>&1; then sudo_cmd groupadd --system "$SERVICE_GROUP"; fi
+    sudo_cmd usermod -a -G "$SERVICE_GROUP" "$SERVICE_USER"
+    sudo_cmd install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$CONFIG_DIR" "$STATE_DIR" "$RUN_DIR"
+}
+
+install_runtime_unit() {
+    local unit
+    unit="$(mktemp)"
+    cat > "$unit" <<UNIT
 [Unit]
-Description=blackwire proxy runtime
-Documentation=https://github.com/${REPO}
+Description=Blackwire MySQL-backed proxy runtime
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 User=${SERVICE_USER}
-Group=${group}
-ExecStart=${PREFIX}/bin/blackwire run -c ${CONFIG_DIR}/config.json
-ExecReload=/bin/kill -HUP \$MAINPID
+Group=${SERVICE_GROUP}
+ExecStart=${PREFIX}/bin/blackwire run
+LoadCredential=database-url:${CONFIG_DIR}/runtime-database-url
 WorkingDirectory=${STATE_DIR}
 Restart=on-failure
 RestartSec=5s
@@ -1012,333 +121,102 @@ Environment=RUST_LOG=info
 [Install]
 WantedBy=multi-user.target
 UNIT
-
-    sudo_cmd install -m 0644 "$tmp_unit" "$unit_path"
-    rm -f "$tmp_unit"
-    sudo_cmd systemctl daemon-reload
-    log "installed systemd unit: $unit_path"
-
-    if [ "$START_SERVICE" = "1" ]; then
-        sudo_cmd systemctl enable blackwire >/dev/null
-        if sudo_cmd systemctl is-active --quiet blackwire; then
-            sudo_cmd systemctl restart blackwire
-            log "enabled and restarted blackwire.service"
-        else
-            sudo_cmd systemctl start blackwire
-            log "enabled and started blackwire.service"
-        fi
-    elif [ -f "$CONFIG_DIR/config.json" ]; then
-        log "service not started; run: systemctl enable --now blackwire"
-    else
-        log "service not started; create ${CONFIG_DIR}/config.json, then run: systemctl enable --now blackwire"
-    fi
+    sudo_cmd install -m 0644 "$unit" /etc/systemd/system/blackwire.service
+    rm -f "$unit"
 }
 
-install_black_ui_systemd_unit() {
-    command -v systemctl >/dev/null 2>&1 || return 0
-    [ -d /run/systemd/system ] || return 0
-
-    unit_path="/etc/systemd/system/black-ui.service"
-    tmp_unit="$(mktemp)"
-    group="$(config_group)"
-    cookie_secure="$BLACK_UI_COOKIE_SECURE"
-    if [ -z "$cookie_secure" ]; then
-        if [ "$SETUP" = "domain" ]; then
-            cookie_secure=1
-        else
-            cookie_secure=0
-        fi
-    fi
-    black_ui_public_base_url="$BLACK_UI_PUBLIC_BASE_URL"
-    black_ui_subscription_host="$BLACK_UI_SUBSCRIPTION_HOST"
-    if [ -z "$black_ui_subscription_host" ]; then
-        if [ -n "$DOMAIN" ]; then
-            black_ui_subscription_host="$DOMAIN"
-        elif [ "$PUBLIC_HOST" != "<server-ip-or-domain>" ]; then
-            black_ui_subscription_host="$PUBLIC_HOST"
-        fi
-    fi
-    if [ -z "$black_ui_public_base_url" ] && [ -n "$black_ui_subscription_host" ]; then
-        listen_port="${BLACK_UI_LISTEN##*:}"
-        case "$listen_port" in
-            ''|*[!0-9]*) listen_port="18080" ;;
-        esac
-        scheme="http"
-        [ "$SETUP" = "domain" ] && scheme="https"
-        if [ "$SETUP" = "domain" ]; then
-            black_ui_public_base_url="${scheme}://${black_ui_subscription_host}${BLACK_UI_PANEL_PATH}"
-        else
-            black_ui_public_base_url="${scheme}://${black_ui_subscription_host}:${listen_port}"
-        fi
-    fi
-    cat > "$tmp_unit" <<UNIT
+install_ui_unit() {
+    local unit
+    unit="$(mktemp)"
+    cat > "$unit" <<UNIT
 [Unit]
-Description=black-ui Blackwire control panel
-Documentation=https://github.com/${REPO}
-After=network-online.target blackwire.service
+Description=Blackwire database-backed control panel
+After=network-online.target
 Wants=network-online.target
 
 [Service]
 User=${SERVICE_USER}
-Group=${group}
+Group=${SERVICE_GROUP}
 ExecStart=${PREFIX}/bin/black-ui
+LoadCredential=database-url:${CONFIG_DIR}/ui-database-url
 WorkingDirectory=${BLACK_UI_DATA_DIR}
-Environment=BLACK_UI_DATA_DIR=${BLACK_UI_DATA_DIR}
 Environment=BLACK_UI_LISTEN=${BLACK_UI_LISTEN}
 Environment=BLACK_UI_STATIC_DIR=${BLACK_UI_STATIC_DIR}
-Environment=BLACK_UI_CONFIG_PATH=${CONFIG_DIR}/config.json
-Environment=BLACK_UI_COOKIE_SECURE=${cookie_secure}
-Environment=BLACK_UI_PUBLIC_BASE_URL=${black_ui_public_base_url}
-Environment=BLACK_UI_SUBSCRIPTION_HOST=${black_ui_subscription_host}
 Restart=on-failure
 RestartSec=5s
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=${BLACK_UI_DATA_DIR} ${CONFIG_DIR}
 PrivateTmp=true
 NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
 UNIT
-
-    sudo_cmd install -m 0644 "$tmp_unit" "$unit_path"
-    rm -f "$tmp_unit"
-    sudo_cmd systemctl daemon-reload
-    sudo_cmd systemctl enable black-ui >/dev/null
-    if sudo_cmd systemctl is-active --quiet black-ui; then
-        sudo_cmd systemctl restart black-ui
-        log "installed and restarted black-ui.service at ${BLACK_UI_LISTEN}"
-    else
-        sudo_cmd systemctl start black-ui
-        log "installed and started black-ui.service at ${BLACK_UI_LISTEN}"
-    fi
+    sudo_cmd install -m 0644 "$unit" /etc/systemd/system/black-ui.service
+    rm -f "$unit"
 }
 
-install_black_ui() {
-    [ "$INSTALL_BLACK_UI" = "1" ] || return 0
-    ui_asset="$(detect_black_ui_asset)"
-    ui_url="$(download_url "$ui_asset")"
-    ui_workdir="$(mktemp -d)"
-    log "downloading ${ui_asset} from ${REPO} (${VERSION})"
-    curl -fsSL "$ui_url" -o "$ui_workdir/$ui_asset"
-    curl -fsSL "$ui_url.sha256" -o "$ui_workdir/$ui_asset.sha256"
-    (
-        cd "$ui_workdir"
-        awk -v asset="$ui_asset" '{ print $1 "  " asset }' "$ui_asset.sha256" > "$ui_asset.sha256.local"
-        sha256sum -c "$ui_asset.sha256.local"
-        tar -xzf "$ui_asset"
-    )
-    ui_binary="$(find "$ui_workdir" -type f -name black-ui -perm -111 | head -n 1)"
-    [ -n "$ui_binary" ] || die "black-ui binary not found in $ui_asset"
-    group="$(config_group)"
-    sudo_cmd install -d -m 0755 "$PREFIX/bin" "$BLACK_UI_STATIC_DIR"
-    sudo_cmd install -d -m 0750 -o "$SERVICE_USER" -g "$group" "$BLACK_UI_DATA_DIR"
-    sudo_cmd chown -R "$SERVICE_USER:$group" "$BLACK_UI_DATA_DIR"
-    sudo_cmd find "$BLACK_UI_DATA_DIR" -type d -exec chmod 0750 {} +
-    sudo_cmd find "$BLACK_UI_DATA_DIR" -type f -exec chmod 0640 {} +
-    sudo_cmd install -m 0755 "$ui_binary" "$PREFIX/bin/black-ui"
-    ui_dist="$(find "$ui_workdir" -type d -path '*/frontend/dist' | head -n 1)"
-    if [ -n "$ui_dist" ]; then
-        sudo_cmd cp -a "$ui_dist"/. "$BLACK_UI_STATIC_DIR"/
-    else
-        log "black-ui frontend dist not found in asset; API will run but browser UI may be unavailable"
-    fi
-    rm -rf "$ui_workdir"
-    install_black_ui_systemd_unit
-    effective_public_base_url="$BLACK_UI_PUBLIC_BASE_URL"
-    effective_subscription_host="$BLACK_UI_SUBSCRIPTION_HOST"
-    if [ -z "$effective_subscription_host" ]; then
-        if [ -n "$DOMAIN" ]; then
-            effective_subscription_host="$DOMAIN"
-        elif [ "$PUBLIC_HOST" != "<server-ip-or-domain>" ]; then
-            effective_subscription_host="$PUBLIC_HOST"
-        fi
-    fi
-    if [ -z "$effective_public_base_url" ] && [ -n "$effective_subscription_host" ]; then
-        listen_port="${BLACK_UI_LISTEN##*:}"
-        case "$listen_port" in
-            ''|*[!0-9]*) listen_port="18080" ;;
-        esac
-        if [ "$SETUP" = "domain" ]; then
-            effective_public_base_url="https://${effective_subscription_host}${BLACK_UI_PANEL_PATH}"
-        else
-            effective_public_base_url="http://${effective_subscription_host}:${listen_port}"
-        fi
-    fi
-    if [ -n "$effective_public_base_url" ]; then
-        log "black-ui public base URL: $effective_public_base_url"
-    elif [ -n "$DOMAIN" ]; then
-        log "black-ui can be reverse-proxied at https://${DOMAIN}${BLACK_UI_PANEL_PATH}"
-    else
-        log "black-ui listens locally at http://${BLACK_UI_LISTEN}"
-    fi
+install_ui() {
+    [ "$INSTALL_BLACK_UI" = 1 ] || return 0
+    [ -n "$UI_DATABASE_URL_FILE" ] || die "INSTALL_BLACK_UI=1 requires UI_DATABASE_URL_FILE for a separate UI account"
+    local work asset binary dist
+    work="$(mktemp -d)"; asset="$(detect_ui_asset)"
+    download_verified_asset "$asset" "$work"
+    binary="$(find "$work" -type f -name black-ui -perm -111 | head -n 1)"
+    [ -n "$binary" ] || die "black-ui binary not found in release asset"
+    sudo_cmd install -m 0755 "$binary" "$PREFIX/bin/black-ui"
+    dist="$(find "$work" -type d -path '*/frontend/dist' | head -n 1)"
+    [ -n "$dist" ] || die "black-ui frontend bundle not found in release asset"
+    sudo_cmd install -d -m 0755 "$BLACK_UI_STATIC_DIR"
+    sudo_cmd cp -a "$dist"/. "$BLACK_UI_STATIC_DIR"/
+    sudo_cmd install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$BLACK_UI_DATA_DIR"
+    install_credential "$UI_DATABASE_URL_FILE" "$CONFIG_DIR/ui-database-url"
+    install_ui_unit
+    rm -rf "$work"
 }
 
-install_config() {
-    if [ -n "$CONFIG_PATH" ] && [ -n "$CONFIG_URL" ]; then
-        die "set only one of CONFIG_PATH or CONFIG_URL"
-    fi
-
-    if [ -n "$CONFIG_PATH" ]; then
-        [ -f "$CONFIG_PATH" ] || die "CONFIG_PATH does not exist: $CONFIG_PATH"
-        sudo_cmd install -m 0640 "$CONFIG_PATH" "$CONFIG_DIR/config.json"
-        protect_config_for_service "$CONFIG_DIR/config.json"
-        log "installed config from CONFIG_PATH to $CONFIG_DIR/config.json"
-    elif [ -n "$CONFIG_URL" ]; then
-        tmp_config="$(mktemp)"
-        curl -fsSL "$CONFIG_URL" -o "$tmp_config"
-        sudo_cmd install -m 0640 "$tmp_config" "$CONFIG_DIR/config.json"
-        protect_config_for_service "$CONFIG_DIR/config.json"
-        rm -f "$tmp_config"
-        log "installed config from CONFIG_URL to $CONFIG_DIR/config.json"
-    elif [ -n "$INIT_SERVER" ]; then
-        generate_server_config
-    fi
-
-    if [ -f "$CONFIG_DIR/config.json" ]; then
-        sudo_cmd "$PREFIX/bin/blackwire" test -c "$CONFIG_DIR/config.json"
-        protect_config_for_service "$CONFIG_DIR/config.json"
-        protect_tls_material_for_service
-        log "config validation passed: $CONFIG_DIR/config.json"
-        if [ "$INSTALL_BLACK_UI" = "1" ] && ! sudo_cmd grep -Eq '"api"[[:space:]]*:' "$CONFIG_DIR/config.json"; then
-            log "black-ui is installed, but $CONFIG_DIR/config.json has no api listener; gRPC live apply will be unavailable"
-            log "add: \"api\": { \"listen\": \"$BLACKWIRE_API_LISTEN\" }"
-        fi
-    fi
-}
-
-configure_firewall() {
-    [ "$OPEN_FIREWALL" = "1" ] || return 0
-    validate_server_port
-
-    if [ "$SETUP" = "domain" ] || [ "$INIT_SERVER" = "vless-ws-nginx" ]; then
-        firewall_ports="80/tcp 443/tcp"
-    elif [ "$INIT_SERVER" = "hysteria2" ]; then
-        firewall_ports="${SERVER_PORT}/udp"
-    else
-        firewall_ports="${SERVER_PORT}/tcp"
-    fi
-
-    if command -v ufw >/dev/null 2>&1; then
-        for port in $firewall_ports; do
-            sudo_cmd ufw allow "$port"
-        done
-        log "opened $firewall_ports with ufw"
-    elif command -v firewall-cmd >/dev/null 2>&1; then
-        for port in $firewall_ports; do
-            sudo_cmd firewall-cmd --add-port="$port" --permanent
-        done
-        sudo_cmd firewall-cmd --reload
-        log "opened $firewall_ports with firewalld"
-    else
-        log "OPEN_FIREWALL=1 requested, but ufw/firewalld was not found"
-        log "open $firewall_ports in your cloud firewall and host firewall"
-    fi
-}
-
-print_next_steps() {
-    if [ "$START_SERVICE" = "1" ]; then
-        log "next: service is enabled and running"
-    elif [ -f "$CONFIG_DIR/config.json" ]; then
-        log "next: start with 'systemctl enable --now blackwire' or run '$PREFIX/bin/blackwire run -c $CONFIG_DIR/config.json'"
-    else
-        log "next: create $CONFIG_DIR/config.json"
-        log "next: validate with '$PREFIX/bin/blackwire test -c $CONFIG_DIR/config.json'"
-        log "next: start with 'systemctl enable --now blackwire'"
-    fi
-    if [ -f "$CONFIG_DIR/client-info.txt" ]; then
-        log "next: read client connection hints from '$CONFIG_DIR/client-info.txt'"
-    fi
-    if [ "$SETUP" = "domain" ] || [ "$INIT_SERVER" = "vless-ws-nginx" ]; then
-        log "next: ensure tcp/80 and tcp/443 are open in your VPS/cloud firewall"
-    elif [ "$INIT_SERVER" = "vless-tcp" ]; then
-        log "next: vless-tcp is cleartext and loopback-only; do not expose tcp/${SERVER_PORT} publicly"
-    elif [ "$INIT_SERVER" = "hysteria2" ]; then
-        log "next: ensure udp/${SERVER_PORT} is open in your VPS/cloud firewall"
-    else
-        log "next: ensure tcp/${SERVER_PORT} is open in your VPS/cloud firewall"
-    fi
-    log "next: view logs with 'journalctl -u blackwire -f'"
+uninstall() {
+    sudo_cmd systemctl disable --now blackwire black-ui >/dev/null 2>&1 || true
+    sudo_cmd rm -f /etc/systemd/system/blackwire.service /etc/systemd/system/black-ui.service
+    sudo_cmd rm -f "$PREFIX/bin/blackwire" "$PREFIX/bin/black-ui"
+    sudo_cmd systemctl daemon-reload >/dev/null 2>&1 || true
+    log "application binaries removed; MySQL data, credentials, and legacy files were retained"
 }
 
 main() {
-    case "$ACTION" in
-        install|upgrade) ;;
-        uninstall)
-            if [ "$(id -u)" -ne 0 ]; then
-                need_cmd sudo
-            fi
-            uninstall_blackwire
-            exit 0
-            ;;
-        *) die "invalid ACTION value: $ACTION (use install, upgrade, or uninstall)" ;;
-    esac
+    [ "$ACTION" != uninstall ] || { uninstall; exit 0; }
+    case "$ACTION" in install|upgrade) ;; *) die "ACTION must be install, upgrade, or uninstall" ;; esac
+    for command in curl tar install sha256sum find sed; do need_cmd "$command"; done
+    if [ "$(id -u)" -ne 0 ]; then need_cmd sudo; fi
+    reject_legacy_options
+    detect_legacy_installation
+    [ -n "$RUNTIME_DATABASE_URL_FILE" ] || die "RUNTIME_DATABASE_URL_FILE is required; this installer never installs MySQL"
+    prepare_accounts_and_dirs
 
-    need_cmd curl
-    need_cmd tar
-    need_cmd install
-    need_cmd sha256sum
-    need_cmd od
-    if [ "$(id -u)" -ne 0 ]; then
-        need_cmd sudo
-    fi
-    resolve_setup
-    check_domain_preflight
-
-    asset="$(detect_asset)"
-    base_url="$(download_url "$asset")"
-    workdir="$(mktemp -d)"
-    trap 'rm -rf "$workdir"' EXIT
-
-    log "downloading ${asset} from ${REPO} (${VERSION})"
-    curl -fsSL "$base_url" -o "$workdir/$asset"
-    curl -fsSL "$base_url.sha256" -o "$workdir/$asset.sha256"
-
-    (
-        cd "$workdir"
-        awk -v asset="$asset" '{ print $1 "  " asset }' "$asset.sha256" > "$asset.sha256.local"
-        sha256sum -c "$asset.sha256.local"
-        tar -xzf "$asset"
-    )
-
-    binary="$(find "$workdir" -type f -name blackwire -perm -111 | head -n 1)"
-    [ -n "$binary" ] || die "blackwire binary not found in $asset"
-
-    prepare_runtime_dirs
+    local work asset binary
+    work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+    asset="$(detect_asset)"; download_verified_asset "$asset" "$work"
+    binary="$(find "$work" -type f -name blackwire -perm -111 | head -n 1)"
+    [ -n "$binary" ] || die "blackwire binary not found in release asset"
+    sudo_cmd install -d -m 0755 "$PREFIX/bin"
     sudo_cmd install -m 0755 "$binary" "$PREFIX/bin/blackwire"
+    install_credential "$RUNTIME_DATABASE_URL_FILE" "$CONFIG_DIR/runtime-database-url"
 
-    if [ ! -f "$CONFIG_DIR/config.json" ]; then
-        sudo_cmd sh -c "cat > '$CONFIG_DIR/README'" <<README
-Place your blackwire JSON config at:
-
-  ${CONFIG_DIR}/config.json
-
-Validate it with:
-
-  ${PREFIX}/bin/blackwire test -c ${CONFIG_DIR}/config.json
-README
+    if [ "$RUN_DB_MIGRATIONS" = 1 ]; then
+        [ -n "$MIGRATOR_DATABASE_URL_FILE" ] || die "RUN_DB_MIGRATIONS=1 requires MIGRATOR_DATABASE_URL_FILE"
+        install_credential "$MIGRATOR_DATABASE_URL_FILE" "$CONFIG_DIR/migrator-database-url"
+        sudo_cmd env BLACKWIRE_DATABASE_URL_FILE="$CONFIG_DIR/migrator-database-url" "$PREFIX/bin/blackwire" db migrate
     fi
+    sudo_cmd env BLACKWIRE_DATABASE_URL_FILE="$CONFIG_DIR/runtime-database-url" "$PREFIX/bin/blackwire" db status
 
-    install_config
-
-    if [ "$START_SERVICE" = "1" ] && [ ! -f "$CONFIG_DIR/config.json" ]; then
-        die "START_SERVICE=1 requires $CONFIG_DIR/config.json; set CONFIG_PATH or CONFIG_URL, or create the config first"
+    case "$INSTALL_SYSTEMD" in 0|false|no) ;; auto|1|true|yes) install_runtime_unit ;; *) die "invalid INSTALL_SYSTEMD" ;; esac
+    install_ui
+    sudo_cmd systemctl daemon-reload >/dev/null 2>&1 || true
+    if [ "$START_SERVICE" = 1 ]; then
+        sudo_cmd systemctl enable --now blackwire
+        [ "$INSTALL_BLACK_UI" != 1 ] || sudo_cmd systemctl enable --now black-ui
     fi
-
-    configure_firewall
-
-    case "$INSTALL_SYSTEMD" in
-        1|true|yes) install_systemd_unit ;;
-        0|false|no) ;;
-        auto) install_systemd_unit ;;
-        *) die "invalid INSTALL_SYSTEMD value: $INSTALL_SYSTEMD" ;;
-    esac
-
-    install_black_ui
-
-    log "installed: $("$PREFIX/bin/blackwire" version 2>/dev/null || "$PREFIX/bin/blackwire" --version 2>/dev/null || echo "$PREFIX/bin/blackwire")"
-    print_next_steps
+    log "installed MySQL-only Blackwire; configure it with Black UI or named db seed presets"
 }
 
 main "$@"

@@ -47,26 +47,20 @@ pub(crate) fn populate_trojan_auth_store(
     auth: &TrojanAuthStore,
     cfg: &blackwire_config::schema::InboundConfig,
 ) -> Result<()> {
-    let clients = cfg.settings["clients"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("Trojan inbound '{}' missing 'clients' array", cfg.tag))?;
+    let clients = &cfg.settings.clients;
 
     let users: Vec<TrojanUser> = clients
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let password = c["password"]
-                .as_str()
+            let password = c
+                .password
+                .as_deref()
                 .ok_or_else(|| {
                     anyhow::anyhow!("Trojan client #{} in '{}' missing 'password'", i, cfg.tag)
                 })
                 .map(|s| s.to_string())?;
-            let label = c
-                .get("email")
-                .or_else(|| c.get("name"))
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned);
+            let label = c.label().map(ToOwned::to_owned);
             Ok(TrojanUser { password, label })
         })
         .collect::<Result<_>>()?;
@@ -85,11 +79,13 @@ pub(crate) fn build_trojan_outbound(
 ) -> Result<Arc<dyn OutboundHandler>> {
     let settings = &cfg.settings;
 
-    let server_str = settings["address"]
-        .as_str()
+    let server_str = settings
+        .address
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("Trojan outbound '{}' missing 'address'", cfg.tag))?;
-    let port = settings["port"]
-        .as_u64()
+    let port = settings
+        .port
+        .map(u64::from)
         .ok_or_else(|| anyhow::anyhow!("Trojan outbound '{}' missing 'port'", cfg.tag))?;
     let server = socket_addr_from_address_port(
         server_str,
@@ -97,8 +93,9 @@ pub(crate) fn build_trojan_outbound(
         &format!("invalid Trojan server address for outbound '{}'", cfg.tag),
     )?;
 
-    let password = settings["password"]
-        .as_str()
+    let password = settings
+        .password
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("Trojan outbound '{}' missing 'password'", cfg.tag))?
         .to_string();
 

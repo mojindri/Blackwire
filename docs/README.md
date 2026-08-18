@@ -80,11 +80,6 @@ Read these when protocol names or config structure are still fuzzy:
 
 ## Example-Driven Learning
 
-- [../examples/vless-client-server/README.md](../examples/vless-client-server/README.md)
-- [../examples/reality-client-server/README.md](../examples/reality-client-server/README.md)
-- [../examples/hysteria2-client-server/README.md](../examples/hysteria2-client-server/README.md)
-- [../examples/vless-ws-local/README.md](../examples/vless-ws-local/README.md)
-- [../examples/http-vmess-grpc-local/README.md](../examples/http-vmess-grpc-local/README.md)
-- [../examples/ss2022-local/README.md](../examples/ss2022-local/README.md)
-- [../examples/dns-fakeip-routing/README.md](../examples/dns-fakeip-routing/README.md)
-- [../examples/tun-local/README.md](../examples/tun-local/README.md)
+- [Database seed presets](../examples/README.md)
+- [Integration and interop tests](../tests/interop/README.md)
+- [Realistic deployment labs](../labs/realistic/README.md)

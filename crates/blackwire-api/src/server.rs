@@ -4,7 +4,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
-use serde_json::Value;
 use tokio::task::JoinHandle;
 use tonic::transport::Server;
 use tonic::{Request, Status};
@@ -23,39 +22,21 @@ pub struct ApiServerConfig {
     pub listen_addr: String,
     /// Optional bearer/token value required by API requests.
     pub token: Option<String>,
+    /// gRPC services to publish. An empty list preserves the legacy all-services default.
+    pub services: Vec<String>,
 }
 
 /// Parse `api` listener settings from config (`"host:port"` string or object).
-pub fn api_server_config(api: &Value) -> Option<ApiServerConfig> {
-    if let Some(addr) = api.as_str() {
-        return Some(ApiServerConfig {
-            listen_addr: addr.to_string(),
-            token: None,
-        });
-    }
-
-    let listen_addr = api
-        .get("listen")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .or_else(|| {
-            let host = api.get("host").and_then(Value::as_str)?;
-            let port = api.get("port").and_then(Value::as_u64)?;
-            Some(format!("{host}:{port}"))
-        })?;
-    let token = api
-        .get("token")
-        .or_else(|| api.get("auth_token"))
-        .or_else(|| api.get("api_token"))
-        .and_then(Value::as_str)
-        .filter(|token| !token.is_empty())
-        .map(ToString::to_string);
-
-    Some(ApiServerConfig { listen_addr, token })
+pub fn api_server_config(api: &blackwire_config::schema::ApiConfig) -> Option<ApiServerConfig> {
+    (!api.listen.trim().is_empty()).then(|| ApiServerConfig {
+        listen_addr: api.listen.clone(),
+        token: api.token.clone(),
+        services: api.services.clone(),
+    })
 }
 
 /// Parse `api` listen address from config (`"host:port"` string or object).
-pub fn api_listen_addr(api: &Value) -> Option<String> {
+pub fn api_listen_addr(api: &blackwire_config::schema::ApiConfig) -> Option<String> {
     api_server_config(api).map(|config| config.listen_addr)
 }
 
@@ -64,28 +45,30 @@ pub fn start_api_server(
     addr: &str,
     management: ManagementHandle,
     token: Option<String>,
+    services: &[String],
 ) -> anyhow::Result<JoinHandle<()>> {
     let addr: SocketAddr = addr
         .parse()
         .with_context(|| format!("invalid API listen address '{addr}'"))?;
     let allow_unauthenticated_loopback = token.is_none() && addr.ip().is_loopback();
+    let expose_stats = service_enabled(services, "StatsService");
+    let expose_handler = service_enabled(services, "HandlerService");
     let token = Arc::new(token);
     let task = tokio::spawn(async move {
         info!(addr = %addr, authenticated = token.is_some(), loopback_only = allow_unauthenticated_loopback, "blackwire-api gRPC server starting");
         let stats_token = Arc::clone(&token);
         let handler_token = Arc::clone(&token);
-        if let Err(e) = Server::builder()
-            .add_service(StatsServiceServer::with_interceptor(
-                StatsServiceImpl,
-                move |request| {
-                    authorize_api_request(
-                        request,
-                        stats_token.as_deref(),
-                        allow_unauthenticated_loopback,
-                    )
-                },
-            ))
-            .add_service(HandlerServiceServer::with_interceptor(
+        let stats_service = expose_stats.then(|| {
+            StatsServiceServer::with_interceptor(StatsServiceImpl, move |request| {
+                authorize_api_request(
+                    request,
+                    stats_token.as_deref(),
+                    allow_unauthenticated_loopback,
+                )
+            })
+        });
+        let handler_service = expose_handler.then(|| {
+            HandlerServiceServer::with_interceptor(
                 HandlerServiceImpl::new(management),
                 move |request| {
                     authorize_api_request(
@@ -94,7 +77,11 @@ pub fn start_api_server(
                         allow_unauthenticated_loopback,
                     )
                 },
-            ))
+            )
+        });
+        if let Err(e) = Server::builder()
+            .add_optional_service(stats_service)
+            .add_optional_service(handler_service)
             .serve(addr)
             .await
         {
@@ -102,6 +89,10 @@ pub fn start_api_server(
         }
     });
     Ok(task)
+}
+
+fn service_enabled(services: &[String], name: &str) -> bool {
+    services.is_empty() || services.iter().any(|service| service == name)
 }
 
 fn authorize_api_request<T>(
@@ -142,18 +133,26 @@ fn authorize_api_request<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn parses_api_token_from_object_config() {
-        let config = api_server_config(&json!({
-            "listen": "0.0.0.0:9000",
-            "token": "secret"
-        }))
+        let config = api_server_config(&blackwire_config::schema::ApiConfig {
+            listen: "0.0.0.0:9000".into(),
+            token: Some("secret".into()),
+            services: Vec::new(),
+        })
         .expect("api config");
 
         assert_eq!(config.listen_addr, "0.0.0.0:9000");
         assert_eq!(config.token.as_deref(), Some("secret"));
+        assert!(config.services.is_empty());
+    }
+
+    #[test]
+    fn service_selection_preserves_legacy_default_and_honors_explicit_names() {
+        assert!(service_enabled(&[], "StatsService"));
+        assert!(service_enabled(&["StatsService".into()], "StatsService"));
+        assert!(!service_enabled(&["StatsService".into()], "HandlerService"));
     }
 
     #[test]

@@ -11,7 +11,7 @@ services:
 
   # ── Xray-core REALITY server ──────────────────────────────────────────────────
   xray-server:
-    image: ghcr.io/xtls/xray-core:latest
+    image: ghcr.io/xtls/xray-core:26.7.28
     volumes:
       - ./configs/xray-server.json:/usr/local/etc/xray/config.json:ro
     command: ["run", "-c", "/usr/local/etc/xray/config.json"]
@@ -25,7 +25,7 @@ services:
   # Connects to our Rust REALITY server running on the host.
   # Only started when ENABLE_XRAY_CLIENT=1 is set.
   xray-client:
-    image: ghcr.io/xtls/xray-core:latest
+    image: ghcr.io/xtls/xray-core:26.7.28
     volumes:
       - ./configs/xray-client.json:/usr/local/etc/xray/config.json:ro
     command: ["run", "-c", "/usr/local/etc/xray/config.json"]

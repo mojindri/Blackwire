@@ -164,7 +164,7 @@ pub struct VlessOutboundConfig {
 
 /// The VLESS outbound handler.
 pub struct VlessOutbound {
-    /// The unique tag for this outbound (from config.json).
+    /// The unique tag for this outbound (from the active database revision).
     tag: String,
 
     /// Connection configuration.

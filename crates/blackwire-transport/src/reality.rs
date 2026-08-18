@@ -38,7 +38,7 @@ pub async fn reality_server_tls_stream(
     auth_key: &[u8; 32],
     cover_sni: &str,
 ) -> Result<blackwire_common::BoxedStream, blackwire_common::ProxyError> {
-    let keys = complete_tls13_server_handshake(&mut stream, auth_key, cover_sni).await?;
+    let keys = complete_tls13_server_handshake(&mut stream, auth_key, cover_sni, None).await?;
     Ok(Box::new(Tls13Stream::new_server(stream, keys)))
 }
 

@@ -1,5 +1,8 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
@@ -7,20 +10,24 @@ use aes_gcm::{Aes256Gcm, Key, Nonce};
 use anyhow::Result;
 use hkdf::Hkdf;
 use sha2::Sha256;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
 use tracing::{debug, warn};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use blackwire_common::{
-    copy_bidirectional_with_idle, tcp_connect, BoxedStream, PrependedStream, ProxyError,
-    CONNECTION_IDLE_TIMEOUT,
+    copy_bidirectional_with_idle_limits, tcp_connect, BoxedStream, PrependedStream, ProxyError,
+    RelayRateLimit, CONNECTION_IDLE_TIMEOUT,
 };
 
 use super::parser::{parse_client_hello, reality_auth_peer_public_keys, ClientHelloFields};
+use super::tls13::{
+    read_client_hello_message, read_cover_handshake_profile, CoverHandshakeProfile,
+    MAX_CLIENT_HELLO_SIZE,
+};
 use super::{MAX_TIME_DIFF_SECS, REALITY_HKDF_INFO, SESSION_ID_OFFSET_IN_HANDSHAKE_BODY};
 
 const REALITY_RECORD_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const REALITY_COVER_PROFILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Stream ready for TLS after successful REALITY authentication.
 pub struct RealityAccepted {
@@ -28,6 +35,8 @@ pub struct RealityAccepted {
     pub stream: BoxedStream,
     /// Per-connection key used by later REALITY/TLS steps.
     pub auth_key: [u8; 32],
+    /// Cached visible TLS characteristics learned from the configured cover.
+    pub cover_profile: Option<CoverHandshakeProfile>,
 }
 
 /// REALITY server configuration read from the inbound config.
@@ -52,6 +61,10 @@ pub struct RealityServerConfig {
 pub struct RealityServer {
     config: Arc<RealityServerConfig>,
     private_key: StaticSecret,
+    cover_profile: Arc<tokio::sync::OnceCell<CoverHandshakeProfile>>,
+    cover_profile_probe_started: Arc<AtomicBool>,
+    fallback_upload_limit: Option<RelayRateLimit>,
+    fallback_download_limit: Option<RelayRateLimit>,
 }
 
 impl RealityServer {
@@ -74,7 +87,22 @@ impl RealityServer {
         Self {
             private_key,
             config: Arc::new(config),
+            cover_profile: Arc::new(tokio::sync::OnceCell::new()),
+            cover_profile_probe_started: Arc::new(AtomicBool::new(false)),
+            fallback_upload_limit: None,
+            fallback_download_limit: None,
         }
+    }
+
+    /// Apply optional pacing only to unauthenticated fallback relays.
+    pub fn with_fallback_limits(
+        mut self,
+        upload: Option<RelayRateLimit>,
+        download: Option<RelayRateLimit>,
+    ) -> Self {
+        self.fallback_upload_limit = upload;
+        self.fallback_download_limit = download;
+        self
     }
 
     /// Accept a connection and replay the ClientHello for post-auth TLS.
@@ -90,10 +118,14 @@ impl RealityServer {
         &self,
         stream: BoxedStream,
     ) -> Result<RealityAccepted, ProxyError> {
-        let (stream, auth_key) = self
+        let (stream, auth_key, cover_profile) = self
             .accept_inner(stream, ReplayMode::PrependClientHello)
             .await?;
-        Ok(RealityAccepted { stream, auth_key })
+        Ok(RealityAccepted {
+            stream,
+            auth_key,
+            cover_profile,
+        })
     }
 
     /// Accept a connection without replaying the ClientHello.
@@ -111,45 +143,36 @@ impl RealityServer {
         &self,
         mut stream: BoxedStream,
         replay_mode: ReplayMode,
-    ) -> Result<(BoxedStream, [u8; 32]), ProxyError> {
-        let mut record_header = [0u8; 5];
-        timeout(
+    ) -> Result<(BoxedStream, [u8; 32], Option<CoverHandshakeProfile>), ProxyError> {
+        // Establish the cover connection before classifying the client, then
+        // mirror the ClientHello as it is consumed. The bounded reader handles
+        // TLS record fragmentation without adding unbounded per-connection
+        // memory or a classification-dependent cover dial delay.
+        let mut fallback = tcp_connect(self.config.fallback)
+            .await
+            .map_err(|e| ProxyError::Transport(format!("fallback connect: {e}")))?;
+        let handshake_body = match timeout(
             REALITY_RECORD_READ_TIMEOUT,
-            stream.read_exact(&mut record_header),
+            read_client_hello_message(&mut stream, Some(&mut fallback)),
         )
         .await
-        .map_err(|_| ProxyError::Timeout)?
-        .map_err(ProxyError::from)?;
-
-        if record_header[0] != 0x16 {
-            debug!(
-                "not a TLS record (byte[0]={:#04x}) — forwarding to fallback",
-                record_header[0]
-            );
-            return self.do_fallback(stream, record_header.to_vec()).await;
-        }
-
-        let record_len = u16::from_be_bytes([record_header[3], record_header[4]]) as usize;
-        if record_len > 16384 {
-            debug!("oversized record ({record_len} bytes) — forwarding to fallback");
-            return self.do_fallback(stream, record_header.to_vec()).await;
-        }
-
-        let mut handshake_body = vec![0u8; record_len];
-        timeout(
-            REALITY_RECORD_READ_TIMEOUT,
-            stream.read_exact(&mut handshake_body),
-        )
-        .await
-        .map_err(|_| ProxyError::Timeout)?
-        .map_err(ProxyError::from)?;
+        {
+            Ok(Ok(body)) => body,
+            Ok(Err(e)) => {
+                debug!(error = %e, "ClientHello read failed — continuing cover relay");
+                return self.do_connected_fallback(stream, fallback).await;
+            }
+            Err(_) => {
+                debug!("ClientHello read timed out — continuing cover relay");
+                return self.do_connected_fallback(stream, fallback).await;
+            }
+        };
 
         let fields = match parse_client_hello(&handshake_body) {
             Ok(f) => f,
             Err(e) => {
                 debug!(error = %e, "ClientHello parse failed — forwarding to fallback");
-                let all_bytes = join_record(record_header, &handshake_body);
-                return self.do_fallback(stream, all_bytes).await;
+                return self.do_connected_fallback(stream, fallback).await;
             }
         };
         if !self
@@ -159,28 +182,62 @@ impl RealityServer {
             .any(|name| name.eq_ignore_ascii_case(&fields.sni))
         {
             debug!("ClientHello SNI not in REALITY allow-list — forwarding to fallback");
-            let all_bytes = join_record(record_header, &handshake_body);
-            return self.do_fallback(stream, all_bytes).await;
+            return self.do_connected_fallback(stream, fallback).await;
         }
 
         let auth_key = match self.derive_auth_key(&fields, &handshake_body) {
             Ok(key) => key,
             Err(e) => {
                 debug!(error = %e, "REALITY authentication failed — forwarding to fallback");
-                let all_bytes = join_record(record_header, &handshake_body);
-                return self.do_fallback(stream, all_bytes).await;
+                return self.do_connected_fallback(stream, fallback).await;
             }
         };
 
         debug!("REALITY authentication succeeded");
         let stream = match replay_mode {
             ReplayMode::PrependClientHello => {
-                let replay = join_record(record_header, &handshake_body);
+                let replay = encode_handshake_records(&handshake_body);
                 Box::new(PrependedStream::new(stream, replay)) as BoxedStream
             }
             ReplayMode::ConsumeClientHello => stream,
         };
-        Ok((stream, auth_key))
+        let cover_profile = self.cover_profile.get().cloned();
+        if cover_profile.is_none()
+            && self
+                .cover_profile_probe_started
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            let profile_cache = Arc::clone(&self.cover_profile);
+            let probe_started = Arc::clone(&self.cover_profile_probe_started);
+            tokio::spawn(async move {
+                match timeout(
+                    REALITY_COVER_PROFILE_TIMEOUT,
+                    read_cover_handshake_profile(&mut fallback),
+                )
+                .await
+                {
+                    Ok(Ok(profile)) => {
+                        if profile.selected_group != 0x001d {
+                            warn!(
+                                selected_group = profile.selected_group,
+                                "REALITY cover TLS fingerprint is incompatible with Blackwire's X25519 server handshake; cover shaping remains disabled"
+                            );
+                        }
+                        let _ = profile_cache.set(profile);
+                    }
+                    Ok(Err(error)) => {
+                        debug!(error = %error, "unable to learn REALITY cover handshake profile");
+                        probe_started.store(false, Ordering::Release);
+                    }
+                    Err(_) => {
+                        debug!("timed out learning REALITY cover handshake profile");
+                        probe_started.store(false, Ordering::Release);
+                    }
+                }
+            });
+        }
+        Ok((stream, auth_key, cover_profile))
     }
 
     /// Derive the REALITY auth key and validate the encrypted session token.
@@ -228,20 +285,20 @@ impl RealityServer {
     }
 
     /// Forward to the real fallback HTTPS site and finish the connection there.
-    async fn do_fallback(
+    async fn do_connected_fallback(
         &self,
         mut stream: BoxedStream,
-        already_read: Vec<u8>,
-    ) -> Result<(BoxedStream, [u8; 32]), ProxyError> {
-        warn!(fallback = %self.config.fallback, "forwarding to fallback");
-
-        let mut fallback = tcp_connect(self.config.fallback)
-            .await
-            .map_err(|e| ProxyError::Transport(format!("fallback connect: {e}")))?;
-
-        // Replay the bytes we consumed before proxying both directions.
-        fallback.write_all(&already_read).await?;
-        copy_bidirectional_with_idle(&mut stream, &mut fallback, CONNECTION_IDLE_TIMEOUT).await;
+        mut fallback: tokio::net::TcpStream,
+    ) -> Result<(BoxedStream, [u8; 32], Option<CoverHandshakeProfile>), ProxyError> {
+        debug!(fallback = %self.config.fallback, "continuing REALITY cover relay");
+        copy_bidirectional_with_idle_limits(
+            &mut stream,
+            &mut fallback,
+            CONNECTION_IDLE_TIMEOUT,
+            self.fallback_upload_limit,
+            self.fallback_download_limit,
+        )
+        .await;
 
         Err(ProxyError::FallbackRequired)
     }
@@ -253,10 +310,17 @@ enum ReplayMode {
     ConsumeClientHello,
 }
 
-fn join_record(record_header: [u8; 5], handshake_body: &[u8]) -> Vec<u8> {
-    let mut all_bytes = record_header.to_vec();
-    all_bytes.extend_from_slice(handshake_body);
-    all_bytes
+fn encode_handshake_records(handshake: &[u8]) -> Vec<u8> {
+    const MAX_RECORD: usize = 16 * 1024;
+    let record_count = handshake.len().div_ceil(MAX_RECORD);
+    let mut wire = Vec::with_capacity(handshake.len() + record_count * 5);
+    for chunk in handshake.chunks(MAX_RECORD) {
+        wire.extend_from_slice(&[0x16, 0x03, 0x03]);
+        wire.extend_from_slice(&(chunk.len() as u16).to_be_bytes());
+        wire.extend_from_slice(chunk);
+    }
+    debug_assert!(handshake.len() <= MAX_CLIENT_HELLO_SIZE);
+    wire
 }
 
 #[derive(Clone, Copy)]

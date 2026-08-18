@@ -1,6 +1,6 @@
 [package]
 name        = "blackwire-config"
-description = "Configuration schema, JSON parsing, validation, env-var substitution, and hot-reload."
+description = "Typed Blackwire runtime configuration and validation."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,10 +10,3 @@ authors.workspace = true
 serde.workspace       = true
 serde_json.workspace  = true
 validator.workspace   = true
-arc-swap.workspace    = true
-notify.workspace      = true
-once_cell.workspace   = true
-regex.workspace       = true
-tokio.workspace       = true
-tracing.workspace     = true
-anyhow.workspace      = true

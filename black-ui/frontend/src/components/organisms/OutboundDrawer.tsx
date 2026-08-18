@@ -5,27 +5,25 @@ import {
   buildOutboundInput,
   createOutboundEditorState,
   outboundSummary,
-  replaceOutboundSlice,
   syncOutboundAfterStructuredChange,
   validateOutboundState,
-  type OutboundEditorState,
-  type OutboundSliceKey
+  type OutboundEditorState
 } from "../../lib/outboundConfigurator";
 import { Button } from "../atoms/Button";
 import { IconButton } from "../atoms/IconButton";
-import { Input, Select, Textarea } from "../atoms/Input";
+import { Input, Select } from "../atoms/Input";
 import { Switch } from "../atoms/Switch";
 import { Field } from "../molecules/Field";
+import { SplitHttpFields } from "./SplitHttpFields";
 
-type TabKey = "basic" | "protocol" | "transport" | "security" | "advanced";
+type TabKey = "basic" | "protocol" | "transport" | "security";
 
 const hysteria2SimpleModes = new Set(["standard", "brutal-compatible", "badnet-low-latency"]);
 const tabOrder: Array<{ key: TabKey; label: string }> = [
   { key: "basic", label: "Basic" },
   { key: "protocol", label: "Protocol" },
   { key: "transport", label: "Transport" },
-  { key: "security", label: "Security" },
-  { key: "advanced", label: "Advanced" }
+  { key: "security", label: "Security" }
 ];
 
 function hysteria2HasCustomTuning(state: OutboundEditorState): boolean {
@@ -117,10 +115,11 @@ export function OutboundDrawer({
   );
   const securityOptions = useMemo(
     () =>
-      capabilities?.security.filter((item) => ["none", "tls", "reality"].includes(item.key)) ?? [
+      capabilities?.security.filter((item) => ["none", "tls", "reality", "shadowtls"].includes(item.key)) ?? [
         { key: "none", label: "No security", status: "supported", notes: "" },
         { key: "tls", label: "TLS", status: "supported", notes: "" },
-        { key: "reality", label: "REALITY", status: "supported", notes: "" }
+        { key: "reality", label: "REALITY", status: "supported", notes: "" },
+        { key: "shadowtls", label: "ShadowTLS v3", status: "supported", notes: "" }
       ],
     [capabilities]
   );
@@ -133,12 +132,6 @@ export function OutboundDrawer({
 
   const updateStructured = (patch: Partial<OutboundEditorState>) => {
     const next = syncOutboundAfterStructuredChange({ ...stateRef.current, ...patch });
-    stateRef.current = next;
-    setState(next);
-  };
-
-  const updateSlice = (key: OutboundSliceKey, text: string) => {
-    const next = replaceOutboundSlice(stateRef.current, key, text);
     stateRef.current = next;
     setState(next);
   };
@@ -189,7 +182,7 @@ export function OutboundDrawer({
           <h2>{editing ? editing.tag : "New outbound"}</h2>
           <p>
             {editing
-              ? "Structured outbound configuration with protocol-aware tabs and advanced JSON fallback."
+              ? "Structured outbound configuration with protocol-aware typed fields."
               : "Create a new outbound with guided protocol, transport, and security settings."}
           </p>
         </div>
@@ -414,9 +407,7 @@ export function OutboundDrawer({
             ) : null}
 
             {state.network === "splithttp" ? (
-              <Field label="Path">
-                <Input value={state.splitHttpPath} onChange={(e) => updateStructured({ splitHttpPath: e.target.value })} placeholder="/packet" />
-              </Field>
+              <SplitHttpFields value={state.splitHttp} onChange={(splitHttp) => updateStructured({ splitHttp })} />
             ) : null}
 
             {state.network === "kcp" ? (
@@ -447,7 +438,7 @@ export function OutboundDrawer({
             ) : null}
 
             {state.network === "quic" ? (
-              <p className="field-hint">QUIC is covered here as an outbound network choice. Any top-level QUIC socket tuning still belongs in Advanced Config.</p>
+              <p className="field-hint">QUIC transport uses the runtime defaults. Hysteria2 exposes its additional socket tuning as typed controls below.</p>
             ) : null}
 
             {hysteria2CustomTuning ? (
@@ -512,6 +503,7 @@ export function OutboundDrawer({
                 <Field label="ALPN">
                   <Input value={state.tlsAlpn} onChange={(e) => updateStructured({ tlsAlpn: e.target.value })} placeholder="h2, http/1.1" />
                 </Field>
+                <Switch checked={state.tlsAllowInsecure} onChange={(tlsAllowInsecure) => updateStructured({ tlsAllowInsecure })} label="Allow insecure certificates" />
                 <Field label="Certificate file">
                   <Input value={state.tlsCertificateFile} onChange={(e) => updateStructured({ tlsCertificateFile: e.target.value })} placeholder="/etc/blackwire/fullchain.pem" />
                 </Field>
@@ -541,35 +533,16 @@ export function OutboundDrawer({
               </div>
             ) : null}
 
-            {state.security === "none" ? <p className="field-hint">No extra security wrapper. TLS or REALITY is usually the better fit for remote proxy outbounds.</p> : null}
-          </section>
-        ) : null}
+            {state.security === "shadowtls" ? <div className="configurator-grid"><Field label="Password"><Input type="password" value={state.shadowTlsPassword} onChange={(e) => updateStructured({ shadowTlsPassword: e.target.value })} /></Field><Field label="TLS camouflage destination"><Input value={state.shadowTlsDest} onChange={(e) => updateStructured({ shadowTlsDest: e.target.value })} placeholder="www.apple.com:443" /></Field><Field label="Version"><Input type="number" min={3} max={3} value={state.shadowTlsVersion} onChange={(e) => updateStructured({ shadowTlsVersion: e.target.value })} /></Field></div> : null}
 
-        {activeTab === "advanced" ? (
-          <section className="drawer-card configurator-section">
-            <AdvancedSlice
-              label="Settings JSON"
-              hint="Protocol-specific outbound settings. Structured controls own the common fields and preserve the rest."
-              value={state.settings.text}
-              error={state.settings.error}
-              placeholder='{"address":"1.2.3.4","port":443}'
-              onChange={(text) => updateSlice("settings", text)}
-            />
-            <AdvancedSlice
-              label="Stream settings JSON"
-              hint="Transport and security JSON. Use this for custom keys not surfaced by the structured tabs."
-              value={state.streamSettings.text}
-              error={state.streamSettings.error}
-              placeholder='{"network":"tcp","security":"tls"}'
-              onChange={(text) => updateSlice("streamSettings", text)}
-            />
+            {state.security === "none" ? <p className="field-hint">No extra security wrapper. TLS or REALITY is usually the better fit for remote proxy outbounds.</p> : null}
           </section>
         ) : null}
 
         {jsonErrors.length > 0 ? (
           <div className="error-line inline-error">
             <AlertCircle size={15} />
-            <span>Fix invalid JSON in Advanced before saving.</span>
+            <span>The stored typed configuration is invalid and cannot be saved safely.</span>
           </div>
         ) : null}
         {validationIssues.length > 0 ? (
@@ -594,30 +567,5 @@ export function OutboundDrawer({
         </Button>
       </div>
     </aside>
-  );
-}
-
-function AdvancedSlice({
-  label,
-  hint,
-  value,
-  error,
-  placeholder,
-  onChange
-}: {
-  label: string;
-  hint?: string;
-  value: string;
-  error: string;
-  placeholder: string;
-  onChange: (text: string) => void;
-}) {
-  return (
-    <Field label={label} hint={hint}>
-      <div className="advanced-slice">
-        <Textarea rows={7} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
-        {error ? <div className="field-error">{error}</div> : null}
-      </div>
-    </Field>
   );
 }

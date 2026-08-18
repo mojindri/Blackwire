@@ -14,7 +14,7 @@ Can be:
 
 Defined in:
 
-- [crates/blackwire-common/src/address.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-common/src/address.rs)
+- [crates/blackwire-common/src/address.rs](../crates/blackwire-common/src/address.rs)
 
 ## `BoxedStream`
 
@@ -80,7 +80,7 @@ Examples:
 
 ## `settings`
 
-Protocol-specific config JSON.
+Protocol-specific typed configuration attached to an endpoint snapshot.
 
 Examples:
 
@@ -136,7 +136,7 @@ and then:
 
 Defined around:
 
-- [crates/blackwire-app/src/dispatcher.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-app/src/dispatcher.rs)
+- [crates/blackwire-app/src/dispatcher.rs](../crates/blackwire-app/src/dispatcher.rs)
 
 ## router
 
@@ -156,7 +156,7 @@ A disguise/authentication transport layer that hides auth inside a browser-like 
 
 See:
 
-- [docs/04-reality-for-dummies.md](/Users/mojnader/RustroverProjects/v2ray/docs/04-reality-for-dummies.md)
+- [docs/04-reality-for-dummies.md](04-reality-for-dummies.md)
 
 ## fallback
 
@@ -216,7 +216,7 @@ Used for auth ID and header encryption logic.
 
 See:
 
-- [crates/blackwire-protocol/src/vmess/auth.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-protocol/src/vmess/auth.rs)
+- [crates/blackwire-protocol/src/vmess/auth.rs](../crates/blackwire-protocol/src/vmess/auth.rs)
 
 ## auth ID
 
@@ -363,17 +363,15 @@ The running assembled proxy runtime built by `blackwire-core`.
 
 It owns listener tasks and startup composition.
 
-Defined in:
+Defined in `crates/blackwire-core/src/instance/mod.rs`.
 
-- [crates/blackwire-core/src/instance/mod.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-core/src/instance/mod.rs)
+## `Database`
 
-## `ConfigManager`
+The MySQL control-plane owner. It verifies the relational schema, reconstructs
+typed revisions, publishes mutations, tracks activation state, and records
+runtime health.
 
-The config owner that loads, validates, and hot-reloads config.
-
-Defined in:
-
-- [crates/blackwire-config/src/manager.rs](/Users/mojnader/RustroverProjects/v2ray/crates/blackwire-config/src/manager.rs)
+Defined in `crates/blackwire-store/src/connection.rs`.
 
 ## `ConnectionHandler`
 

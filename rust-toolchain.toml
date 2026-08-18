@@ -1,7 +1,5 @@
-# Pins the Rust toolchain version for this project.
-# Everyone who builds this — on any machine, in any CI — gets the exact same
-# compiler version, which prevents "works on my machine" issues caused by
-# compiler updates changing behaviour or adding new warnings.
+# Selects the stable Rust release used by local development, CI, and container
+# builds. Cargo.toml records the minimum supported Rust version separately.
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy"]

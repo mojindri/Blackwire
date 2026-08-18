@@ -18,6 +18,17 @@ use crate::{BufferPool, ProxyError};
 /// Default idle timeout for established connections (Xray `ConnectionIdle`).
 pub const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Optional one-way relay pacing applied after an initial unthrottled prefix.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RelayRateLimit {
+    /// Number of bytes passed without pacing.
+    pub after_bytes: u64,
+    /// Sustained transfer rate after the prefix and burst are consumed.
+    pub bytes_per_second: u64,
+    /// Additional bytes passed immediately before sustained pacing.
+    pub burst_bytes: u64,
+}
+
 /// Milliseconds elapsed since the relay module was first used.
 /// Provides a lightweight monotonic clock for idle-timeout tracking without
 /// allocating a mutex or taking a lock on every packet.
@@ -609,6 +620,23 @@ where
     A: AsyncRead + AsyncWrite + Unpin,
     B: AsyncRead + AsyncWrite + Unpin,
 {
+    copy_bidirectional_with_idle_limits(a, b, idle, None, None).await;
+}
+
+/// Bidirectional idle-aware relay with optional one-way pacing.
+///
+/// `a_to_b` and `b_to_a` are intentionally explicit so callers do not have to
+/// wrap streams or add overhead when both limits are disabled.
+pub async fn copy_bidirectional_with_idle_limits<A, B>(
+    a: &mut A,
+    b: &mut B,
+    idle: Duration,
+    a_to_b: Option<RelayRateLimit>,
+    b_to_a: Option<RelayRateLimit>,
+) where
+    A: AsyncRead + AsyncWrite + Unpin,
+    B: AsyncRead + AsyncWrite + Unpin,
+{
     let (a_read, a_write) = tokio::io::split(a);
     let (b_read, b_write) = tokio::io::split(b);
 
@@ -616,8 +644,8 @@ where
     // Both relay halves update it lock-free; `sleep_until_idle` reads it.
     let last_activity = Arc::new(AtomicU64::new(now_ms()));
 
-    let up = copy_one_way_with_idle(b_read, a_write, idle, Arc::clone(&last_activity));
-    let down = copy_one_way_with_idle(a_read, b_write, idle, last_activity);
+    let up = copy_one_way_with_idle(b_read, a_write, idle, Arc::clone(&last_activity), b_to_a);
+    let down = copy_one_way_with_idle(a_read, b_write, idle, last_activity, a_to_b);
 
     let _ = tokio::join!(up, down);
 }
@@ -627,6 +655,7 @@ async fn copy_one_way_with_idle<R, W>(
     mut writer: W,
     idle: Duration,
     last_activity: Arc<AtomicU64>,
+    rate_limit: Option<RelayRateLimit>,
 ) where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -635,6 +664,8 @@ async fn copy_one_way_with_idle<R, W>(
     let pool = relay_pool();
     let mut buf = pool.acquire(BUF_SIZE);
     buf.resize(BUF_SIZE, 0); // make the full capacity addressable for reads
+    let mut pace_started = None;
+    let mut paced_bytes = 0u64;
 
     loop {
         let read_fut = reader.read(&mut buf[..]);
@@ -659,6 +690,20 @@ async fn copy_one_way_with_idle<R, W>(
             break;
         }
         last_activity.store(now_ms(), Ordering::Relaxed);
+        if let Some(limit) = rate_limit.filter(|limit| limit.bytes_per_second > 0) {
+            paced_bytes = paced_bytes.saturating_add(n as u64);
+            let delayed_bytes = paced_bytes
+                .saturating_sub(limit.after_bytes)
+                .saturating_sub(limit.burst_bytes);
+            if delayed_bytes > 0 {
+                let started = *pace_started.get_or_insert_with(tokio::time::Instant::now);
+                let delay_nanos = (u128::from(delayed_bytes) * 1_000_000_000u128
+                    / u128::from(limit.bytes_per_second))
+                .min(u128::from(u64::MAX)) as u64;
+                tokio::time::sleep_until(started + Duration::from_nanos(delay_nanos)).await;
+                last_activity.store(now_ms(), Ordering::Relaxed);
+            }
+        }
     }
 
     // Propagate EOF to the peer so it does not stall waiting for data that will

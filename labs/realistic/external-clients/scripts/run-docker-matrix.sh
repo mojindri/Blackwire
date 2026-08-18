@@ -10,11 +10,12 @@ REPORT_DIR="${1:-$REALISTIC_DIR/reports/external-clients}"
 ENV_FILE="${2:-$REALISTIC_DIR/configs/matrix.env}"
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-blackwire-external-clients}"
 COMPOSE=(docker compose -p "$PROJECT_NAME" -f "$LAB_DIR/docker-compose.yml")
-TARGET_URL="http://target-http:8080"
+TARGET_URL="http://10.203.0.12:8080"
 
 PORT_WAIT_TRIES="${MATRIX_PORT_WAIT_TRIES:-40}"
 PORT_WAIT_SLEEP="${MATRIX_PORT_WAIT_SLEEP:-0.15}"
 SOCKS_WAIT_TRIES="${MATRIX_SOCKS_WAIT_TRIES:-20}"
+NEGATIVE_SOCKS_WAIT_TRIES="${MATRIX_NEGATIVE_SOCKS_WAIT_TRIES:-2}"
 SOCKS_WAIT_SLEEP="${MATRIX_SOCKS_WAIT_SLEEP:-0.25}"
 # VLESS + Docker DNS round-trips can exceed 8s on loaded hosts; keep headroom over relay latency.
 CURL_MAX_TIME="${MATRIX_CURL_MAX_TIME:-15}"
@@ -28,7 +29,11 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
     exit 1
 fi
 
-bash "$LAB_DIR/scripts/render-configs.sh" "$ENV_FILE" "$LAB_DIR/generated" > "$REPORT_DIR/render.log" 2>&1
+EXTERNAL_SERVER_ADDRESS="${EXTERNAL_SERVER_ADDRESS:-10.203.0.11}" \
+EXTERNAL_REALITY_SERVER_NAME="${EXTERNAL_REALITY_SERVER_NAME:-blackwire.local}" \
+EXTERNAL_REALITY_DEST="${EXTERNAL_REALITY_DEST:-10.203.0.10:443}" \
+    bash "$LAB_DIR/scripts/render-configs.sh" "$ENV_FILE" "$LAB_DIR/generated" \
+    > "$REPORT_DIR/render.log" 2>&1
 
 port_for_protocol() {
     case "$1" in
@@ -69,8 +74,8 @@ matrix_bootstrap() {
         include_hiddify=0
     fi
     if (( include_hiddify )); then
-        if ! "${COMPOSE[@]}" up -d target-http tls-cover matrix-probe blackwire-server sing-box-client \
-            hiddify-sing-box-client \
+        if ! "${COMPOSE[@]}" up -d mysql target-http tls-cover matrix-probe blackwire-server sing-box-client \
+            hiddify-sing-box-client hiddify-probe \
             >> "$REPORT_DIR/compose.log" 2>&1; then
             echo "WARN: failed to start hiddify-sing-box-client; retrying without it" | tee -a "$REPORT_DIR/compose.log" >&2
             "${COMPOSE[@]}" down -v >> "$REPORT_DIR/compose.log" 2>&1 || true
@@ -78,7 +83,7 @@ matrix_bootstrap() {
         fi
     fi
     if (( ! include_hiddify )); then
-        "${COMPOSE[@]}" up -d target-http tls-cover matrix-probe blackwire-server sing-box-client \
+        "${COMPOSE[@]}" up -d mysql target-http tls-cover matrix-probe blackwire-server sing-box-client \
             >> "$REPORT_DIR/compose.log" 2>&1
     fi
 
@@ -88,11 +93,18 @@ matrix_bootstrap() {
     if (( include_hiddify )); then
         "${COMPOSE[@]}" up -d --force-recreate hiddify-sing-box-client \
             >> "$REPORT_DIR/compose.log" 2>&1 || true
+        "${COMPOSE[@]}" up -d --force-recreate hiddify-probe \
+            >> "$REPORT_DIR/compose.log" 2>&1 || true
     fi
 
     "${COMPOSE[@]}" exec -T matrix-probe sh -c \
         'command -v python3 >/dev/null 2>&1 || apk add --no-cache curl netcat-openbsd bind-tools python3 >/dev/null' \
         </dev/null >> "$REPORT_DIR/compose.log" 2>&1 || true
+    if (( include_hiddify )); then
+        "${COMPOSE[@]}" exec -T hiddify-probe sh -c \
+            'command -v curl >/dev/null 2>&1 || apk add --no-cache curl >/dev/null' \
+            </dev/null >> "$REPORT_DIR/compose.log" 2>&1 || true
+    fi
 
     local i
     for i in $(seq 1 30); do
@@ -121,8 +133,26 @@ start_blackwire() {
             >>"$REPORT_DIR/compose.log"
         return 1
     fi
+    if ! "${COMPOSE[@]}" exec -T mysql mysql -uroot -pblackwire-root \
+        -e "DROP DATABASE IF EXISTS blackwire; CREATE DATABASE blackwire CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; GRANT ALL PRIVILEGES ON blackwire.* TO 'blackwire'@'%';" \
+        </dev/null >> "$REPORT_DIR/compose.log" 2>&1; then
+        echo "ERROR: failed to reset the matrix MySQL database" >> "$REPORT_DIR/compose.log"
+        return 1
+    fi
+    if ! "${COMPOSE[@]}" exec -T blackwire-server blackwire db init \
+        </dev/null >> "$REPORT_DIR/compose.log" 2>&1; then
+        echo "ERROR: failed to initialize the matrix MySQL schema" >> "$REPORT_DIR/compose.log"
+        return 1
+    fi
+    if ! "${COMPOSE[@]}" exec -T blackwire-server \
+        blackwire db import-fixture "/generated/blackwire/${server_cfg}" \
+        </dev/null >> "$REPORT_DIR/compose.log" 2>&1; then
+        echo "ERROR: failed to import /generated/blackwire/${server_cfg} into MySQL" \
+            >> "$REPORT_DIR/compose.log"
+        return 1
+    fi
     local rust_log="${MATRIX_SERVER_RUST_LOG:-}"
-    local run_cmd="blackwire run -c /generated/blackwire/${server_cfg}"
+    local run_cmd="blackwire run"
     if [[ -n "$rust_log" ]]; then
         run_cmd="env RUST_LOG=${rust_log} ${run_cmd}"
     fi
@@ -195,16 +225,35 @@ start_sing_box() {
 }
 
 stop_hiddify() {
-    "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c 'pkill -x sing-box 2>/dev/null || true' \
+    "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c '
+        if test -s /tmp/hiddify-matrix.pid; then
+            pid=$(cat /tmp/hiddify-matrix.pid)
+            kill "$pid" 2>/dev/null || true
+            i=0
+            while kill -0 "$pid" 2>/dev/null && test "$i" -lt 20; do
+                sleep 0.1
+                i=$((i + 1))
+            done
+            kill -9 "$pid" 2>/dev/null || true
+            rm -f /tmp/hiddify-matrix.pid
+        fi
+        pkill -x hiddify-core 2>/dev/null || true
+    ' \
         </dev/null >/dev/null 2>&1 || true
     sleep 0.2
 }
 
 start_hiddify() {
     local client_cfg="$1"
+    local mode="${2:-plain}"
     stop_hiddify
-    "${COMPOSE[@]}" exec -d hiddify-sing-box-client \
-        sing-box run -c "/generated/${client_cfg}" </dev/null >> "$REPORT_DIR/compose.log" 2>&1
+    local command="exec /hiddify/hiddify-core-linux-*/hiddify-core srun -c /generated/${client_cfg}"
+    if [[ "$mode" == *tcp-fragment* ]]; then
+        command="exec /hiddify/hiddify-core-linux-*/hiddify-core run -c /generated/${client_cfg} --full-config --in-proxy-port 1080 --fragment --fragment-size 2-4 --fragment-sleep 2-4"
+    fi
+    "${COMPOSE[@]}" exec -d hiddify-sing-box-client sh -c \
+        ": > /tmp/hiddify-matrix.log; echo \$\$ > /tmp/hiddify-matrix.pid; ${command} >> /tmp/hiddify-matrix.log 2>&1" \
+        </dev/null >> "$REPORT_DIR/compose.log" 2>&1
 }
 
 assert_single_client() {
@@ -213,7 +262,7 @@ assert_single_client() {
     if "${COMPOSE[@]}" exec -T sing-box-client sh -c 'pgrep -x sing-box >/dev/null' </dev/null 2>/dev/null; then
         n=$((n + 1))
     fi
-    if "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c 'pgrep -x sing-box >/dev/null' </dev/null 2>/dev/null; then
+    if "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c 'pgrep -x hiddify-core >/dev/null' </dev/null 2>/dev/null; then
         n=$((n + 1))
     fi
     if [[ "$n" -gt 1 ]]; then
@@ -308,9 +357,11 @@ should_run_protocol() {
 
 wait_for_socks() {
     local client_host="$1"
+    local tries="${2:-$SOCKS_WAIT_TRIES}"
+    local probe_service="${3:-matrix-probe}"
     local i
-    for i in $(seq 1 "$SOCKS_WAIT_TRIES"); do
-        if "${COMPOSE[@]}" exec -T matrix-probe \
+    for i in $(seq 1 "$tries"); do
+        if "${COMPOSE[@]}" exec -T "$probe_service" \
             curl -fsS --max-time "$CURL_MAX_TIME" --socks5-hostname "${client_host}:1080" "$TARGET_URL" \
             </dev/null >/dev/null 2>&1; then
             return 0
@@ -322,9 +373,11 @@ wait_for_socks() {
 
 wait_for_socks_udp() {
     local client_host="$1"
+    local tries="${2:-$SOCKS_WAIT_TRIES}"
+    local probe_service="${3:-matrix-probe}"
     local i
-    for i in $(seq 1 "$SOCKS_WAIT_TRIES"); do
-        if "${COMPOSE[@]}" exec -T matrix-probe \
+    for i in $(seq 1 "$tries"); do
+        if "${COMPOSE[@]}" exec -T "$probe_service" \
             sh /scripts/udp-socks-probe.sh "$client_host" 1080 \
             </dev/null >/dev/null 2>&1; then
             return 0
@@ -355,6 +408,10 @@ append_logs() {
     "${COMPOSE[@]}" exec -T blackwire-server sh -c 'test -f /tmp/blackwire-matrix.log && cat /tmp/blackwire-matrix.log || true' >> "$log" 2>&1 || true
     if [[ "${2:-}" == "xray-client" ]]; then
         docker logs xray-client >> "$log" 2>&1 || true
+    elif [[ "${2:-}" == "hiddify-sing-box-client" ]]; then
+        "${COMPOSE[@]}" exec -T hiddify-sing-box-client sh -c \
+            'test -f /tmp/hiddify-matrix.log && cat /tmp/hiddify-matrix.log || true' \
+            >> "$log" 2>&1 || true
     elif [[ -n "${2:-}" ]]; then
         "${COMPOSE[@]}" logs --no-color "$2" >> "$log" 2>&1 || true
     fi
@@ -425,7 +482,7 @@ run_client_case() {
             return 1
         }
     elif [[ "$client" == "hiddify" ]]; then
-        start_hiddify "$resolved_cfg"
+        start_hiddify "$resolved_cfg" "$label"
     else
         start_sing_box "$resolved_cfg" || {
             echo "FAIL ${label} (client start)" | tee -a "$REPORT_DIR/summary.txt"
@@ -435,12 +492,18 @@ run_client_case() {
     assert_single_client
 
     local client_host="$client_service"
-    [[ "$client" == "hiddify" ]] && client_host="hiddify-sing-box-client"
+    local probe_service="matrix-probe"
+    if [[ "$client" == "hiddify" ]]; then
+        client_host="127.0.0.1"
+        probe_service="hiddify-probe"
+    fi
+    local probe_tries="$SOCKS_WAIT_TRIES"
+    [[ "$expect_pass" == "reject" ]] && probe_tries="$NEGATIVE_SOCKS_WAIT_TRIES"
 
     stop_client() { case "$client" in xray) stop_xray ;; hiddify) stop_hiddify ;; *) stop_sing_box ;; esac; }
 
     if udp_only_protocol "$protocol"; then
-        if wait_for_socks_udp "$client_host"; then
+        if wait_for_socks_udp "$client_host" "$probe_tries" "$probe_service"; then
             if [[ "$expect_pass" == "pass" ]]; then
                 echo "PASS ${label}" | tee -a "$REPORT_DIR/summary.txt"
                 stop_client; return 0
@@ -458,7 +521,7 @@ run_client_case() {
         stop_client; return 0
     fi
 
-    if wait_for_socks "$client_host"; then
+    if wait_for_socks "$client_host" "$probe_tries" "$probe_service"; then
         if [[ "$expect_pass" == "pass" ]]; then
             if requires_udp_probe "$protocol" && ! wait_for_socks_udp "$client_host"; then
                 echo "FAIL ${label} (udp socks probe)" | tee -a "$REPORT_DIR/summary.txt"
@@ -521,6 +584,26 @@ run_protocol() {
         "$REPORT_DIR/logs/negative-xray-${protocol}.log" "$protocol" || overall=1
     run_client_case reject "negative-sing-box-${protocol}" sing-box "$sing_cfg" \
         "$REPORT_DIR/logs/negative-sing-box-${protocol}.log" "$protocol" || overall=1
+
+    if [[ "$protocol" == "vless-reality" ]]; then
+        stop_blackwire
+        if start_blackwire "$server_cfg" && wait_for_server_port "$protocol"; then
+            run_client_case pass "hiddify-${protocol}-tcp-fragment" hiddify "$sing_cfg" \
+                "$REPORT_DIR/logs/hiddify-${protocol}-tcp-fragment.log" "$protocol" || overall=1
+        else
+            echo "FAIL hiddify-${protocol}-tcp-fragment (server restart)" | tee -a "$REPORT_DIR/summary.txt"
+            overall=1
+        fi
+
+        stop_blackwire
+        if start_blackwire "$server_cfg" && wait_for_server_port "$protocol"; then
+            run_client_case pass "hiddify-${protocol}-record-fragment" hiddify "vless-reality-record-fragment.json" \
+                "$REPORT_DIR/logs/hiddify-${protocol}-record-fragment.log" "$protocol" || overall=1
+        else
+            echo "FAIL hiddify-${protocol}-record-fragment (server restart)" | tee -a "$REPORT_DIR/summary.txt"
+            overall=1
+        fi
+    fi
 
     stop_blackwire
     stop_xray

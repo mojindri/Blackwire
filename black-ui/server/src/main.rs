@@ -1,41 +1,26 @@
 //! Black UI server — management panel backend for Blackwire.
 
 mod app;
-mod auth;
-mod autotune;
 mod capabilities;
-mod config;
-mod db;
-mod enforcement;
+mod control_handlers;
 mod error;
-mod firewall;
-mod handlers;
 mod models;
-mod reality_values;
-mod runtime;
+mod mysql_auth;
+mod mysql_state;
 mod service;
-mod state;
 mod tls_cert;
 mod util;
 
 use anyhow::Result;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
-use tracing::{info, warn};
+use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let state = state::AppState::open()?;
-    if let Err(e) = enforcement::run_startup_once(&state).await {
-        warn!(error = %e, "startup quota/expiry enforcement failed");
-    }
-    if let Err(e) = autotune::run_startup_once(&state).await {
-        warn!(error = %e, "startup adaptive tuning failed");
-    }
-    enforcement::spawn(state.clone());
-    autotune::spawn(state.clone());
+    let state = mysql_state::AppState::open().await?;
 
     let addr: SocketAddr = std::env::var("BLACK_UI_LISTEN")
         .unwrap_or_else(|_| "127.0.0.1:18080".into())

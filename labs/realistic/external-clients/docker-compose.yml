@@ -1,6 +1,22 @@
 services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: blackwire-root
+      MYSQL_DATABASE: blackwire
+      MYSQL_USER: blackwire
+      MYSQL_PASSWORD: blackwire
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -pblackwire-root --silent"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   target-http:
     image: hashicorp/http-echo:1.0
+    networks:
+      default:
+        ipv4_address: 10.203.0.12
     command:
       - "-listen=:8080"
       - "-text=blackwire external client target"
@@ -9,6 +25,9 @@ services:
   tls-cover:
     image: nginx:alpine
     hostname: tls-cover
+    networks:
+      default:
+        ipv4_address: 10.203.0.10
     volumes:
       - ./generated/certs:/etc/nginx/certs:ro
       - ./tls-cover/nginx.conf:/etc/nginx/conf.d/default.conf:ro
@@ -27,20 +46,29 @@ services:
   blackwire-server:
     image: blackwire:latest
     hostname: blackwire-server
+    networks:
+      default:
+        ipv4_address: 10.203.0.11
     dns:
       - 127.0.0.11
     entrypoint: ["/bin/sh", "-c"]
     command: ["exec sleep infinity"]
+    environment:
+      BLACKWIRE_DATABASE_URL: mysql://blackwire:blackwire@mysql:3306/blackwire
     volumes:
       - ./generated/blackwire:/generated/blackwire:ro
       - ./generated/certs:/etc/blackwire/certs:ro
     depends_on:
-      - target-http
-      - tls-cover
+      mysql:
+        condition: service_healthy
+      target-http:
+        condition: service_started
+      tls-cover:
+        condition: service_started
 
   # sing-box image includes /bin/sh — idle holder + exec-driven runs.
   sing-box-client:
-    image: ghcr.io/sagernet/sing-box:latest
+    image: ghcr.io/sagernet/sing-box:v1.13.19
     hostname: sing-box-client
     entrypoint: ["/bin/sh", "-c"]
     command: ["exec sleep infinity"]
@@ -49,9 +77,9 @@ services:
     depends_on:
       - target-http
 
-  # hiddify-sing-box: sing-box fork with xHTTP/packet-up support.
+  # Hiddify Core used by the current Hiddify app release.
   hiddify-sing-box-client:
-    image: ghcr.io/hiddify/hiddify-sing-box:latest
+    image: ghcr.io/hiddify/hiddify-core:v4.1.0
     hostname: hiddify-sing-box-client
     entrypoint: ["/bin/sh", "-c"]
     command: ["exec sleep infinity"]
@@ -60,12 +88,29 @@ services:
     depends_on:
       - target-http
 
+  # Hiddify app mode intentionally binds its mixed proxy to loopback. This
+  # probe shares that network namespace so the matrix exercises 127.0.0.1:1080.
+  hiddify-probe:
+    image: alpine:3.20
+    command: ["sleep", "infinity"]
+    network_mode: "service:hiddify-sing-box-client"
+    volumes:
+      - ./scripts:/scripts:ro
+    depends_on:
+      - hiddify-sing-box-client
+
   # Xray-core is distroless (no shell). Not started via `compose up`; matrix uses
   # `compose run --name xray-client` per case (see run-docker-matrix.sh).
   xray-client:
-    image: ghcr.io/xtls/xray-core:latest
+    image: ghcr.io/xtls/xray-core:26.7.28
     hostname: xray-client
     volumes:
       - ./generated:/generated:ro
     depends_on:
       - target-http
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.203.0.0/24

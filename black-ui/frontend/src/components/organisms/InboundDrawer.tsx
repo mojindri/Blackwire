@@ -7,11 +7,9 @@ import {
   createInboundEditorState,
   inboundCompatibilityNotice,
   inboundSummary,
-  replaceSlice,
   syncAfterStructuredChange,
   validateInboundState,
-  type InboundEditorState,
-  type SliceKey
+  type InboundEditorState
 } from "../../lib/inboundConfigurator";
 import {
   buildTlsSelfSignedInput,
@@ -21,11 +19,12 @@ import {
 } from "../../lib/tlsSelfSigned";
 import { Button } from "../atoms/Button";
 import { IconButton } from "../atoms/IconButton";
-import { Input, Select, Textarea } from "../atoms/Input";
+import { Input, Select } from "../atoms/Input";
 import { Switch } from "../atoms/Switch";
 import { Field } from "../molecules/Field";
+import { SplitHttpFields } from "./SplitHttpFields";
 
-type TabKey = "basic" | "protocol" | "transport" | "security" | "sniffing" | "advanced";
+type TabKey = "basic" | "protocol" | "transport" | "security" | "sniffing";
 
 const sniffingOptions = ["http", "tls", "fakedns"];
 const hysteria2SimpleModes = new Set(["standard", "brutal-compatible", "badnet-low-latency"]);
@@ -34,8 +33,7 @@ const tabOrder: Array<{ key: TabKey; label: string }> = [
   { key: "protocol", label: "Protocol" },
   { key: "transport", label: "Transport" },
   { key: "security", label: "Security" },
-  { key: "sniffing", label: "Sniffing" },
-  { key: "advanced", label: "Advanced" }
+  { key: "sniffing", label: "Sniffing & limits" }
 ];
 
 function hysteria2HasCustomTuning(state: InboundEditorState): boolean {
@@ -141,10 +139,11 @@ export function InboundDrawer({
   );
   const securityOptions = useMemo(
     () =>
-      capabilities?.security.filter((item) => ["none", "tls", "reality"].includes(item.key)) ?? [
+      capabilities?.security.filter((item) => ["none", "tls", "reality", "shadowtls"].includes(item.key)) ?? [
         { key: "none", label: "No security", status: "supported", notes: "" },
         { key: "tls", label: "TLS", status: "supported", notes: "" },
-        { key: "reality", label: "REALITY", status: "supported", notes: "" }
+        { key: "reality", label: "REALITY", status: "supported", notes: "" },
+        { key: "shadowtls", label: "ShadowTLS v3", status: "supported", notes: "" }
       ],
     [capabilities]
   );
@@ -160,12 +159,6 @@ export function InboundDrawer({
 
   const updateStructured = (patch: Partial<InboundEditorState>) => {
     const next = syncAfterStructuredChange({ ...stateRef.current, ...patch });
-    stateRef.current = next;
-    setState(next);
-  };
-
-  const updateSlice = (key: SliceKey, text: string) => {
-    const next = replaceSlice(stateRef.current, key, text);
     stateRef.current = next;
     setState(next);
   };
@@ -297,7 +290,7 @@ export function InboundDrawer({
           <h2>{editing ? editing.tag : "New inbound"}</h2>
           <p>
             {editing
-              ? "Structured inbound configuration with protocol-aware tabs and advanced JSON fallback."
+              ? "Structured inbound configuration with protocol-aware typed fields."
               : "Create a new inbound with guided protocol, transport, security, and sniffing settings."}
           </p>
         </div>
@@ -388,7 +381,7 @@ export function InboundDrawer({
               </Field>
             ) : null}
             {state.protocol === "trojan" ? (
-              <p className="field-hint">Trojan client secrets continue to be managed through Users. Use Advanced only for extra inbound-level keys.</p>
+              <p className="field-hint">Trojan client secrets are managed through Users.</p>
             ) : null}
             {state.protocol === "hysteria2" ? (
               <>
@@ -436,10 +429,10 @@ export function InboundDrawer({
               </>
             ) : null}
             {state.protocol === "socks" || state.protocol === "http" ? (
-              <p className="field-hint">Listener basics are handled here. Auth and less-common protocol knobs stay available under Advanced.</p>
+              <p className="field-hint">Listener basics are managed here. Add managed credentials through Users when authentication is required.</p>
             ) : null}
             {!["vless", "vmess", "shadowsocks", "trojan", "hysteria2", "socks", "http"].includes(state.protocol) ? (
-              <p className="field-hint">This protocol is still editable through Advanced without losing custom keys.</p>
+              <p className="field-hint">This legacy protocol has no editable protocol-specific fields in this panel; its existing stored values are preserved.</p>
             ) : null}
           </section>
         ) : null}
@@ -487,9 +480,7 @@ export function InboundDrawer({
             ) : null}
 
             {state.network === "splithttp" ? (
-              <Field label="Path">
-                <Input value={state.splitHttpPath} onChange={(e) => updateStructured({ splitHttpPath: e.target.value })} placeholder="/packet" />
-              </Field>
+              <SplitHttpFields value={state.splitHttp} onChange={(splitHttp) => updateStructured({ splitHttp })} />
             ) : null}
 
             {state.network === "kcp" ? (
@@ -520,7 +511,7 @@ export function InboundDrawer({
             ) : null}
 
             {state.network === "quic" ? (
-              <p className="field-hint">QUIC transport is available here as a network choice. Endpoint-level transport stays structured; top-level QUIC socket tuning still belongs in Advanced Config.</p>
+              <p className="field-hint">QUIC transport uses the runtime defaults. Hysteria2 exposes its additional socket tuning as typed controls below.</p>
             ) : null}
 
             {hysteria2CustomTuning ? (
@@ -620,6 +611,9 @@ export function InboundDrawer({
                 <p className="field-hint">
                   Use the values generated by the running server. The public key is derived from the server private key, and the short ID must match one of the server shortIds entries.
                 </p>
+                <p className="field-hint">
+                  Cover safety: choose a stable, directly reachable TLS 1.3 site whose handshake resembles normal traffic in your region. Avoid Microsoft, Apple/iCloud, and targets in heavily filtered country domains; these choices can increase blocking risk.
+                </p>
                 <Button type="button" variant="secondary" icon={<KeyRound size={16} />} onClick={generateRealityValues} loading={realityGenerateBusy} disabled={busy || realityGenerateBusy}>
                   Generate REALITY Key Pair
                 </Button>
@@ -631,8 +625,8 @@ export function InboundDrawer({
                   <Field label="Server name" hint="Must be allowed by server realitySettings.serverNames.">
                     <Input value={state.realityServerName} onChange={(e) => updateStructured({ realityServerName: e.target.value })} placeholder="www.cloudflare.com" />
                   </Field>
-                  <Field label="Private key" hint="Server-side key stored in the inbound config. Generated client links use the matching public key.">
-                    <Input value={state.realityPrivateKey} onChange={(e) => updateStructured({ realityPrivateKey: e.target.value })} placeholder="64-character server private key" />
+                  <Field label="Private key" hint="Server-side hex, base64url, or standard Base64 key stored in the inbound config. Generated client links use the matching public key.">
+                    <Input value={state.realityPrivateKey} onChange={(e) => updateStructured({ realityPrivateKey: e.target.value })} placeholder="32-byte X25519 private key" />
                   </Field>
                   <Field label="Public key" hint="Paste from server client-info or derive from the REALITY privateKey; do not randomize this value.">
                     <Input value={state.realityPublicKey} onChange={(e) => updateStructured({ realityPublicKey: e.target.value })} placeholder="base64-x25519-public-key" />
@@ -649,9 +643,29 @@ export function InboundDrawer({
                   <Field label="Spider X">
                     <Input value={state.realitySpiderX} onChange={(e) => updateStructured({ realitySpiderX: e.target.value })} placeholder="/" />
                   </Field>
+                  <Field label="Fallback upload starts after" hint="Bytes relayed from an unauthenticated client before pacing begins. Leave all fallback limit fields empty to disable.">
+                    <Input type="number" min={0} value={state.realityFallbackUploadAfterBytes} onChange={(e) => updateStructured({ realityFallbackUploadAfterBytes: e.target.value })} placeholder="0" />
+                  </Field>
+                  <Field label="Fallback upload bytes/sec" hint="Sustained client-to-cover limit. This never affects authenticated proxy traffic.">
+                    <Input type="number" min={0} value={state.realityFallbackUploadBytesPerSec} onChange={(e) => updateStructured({ realityFallbackUploadBytesPerSec: e.target.value })} placeholder="disabled" />
+                  </Field>
+                  <Field label="Fallback upload burst" hint="Additional bytes allowed immediately before sustained pacing.">
+                    <Input type="number" min={0} value={state.realityFallbackUploadBurstBytesPerSec} onChange={(e) => updateStructured({ realityFallbackUploadBurstBytesPerSec: e.target.value })} placeholder="0" />
+                  </Field>
+                  <Field label="Fallback download starts after" hint="Bytes returned by the cover before pacing begins.">
+                    <Input type="number" min={0} value={state.realityFallbackDownloadAfterBytes} onChange={(e) => updateStructured({ realityFallbackDownloadAfterBytes: e.target.value })} placeholder="0" />
+                  </Field>
+                  <Field label="Fallback download bytes/sec" hint="Sustained cover-to-client limit. Use only when fallback abuse is a concern.">
+                    <Input type="number" min={0} value={state.realityFallbackDownloadBytesPerSec} onChange={(e) => updateStructured({ realityFallbackDownloadBytesPerSec: e.target.value })} placeholder="disabled" />
+                  </Field>
+                  <Field label="Fallback download burst" hint="Additional response bytes allowed immediately before sustained pacing.">
+                    <Input type="number" min={0} value={state.realityFallbackDownloadBurstBytesPerSec} onChange={(e) => updateStructured({ realityFallbackDownloadBurstBytesPerSec: e.target.value })} placeholder="0" />
+                  </Field>
                 </div>
               </>
             ) : null}
+
+            {state.security === "shadowtls" ? <div className="configurator-grid"><Field label="Password"><Input type="password" value={state.shadowTlsPassword} onChange={(e) => updateStructured({ shadowTlsPassword: e.target.value })} /></Field><Field label="TLS camouflage destination"><Input value={state.shadowTlsDest} onChange={(e) => updateStructured({ shadowTlsDest: e.target.value })} placeholder="www.apple.com:443" /></Field><Field label="Version"><Input type="number" min={3} max={3} value={state.shadowTlsVersion} onChange={(e) => updateStructured({ shadowTlsVersion: e.target.value })} /></Field></div> : null}
 
             {state.security === "none" ? <p className="field-hint">Use only on trusted links. TLS or REALITY is usually the better default for public-facing listeners.</p> : null}
           </section>
@@ -699,45 +713,10 @@ export function InboundDrawer({
           </section>
         ) : null}
 
-        {activeTab === "advanced" ? (
-          <section className="drawer-card configurator-section">
-            <AdvancedSlice
-              label="Settings JSON"
-              hint="Protocol-specific inbound settings. Managed users are merged separately, so clients stay out of this editor."
-              value={state.settings.text}
-              error={state.settings.error}
-              placeholder='{"decryption":"none"}'
-              onChange={(text) => updateSlice("settings", text)}
-            />
-            <AdvancedSlice
-              label="Stream settings JSON"
-              hint="Transport and security JSON. Structured tabs own common keys and preserve the rest."
-              value={state.streamSettings.text}
-              error={state.streamSettings.error}
-              placeholder='{"network":"ws","security":"tls"}'
-              onChange={(text) => updateSlice("streamSettings", text)}
-            />
-            <AdvancedSlice
-              label="Sniffing JSON"
-              value={state.sniffing.text}
-              error={state.sniffing.error}
-              placeholder='{"enabled":true,"destOverride":["http","tls"]}'
-              onChange={(text) => updateSlice("sniffing", text)}
-            />
-            <AdvancedSlice
-              label="Limits JSON"
-              value={state.limits.text}
-              error={state.limits.error}
-              placeholder='{"maxConnections":10000,"maxHandshakeSeconds":10}'
-              onChange={(text) => updateSlice("limits", text)}
-            />
-          </section>
-        ) : null}
-
         {jsonErrors.length > 0 ? (
           <div className="error-line inline-error">
             <AlertCircle size={15} />
-            <span>Fix invalid JSON in Advanced before saving.</span>
+            <span>The stored typed configuration is invalid and cannot be saved safely.</span>
           </div>
         ) : null}
         {validationIssues.length > 0 ? (
@@ -831,30 +810,5 @@ function CompatibilityNotice({ tone, message }: { tone: "info" | "warning"; mess
       <AlertCircle size={15} />
       <span>{message}</span>
     </div>
-  );
-}
-
-function AdvancedSlice({
-  label,
-  hint,
-  value,
-  error,
-  placeholder,
-  onChange
-}: {
-  label: string;
-  hint?: string;
-  value: string;
-  error: string;
-  placeholder: string;
-  onChange: (text: string) => void;
-}) {
-  return (
-    <Field label={label} hint={hint}>
-      <div className="advanced-slice">
-        <Textarea rows={7} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
-        {error ? <div className="field-error">{error}</div> : null}
-      </div>
-    </Field>
   );
 }

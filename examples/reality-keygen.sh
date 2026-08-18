@@ -5,35 +5,32 @@
 # has the corresponding public key. Run this on your server to generate the keys.
 #
 # Usage:
-#   1. Run this script:  bash examples/reality-keygen.sh
-#   2. Copy the output into examples/reality-server.json (privateKey)
-#      and examples/reality-client.json (publicKey).
-#   3. Edit SERVER_IP in reality-client.json to your server's IP address.
-#   4. Edit the UUID (you can run: blackwire uuid  to generate a fresh one).
-#   5. Start the server: blackwire run -c examples/reality-server.json
-#   6. Start the client: blackwire run -c examples/reality-client.json
-#   7. Test:  curl --socks5 127.0.0.1:1080 https://example.com
+#   1. Run this script: bash examples/reality-keygen.sh
+#   2. In Black UI, create or edit a VLESS inbound and select REALITY security.
+#   3. Paste the private key into the server-side REALITY settings.
+#   4. Add a user with the generated UUID and save the revision.
+#   5. Use the public key in the corresponding client subscription/profile.
 set -euo pipefail
 
 echo "=== REALITY Key Generation ==="
 echo ""
 
 # Generate a key pair using the built CLI tool.
-# Output format: "Private key: <base64>  Public key: <base64>"
+# Output format is the labeled hexadecimal text emitted by `blackwire x25519`.
 OUTPUT=$(cargo run -q --bin blackwire -- x25519 2>/dev/null)
 echo "$OUTPUT"
 echo ""
 
-PRIVATE=$(echo "$OUTPUT" | grep "Private key:" | awk '{print $3}')
-PUBLIC=$(echo "$OUTPUT" | grep "Public key:"  | awk '{print $3}')
+PRIVATE=$(echo "$OUTPUT" | sed -n 's/^Private key (server config): //p')
+PUBLIC=$(echo "$OUTPUT" | sed -n 's/^Public key  (client config): //p')
 
-echo "=== Add to reality-server.json ==="
-echo "  \"privateKey\": \"$PRIVATE\","
+echo "=== Server-side REALITY private key ==="
+echo "$PRIVATE"
 echo ""
-echo "=== Add to reality-client.json ==="
-echo "  \"publicKey\": \"$PUBLIC\","
+echo "=== Client-side REALITY public key ==="
+echo "$PUBLIC"
 echo ""
 echo "=== Also generate a UUID for the user list ==="
 cargo run -q --bin blackwire -- uuid 2>/dev/null
 echo ""
-echo "Done. Edit the JSON files with the values above, then run the demo."
+echo "Done. Save these values through Black UI's typed REALITY fields."

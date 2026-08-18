@@ -1,4 +1,5 @@
 import type { Inbound, InboundInput } from "./types";
+import { buildSplitHttp, readSplitHttp, type SplitHttpEditorState } from "./splitHttpConfigurator";
 
 export type JsonObject = Record<string, unknown>;
 export type SliceKey = "settings" | "streamSettings" | "sniffing" | "limits";
@@ -39,6 +40,7 @@ export interface InboundEditorState {
   grpcServiceName: string;
   httpupgradePath: string;
   httpupgradeHost: string;
+  splitHttp: SplitHttpEditorState;
   splitHttpPath: string;
   kcpHeader: string;
   kcpMtu: string;
@@ -59,6 +61,15 @@ export interface InboundEditorState {
   realityDest: string;
   realityFingerprint: string;
   realitySpiderX: string;
+  realityFallbackUploadAfterBytes: string;
+  realityFallbackUploadBytesPerSec: string;
+  realityFallbackUploadBurstBytesPerSec: string;
+  realityFallbackDownloadAfterBytes: string;
+  realityFallbackDownloadBytesPerSec: string;
+  realityFallbackDownloadBurstBytesPerSec: string;
+  shadowTlsPassword: string;
+  shadowTlsDest: string;
+  shadowTlsVersion: string;
   sniffingEnabled: boolean;
   sniffingDestOverride: string[];
   sniffingMetadataOnly: boolean;
@@ -137,6 +148,7 @@ export function createInboundEditorState(inbound?: Inbound | null): InboundEdito
     grpcServiceName: stringValue(objectValue(streamSettings.value.grpcSettings)?.serviceName) ?? "",
     httpupgradePath: stringValue(objectValue(streamSettings.value.httpupgradeSettings)?.path) ?? "",
     httpupgradeHost: stringValue(objectValue(streamSettings.value.httpupgradeSettings)?.host) ?? "",
+    splitHttp: readSplitHttp(streamSettings.value.splithttpSettings),
     splitHttpPath: stringValue(objectValue(streamSettings.value.splithttpSettings)?.path) ?? "",
     kcpHeader: stringValue(objectValue(streamSettings.value.kcpSettings)?.header) ?? "",
     kcpMtu: numberString(objectValue(streamSettings.value.kcpSettings)?.mtu),
@@ -163,6 +175,15 @@ export function createInboundEditorState(inbound?: Inbound | null): InboundEdito
     realityDest: stringValue(objectValue(streamSettings.value.realitySettings)?.dest) ?? "",
     realityFingerprint: stringValue(objectValue(streamSettings.value.realitySettings)?.fingerprint) ?? "chrome",
     realitySpiderX: stringValue(objectValue(streamSettings.value.realitySettings)?.spiderX) ?? "/",
+    realityFallbackUploadAfterBytes: numberString(objectValue(objectValue(streamSettings.value.realitySettings)?.limitFallbackUpload)?.afterBytes),
+    realityFallbackUploadBytesPerSec: numberString(objectValue(objectValue(streamSettings.value.realitySettings)?.limitFallbackUpload)?.bytesPerSec),
+    realityFallbackUploadBurstBytesPerSec: numberString(objectValue(objectValue(streamSettings.value.realitySettings)?.limitFallbackUpload)?.burstBytesPerSec),
+    realityFallbackDownloadAfterBytes: numberString(objectValue(objectValue(streamSettings.value.realitySettings)?.limitFallbackDownload)?.afterBytes),
+    realityFallbackDownloadBytesPerSec: numberString(objectValue(objectValue(streamSettings.value.realitySettings)?.limitFallbackDownload)?.bytesPerSec),
+    realityFallbackDownloadBurstBytesPerSec: numberString(objectValue(objectValue(streamSettings.value.realitySettings)?.limitFallbackDownload)?.burstBytesPerSec),
+    shadowTlsPassword: stringValue(objectValue(streamSettings.value.shadowTlsSettings)?.password) ?? "",
+    shadowTlsDest: stringValue(objectValue(streamSettings.value.shadowTlsSettings)?.dest) ?? "",
+    shadowTlsVersion: numberString(objectValue(streamSettings.value.shadowTlsSettings)?.version) || "3",
     sniffingEnabled: boolValue(sniffing.value.enabled) ?? false,
     sniffingDestOverride: arrayOfStrings(sniffing.value.destOverride),
     sniffingMetadataOnly: boolValue(sniffing.value.metadataOnly) ?? false,
@@ -261,9 +282,10 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
   }
 
   if (state.network === "splithttp") {
-    const splitHttpSettings = cloneObject(objectValue(streamSettings.splithttpSettings));
-    splitHttpSettings.path = state.splitHttpPath.trim() || "/";
-    streamSettings.splithttpSettings = pruneEmpty(splitHttpSettings);
+    const splitHttp = pruneEmpty(buildSplitHttp({ ...state.splitHttp, path: state.splitHttp.path || state.splitHttpPath }, streamSettings.splithttpSettings));
+    if (state.splitHttp.xmuxEnabled && !("xmux" in splitHttp)) splitHttp.xmux = {};
+    if (state.splitHttp.downloadEnabled && !("downloadSettings" in splitHttp)) splitHttp.downloadSettings = {};
+    streamSettings.splithttpSettings = splitHttp;
   } else {
     delete streamSettings.splithttpSettings;
   }
@@ -317,6 +339,20 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
     applyStringField(realitySettings, "dest", state.realityDest);
     applyStringField(realitySettings, "fingerprint", state.realityFingerprint);
     applyStringField(realitySettings, "spiderX", state.realitySpiderX);
+    applyRealityFallbackLimit(
+      realitySettings,
+      "limitFallbackUpload",
+      state.realityFallbackUploadAfterBytes,
+      state.realityFallbackUploadBytesPerSec,
+      state.realityFallbackUploadBurstBytesPerSec
+    );
+    applyRealityFallbackLimit(
+      realitySettings,
+      "limitFallbackDownload",
+      state.realityFallbackDownloadAfterBytes,
+      state.realityFallbackDownloadBytesPerSec,
+      state.realityFallbackDownloadBurstBytesPerSec
+    );
     if (state.realityShortId.trim()) {
       realitySettings.shortId = state.realityShortId.trim();
       realitySettings.shortIds = [state.realityShortId.trim()];
@@ -328,6 +364,13 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
     delete streamSettings.tlsSettings;
   } else {
     delete streamSettings.realitySettings;
+  }
+  if (state.security === "shadowtls") {
+    streamSettings.shadowTlsSettings = { password: state.shadowTlsPassword.trim(), dest: state.shadowTlsDest.trim(), version: Number(state.shadowTlsVersion || 3) };
+    delete streamSettings.tlsSettings;
+    delete streamSettings.realitySettings;
+  } else {
+    delete streamSettings.shadowTlsSettings;
   }
 
   if (!state.sniffingEnabled && state.sniffingDestOverride.length === 0 && !state.sniffingMetadataOnly && !state.sniffingRouteOnly) {
@@ -359,6 +402,12 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
   }
 
   streamSettings = pruneEmpty(streamSettings);
+  if (state.network === "splithttp") {
+    const splitHttp = objectValue(streamSettings.splithttpSettings) ?? {};
+    if (state.splitHttp.xmuxEnabled) splitHttp.xmux = objectValue(splitHttp.xmux) ?? {};
+    if (state.splitHttp.downloadEnabled) splitHttp.downloadSettings = objectValue(splitHttp.downloadSettings) ?? {};
+    streamSettings.splithttpSettings = splitHttp;
+  }
   settings = pruneEmpty(settings);
   sniffing = pruneEmpty(sniffing);
   limits = pruneEmpty(limits);
@@ -369,7 +418,8 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
     port: state.port,
     protocol: state.protocol,
     enabled: state.enabled,
-    transport: state.security === "reality" ? "reality" : state.network,
+    transport: state.network,
+    security: state.security,
     settings: stringifySlice(settings),
     streamSettings: stringifySlice(streamSettings),
     sniffing: stringifySlice(sniffing),
@@ -403,7 +453,7 @@ export function syncAfterStructuredChange(state: InboundEditorState): InboundEdi
 
 export function inboundSummary(inbound: Inbound): { network: string; security: string; detail: string } {
   const streamSettings = parseJsonSlice(inbound.streamSettings).value;
-  const network = stringValue(streamSettings.network) ?? transportToNetwork(inbound.transport) ?? inbound.transport;
+  const network = stringValue(streamSettings.network) ?? transportToNetwork(inbound.transport) ?? inbound.transport ?? "tcp";
   const security = stringValue(streamSettings.security) ?? (inbound.transport === "reality" ? "reality" : "none");
   const wsPath = stringValue(objectValue(streamSettings.wsSettings)?.path);
   const grpcServiceName = stringValue(objectValue(streamSettings.grpcSettings)?.serviceName);
@@ -491,12 +541,12 @@ export function validateInboundState(state: InboundEditorState): InboundValidati
     if (!state.realityPrivateKey.trim()) {
       issues.push({ field: "realityPrivateKey", message: "REALITY private key is required for the server listener." });
     } else if (!isRealityPrivateKey(state.realityPrivateKey.trim())) {
-      issues.push({ field: "realityPrivateKey", message: "REALITY private key must be a 32-byte hex X25519 private key." });
+      issues.push({ field: "realityPrivateKey", message: "REALITY private key must be a 32-byte hex, base64url, or standard Base64 X25519 private key." });
     }
     if (!state.realityPublicKey.trim()) {
       issues.push({ field: "realityPublicKey", message: "REALITY public key is required and must come from the server key pair." });
     } else if (!isRealityPublicKey(state.realityPublicKey.trim())) {
-      issues.push({ field: "realityPublicKey", message: "REALITY public key must be a 32-byte hex key or base64url X25519 public key from the server." });
+      issues.push({ field: "realityPublicKey", message: "REALITY public key must be a 32-byte hex, base64url, or standard Base64 X25519 public key from the server." });
     }
     if (!state.realityShortId.trim()) {
       issues.push({ field: "realityShortId", message: "REALITY short ID is required and must match a server shortIds entry." });
@@ -508,8 +558,28 @@ export function validateInboundState(state: InboundEditorState): InboundValidati
     } else if (!isRealityDest(state.realityDest.trim())) {
       issues.push({ field: "realityDest", message: "REALITY fallback destination must be an IP socket address like 93.184.216.34:443." });
     }
+    validateOptionalByteCount(issues, "realityFallbackUploadAfterBytes", state.realityFallbackUploadAfterBytes, "Fallback upload threshold");
+    validateOptionalByteCount(issues, "realityFallbackUploadBytesPerSec", state.realityFallbackUploadBytesPerSec, "Fallback upload rate");
+    validateOptionalByteCount(issues, "realityFallbackUploadBurstBytesPerSec", state.realityFallbackUploadBurstBytesPerSec, "Fallback upload burst");
+    validateOptionalByteCount(issues, "realityFallbackDownloadAfterBytes", state.realityFallbackDownloadAfterBytes, "Fallback download threshold");
+    validateOptionalByteCount(issues, "realityFallbackDownloadBytesPerSec", state.realityFallbackDownloadBytesPerSec, "Fallback download rate");
+    validateOptionalByteCount(issues, "realityFallbackDownloadBurstBytesPerSec", state.realityFallbackDownloadBurstBytesPerSec, "Fallback download burst");
   }
   return issues;
+}
+
+function validateOptionalByteCount(
+  issues: InboundValidationIssue[],
+  field: string,
+  value: string,
+  label: string
+) {
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  const parsed = Number(trimmed);
+  if (!/^\d+$/.test(trimmed) || !Number.isSafeInteger(parsed)) {
+    issues.push({ field, message: `${label} must be a non-negative whole number.` });
+  }
 }
 
 function syncStructuredFields(state: InboundEditorState): InboundEditorState {
@@ -552,6 +622,7 @@ function syncStructuredFields(state: InboundEditorState): InboundEditorState {
     grpcServiceName: next.grpcServiceName,
     httpupgradePath: next.httpupgradePath,
     httpupgradeHost: next.httpupgradeHost,
+    splitHttp: next.splitHttp,
     splitHttpPath: next.splitHttpPath,
     kcpHeader: next.kcpHeader,
     kcpMtu: next.kcpMtu,
@@ -572,6 +643,15 @@ function syncStructuredFields(state: InboundEditorState): InboundEditorState {
     realityDest: next.realityDest,
     realityFingerprint: next.realityFingerprint,
     realitySpiderX: next.realitySpiderX,
+    realityFallbackUploadAfterBytes: next.realityFallbackUploadAfterBytes,
+    realityFallbackUploadBytesPerSec: next.realityFallbackUploadBytesPerSec,
+    realityFallbackUploadBurstBytesPerSec: next.realityFallbackUploadBurstBytesPerSec,
+    realityFallbackDownloadAfterBytes: next.realityFallbackDownloadAfterBytes,
+    realityFallbackDownloadBytesPerSec: next.realityFallbackDownloadBytesPerSec,
+    realityFallbackDownloadBurstBytesPerSec: next.realityFallbackDownloadBurstBytesPerSec,
+    shadowTlsPassword: next.shadowTlsPassword,
+    shadowTlsDest: next.shadowTlsDest,
+    shadowTlsVersion: next.shadowTlsVersion,
     sniffingEnabled: next.sniffingEnabled,
     sniffingDestOverride: next.sniffingDestOverride,
     sniffingMetadataOnly: next.sniffingMetadataOnly,
@@ -695,6 +775,18 @@ function stringOrNumberString(value: unknown): string {
   return numberString(value);
 }
 
+function applyRealityFallbackLimit(target: JsonObject, key: string, afterBytes: string, bytesPerSec: string, burstBytesPerSec: string) {
+  if (![afterBytes, bytesPerSec, burstBytesPerSec].some((value) => value.trim())) {
+    delete target[key];
+    return;
+  }
+  const limit = cloneObject(objectValue(target[key]));
+  applyNumberField(limit, "afterBytes", afterBytes);
+  applyNumberField(limit, "bytesPerSec", bytesPerSec);
+  applyNumberField(limit, "burstBytesPerSec", burstBytesPerSec);
+  target[key] = pruneEmpty(limit);
+}
+
 function applyStringField(target: JsonObject, key: string, value: string) {
   const trimmed = value.trim();
   if (trimmed) target[key] = trimmed;
@@ -800,7 +892,7 @@ function isRealityPublicKey(value: string): boolean {
 }
 
 function isRealityPrivateKey(value: string): boolean {
-  return /^[0-9a-fA-F]{64}$/.test(value);
+  return isRealityPublicKey(value);
 }
 
 function isRealityShortId(value: string): boolean {

@@ -69,7 +69,7 @@ This is the best beginner example.
 
 Your browser or tool connects to a local TCP port.
 
-That port belongs to a SOCKS inbound listener configured in `config.json`.
+That port belongs to a SOCKS inbound listener in the active MySQL revision.
 
 ### Step 2: TCP transport accepts
 
@@ -331,11 +331,12 @@ Hot reload does not mean the whole process restarts.
 
 The intended model is:
 
-- config manager watches the config file
-- new config is parsed and validated
-- atomic data like routing can be swapped
-- new connections see new config
-- in-flight connections finish on old state
+- Black UI or a database command publishes an immutable desired MySQL revision
+- the runtime reconstructs and validates the typed relational snapshot
+- routing and supported authentication state are swapped atomically
+- structural listener changes use prepared instance handover
+- new connections see the activated revision
+- in-flight connections finish on their existing state
 
 Not every possible listener/property can be changed instantly in every architecture, but that is the intended design boundary.
 
@@ -375,4 +376,3 @@ That is how to trace any connection without getting lost.
 Every connection in this repo is:
 
 "accepted by a listener, optionally unwrapped by transports, decoded by an inbound protocol, routed by the dispatcher, connected by an outbound, and relayed until close."
-

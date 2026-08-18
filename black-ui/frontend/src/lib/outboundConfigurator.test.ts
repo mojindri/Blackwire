@@ -472,7 +472,7 @@ describe("outboundConfigurator", () => {
 
     const securities = [
       { security: "none", patch: {}, settings: {} },
-      { security: "tls", patch: { tlsServerName: "tls.example.com" }, settings: { tlsSettings: { serverName: "tls.example.com" } } },
+      { security: "tls", patch: { tlsServerName: "tls.example.com", tlsAllowInsecure: true }, settings: { tlsSettings: { serverName: "tls.example.com", allowInsecure: true } } },
       {
         security: "reality",
         patch: {
@@ -517,5 +517,17 @@ describe("outboundConfigurator", () => {
         }
       }
     }
+  });
+
+  it("keeps enabled empty SplitHTTP option groups through structured sync", () => {
+    const initial = createOutboundEditorState();
+    const state = syncOutboundAfterStructuredChange({
+      ...initial,
+      network: "splithttp",
+      splitHttp: { ...initial.splitHttp, xmuxEnabled: true, downloadEnabled: true }
+    });
+    expect(state.splitHttp.xmuxEnabled).toBe(true);
+    expect(state.splitHttp.downloadEnabled).toBe(true);
+    expect(parseObject(buildOutboundInput(state).streamSettings).splithttpSettings).toMatchObject({ xmux: {}, downloadSettings: {} });
   });
 });

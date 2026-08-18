@@ -36,8 +36,9 @@ That is why the workspace is split into crates with distinct ownership.
 
 There are four layers you should keep separate in your head:
 
-1. Config layer
-   This is the JSON file and the code that parses and validates it.
+1. Control-plane and config layer
+   MySQL revisions are the persistent source of truth. The store reconstructs
+   each revision into typed Rust configuration and validates it before use.
 
 2. Runtime wiring layer
    This is the code that turns config into a running instance with listeners, router, dispatcher, and handlers.
@@ -65,7 +66,10 @@ The workspace root `Cargo.toml` declares these crates:
   Shared types used everywhere.
 
 - `blackwire-config`
-  Config schema, parsing, validation, and hot reload.
+  Typed runtime configuration schema and validation.
+
+- `blackwire-store`
+  MySQL persistence, immutable revisions, relational snapshots, and runtime state.
 
 - `blackwire-app`
   Router, dispatcher, DNS, metrics, health, relay helpers.
@@ -98,10 +102,12 @@ The startup path begins in `crates/blackwire-cli/src/main.rs`.
 The normal `run` command does this:
 
 1. Initialize tracing/logging.
-2. Load config through `blackwire_config::ConfigManager`.
-3. Start the config watcher for hot reload.
-4. Build `blackwire_core::Instance` from the current config.
-5. Wait for signals or for the instance to exit.
+2. Connect to MySQL and verify the expected schema version.
+3. Reconstruct and validate the desired immutable revision.
+4. Build `blackwire_core::Instance` from the typed snapshot.
+5. Mark the revision active and publish runtime heartbeats.
+6. Poll for later desired revisions, applying a hot swap or listener handover.
+7. Wait for a shutdown signal.
 
 `blackwire_core::Instance::from_config()` is the main wiring function.
 

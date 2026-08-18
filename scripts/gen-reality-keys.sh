@@ -2,7 +2,7 @@
 # gen-reality-keys.sh — Generate an X25519 key pair for REALITY transport.
 #
 # Run this once when setting up a new server. Copy the output into your
-# config.json under the `realitySettings` section:
+# typed REALITY settings in Black UI:
 #
 #   "realitySettings": {
 #     "privateKey": "<output of this script, server only>",
@@ -33,5 +33,5 @@ echo "Generating X25519 key pair for REALITY transport..."
 echo ""
 "$BINARY" x25519
 echo ""
-echo "Copy the private key into your server config.json."
-echo "Copy the public key into your client config.json."
+echo "Copy the private key into the server REALITY form."
+echo "Copy the public key into the client connection settings."

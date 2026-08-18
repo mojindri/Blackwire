@@ -340,8 +340,8 @@ HYSTERIA2_PASSWORD=<strong random string>
 REALITY_PRIVATE_KEY=<server private key>
 REALITY_PUBLIC_KEY=<client public key>
 REALITY_SHORT_ID=<8-byte hex, e.g. aabbccdd00000001>
-REALITY_SERVER_NAME=www.microsoft.com
-REALITY_DEST=www.microsoft.com:443
+REALITY_SERVER_NAME=www.cloudflare.com
+REALITY_DEST=<resolved-cover-ip>:443
 ```
 
 ### Step 3 — Provision the server VPS
@@ -370,10 +370,17 @@ Port layout after setup:
 | 8444/tcp | TLS | VMess gRPC |
 | 8445/tcp | TLS | Trojan |
 | 8388/tcp | TCP | Shadowsocks 2022 |
+| 8389/udp | UDP | Shadowsocks 2022 UDP |
 | 4433/udp | QUIC | Hysteria2 |
-| 8446–8448/tcp | TLS | Advanced VLESS rows (QUIC/SplitHTTP/ShadowTLS lab) |
-| 8450–8452/tcp | TCP/TLS | Sniffing and extended matrix ports |
-| 10081–10082/tcp | TCP | mKCP / auxiliary |
+| 9443/udp | QUIC | TUIC v5 |
+| 8446/tcp | TLS | VLESS HTTPUpgrade |
+| 8447/udp | QUIC | VLESS QUIC |
+| 8448/tcp | TLS | VLESS SplitHTTP |
+| 10081/tcp | TCP | VLESS UDP control channel |
+| 10082/tcp | TCP | VLESS Vision |
+| 8450/tcp | TLS | VLESS ShadowTLS |
+| 8451/udp | mKCP | VLESS mKCP |
+| 8452/tcp | TCP | VLESS with sniffing |
 
 ### Step 4 — Run the external-client matrix
 
@@ -389,10 +396,10 @@ clients where configured, and records PASS/FAIL/SKIP like Docker.
 
 ---
 
-## Tier 10b — Legacy VPS blackwire client matrix (optional)
+## Tier 10b — Blackwire client VPS matrix (optional)
 
 Separate from the external-client lab: proves **blackwire as client** over SOCKS to the
-server VPS using seven standalone server configs.
+server VPS using seven lab fixtures imported into the MySQL control plane.
 
 ### Provision client VPS
 
@@ -409,12 +416,16 @@ SSH_CLIENT=5.6.7.8 make -C labs/realistic vps-test
 This runs `scripts/run-matrix.sh` on the client VPS (SOCKS5 on `127.0.0.1:1080`,
 `curl` to `http://<SERVER_HOST>:18080`). Reports go to `labs/realistic/reports/`.
 
-On the server VPS you still start each legacy inbound manually when using only Tier 10b:
+On the server VPS, use a dedicated disposable lab database and start one fixture
+at a time. The credential must be able to create/migrate the schema and replace
+lab configuration; do not use the restricted production runtime credential.
 
 ```sh
-blackwire run -c /etc/blackwire/generated/server-vless-tcp.json &
-blackwire run -c /etc/blackwire/generated/server-vless-reality.json &
-# ... remaining base protocols
+export BLACKWIRE_DATABASE_URL_FILE=/etc/blackwire/lab-database-url
+blackwire db init
+blackwire db import-fixture --replace /etc/blackwire/generated/server-vless-tcp.json
+blackwire run
+# Stop it, import the next fixture, and repeat for the remaining protocols.
 ```
 
 ---

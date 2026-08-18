@@ -171,13 +171,14 @@ vm-pack: ## Pack the full VPS bundle (configs + scripts + service files + README
 vps-configs: ## Expand JSON templates locally using configs/matrix.env (requires envsubst)
 	@if [ ! -f configs/matrix.env ]; then \
 		echo "ERROR: configs/matrix.env not found. Copy configs/matrix.env.example and fill in values."; exit 1; fi
-	@mkdir -p $(REPORTS)/generated-configs
-	@for f in configs/server/*.json; do \
+	@set -a; source configs/matrix.env; set +a; \
+		mkdir -p $(REPORTS)/generated-configs; \
+		for f in configs/server/*.json; do \
 		envsubst < "$$f" > "$(REPORTS)/generated-configs/server-$$(basename $$f)"; \
-	done
-	@for f in configs/client/*.json; do \
+		done; \
+		for f in configs/client/*.json; do \
 		envsubst < "$$f" > "$(REPORTS)/generated-configs/client-$$(basename $$f)"; \
-	done
+		done
 	@echo "Expanded configs written to $(REPORTS)/generated-configs/"
 
 external-clients-docker: build ## Atom: run external-client matrix only (prefer interop-server-docker)

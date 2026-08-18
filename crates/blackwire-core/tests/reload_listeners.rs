@@ -1,10 +1,14 @@
 use std::net::IpAddr;
 
 use blackwire_config::schema::{
-    Config, DatagramConfig, FecConfig, FecMode, InboundConfig, LimitsConfig, LogConfig,
-    OutboundConfig, ProfileMode, Protocol, QuicConfig,
+    Config, DatagramConfig, EndpointSettings, FecConfig, FecMode, InboundConfig, LimitsConfig,
+    LogConfig, OutboundConfig, ProfileMode, Protocol, QuicConfig,
 };
 use blackwire_core::{inbound_listener_changes, requires_instance_restart};
+
+fn endpoint_settings(value: serde_json::Value) -> EndpointSettings {
+    serde_json::from_value(value).expect("test endpoint settings should be valid")
+}
 
 fn minimal_config(port: u16) -> Config {
     Config {
@@ -26,7 +30,7 @@ fn minimal_config(port: u16) -> Config {
             listen: "127.0.0.1".parse::<IpAddr>().unwrap(),
             port,
             protocol: Protocol::Socks,
-            settings: serde_json::json!({}),
+            settings: Default::default(),
             stream_settings: None,
             limits: None,
             sniffing: None,
@@ -34,7 +38,7 @@ fn minimal_config(port: u16) -> Config {
         outbounds: vec![OutboundConfig {
             tag: "direct".into(),
             protocol: Protocol::Freedom,
-            settings: serde_json::json!({}),
+            settings: Default::default(),
             stream_settings: None,
         }],
         stats: None,
@@ -60,7 +64,7 @@ fn inbound_listener_changes_reports_added_listener_once() {
         listen: "127.0.0.1".parse::<IpAddr>().unwrap(),
         port: 1081,
         protocol: Protocol::Socks,
-        settings: serde_json::json!({}),
+        settings: Default::default(),
         stream_settings: None,
         limits: None,
         sniffing: None,
@@ -84,17 +88,17 @@ fn inbound_listener_changes_reports_removed_listener() {
 fn requires_instance_restart_ignores_vless_client_list_changes() {
     let mut old = minimal_config(1080);
     old.inbounds[0].protocol = Protocol::Vless;
-    old.inbounds[0].settings = serde_json::json!({
+    old.inbounds[0].settings = endpoint_settings(serde_json::json!({
         "clients": [{"id":"00000000-0000-4000-8000-000000000001"}]
-    });
+    }));
 
     let mut new = old.clone();
-    new.inbounds[0].settings = serde_json::json!({
+    new.inbounds[0].settings = endpoint_settings(serde_json::json!({
         "clients": [
             {"id":"00000000-0000-4000-8000-000000000001"},
             {"id":"00000000-0000-4000-8000-000000000002"}
         ]
-    });
+    }));
 
     assert!(!requires_instance_restart(&old, &new));
 }
@@ -103,14 +107,14 @@ fn requires_instance_restart_ignores_vless_client_list_changes() {
 fn requires_instance_restart_ignores_non_vless_client_bandwidth_only_changes() {
     let mut old = minimal_config(1080);
     old.inbounds[0].protocol = Protocol::Trojan;
-    old.inbounds[0].settings = serde_json::json!({
+    old.inbounds[0].settings = endpoint_settings(serde_json::json!({
         "clients": [{"password":"secret","email":"alice@example.local","upMbps":10,"downMbps":20}]
-    });
+    }));
 
     let mut new = old.clone();
-    new.inbounds[0].settings = serde_json::json!({
+    new.inbounds[0].settings = endpoint_settings(serde_json::json!({
         "clients": [{"password":"secret","email":"alice@example.local","upMbps":40,"downMbps":80}]
-    });
+    }));
 
     assert!(!requires_instance_restart(&old, &new));
 }
@@ -119,16 +123,16 @@ fn requires_instance_restart_ignores_non_vless_client_bandwidth_only_changes() {
 fn requires_instance_restart_for_non_reloadable_setting_changes() {
     let mut old = minimal_config(1080);
     old.inbounds[0].protocol = Protocol::Trojan;
-    old.inbounds[0].settings = serde_json::json!({
+    old.inbounds[0].settings = endpoint_settings(serde_json::json!({
         "clients": [{"password":"secret","email":"alice@example.local","upMbps":10,"downMbps":20}],
         "network": "tcp"
-    });
+    }));
 
     let mut new = old.clone();
-    new.inbounds[0].settings = serde_json::json!({
+    new.inbounds[0].settings = endpoint_settings(serde_json::json!({
         "clients": [{"password":"changed","email":"alice@example.local","upMbps":10,"downMbps":20}],
         "network": "ws"
-    });
+    }));
 
     assert!(requires_instance_restart(&old, &new));
 }
@@ -137,14 +141,14 @@ fn requires_instance_restart_for_non_reloadable_setting_changes() {
 fn requires_instance_restart_ignores_vmess_client_auth_changes() {
     let mut old = minimal_config(1080);
     old.inbounds[0].protocol = Protocol::Vmess;
-    old.inbounds[0].settings = serde_json::json!({
+    old.inbounds[0].settings = endpoint_settings(serde_json::json!({
         "clients": [{"id":"00000000-0000-4000-8000-000000000001","email":"alice@example.local"}]
-    });
+    }));
 
     let mut new = old.clone();
-    new.inbounds[0].settings = serde_json::json!({
+    new.inbounds[0].settings = endpoint_settings(serde_json::json!({
         "clients": [{"id":"00000000-0000-4000-8000-000000000002","email":"bob@example.local"}]
-    });
+    }));
 
     assert!(!requires_instance_restart(&old, &new));
 }
@@ -153,14 +157,14 @@ fn requires_instance_restart_ignores_vmess_client_auth_changes() {
 fn requires_instance_restart_ignores_tuic_user_auth_changes() {
     let mut old = minimal_config(1080);
     old.inbounds[0].protocol = Protocol::Tuic;
-    old.inbounds[0].settings = serde_json::json!({
+    old.inbounds[0].settings = endpoint_settings(serde_json::json!({
         "users": [{"uuid":"00000000-0000-4000-8000-000000000001","password":"secret"}]
-    });
+    }));
 
     let mut new = old.clone();
-    new.inbounds[0].settings = serde_json::json!({
+    new.inbounds[0].settings = endpoint_settings(serde_json::json!({
         "users": [{"uuid":"00000000-0000-4000-8000-000000000002","password":"changed"}]
-    });
+    }));
 
     assert!(!requires_instance_restart(&old, &new));
 }
@@ -172,7 +176,7 @@ fn requires_instance_restart_for_outbound_changes() {
     new.outbounds.push(OutboundConfig {
         tag: "backup".into(),
         protocol: Protocol::Freedom,
-        settings: serde_json::json!({}),
+        settings: Default::default(),
         stream_settings: None,
     });
 

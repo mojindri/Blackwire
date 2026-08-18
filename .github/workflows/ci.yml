@@ -6,7 +6,7 @@ on:
   pull_request:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -31,6 +31,12 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Install consistency-check tools
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Enforce MySQL-only control plane
+        run: scripts/check-mysql-only.sh
+
       - name: Run workspace checks
         run: make verify-local
 
@@ -38,6 +44,21 @@ jobs:
     name: Black UI
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: blackwire_qa
+          MYSQL_ROOT_PASSWORD: blackwire-qa
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pblackwire-qa"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      BLACKWIRE_QA_DATABASE_URL: mysql://root:blackwire-qa@127.0.0.1:3306/blackwire_qa
     steps:
       - uses: actions/checkout@v6
 

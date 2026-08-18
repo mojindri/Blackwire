@@ -1,4 +1,4 @@
-import { AlertCircle, Copy, KeyRound, RotateCcw, Save, X } from "lucide-react";
+import { AlertCircle, Copy, KeyRound, QrCode, RotateCcw, Save, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Inbound, ManagedUser, Settings, UserInput } from "../../lib/types";
 import { formatBytes } from "../../lib/format";
@@ -9,7 +9,6 @@ import {
   createUserEditorState,
   generateCredentialSecret,
   protocolLabel,
-  replaceCredentialJson,
   syncCredentialFromFields,
   validateUserState,
   type UserEditorState
@@ -19,6 +18,7 @@ import { IconButton } from "../atoms/IconButton";
 import { Input, Select, Textarea } from "../atoms/Input";
 import { Switch } from "../atoms/Switch";
 import { Field } from "../molecules/Field";
+import { SubscriptionQrDialog } from "../molecules/SubscriptionQrDialog";
 
 export function UserDrawer({
   open,
@@ -47,15 +47,15 @@ export function UserDrawer({
 }) {
   const [state, setState] = useState<UserEditorState>(() => createUserEditorState(user, inbounds));
   const stateRef = useRef(state);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState("");
+  const [qrOpen, setQrOpen] = useState(false);
 
   useEffect(() => {
     const next = createUserEditorState(user, inbounds);
     stateRef.current = next;
     setState(next);
-    setAdvancedOpen(false);
     setCopyFeedback("");
+    setQrOpen(false);
   }, [inbounds, user]);
 
   const protocol = useMemo(() => activeUserProtocol(inbounds, state.inboundId), [inbounds, state.inboundId]);
@@ -75,12 +75,6 @@ export function UserDrawer({
     const synced = syncCredentialFromFields(next, activeUserProtocol(inbounds, next.inboundId));
     stateRef.current = synced;
     setState(synced);
-  };
-
-  const updateCredentialJson = (text: string) => {
-    const next = replaceCredentialJson(stateRef.current, text);
-    stateRef.current = next;
-    setState(next);
   };
 
   const submit = () => {
@@ -157,7 +151,7 @@ export function UserDrawer({
           <div className="section-editor-head">
             <div>
               <h3>Access</h3>
-              <p>These fields come from the selected inbound&apos;s protocol, with advanced JSON available only as a fallback.</p>
+              <p>These typed fields come from the selected inbound&apos;s protocol.</p>
             </div>
           </div>
           <div className="configurator-grid">
@@ -202,7 +196,7 @@ export function UserDrawer({
             ) : null}
           </div>
           {protocol === "vmess" ? <p className="field-hint">VMess users only need the shared UUID here. No extra credential keys are required.</p> : null}
-          {protocol === "unknown" ? <p className="field-hint">This inbound protocol does not have a structured user form yet. Use Advanced only if you truly need custom credential keys.</p> : null}
+          {protocol === "unknown" ? <p className="field-hint">This inbound protocol does not have a supported structured credential form yet.</p> : null}
           {issuesByField.get("uuid") ? <div className="field-error">{issuesByField.get("uuid")}</div> : null}
           {issuesByField.get("password") ? <div className="field-error">{issuesByField.get("password")}</div> : null}
           {issuesByField.get("auth") ? <div className="field-error">{issuesByField.get("auth")}</div> : null}
@@ -245,28 +239,6 @@ export function UserDrawer({
           </Field>
         </section>
 
-        <section className="drawer-card configurator-section">
-          <div className="section-editor-head">
-            <div>
-              <h3>Advanced</h3>
-              <p>Use this only for custom credential keys that do not have a first-class field yet.</p>
-            </div>
-            <Button variant="ghost" onClick={() => setAdvancedOpen((current) => !current)} type="button">
-              {advancedOpen ? "Hide JSON" : "Show JSON"}
-            </Button>
-          </div>
-          {advancedOpen ? (
-            <Field label="Credential JSON" hint='Examples: {"password":"..."} for Trojan or {"auth":"..."} for Hysteria2. Unknown keys are preserved.'>
-              <div className="advanced-slice">
-                <Textarea rows={7} value={state.credentialText} onChange={(e) => updateCredentialJson(e.target.value)} />
-                {state.credentialError ? <div className="field-error">{state.credentialError}</div> : null}
-              </div>
-            </Field>
-          ) : (
-            <p className="field-hint">Advanced credential JSON is collapsed by default so the common path stays clean.</p>
-          )}
-        </section>
-
         {user ? (
           <>
             <section className="drawer-card configurator-section">
@@ -298,13 +270,16 @@ export function UserDrawer({
               <div className="section-editor-head">
                 <div>
                   <h3>Subscription</h3>
-                  <p>Copy the managed subscription link without mixing it into the editable access fields.</p>
+                  <p>Copy or scan the managed subscription content without mixing it into the editable access fields.</p>
                 </div>
               </div>
               <div className="copy-row">
                 <Input value={subUrl} readOnly />
                 <IconButton label="Copy subscription content" onClick={copySubscription} disabled={!subUrl}>
                   <Copy size={16} />
+                </IconButton>
+                <IconButton label="Show subscription content QR code" onClick={() => setQrOpen(true)} disabled={!subUrl}>
+                  <QrCode size={17} />
                 </IconButton>
               </div>
               {copyFeedback ? (
@@ -338,6 +313,7 @@ export function UserDrawer({
           Save User
         </Button>
       </div>
+      {qrOpen ? <SubscriptionQrDialog url={subUrl} label={user?.email || "Managed user"} onClose={() => setQrOpen(false)} /> : null}
     </aside>
   );
 }

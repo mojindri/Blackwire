@@ -276,9 +276,10 @@ sudo FLAMEGRAPH_DIR=~/FlameGraph make latency-profile
 # Opens: latency/reports/flamegraph-blackwire-fast-lab-<ts>.svg
 ```
 
-For CPU profiling of a specific inbound handler or relay path, set `SERVER_CONFIG` directly:
+For CPU profiling of a specific inbound handler or relay path, point the runtime at
+an isolated MySQL 8.4 lab database:
 ```bash
-SERVER_CONFIG=path/to/config.json \
+BLACKWIRE_DATABASE_URL_FILE=/run/credentials/blackwire-runtime-database-url \
 PROXY_ADDR=127.0.0.1:1081 \
 bash labs/realistic/latency/scripts/run-flamegraph.sh my-variant http://target/
 ```

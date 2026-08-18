@@ -8,7 +8,7 @@ use axum::{
 };
 use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
 
-use crate::{handlers, state::AppState};
+use crate::{control_handlers as handlers, mysql_state::AppState};
 
 pub fn router(state: AppState) -> Router {
     let static_dir =
@@ -112,7 +112,6 @@ fn api_router() -> Router<AppState> {
             "/settings",
             get(handlers::get_settings).put(handlers::update_settings),
         )
-        .route("/runtime/probe", post(handlers::runtime_probe))
         .route("/runtime/traffic", get(handlers::runtime_traffic))
         .route(
             "/reality/client-values",
@@ -127,10 +126,32 @@ fn api_router() -> Router<AppState> {
             "/tls/generate-self-signed",
             post(handlers::tls_generate_self_signed),
         )
+        .route(
+            "/routing-dns",
+            get(handlers::get_routing_dns).put(handlers::update_routing_dns),
+        )
+        .route(
+            "/core-settings",
+            get(handlers::get_core_settings).put(handlers::update_core_settings),
+        )
+        .route("/runtime/revisions", get(handlers::revision_history))
+        .route("/runtime/rollback", post(handlers::rollback_revision))
+        .route(
+            "/runtime/activate-maintenance",
+            post(handlers::activate_maintenance),
+        )
         .route("/service/status", get(handlers::service_status))
         .route(
             "/service/restart-blackwire",
             post(handlers::service_restart_blackwire),
+        )
+        .route(
+            "/service/start-blackwire",
+            post(handlers::service_start_blackwire),
+        )
+        .route(
+            "/service/stop-blackwire",
+            post(handlers::service_stop_blackwire),
         )
         .route("/service/logs", get(handlers::service_logs))
         .route(
@@ -159,24 +180,14 @@ fn api_router() -> Router<AppState> {
         )
         .route("/users/{id}/enable", post(handlers::enable_user))
         .route("/users/{id}/disable", post(handlers::disable_user))
-        .route("/users/{id}/reset-usage", post(handlers::reset_usage))
-        .route("/users/{id}/rotate-uuid", post(handlers::rotate_uuid))
+        .route("/users/{id}/reset-usage", post(handlers::reset_user_usage))
+        .route("/users/{id}/rotate-uuid", post(handlers::rotate_user_uuid))
         .route(
             "/users/{id}/rotate-sub-token",
-            post(handlers::rotate_sub_token),
+            post(handlers::rotate_user_token),
         )
         .route("/users/bulk", post(handlers::bulk_users))
         .route("/uuid", post(handlers::generate_uuid))
-        .route("/config/sections", get(handlers::list_config_sections))
-        .route(
-            "/config/sections/{name}",
-            put(handlers::update_config_section),
-        )
-        .route("/config/preview", get(handlers::config_preview))
-        .route("/config/import", post(handlers::config_import))
-        .route("/config/validate", post(handlers::config_validate))
-        .route("/config/write", post(handlers::config_write))
-        .route("/config/apply", post(handlers::config_apply))
 }
 
 #[cfg(test)]

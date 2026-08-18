@@ -22,7 +22,9 @@ echo "==> Installing system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null
 apt-get install -y --no-install-recommends -qq \
-    curl ca-certificates gettext-base netcat-openbsd >/dev/null
+    curl ca-certificates docker.io gettext-base netcat-openbsd >/dev/null
+systemctl enable --now docker
+docker version >/dev/null
 
 echo "==> Checking blackwire binary"
 if [[ ! -x /usr/local/bin/blackwire ]]; then

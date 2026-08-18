@@ -20,6 +20,7 @@ members = [
     "crates/blackwire-core",
     "crates/blackwire-common",
     "crates/blackwire-config",
+    "crates/blackwire-store",
     "crates/blackwire-transport",
     "crates/blackwire-protocol",
     "crates/blackwire-app",
@@ -31,7 +32,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version     = "0.1.41"
+version     = "0.2.0"
 edition     = "2021"
 license     = "MIT"
 authors     = ["moji.ndr", "Blackwire contributors"]
@@ -162,9 +163,11 @@ reed-solomon-erasure = "6.0.0"
 rand_core   = "0.6"
 hex         = "0.4"
 base64      = "0.22"
+url         = "2"
 num_cpus    = "1"
 chrono      = { version = "0.4", features = ["serde", "clock"] }
-rusqlite    = { version = "0.37", features = ["bundled"] }
+sqlx-core   = { version = "=0.8.6", default-features = false, features = ["_rt-tokio", "_tls-rustls-aws-lc-rs", "chrono"] }
+sqlx-mysql  = { version = "=0.8.6", default-features = false, features = ["chrono"] }
 
 # ── Build profiles ───────────────────────────────────────────────────────────
 # Release builds optimise for the proxy's CPU-bound hot paths (crypto, framing,
