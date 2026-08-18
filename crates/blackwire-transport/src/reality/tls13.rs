@@ -34,7 +34,7 @@ use tokio::net::TcpStream;
 use tracing::debug;
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use blackwire_common::{BoxedStream, ProxyError};
+use blackwire_common::{BoxedStream, DirectCopyUnwrap, ProxyError};
 
 // ── TLS record types ─────────────────────────────────────────────────────────
 
@@ -1064,6 +1064,38 @@ impl Tls13Stream {
     }
 }
 
+impl DirectCopyUnwrap for Tls13Stream {
+    fn direct_copy_ready(&self) -> bool {
+        if !self.write_buf.is_empty() {
+            return false;
+        }
+
+        match self.read_phase {
+            RPHASE_PLAINTEXT => true,
+            RPHASE_HEADER => self.header_pos == 0,
+            RPHASE_BODY => false,
+            _ => false,
+        }
+    }
+
+    fn try_unwrap_direct(
+        self: Box<Self>,
+    ) -> Result<(BoxedStream, Vec<u8>), Box<dyn DirectCopyUnwrap>> {
+        if !self.direct_copy_ready() {
+            return Err(self);
+        }
+
+        let mut this = *self;
+        let prefix = if this.read_phase == RPHASE_PLAINTEXT && this.plain_pos < this.plain_buf.len()
+        {
+            this.plain_buf.split_off(this.plain_pos)
+        } else {
+            Vec::new()
+        };
+        Ok((this.inner, prefix))
+    }
+}
+
 impl AsyncRead for Tls13Stream {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -1301,6 +1333,51 @@ impl AsyncWrite for Tls13Stream {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.project().inner.poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod direct_copy_tests {
+    use super::{
+        derive_app_keys, encrypt_app_record, CipherSuite, DirectCopyUnwrap, Tls13Stream,
+        RT_APPLICATION_DATA,
+    };
+    use blackwire_common::BoxedStream;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn direct_unwrap_preserves_plaintext_prefix_then_exposes_raw_transport() {
+        let keys = derive_app_keys(CipherSuite::Aes128GcmSha256, &[0x31; 32], &[0x72; 32]).unwrap();
+        let record = encrypt_app_record(
+            keys.cs,
+            &keys.client_key,
+            &keys.client_iv,
+            0,
+            b"vision-direct",
+            RT_APPLICATION_DATA,
+        )
+        .unwrap();
+        let raw_tls_record = b"\x17\x03\x03\x00\x04raw!";
+
+        let (mut peer, transport) = tokio::io::duplex(4096);
+        peer.write_all(&record).await.unwrap();
+        peer.write_all(raw_tls_record).await.unwrap();
+
+        let transport = Box::new(transport) as BoxedStream;
+        let mut tls = Box::new(Tls13Stream::new_server(transport, keys));
+        let mut first = [0u8; 6];
+        tls.read_exact(&mut first).await.unwrap();
+        assert_eq!(&first, b"vision");
+        assert!(tls.direct_copy_ready());
+
+        let (mut raw, prefix) = match tls.try_unwrap_direct() {
+            Ok(parts) => parts,
+            Err(_) => panic!("TLS stream should be ready for direct-copy handoff"),
+        };
+        assert_eq!(prefix, b"-direct");
+        let mut observed_raw = [0u8; 9];
+        raw.read_exact(&mut observed_raw).await.unwrap();
+        assert_eq!(&observed_raw, raw_tls_record);
     }
 }
 

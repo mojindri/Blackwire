@@ -87,6 +87,81 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> AsyncReadWrite for T {
 /// reading/writing network data.
 pub type BoxedStream = Box<dyn AsyncReadWrite + Send + Unpin + 'static>;
 
+/// A framed stream that can expose its underlying transport at an
+/// authenticated direct-copy boundary.
+///
+/// XTLS Vision uses this after its `direct` command: subsequent bytes are raw
+/// destination TLS records rather than records protected by the outer TLS
+/// layer. Keeping the hook here avoids coupling the relay to a TLS backend.
+pub trait DirectCopyUnwrap: AsyncRead + AsyncWrite + Unpin + Send + 'static {
+    /// Whether removing the wrapper cannot lose a partial write or framed read.
+    fn direct_copy_ready(&self) -> bool;
+
+    /// Remove the wrapper and return already-decoded bytes that precede the
+    /// underlying transport's unread bytes.
+    fn try_unwrap_direct(
+        self: Box<Self>,
+    ) -> Result<(BoxedStream, Vec<u8>), Box<dyn DirectCopyUnwrap>>;
+}
+
+/// Type-erased adapter for a stream implementing [`DirectCopyUnwrap`].
+pub struct DirectCopyStream {
+    inner: Box<dyn DirectCopyUnwrap>,
+}
+
+impl DirectCopyStream {
+    /// Wrap a framing stream that supports a protocol-directed handoff.
+    pub fn new<T>(inner: T) -> Self
+    where
+        T: DirectCopyUnwrap,
+    {
+        Self {
+            inner: Box::new(inner),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn is_ready(&self) -> bool {
+        self.inner.direct_copy_ready()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn try_unwrap(self) -> Result<(BoxedStream, Vec<u8>), Self> {
+        match self.inner.try_unwrap_direct() {
+            Ok(parts) => Ok(parts),
+            Err(inner) => Err(Self { inner }),
+        }
+    }
+}
+
+impl AsyncRead for DirectCopyStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for DirectCopyStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut *self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.inner).poll_shutdown(cx)
+    }
+}
+
 /// High-level stream capability used by relay decision metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayCapability {
@@ -773,6 +848,23 @@ pub fn try_into_tcp_stream_with_prefix(
         return Ok((tcp, Vec::new()));
     }
 
+    if (*stream).as_any().is::<DirectCopyStream>() {
+        let any = stream.into_any();
+        let direct = any
+            .downcast::<DirectCopyStream>()
+            .expect("stream type checked as DirectCopyStream before downcast");
+        return match direct.try_unwrap() {
+            Ok((inner, mut prefix)) => match try_into_tcp_stream_with_prefix(inner) {
+                Ok((tcp, mut inner_prefix)) => {
+                    prefix.append(&mut inner_prefix);
+                    Ok((tcp, prefix))
+                }
+                Err(inner) => Err(Box::new(PrependedStream::new(inner, prefix))),
+            },
+            Err(direct) => Err(Box::new(direct)),
+        };
+    }
+
     if (*stream).as_any().is::<PrependedStream<BoxedStream>>() {
         let any = stream.into_any();
         let prepended = any
@@ -806,6 +898,10 @@ fn boxed_stream_is_tcp_like(stream: &BoxedStream) -> bool {
         || (*stream).as_any().is::<PrependedStream<TcpStream>>()
         || (*stream).as_any().is::<PooledStream<TcpStream>>()
         || (*stream).as_any().is::<PrependedStream<BoxedStream>>()
+        || (*stream)
+            .as_any()
+            .downcast_ref::<DirectCopyStream>()
+            .is_some_and(DirectCopyStream::is_ready)
 }
 
 /// Recover a Vision wrapper from a boxed stream for Linux relay infrastructure.

@@ -47,9 +47,9 @@ pub use socks5_address::{
     ATYP_IPV6,
 };
 pub use stream::{
-    wrap_vision_inbound_stream, wrap_vision_stream, AsyncReadWrite, BoxedStream, Link, LowerState,
-    LowerableStream, PooledStream, PrependedStream, RelayCapability, RelayDecision, RelayPath,
-    RelayProfile, ReunionStream, VisionStream,
+    wrap_vision_inbound_stream, wrap_vision_stream, AsyncReadWrite, BoxedStream, DirectCopyStream,
+    DirectCopyUnwrap, Link, LowerState, LowerableStream, PooledStream, PrependedStream,
+    RelayCapability, RelayDecision, RelayPath, RelayProfile, ReunionStream, VisionStream,
 };
 
 // Linux-only relay optimization support.

@@ -14,7 +14,9 @@ use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::features::{
     ConnectionHandler, InboundHandler, OutboundConnectResult, OutboundHandler,
 };
-use blackwire_common::{with_handshake_timeout, BoxedStream, ProxyError, RelayRateLimit};
+use blackwire_common::{
+    with_handshake_timeout, BoxedStream, DirectCopyStream, ProxyError, RelayRateLimit,
+};
 use blackwire_config::schema::{SecurityType, StreamSettingsConfig};
 use blackwire_protocol::vless::codec::Command;
 use blackwire_protocol::vless::{
@@ -127,7 +129,12 @@ impl ConnectionHandler for RealityConnectionHandler {
             duration_ms = started.elapsed().as_millis(),
             "REALITY TLS handshake completed"
         );
-        let stream = Box::new(Tls13Stream::new_server(stream, app_keys));
+        // XTLS Vision's authenticated `direct` command must be able to remove
+        // the outer REALITY TLS framing before raw destination TLS records
+        // arrive on the socket.
+        let stream = Box::new(DirectCopyStream::new(Tls13Stream::new_server(
+            stream, app_keys,
+        )));
         self.inbound
             .handle(stream, source, Arc::clone(&self.dispatcher))
             .await
