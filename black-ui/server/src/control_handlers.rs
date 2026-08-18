@@ -79,6 +79,16 @@ pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<
     Ok(Json(CurrentAdmin { username }))
 }
 
+/// Returns only the setup gate used by the unauthenticated login page.
+/// Operational status remains behind `GET /api/status` authentication.
+pub async fn auth_bootstrap_status(
+    State(state): State<AppState>,
+) -> ApiResult<crate::models::AuthBootstrapStatus> {
+    Ok(Json(crate::models::AuthBootstrapStatus {
+        setup_required: state.store.setup_required().await.map_err(store_error)?,
+    }))
+}
+
 pub async fn capabilities(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -8,6 +8,22 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.2.1 - 2026-08-18
+
+### Fixed
+
+- Black UI now has a minimal unauthenticated bootstrap-status endpoint, so an
+  existing panel shows an enabled login form instead of being stuck in
+  “Checking panel”. The frontend remains compatible with v0.2.0 servers.
+- The native installer now completes temporary-file cleanup before its strict
+  shell exit trap runs.
+
+### Changed
+
+- Native Black UI installation now uses the explicit
+  `BLACK_UI_EXPOSURE=private|public` setting; private loopback binding remains
+  the default and public binding uses `0.0.0.0` unless overridden.
+
 ## 0.2.0 - 2026-08-18
 
 ### Added

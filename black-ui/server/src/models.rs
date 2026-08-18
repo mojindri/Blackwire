@@ -274,6 +274,15 @@ pub struct LoginResponse {
     pub username: String,
 }
 
+/// The only panel state needed before authentication. Keep operational status
+/// private; the login screen only needs to know whether it should create the
+/// first administrator or show the sign-in form.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthBootstrapStatus {
+    pub setup_required: bool,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CurrentAdmin {

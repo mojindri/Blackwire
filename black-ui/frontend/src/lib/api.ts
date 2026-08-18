@@ -71,6 +71,25 @@ export const api = {
   status: () => request<Status>("/api/status"),
   capabilities: () => request<CapabilityMap>("/api/capabilities"),
   me: () => request<{ username: string }>("/api/auth/me"),
+  authStatus: async () => {
+    try {
+      return await request<{ setupRequired: boolean }>("/api/auth/status");
+    } catch (error) {
+      // v0.2.0 did not have the minimal bootstrap endpoint. Its status route
+      // is public only before the first admin exists, so an authentication
+      // response means a login form—not an indefinitely disabled screen.
+      if (!(error instanceof Error) || !error.message.includes("404")) throw error;
+      try {
+        const legacy = await request<Status>("/api/status");
+        return { setupRequired: legacy.setupRequired };
+      } catch (legacyError) {
+        if (legacyError instanceof Error && legacyError.message.includes("authentication")) {
+          return { setupRequired: false };
+        }
+        throw legacyError;
+      }
+    }
+  },
   setup: (username: string, password: string) =>
     request<LoginResponse>("/api/auth/setup", body({ username, password })),
   login: (username: string, password: string) =>

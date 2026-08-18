@@ -27,14 +27,15 @@ const emptyData: AppData = {
 
 export default function App() {
   const [token, setTokenState] = useState(getToken());
+  const [authBootstrap, setAuthBootstrap] = useState<{ checking: boolean; setupRequired: boolean }>({ checking: true, setupRequired: false });
   const [page, setPage] = useState<PageKey>("users");
   const [data, setData] = useState<AppData>(emptyData);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  const statusKnown = data.status !== null;
-  const setupRequired = data.status?.setupRequired ?? false;
+  const statusKnown = !authBootstrap.checking;
+  const setupRequired = authBootstrap.setupRequired;
   const authenticated = Boolean(token) && !setupRequired;
   const databaseReadOnly = data.status?.databaseConnected === false;
 
@@ -48,9 +49,9 @@ export default function App() {
   }, []);
 
   const refresh = useCallback(async () => {
-    const status = await api.status();
-    if (status.setupRequired) {
-      setData((current) => ({ ...current, status }));
+    const bootstrap = await api.authStatus();
+    setAuthBootstrap({ checking: false, setupRequired: bootstrap.setupRequired });
+    if (bootstrap.setupRequired) {
       return;
     }
     try {
@@ -62,9 +63,9 @@ export default function App() {
     } catch {
       clearToken();
       setTokenState("");
-      setData((current) => ({ ...current, status }));
       return;
     }
+    const status = await api.status();
     const [settings, inbounds, outbounds, users, traffic, capabilities, service, revisions, routingDns, coreSettings] = await Promise.all([
       api.settings(),
       api.inbounds(),

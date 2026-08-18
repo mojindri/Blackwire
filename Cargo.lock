@@ -372,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "black-ui-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -438,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-api"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-benches"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "blackwire-common",
@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-common"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes-gcm",
  "aws-lc-rs",
@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-config"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-connmgr"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dashmap",
  "metrics",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-protocol"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-store"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "blackwire-config",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-tls"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-transport"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2319,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "integration-tests"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes-gcm",
  "anyhow",

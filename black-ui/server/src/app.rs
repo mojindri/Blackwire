@@ -106,6 +106,7 @@ fn api_router() -> Router<AppState> {
         .route("/auth/login", post(handlers::login))
         .route("/auth/logout", post(handlers::logout))
         .route("/auth/me", get(handlers::me))
+        .route("/auth/status", get(handlers::auth_bootstrap_status))
         .route("/capabilities", get(handlers::capabilities))
         .route("/status", get(handlers::status))
         .route(
