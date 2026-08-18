@@ -15,6 +15,7 @@ TARGET_URL="http://target-http:8080"
 PORT_WAIT_TRIES="${MATRIX_PORT_WAIT_TRIES:-40}"
 PORT_WAIT_SLEEP="${MATRIX_PORT_WAIT_SLEEP:-0.15}"
 SOCKS_WAIT_TRIES="${MATRIX_SOCKS_WAIT_TRIES:-20}"
+NEGATIVE_SOCKS_WAIT_TRIES="${MATRIX_NEGATIVE_SOCKS_WAIT_TRIES:-2}"
 SOCKS_WAIT_SLEEP="${MATRIX_SOCKS_WAIT_SLEEP:-0.25}"
 # VLESS + Docker DNS round-trips can exceed 8s on loaded hosts; keep headroom over relay latency.
 CURL_MAX_TIME="${MATRIX_CURL_MAX_TIME:-15}"
@@ -69,7 +70,7 @@ matrix_bootstrap() {
         include_hiddify=0
     fi
     if (( include_hiddify )); then
-        if ! "${COMPOSE[@]}" up -d target-http tls-cover matrix-probe blackwire-server sing-box-client \
+        if ! "${COMPOSE[@]}" up -d mysql target-http tls-cover matrix-probe blackwire-server sing-box-client \
             hiddify-sing-box-client \
             >> "$REPORT_DIR/compose.log" 2>&1; then
             echo "WARN: failed to start hiddify-sing-box-client; retrying without it" | tee -a "$REPORT_DIR/compose.log" >&2
@@ -78,7 +79,7 @@ matrix_bootstrap() {
         fi
     fi
     if (( ! include_hiddify )); then
-        "${COMPOSE[@]}" up -d target-http tls-cover matrix-probe blackwire-server sing-box-client \
+        "${COMPOSE[@]}" up -d mysql target-http tls-cover matrix-probe blackwire-server sing-box-client \
             >> "$REPORT_DIR/compose.log" 2>&1
     fi
 
@@ -121,8 +122,26 @@ start_blackwire() {
             >>"$REPORT_DIR/compose.log"
         return 1
     fi
+    if ! "${COMPOSE[@]}" exec -T mysql mysql -uroot -pblackwire-root \
+        -e "DROP DATABASE IF EXISTS blackwire; CREATE DATABASE blackwire CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; GRANT ALL PRIVILEGES ON blackwire.* TO 'blackwire'@'%';" \
+        </dev/null >> "$REPORT_DIR/compose.log" 2>&1; then
+        echo "ERROR: failed to reset the matrix MySQL database" >> "$REPORT_DIR/compose.log"
+        return 1
+    fi
+    if ! "${COMPOSE[@]}" exec -T blackwire-server blackwire db init \
+        </dev/null >> "$REPORT_DIR/compose.log" 2>&1; then
+        echo "ERROR: failed to initialize the matrix MySQL schema" >> "$REPORT_DIR/compose.log"
+        return 1
+    fi
+    if ! "${COMPOSE[@]}" exec -T blackwire-server \
+        blackwire db import-fixture "/generated/blackwire/${server_cfg}" \
+        </dev/null >> "$REPORT_DIR/compose.log" 2>&1; then
+        echo "ERROR: failed to import /generated/blackwire/${server_cfg} into MySQL" \
+            >> "$REPORT_DIR/compose.log"
+        return 1
+    fi
     local rust_log="${MATRIX_SERVER_RUST_LOG:-}"
-    local run_cmd="blackwire run -c /generated/blackwire/${server_cfg}"
+    local run_cmd="blackwire run"
     if [[ -n "$rust_log" ]]; then
         run_cmd="env RUST_LOG=${rust_log} ${run_cmd}"
     fi
@@ -313,8 +332,9 @@ should_run_protocol() {
 
 wait_for_socks() {
     local client_host="$1"
+    local tries="${2:-$SOCKS_WAIT_TRIES}"
     local i
-    for i in $(seq 1 "$SOCKS_WAIT_TRIES"); do
+    for i in $(seq 1 "$tries"); do
         if "${COMPOSE[@]}" exec -T matrix-probe \
             curl -fsS --max-time "$CURL_MAX_TIME" --socks5-hostname "${client_host}:1080" "$TARGET_URL" \
             </dev/null >/dev/null 2>&1; then
@@ -327,8 +347,9 @@ wait_for_socks() {
 
 wait_for_socks_udp() {
     local client_host="$1"
+    local tries="${2:-$SOCKS_WAIT_TRIES}"
     local i
-    for i in $(seq 1 "$SOCKS_WAIT_TRIES"); do
+    for i in $(seq 1 "$tries"); do
         if "${COMPOSE[@]}" exec -T matrix-probe \
             sh /scripts/udp-socks-probe.sh "$client_host" 1080 \
             </dev/null >/dev/null 2>&1; then
@@ -441,11 +462,13 @@ run_client_case() {
 
     local client_host="$client_service"
     [[ "$client" == "hiddify" ]] && client_host="hiddify-sing-box-client"
+    local probe_tries="$SOCKS_WAIT_TRIES"
+    [[ "$expect_pass" == "reject" ]] && probe_tries="$NEGATIVE_SOCKS_WAIT_TRIES"
 
     stop_client() { case "$client" in xray) stop_xray ;; hiddify) stop_hiddify ;; *) stop_sing_box ;; esac; }
 
     if udp_only_protocol "$protocol"; then
-        if wait_for_socks_udp "$client_host"; then
+        if wait_for_socks_udp "$client_host" "$probe_tries"; then
             if [[ "$expect_pass" == "pass" ]]; then
                 echo "PASS ${label}" | tee -a "$REPORT_DIR/summary.txt"
                 stop_client; return 0
@@ -463,7 +486,7 @@ run_client_case() {
         stop_client; return 0
     fi
 
-    if wait_for_socks "$client_host"; then
+    if wait_for_socks "$client_host" "$probe_tries"; then
         if [[ "$expect_pass" == "pass" ]]; then
             if requires_udp_probe "$protocol" && ! wait_for_socks_udp "$client_host"; then
                 echo "FAIL ${label} (udp socks probe)" | tee -a "$REPORT_DIR/summary.txt"

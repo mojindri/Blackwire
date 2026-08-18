@@ -28,6 +28,10 @@ This project is pre-1.0. The support contract is owned by
 
 ### Fixed
 
+- External-client Docker scenarios now bootstrap fresh relational MySQL
+  revisions instead of invoking the removed file-config runtime interface.
+- Inbound protocol network mode and authentication timeout now survive MySQL
+  revision persistence, restoring UDP-only Shadowsocks 2022 listeners.
 - Structured inbound and outbound editors preserve complete transport and
   security settings, including SplitHTTP option groups and outbound TLS
   certificate verification policy.
