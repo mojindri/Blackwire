@@ -68,6 +68,17 @@ UI_DATABASE_URL_FILE=/secure/ui-database-url \
 RUN_DB_MIGRATIONS=1 INSTALL_BLACK_UI=1 VERSION=v0.2.0 ./install.sh
 ```
 
+Black UI is private on `127.0.0.1:18080` by default. To expose it on the
+network, make that choice explicit rather than tying it to one VPS address:
+
+```sh
+BLACK_UI_EXPOSURE=public INSTALL_BLACK_UI=1 ... ./install.sh
+```
+
+This listens on `0.0.0.0:18080` by default; set `BLACK_UI_LISTEN` when you
+need a specific interface or port. Put a public panel behind HTTPS and access
+control. MySQL is unrelated and should remain private.
+
 For Docker, use [the Compose deployment](deploy/docker/docker-compose.yml).
 Create its documented secret files before bringing the stack up. For a
 development-only local URL, you can use `BLACKWIRE_DATABASE_URL`; use protected

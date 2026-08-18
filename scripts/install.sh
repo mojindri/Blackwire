@@ -14,7 +14,11 @@ SERVICE_GROUP="${SERVICE_GROUP:-blackwire}"
 START_SERVICE="${START_SERVICE:-0}"
 INSTALL_SYSTEMD="${INSTALL_SYSTEMD:-auto}"
 INSTALL_BLACK_UI="${INSTALL_BLACK_UI:-0}"
-BLACK_UI_LISTEN="${BLACK_UI_LISTEN:-127.0.0.1:18080}"
+# Keep the management panel private unless public exposure is explicitly chosen.
+# An explicit switch is safer than an interactive prompt because this installer is
+# also used by unattended provisioning.
+BLACK_UI_EXPOSURE="${BLACK_UI_EXPOSURE:-private}"
+BLACK_UI_LISTEN="${BLACK_UI_LISTEN:-}"
 BLACK_UI_STATIC_DIR="${BLACK_UI_STATIC_DIR:-/usr/local/share/black-ui/frontend/dist}"
 BLACK_UI_DATA_DIR="${BLACK_UI_DATA_DIR:-/var/lib/black-ui}"
 RUNTIME_DATABASE_URL_FILE="${RUNTIME_DATABASE_URL_FILE:-}"
@@ -26,6 +30,22 @@ log() { printf 'blackwire-install: %s\n' "$*"; }
 die() { printf 'blackwire-install: ERROR: %s\n' "$*" >&2; exit 1; }
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
 sudo_cmd() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
+
+configure_black_ui_exposure() {
+    case "$BLACK_UI_EXPOSURE" in
+        private)
+            BLACK_UI_LISTEN="${BLACK_UI_LISTEN:-127.0.0.1:18080}"
+            ;;
+        public)
+            # Bind every interface by default; do not couple an install to one
+            # potentially changing public address. A caller may still provide
+            # an explicit address through BLACK_UI_LISTEN.
+            BLACK_UI_LISTEN="${BLACK_UI_LISTEN:-0.0.0.0:18080}"
+            log "Black UI will be publicly reachable at ${BLACK_UI_LISTEN}; protect it with HTTPS and access controls"
+            ;;
+        *) die "BLACK_UI_EXPOSURE must be private or public" ;;
+    esac
+}
 
 detect_asset() {
     case "$(uname -s):$(uname -m)" in
@@ -189,6 +209,7 @@ main() {
     for command in curl tar install sha256sum find sed; do need_cmd "$command"; done
     if [ "$(id -u)" -ne 0 ]; then need_cmd sudo; fi
     reject_legacy_options
+    configure_black_ui_exposure
     detect_legacy_installation
     [ -n "$RUNTIME_DATABASE_URL_FILE" ] || die "RUNTIME_DATABASE_URL_FILE is required; this installer never installs MySQL"
     prepare_accounts_and_dirs

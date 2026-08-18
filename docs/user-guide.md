@@ -45,6 +45,12 @@ The installer copies service credentials into protected locations under
 `/etc/blackwire`. It does not start a migration unless you opt in with
 `RUN_DB_MIGRATIONS=1`.
 
+Black UI defaults to `127.0.0.1:18080`. For an intentionally public panel,
+set `BLACK_UI_EXPOSURE=public`; the installer then listens on `0.0.0.0:18080`
+unless you supply `BLACK_UI_LISTEN`. Use a hardened HTTPS reverse proxy and
+access controls for a public panel. Keep MySQL private regardless of the panel
+choice.
+
 For a container deployment, use [Docker Compose](../deploy/docker/docker-compose.yml).
 Create the secret files referenced by that Compose file before starting the
 stack. It creates MySQL, migration, runtime, and Black UI services with
