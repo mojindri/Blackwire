@@ -5,6 +5,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use base64::Engine as _;
@@ -19,7 +20,7 @@ use blackwire_protocol::vless::codec::Command;
 use blackwire_protocol::vless::{
     connect_vless_on_stream, connect_vless_on_stream_with_early_payload,
 };
-use tracing::warn;
+use tracing::{debug, warn};
 
 use blackwire_transport::{
     complete_tls13_server_handshake, RealityClient, RealityClientConfig, RealityServer,
@@ -38,6 +39,7 @@ pub(crate) fn uses_reality(stream_settings: &Option<StreamSettingsConfig>) -> bo
 /// Connection adapter that unwraps REALITY before handing bytes to VLESS.
 pub(crate) struct RealityConnectionHandler {
     reality: Arc<RealityServer>,
+    inbound_tag: Arc<str>,
     cover_sni: String,
     handshake_timeout: Option<std::time::Duration>,
     inbound: Arc<dyn InboundHandler>,
@@ -47,6 +49,7 @@ pub(crate) struct RealityConnectionHandler {
 impl RealityConnectionHandler {
     pub(crate) fn new(
         reality: Arc<RealityServer>,
+        inbound_tag: impl Into<Arc<str>>,
         cover_sni: &str,
         handshake_timeout: Option<std::time::Duration>,
         inbound: Arc<dyn InboundHandler>,
@@ -54,6 +57,7 @@ impl RealityConnectionHandler {
     ) -> Result<Arc<Self>> {
         Ok(Arc::new(Self {
             reality,
+            inbound_tag: inbound_tag.into(),
             cover_sni: if cover_sni.is_empty() {
                 "localhost".to_string()
             } else {
@@ -73,9 +77,26 @@ impl ConnectionHandler for RealityConnectionHandler {
         stream: BoxedStream,
         source: SocketAddr,
     ) -> Result<(), ProxyError> {
+        let started = Instant::now();
+        debug!(
+            inbound = %self.inbound_tag,
+            source = %source,
+            cover_sni = %self.cover_sni,
+            "REALITY connection accepted"
+        );
         let accepted =
             with_handshake_timeout(self.handshake_timeout, self.reality.accept_with_key(stream))
-                .await?;
+                .await
+                .map_err(|error| {
+                    debug!(
+                        inbound = %self.inbound_tag,
+                        source = %source,
+                        duration_ms = started.elapsed().as_millis(),
+                        error = %error,
+                        "REALITY authentication failed"
+                    );
+                    error
+                })?;
         let cover_profile = accepted.cover_profile;
         let mut stream = accepted.stream;
         // Keep this on the custom TLS path: rustls does not currently negotiate with uTLS REALITY clients.
@@ -90,15 +111,34 @@ impl ConnectionHandler for RealityConnectionHandler {
         )
         .await
         .map_err(|e| {
-            warn!(error = %e, sni = %self.cover_sni, "REALITY post-auth TLS handshake failed");
+            warn!(
+                inbound = %self.inbound_tag,
+                source = %source,
+                duration_ms = started.elapsed().as_millis(),
+                error = %e,
+                sni = %self.cover_sni,
+                "REALITY post-auth TLS handshake failed"
+            );
             e
         })?;
+        debug!(
+            inbound = %self.inbound_tag,
+            source = %source,
+            duration_ms = started.elapsed().as_millis(),
+            "REALITY TLS handshake completed"
+        );
         let stream = Box::new(Tls13Stream::new_server(stream, app_keys));
         self.inbound
             .handle(stream, source, Arc::clone(&self.dispatcher))
             .await
             .map_err(|e| {
-                warn!(error = %e, "REALITY VLESS inbound failed after TLS");
+                warn!(
+                    inbound = %self.inbound_tag,
+                    source = %source,
+                    duration_ms = started.elapsed().as_millis(),
+                    error = %e,
+                    "REALITY VLESS inbound failed after TLS"
+                );
                 e
             })
     }

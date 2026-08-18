@@ -10,6 +10,10 @@ This project is pre-1.0. The support contract is owned by
 
 ### Fixed
 
+- Targeted debug logging now correlates Reality authentication and TLS stages,
+  sniffed destination rewrites, outbound selection, relay connection IDs,
+  duration, byte counts, and close errors without exposing credentials or
+  traffic payloads.
 - Black UI subscription actions once again fetch and copy or encode the actual
   base64 subscription content. The configured public URL is used only to fetch
   that content, so Hiddify receives an importable payload without a loopback

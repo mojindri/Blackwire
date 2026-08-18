@@ -474,6 +474,7 @@ impl Dispatcher for DefaultDispatcher {
         let sniff_cfg = self.sniffing.load().get(&*ctx.inbound_tag).cloned();
         if let Some(cfg) = sniff_cfg {
             if cfg.enabled {
+                let original_dest = dest.clone();
                 let mut sniff = match early_payload.as_deref() {
                     Some(payload) if !payload.is_empty() && !cfg.metadata_only => {
                         crate::sniff::analyze_peek(payload, &cfg)
@@ -492,6 +493,16 @@ impl Dispatcher for DefaultDispatcher {
                     }
                 }
                 dest = crate::sniff::apply_dest_override(dest, &sniff, &cfg);
+                debug!(
+                    inbound = %ctx.inbound_tag,
+                    source = ?ctx.source,
+                    original_dest = %original_dest,
+                    effective_dest = %dest,
+                    sniffed_protocol = ?sniff.protocol,
+                    sniffed_domain = ?sniff.domain,
+                    rewritten = original_dest != dest,
+                    "inbound destination sniffed"
+                );
                 ctx = ctx.with_sniff(sniff.protocol, sniff.domain);
             }
         }
@@ -569,6 +580,15 @@ impl Dispatcher for DefaultDispatcher {
             Transport::Tcp,
             RelayPath::Adaptive,
         );
+        let connection_id = conn.id();
+        debug!(
+            connection_id,
+            inbound = %ctx.inbound_tag,
+            outbound = %outbound.outbound_tag,
+            dest = %dest,
+            protocol = ?protocol,
+            "relay connection tracked"
+        );
         let cancel = conn.cancellation_token();
 
         // Relay bytes bidirectionally until either side closes.
@@ -630,6 +650,7 @@ impl Dispatcher for DefaultDispatcher {
             Ok((up, down)) => {
                 relay_log!(
                     self.profile,
+                    connection_id,
                     dest = %dest,
                     inbound = %ctx.inbound_tag,
                     uplink_bytes = up,
@@ -645,8 +666,11 @@ impl Dispatcher for DefaultDispatcher {
                 )
                 .increment(1);
                 debug!(
+                    connection_id,
                     dest = %dest,
                     inbound = %ctx.inbound_tag,
+                    outbound = %outbound.outbound_tag,
+                    duration_ms = elapsed.as_millis(),
                     error = %e,
                     "relay error"
                 );

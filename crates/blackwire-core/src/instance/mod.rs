@@ -826,6 +826,7 @@ impl Instance {
                     .unwrap_or("localhost");
                 RealityConnectionHandler::new(
                     reality,
+                    in_cfg.tag.clone(),
                     cover_sni,
                     handshake_timeout,
                     Arc::clone(&handler),
