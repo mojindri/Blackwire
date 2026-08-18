@@ -31,6 +31,8 @@ invocations.
   and cover configured in the private matrix environment. Docker probes use
   the isolated echo target at `10.203.0.12:8080`, avoiding client DNS variance.
 - Reused `matrix-probe` container for `nc` / `curl` (no `docker run --rm` per check).
+- Hiddify app-mode checks use a dedicated probe in its network namespace,
+  matching Hiddify's loopback-only mixed proxy without exposing an extra port.
 - `compose exec` to start/stop `blackwire` and sing-box per case.
 - **Xray** uses `compose run` per case (distroless image has no `/bin/sh` for idle holders).
 - **One server start per protocol** (four client cases reuse the same listener).

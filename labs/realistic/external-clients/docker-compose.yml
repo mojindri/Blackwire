@@ -88,6 +88,17 @@ services:
     depends_on:
       - target-http
 
+  # Hiddify app mode intentionally binds its mixed proxy to loopback. This
+  # probe shares that network namespace so the matrix exercises 127.0.0.1:1080.
+  hiddify-probe:
+    image: alpine:3.20
+    command: ["sleep", "infinity"]
+    network_mode: "service:hiddify-sing-box-client"
+    volumes:
+      - ./scripts:/scripts:ro
+    depends_on:
+      - hiddify-sing-box-client
+
   # Xray-core is distroless (no shell). Not started via `compose up`; matrix uses
   # `compose run --name xray-client` per case (see run-docker-matrix.sh).
   xray-client:
