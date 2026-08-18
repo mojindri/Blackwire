@@ -34,13 +34,14 @@ sudo mkdir -p /etc/blackwire /etc/blackwire/certs /var/lib/blackwire
 sudo chown -R blackwire:blackwire /var/lib/blackwire
 ```
 
-Provision MySQL separately, put the runtime URL in the protected credential
-file, then initialize and configure the database before starting systemd:
+Provision MySQL separately. Use a protected migrator credential only to
+initialize the schema, then give the service its restricted runtime credential:
 
 ```sh
-sudo install -o blackwire -g blackwire -m 0400 runtime-database-url /etc/blackwire/runtime-database-url
-sudo -u blackwire env BLACKWIRE_DATABASE_URL_FILE=/etc/blackwire/runtime-database-url \
+sudo install -o root -g root -m 0400 migrator-database-url /etc/blackwire/migrator-database-url
+sudo env BLACKWIRE_DATABASE_URL_FILE=/etc/blackwire/migrator-database-url \
   /usr/local/bin/blackwire db init
+sudo install -o blackwire -g blackwire -m 0400 runtime-database-url /etc/blackwire/runtime-database-url
 ```
 
 Use Black UI/control-plane APIs for normal configuration. Lab fixtures may be

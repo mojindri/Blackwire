@@ -9,7 +9,7 @@ This file owns detailed feature status and evidence. The release support
 contract is summarized in [release.md](release.md); test command details belong
 in [11-testing.md](11-testing.md) and [test-workflows.md](test-workflows.md).
 
-**Latest VPS evidence (2026-05-30):** `make -C labs/realistic interop-server-vps` passed with two real VPS hosts (`SSH_SERVER=<server-host>`, `SSH_CLIENT=<client-host>`); `ss2022-udp` is now PASS for both Xray and sing-box after opening `8389/udp` in VPS server setup. Summary: `labs/realistic/reports/external-clients-vps/summary.txt`.
+**Recorded VPS evidence (2026-05-30):** `make -C labs/realistic interop-server-vps` passed with two real VPS hosts (`SSH_SERVER=<server-host>`, `SSH_CLIENT=<client-host>`); `ss2022-udp` passed for both Xray and sing-box after opening `8389/udp` in VPS server setup. Treat this as dated evidence, not a claim about the latest CI result; run the current matrix before release.
 
 **Release posture** (see [release.md](release.md) for the full support contract):
 

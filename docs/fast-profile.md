@@ -1,202 +1,95 @@
 # Fast Profile
 
-Blackwire has two operating modes:
+Fast is a latency-first runtime profile. It deliberately accepts a narrower
+set of configurations than `compat`, Blackwire's default broad-compatibility
+profile. It does not weaken authentication, TLS/REALITY validation, timeouts,
+or parser checks.
 
-| Mode | Purpose |
-|---|---|
-| **Compat** (default) | Broad protocol/transport matrix, Xray/sing-box interop, experiments, feature parity work |
-| **Fast** | Narrow, latency-first controlled-deployment path — strict defaults, lower complexity, benchmarked head-to-head against Xray and sing-box |
+Configure the saved profile in **Black UI → Settings → Runtime & observability**.
+Blackwire stores that selection in the desired MySQL revision. For a temporary
+process-level override, start the runtime with:
 
-These are different promises. Compatibility Mode may be slower or more complex — that is intentional and acceptable. Fast Profile rejects useful features when they add latency overhead.
-
-**Security rule**: Fast Profile means _less complexity_, not _less safety_. Auth, REALITY validation, TLS, timeouts, and parser strictness are identical in both modes.
-
----
-
-## Enabling Fast Profile
-
-**In config:**
-```json
-{ "profile": "fast", ... }
-```
-
-**CLI override:**
-```bash
+```sh
 blackwire run --profile fast
 ```
 
-The CLI flag wins over the config field. This allows using an existing config without editing it.
+The CLI override wins for that process only; it does not edit your stored
+revision.
 
----
+## When You Should Use It
 
-## `fast` block (optional)
+Use `compat` unless you have measured a latency or throughput problem on a
+supported path. Choose Fast only when you can accept a reduced protocol and
+transport surface in exchange for a simpler hot path.
 
-```json
-{
-  "profile": "fast",
-  "fast": { "strictProduction": true }
-}
-```
+| Profile | Purpose |
+| --- | --- |
+| `compat` | Default. Broad protocol/transport compatibility and interop work. |
+| `fast` | Narrow, latency-first path with stricter validation. |
 
-| Field | Default | Meaning |
-|---|---|---|
-| `strictProduction` | `true` | Rejects `security = none`. Set to `false` only for local benchmarking labs. |
-| `pool` | `disabled` | Freedom preconnect pool policy. Keep disabled unless a targeted VPS gate proves pooling helps the workload. |
-| `splice` | `adaptive` | Raw TCP relay splice policy for eligible streams. |
-| `relay.engine` | `v2` | Userspace relay engine used when splice is unavailable, such as wrapped transports. |
-| `relay.flush` | `adaptive` | Relay v2 flush policy; coalesces burst flushes while preserving interactive writes. |
+The other profiles shown in Settings are workload-oriented defaults. They do
+not make an untested protocol or transport supported; consult the
+[Feature Matrix](feature-matrix.md) first.
 
-Fast Profile keeps compatibility defaults out of the hot path. Compatibility
-Mode still uses the legacy userspace relay unless configured otherwise.
+## Fast-Profile Rules
 
-### Freedom pool tuning (optional)
+When Fast is selected, Blackwire validates the stored revision at startup.
 
-Fast Profile keeps Freedom TCP preconnect pooling disabled by default. Current
-native VPS results show adaptive pooling can help some warm rows but can hurt
-bursty high-concurrency no-keepalive traffic, so pooling is now opt-in and must
-be justified by a targeted gate. You can enable and tune it per outbound in
-`settings`:
+| Setting | Fast behavior |
+| --- | --- |
+| VLESS inbound | Allowed. |
+| VMess inbound | Rejected. |
+| TCP transport | Allowed. |
+| WebSocket, gRPC, mKCP, SplitHTTP, or TUN | Rejected. |
+| TLS or REALITY | Allowed. |
+| No transport security | Rejected in strict production mode; warned about only when you explicitly disable strict production for a lab. |
+| Sniffing or FakeIP | Rejected. |
+| `IpOnDemand` routing strategy | Rejected. |
+| Large routing rule sets | Warned about; keep your rules focused. |
+| Freedom or VLESS outbound | Allowed. |
 
-```json
-{
-  "tag": "freedom",
-  "protocol": "freedom",
-  "settings": {
-    "pool": {
-      "mode": "adaptive",
-      "maxPerDest": 8,
-      "maxGlobalIdle": 256,
-      "maxDests": 512,
-      "idleTtlMs": 8000,
-      "hotnessWindowMs": 12000,
-      "minHotnessForPool": 8
-    }
-  }
-}
-```
+Validation is fail-closed: an invalid Fast revision does not start. Runtime
+status explains the problem so you can adjust the revision in Black UI.
 
-Accepted `pool.mode` values:
-- `adaptive`
-- `fixed` (uses fixed per-destination capacity)
-- `disabled` / `off` / `none` (default in Fast Profile)
+## Fast-Path Tuning
 
-Legacy `poolSize` is still supported for lab/debug compatibility.
+In **Black UI → Settings → Performance policies**, you can enable
+**Fast-path tuning**. Leave it off unless you are investigating a measured
+problem. The normal profile choice is safer than manually changing relay
+internals.
 
-Latency lab profiles may use `blackwire-fast-lab-server-pooled.json` to test
-pooling explicitly. The default Fast lab server keeps pooling disabled so the
-strict gate does not hide high-concurrency no-keepalive failures behind mixed
-pool behavior.
+When enabled, these controls are stored relationally with the revision:
 
----
+| Control | Default guidance |
+| --- | --- |
+| Strict production mode | Keep on for public deployments. |
+| Pool policy | Leave at the default unless a targeted benchmark proves it helps your workload. |
+| Splice policy | Keep adaptive; it uses the best available safe relay path. |
+| Relay engine and flush policy | Keep the supplied defaults unless profiling identifies a bottleneck. |
+| Buffer sizes | Do not increase them blindly; they affect memory per active connection. |
+| Linux zero-copy, io_uring, AF_XDP | Experimental or host-dependent; enable only on prepared Linux hosts with measurements. |
 
-## Validation rules
+Fast Profile keeps extra compatibility work off the hot path. It never skips
+REALITY key checks, TLS certificate validation, UUID/password validation, or
+protocol error handling.
 
-When `profile = fast`, `validate_fast_profile()` runs at startup and rejects or warns on the following:
+## Security And Operations
 
-| Setting | Behaviour |
-|---|---|
-| `protocol = vless` inbound | ✅ allowed |
-| `protocol = vmess` inbound | ❌ error |
-| `network = tcp` | ✅ allowed |
-| `network = ws / grpc / kcp / splithttp / tun` | ❌ error |
-| `security = reality` or `tls` | ✅ allowed |
-| `security = none` + `strictProduction: false` | ⚠️ warning — lab-only |
-| `security = none` + `strictProduction: true` | ❌ error |
-| `sniffing.enabled = true` | ❌ error |
-| `dns.fakeIp.enabled = true` | ❌ error |
-| `routing.domainStrategy = IpOnDemand` | ❌ error |
-| `routing.rules` count > 50 | ⚠️ warning |
-| `protocol = freedom` or `vless` outbound | ✅ allowed |
-| GeoSite/GeoIP heavy rules (> 20) | ⚠️ warning |
+- Do not expose an unauthenticated or unencrypted inbound to the public
+  internet.
+- Treat `security: none` as an internal disposable-lab case, never an operator
+  recipe.
+- Check Runtime after changing profiles: a revision may require maintenance
+  activation if its listeners must change.
+- Benchmark in an environment resembling your deployment before tuning. A
+  setting that improves one destination or connection pattern can harm another.
 
-Errors abort startup. Warnings are printed to stderr and then startup continues.
+## Lab Fixtures
 
----
+The repository has JSON fixtures for wire tests and latency labs. They are
+loaded only into explicitly disposable MySQL databases by lab scripts. They are
+not deployable configuration files and must not be copied into production.
 
-## Log level changes
-
-Under `profile = fast`, per-connection relay logs (`relay started`, `relay finished`, `route selected`) are emitted at `DEBUG` level instead of `INFO`. This avoids log I/O on the hot path at production log levels.
-
-Security events (auth failures, config errors, startup messages) remain at `INFO`/`WARN`/`ERROR` regardless of profile.
-
----
-
-## Lab config example (security = none, loopback only)
-
-```json
-{
-  "profile": "fast",
-  "fast": { "strictProduction": false },
-  "log": { "level": "warn" },
-  "inbounds": [
-    {
-      "tag": "vless-in",
-      "protocol": "vless",
-      "listen": "127.0.0.1",
-      "port": 10080,
-      "settings": {
-        "clients": [{ "id": "00000000-0000-4000-8000-000000000001" }]
-      }
-    }
-  ],
-  "outbounds": [{ "tag": "freedom", "protocol": "freedom" }]
-}
-```
-
-Never use `security = none` on a publicly reachable port. This is a loopback-only latency lab config.
-
----
-
-## Production config example (REALITY)
-
-```json
-{
-  "profile": "fast",
-  "inbounds": [
-    {
-      "tag": "vless-reality-in",
-      "protocol": "vless",
-      "listen": "0.0.0.0",
-      "port": 10443,
-      "settings": {
-        "clients": [{ "id": "<uuid>", "flow": "" }],
-        "fallback": { "dest": "<reality-dest>:443" }
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "dest": "<reality-dest>:443",
-          "serverName": "<sni>",
-          "serverNames": ["<sni>"],
-          "privateKey": "<private-key>",
-          "shortIds": ["<short-id>"],
-          "maxTimeDiffSeconds": 60
-        }
-      }
-    }
-  ],
-  "outbounds": [{ "tag": "freedom", "protocol": "freedom" }]
-}
-```
-
----
-
-## What Fast Profile does NOT do
-
-- Does not bypass REALITY key verification
-- Does not skip TLS certificate validation
-- Does not relax UUID parsing
-- Does not shorten handshake timeouts
-- Does not disable parser error checks
-- Does not introduce a separate code path for dispatch
-
-All of the above remain identical to Compatibility Mode.
-
----
-
-## Measurement-driven optimization policy
-
-Performance improvements beyond the current scope (profile validation, log gating, histograms) require profiling evidence. Decisions based on assumptions rather than measurements are explicitly out of scope.
-
-See `docs/latency-lab.md` for the benchmarking methodology.
+See [Latency Lab](latency-lab.md) for benchmark methodology and
+[Configuration For Dummies](08-config-for-dummies.md) for the normal Black UI
+workflow.

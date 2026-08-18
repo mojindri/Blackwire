@@ -332,7 +332,7 @@ This is the executable, `blackwire`.
 ### Main Responsibilities
 
 - parse CLI arguments
-- load config
+- connect to MySQL and reconstruct the desired typed revision
 - start `Instance`
 - install signal handlers
 - expose helper commands like UUID and X25519 generation

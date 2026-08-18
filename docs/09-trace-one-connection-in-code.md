@@ -20,7 +20,7 @@ Read:
 
 What to notice:
 
-- config is loaded
+- the desired revision is loaded from MySQL and reconstructed into typed config
 - `Instance::from_config(...)` is called
 - the running instance is what actually starts listeners
 

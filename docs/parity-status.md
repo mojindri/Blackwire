@@ -66,7 +66,7 @@ See [roadmap.md](roadmap.md). Summary:
 | Trojan UDP outbound | `connect_trojan_on_stream_udp()`; in-process e2e PASS; no external-client lab row |
 | XUDP vs Mux.Cool UDP | XUDP: session `0` + GlobalID; Mux.Cool UDP: non-zero session id |
 | Handler structural RPCs | `AddInbound`/`RemoveInbound` rebuild the running CLI instance using native blackwire endpoint JSON; in-place listener rebind remains backlog |
-| Native JSON only | Xray/sing-box JSON not imported |
+| Typed relational configuration | Xray/sing-box JSON is not imported; lab fixtures are loaded only into disposable MySQL databases |
 
 ## Backlog (post–P0/P1)
 

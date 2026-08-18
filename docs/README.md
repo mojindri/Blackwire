@@ -36,10 +36,10 @@ contract and feature matrix instead of carrying their own support tables.
 ## User Docs
 
 - [user-guide.md](user-guide.md)
-  Install, Black UI, service operations, config basics, troubleshooting, and
-  advanced operator notes.
+  Requirements, installation, Black UI, service operations, configuration,
+  troubleshooting, and operator safety notes.
 - [08-config-for-dummies.md](08-config-for-dummies.md)
-  Longer field-by-field config explanation.
+  A beginner guide to the relational configuration concepts shown in Black UI.
 - [fast-profile.md](fast-profile.md)
   Constraints and policy for the latency-first profile.
 

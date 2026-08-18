@@ -1,644 +1,163 @@
-# Config For Dummies
+# Configuration For Dummies
 
-This is the practical guide to the config format used in this repo.
+Blackwire does not use deployable JSON configuration files. You configure it in
+Black UI or through its database-backed CLI; MySQL stores each typed change as
+an immutable revision. The runtime reconstructs and validates that revision
+before it can run.
 
-If you keep forgetting what goes in:
+This guide explains the concepts you see in Black UI. It is deliberately about
+what you are configuring, not a file format to copy into a server.
 
-- `inbounds`
-- `outbounds`
-- `routing`
-- `streamSettings`
-- `metricsAddr`
+## Start With The Five Questions
 
-start here.
+Before you add anything, decide:
 
-## First Principle
+1. Which port should accept your clients?
+2. Which protocol should that inbound speak?
+3. Where should the traffic leave from?
+4. Which routing rules choose that outbound?
+5. Do you need a transport or security layer such as TLS, REALITY, WebSocket,
+   or QUIC?
 
-The config answers five questions:
+For your first setup, keep the answers boring: one local SOCKS inbound, one
+direct outbound, and one rule that sends everything to it.
 
-1. What ports should this proxy listen on?
-2. What protocol should each listener speak?
-3. Where should traffic go out?
-4. How should routing choose an outbound?
-5. Should any transport wrapper like TLS, WebSocket, or REALITY be used?
+## Your First Safe Setup
 
-Everything else is a detail under one of those five.
+An empty inbound list is safe and valid: no proxy port is exposed until you add
+an inbound. In Black UI, create the following:
 
-## The Smallest Useful Config
+| Section | Add | Suggested values |
+| --- | --- | --- |
+| Inbounds | Local SOCKS listener | `127.0.0.1`, port `1080`, protocol `socks` |
+| Outbounds | Direct path | protocol `freedom` |
+| Routing | Default rule | choose the direct outbound |
 
-This is the smallest shape worth understanding:
+Save the revision, then look at Runtime. Blackwire tells you whether it can
+activate immediately or needs confirmed maintenance activation.
 
-```json
-{
-  "log": { "level": "info" },
-  "inbounds": [
-    {
-      "tag": "socks-in",
-      "protocol": "socks",
-      "listen": "127.0.0.1",
-      "port": 1080
-    }
-  ],
-  "outbounds": [
-    {
-      "tag": "direct",
-      "protocol": "freedom"
-    }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "outboundTag": "direct"
-      }
-    ]
-  }
-}
+For a disposable local starting point, you can also create a relational preset:
+
+```sh
+blackwire db seed socks-local
 ```
 
-This means:
+The other presets are `vless-local`, `trojan-local`, and `shadowsocks-local`.
+They create relational state and, where needed, a user credential. They are not
+JSON imports and should not be treated as a production migration tool.
 
-- listen locally on `127.0.0.1:1080`
-- speak SOCKS5 to local clients
-- send everything out directly
+## The Main Sections
 
-## Top-Level Fields
+## Inbounds: What You Accept
 
-## `log`
+An inbound is a listener. It needs a tag, listening address, port, and
+protocol. You may also select transport, security, users, limits, and
+sniffing.
 
-Controls logging.
+- Bind local client proxies to `127.0.0.1` unless you intentionally need LAN
+  access.
+- Bind a public server inbound only after you have chosen authentication and a
+  suitable security/transport design.
+- Keep tags descriptive, such as `socks-local` or `vless-reality-in`.
 
-Common fields:
+Common choices:
 
-- `level`
-  log level like `info` or `warning`
+| You want to… | Inbound protocol |
+| --- | --- |
+| Proxy applications on this machine | SOCKS or HTTP CONNECT |
+| Accept a VLESS client | VLESS |
+| Accept a Trojan client | Trojan |
+| Accept a Shadowsocks 2022 client | Shadowsocks |
 
-- `json`
-  whether logs are JSON formatted in examples that include it
+## Outbounds: Where Traffic Goes
 
-## `inbounds`
+An outbound is the path Blackwire takes after routing selects it.
 
-What the proxy accepts from clients.
+- Use `freedom` for a direct connection to the requested destination.
+- Use VLESS, Trojan, VMess, Shadowsocks, Hysteria2, or TUIC when this instance
+  must act as a client to another proxy server.
+- Give each path a clear tag, because routing refers to it by name.
 
-Each inbound needs:
+## Routing: Choosing An Outbound
 
-- `tag`
-- `protocol`
-- `listen`
-- `port`
+Routing rules match traffic and choose an outbound tag. You can match by
+domain, IP, port, source, or inbound. A sensible default rule is important:
+without a matching path, traffic cannot leave the runtime.
 
-Optional:
+Start with one direct default rule. Add domain and DNS policies only when you
+can describe the outcome you want, for example “send this domain group through
+my remote outbound.”
 
-- `settings`
-- `streamSettings`
-- `sniffing`
+## Transport And Security
 
-Think of an inbound as:
+Transport controls how the proxy connection moves; security controls how it is
+protected or disguised. They are related but not interchangeable.
 
-"Open this port, speak this client-facing protocol."
+| Item | What it changes |
+| --- | --- |
+| TCP | The normal stream transport and the simplest starting point. |
+| TLS | Encrypts and authenticates a TLS-backed path. |
+| REALITY | Authenticated TLS camouflage for supported VLESS TCP paths. |
+| WebSocket / gRPC / HTTPUpgrade / SplitHTTP | HTTP-shaped choices with interoperability trade-offs. |
+| QUIC, Hysteria2, TUIC | UDP/QUIC paths that depend on firewall, NAT, MTU, and client support. |
 
-## `outbounds`
+Use the [Feature Matrix](feature-matrix.md) before selecting an advanced path.
+It is the source of truth for supported clients, known caveats, and test
+evidence.
 
-What the proxy uses when sending traffic onward.
+## Users And Client Subscriptions
 
-Each outbound needs:
+Users belong to an inbound. In Black UI you can create or disable users, set
+credentials, expiry, and quota, then use **Copy subscription** for
+database-derived client content that Hiddify can scan or import.
 
-- `tag`
-- `protocol`
+This is not a server-configuration export. Blackwire does not accept or emit
+Xray, sing-box, or Blackwire server configuration files.
 
-Optional:
+## Runtime And Settings
 
-- `settings`
-- `streamSettings`
+The Settings page controls shared runtime behavior: profile, logs, metrics,
+API, limits, DNS, routing, and optional performance policies. Start with the
+`compat` profile and defaults. Turn on Fast-path tuning only when you have a
+measured reason and understand its compatibility constraints.
 
-Think of an outbound as:
+See [Fast Profile](fast-profile.md) for the constraints and safe operating
+rules.
 
-"When routing chooses this tag, use this method to connect outward."
+## How Changes Become Active
 
-## `routing`
+Every completed UI or CLI edit creates a new revision. Blackwire validates the
+desired revision and either activates it immediately, hands over a supported
+listener, or holds it for confirmed maintenance activation. During a temporary
+MySQL outage, it keeps serving the active in-memory revision.
 
-How the proxy decides which outbound tag to use.
+Useful recovery commands:
 
-Main field:
-
-- `rules`
-
-Each rule usually ends with:
-
-- `outboundTag`
-
-Optional matchers:
-
-- `domain`
-- `ip`
-- `port`
-- `inboundTag`
-
-## `metricsAddr`
-
-Optional HTTP server for metrics and health endpoints.
-
-Example:
-
-```json
-"metricsAddr": "127.0.0.1:16090"
+```sh
+blackwire db validate
+blackwire db status
+blackwire db history --limit 20
+blackwire db rollback REVISION
+blackwire db activate-maintenance REVISION
 ```
 
-If set, the instance will try to bind a metrics server there during startup.
-
-## Anatomy Of An Inbound
-
-From the schema:
-
-- `tag`: unique name
-- `protocol`: `socks`, `http`, `vless`, `vmess`, `trojan`, `shadowsocks`, etc.
-- `listen`: IP address only
-- `port`: numeric port
-- `settings`: protocol-specific JSON
-- `streamSettings`: transport/security wrapper config
-
-Important beginner point:
-
-`listen` is not a domain name in the schema.
-It is a real IP address.
-
-## Anatomy Of An Outbound
-
-From the schema:
-
-- `tag`: route name
-- `protocol`: `freedom`, `vless`, `vmess`, `trojan`, `shadowsocks`, etc.
-- `settings`: protocol-specific JSON
-- `streamSettings`: optional transport wrapper
-
-## The Meaning Of `tag`
-
-`tag` is just the name used to refer to an inbound or outbound elsewhere.
-
-Examples:
-
-- inbound tag appears in routing rule `inboundTag`
-- outbound tag appears in routing rule `outboundTag`
-
-Good tags are descriptive:
-
-- `socks-in`
-- `direct`
-- `vless-reality-out`
-- `ss2022-out`
-
-## Common Inbound Examples
-
-## SOCKS inbound
-
-```json
-{
-  "tag": "socks-in",
-  "protocol": "socks",
-  "listen": "127.0.0.1",
-  "port": 10080
-}
-```
-
-Meaning:
-
-- local apps can use this as a SOCKS5 proxy
-
-## HTTP CONNECT inbound
-
-```json
-{
-  "tag": "http-in",
-  "protocol": "http",
-  "listen": "127.0.0.1",
-  "port": 8080
-}
-```
-
-Meaning:
-
-- local apps can use this as an HTTP CONNECT proxy
-
-## VLESS inbound
-
-```json
-{
-  "tag": "vless-in",
-  "protocol": "vless",
-  "listen": "127.0.0.1",
-  "port": 10443,
-  "settings": {
-    "clients": [
-      {
-        "id": "a3482e88-686a-4a58-8126-99c9df64b7bf",
-        "email": "user@example.test"
-      }
-    ]
-  }
-}
-```
-
-Meaning:
-
-- accept VLESS clients
-- allow the listed UUIDs
-
-## Common Outbound Examples
-
-## Freedom outbound
-
-```json
-{
-  "tag": "direct",
-  "protocol": "freedom"
-}
-```
-
-Meaning:
-
-- connect directly to the target destination
-
-## VLESS outbound
-
-```json
-{
-  "tag": "vless-out",
-  "protocol": "vless",
-  "settings": {
-    "address": "127.0.0.1",
-    "port": 10443,
-    "users": [
-      {
-        "id": "a3482e88-686a-4a58-8126-99c9df64b7bf",
-        "flow": ""
-      }
-    ]
-  }
-}
-```
-
-Meaning:
-
-- when this outbound is chosen, connect to a VLESS server at `127.0.0.1:10443`
-
-## Trojan outbound
-
-Typical idea:
-
-```json
-{
-  "tag": "trojan-out",
-  "protocol": "trojan",
-  "settings": {
-    "address": "server.example.com",
-    "port": 443,
-    "password": "my-password"
-  }
-}
-```
-
-Meaning:
-
-- use Trojan to reach that server
-
-## Shadowsocks-2022 outbound
-
-From the examples:
-
-```json
-{
-  "tag": "ss2022-out",
-  "protocol": "shadowsocks",
-  "settings": {
-    "address": "127.0.0.1",
-    "port": 16388,
-    "method": "2022-blake3-aes-256-gcm",
-    "password": "local-ss2022-password"
-  }
-}
-```
-
-Meaning:
-
-- use SS-2022 to reach the configured server
-
-## `settings` Versus `streamSettings`
-
-This distinction is very important.
-
-## `settings`
-
-Protocol-specific meaning.
-
-Examples:
-
-- VLESS user UUID
-- Trojan password
-- SS-2022 method/password
-
-## `streamSettings`
-
-Transport/security-specific meaning.
-
-Examples:
-
-- `network: "ws"`
-- `security: "tls"`
-- `security: "reality"`
-- `wsSettings`
-- `tlsSettings`
-- `realitySettings`
-
-Use this memory trick:
-
-- `settings` = what the protocol needs
-- `streamSettings` = how the bytes travel
-
-## `streamSettings`
-
-Main fields from the schema:
-
-- `network`
-- `security`
-- `tlsSettings`
-- `realitySettings`
-- `wsSettings`
-- `grpcSettings`
-- `shadowTlsSettings`
-- `kcpSettings`
-
-## `network`
-
-Examples:
-
-- `tcp`
-- `ws`
-- `grpc`
-- `quic`
-- `kcp` (deprecated legacy/internal path)
-
-This chooses the transport style.
-
-## `security`
-
-Examples:
-
-- `none`
-- `tls`
-- `reality`
-
-This chooses the security/disguise wrapper.
-
-## Example: VLESS over WebSocket
-
-From the examples:
-
-```json
-"streamSettings": {
-  "network": "ws",
-  "security": "none",
-  "wsSettings": {
-    "path": "/vless-ws",
-    "headers": {
-      "Host": "localhost"
-    }
-  }
-}
-```
-
-Meaning:
-
-- use WebSocket as the transport
-- no TLS wrapper in this local example
-- use path `/vless-ws`
-
-## Example: VLESS over REALITY
-
-Client-side shape:
-
-```json
-"streamSettings": {
-  "network": "tcp",
-  "security": "reality",
-  "realitySettings": {
-    "publicKey": "...",
-    "shortId": "0123456789abcdef",
-    "serverName": "www.example.com",
-    "fingerprint": "chrome"
-  }
-}
-```
-
-Meaning:
-
-- underlying connection is TCP
-- security wrapper is REALITY
-- use these client-side REALITY credentials
-
-Server-side shape:
-
-```json
-"streamSettings": {
-  "network": "tcp",
-  "security": "reality",
-  "realitySettings": {
-    "dest": "127.0.0.1:18080",
-    "privateKey": "...",
-    "shortIds": ["0123456789abcdef"],
-    "serverName": "www.example.com",
-    "serverNames": ["www.example.com"],
-    "maxTimeDiffSeconds": 60
-  }
-}
-```
-
-Meaning:
-
-- validate REALITY clients with this private key and short IDs
-- only accept ClientHello SNI values listed in `serverNames`
-- send failures to fallback `dest`
-
-## `routing.rules`
-
-A rule says:
-
-"If these conditions match, use this outbound tag."
-
-Minimal rule:
-
-```json
-{
-  "outboundTag": "direct"
-}
-```
-
-Meaning:
-
-- use `direct` for everything
-
-More specific rule:
-
-```json
-{
-  "domain": ["suffix:example.com"],
-  "outboundTag": "vless-out"
-}
-```
-
-Meaning:
-
-- traffic for `*.example.com` uses `vless-out`
-
-You can also match:
-
-- CIDRs in `ip`
-- ports in `port`
-- inbound tags in `inboundTag`
-
-## `routing.balancers`
-
-A balancer is an outbound-like tag that chooses between multiple real outbounds.
-Routing rules can target the balancer tag exactly like a normal outbound tag.
-
-Basic adaptive balancer shape:
-
-```json
-{
-  "routing": {
-    "balancers": [
-      {
-        "tag": "auto-proxy",
-        "selector": ["primary-vless", "backup-ss2022"],
-        "strategy": "adaptive",
-        "profiles": [
-          { "name": "stable", "outboundTag": "primary-vless" },
-          { "name": "backup", "outboundTag": "backup-ss2022" }
-        ],
-        "adaptive": {
-          "failureThreshold": 2,
-          "cooldownSecs": 30,
-          "ewmaAlpha": 0.2,
-          "switchMargin": 0.15
-        },
-        "health_check": {
-          "url": "http://www.gstatic.com/generate_204",
-          "interval_secs": 30,
-          "timeout_secs": 5,
-          "max_failures": 2
-        }
-      }
-    ],
-    "rules": [
-      { "outboundTag": "auto-proxy" }
-    ]
-  }
-}
-```
-
-Meaning:
-
-- `selector` lists the real outbound tags the balancer may use
-- `strategy: "adaptive"` scores paths by success rate, latency, and stability
-- `profiles` gives readable names for metrics; each profile still maps to an outbound tag
-- `failureThreshold` and `cooldownSecs` control conservative failover
-- `switchMargin` prevents switching for tiny latency changes
-- `health_check` lets the balancer detect broken paths before user traffic hits them
-
-If `profiles` is omitted, the selector tags are used as profile names. These
-balancer profiles are not the same thing as the top-level operating
-`profile: "fast"` setting.
-
-## A Good Beginner Config Progression
-
-Do not start with the hardest config first.
-
-Use this order:
-
-1. SOCKS inbound + Freedom outbound
-2. SOCKS inbound + VLESS outbound
-3. VLESS inbound + Freedom outbound
-4. add WebSocket
-5. add TLS
-6. add REALITY
-
-That progression matches how the code is easiest to understand too.
-
-## Real Examples In This Repo
-
-Deployable JSON configuration examples were removed when Blackwire adopted its
-MySQL-only control plane. Use the named relational presets documented in
-[the database seed guide](../examples/README.md), then inspect and extend the
-created revision in Black UI. Focused protocol and transport fixtures remain in
-the workspace integration tests for debugging wire behavior.
-
-## Common Beginner Mistakes
-
-## Mistake 1: confusing `settings` and `streamSettings`
-
-Remember:
-
-- protocol details go in `settings`
-- transport/security details go in `streamSettings`
-
-## Mistake 2: using a bad `tag`
-
-Routing references tags literally.
-
-If a routing rule says `outboundTag: "direct"`, there must actually be an outbound with tag `direct`.
-
-## Mistake 3: treating `listen` like a hostname
-
-In the schema, `listen` is an IP address.
-
-## Mistake 4: using REALITY fields on the wrong side
-
-Client and server use different REALITY fields:
-
-- client uses `publicKey`, `shortId`, `serverName`, `fingerprint`
-- server uses `privateKey`, `shortIds`, `dest`, `serverNames`, `maxTimeDiffSeconds`
-
-## Mistake 5: skipping `routing`
-
-You usually want at least one rule or a sensible default path.
-
-## Cheat Sheet
-
-### Local SOCKS proxy
-
-- inbound protocol: `socks`
-- outbound protocol: `freedom`
-
-### Client that sends traffic to a VLESS server
-
-- inbound protocol: `socks`
-- outbound protocol: `vless`
-
-### Hide VLESS inside WebSocket
-
-- outbound `protocol: "vless"`
-- outbound `streamSettings.network: "ws"`
-
-### Add REALITY disguise
-
-- outbound `streamSettings.security: "reality"`
-
-## Final Summary
-
-Think of config like this:
-
-- `inbounds`
-  how clients enter
-
-- `outbounds`
-  how traffic leaves
-
-- `routing`
-  how to choose an outbound
-
-- `settings`
-  protocol-specific fields
-
-- `streamSettings`
-  transport/security-specific fields
-
-- `metricsAddr`
-  optional monitoring server
+Revision history is configuration rollback, not a database backup. Protect
+your MySQL service with dumps, snapshots, and binlogs.
+
+## Common Mistakes
+
+- Do not create a legacy JSON configuration file; it is not part of the
+  supported runtime workflow.
+- Do not expose a local SOCKS or HTTP listener publicly.
+- Do not use an unencrypted public inbound.
+- Do not assume an Xray or sing-box feature is supported because its name
+  appears in another project; check the Feature Matrix.
+- Do not use lab fixtures or `blackwire db import-fixture` against production
+  data.
+
+## Where To Go Next
+
+- [User Guide](user-guide.md) — install and operate the service.
+- [Feature Matrix](feature-matrix.md) — support evidence and caveats.
+- [REALITY For Dummies](04-reality-for-dummies.md) — the REALITY handshake and
+  terminology.
