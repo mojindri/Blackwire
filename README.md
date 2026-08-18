@@ -1,95 +1,164 @@
+<p align="center">
+  <img src="docs/assets/blackwire-logo.png" alt="Blackwire logo" width="180">
+</p>
+
 # Blackwire
 
-Blackwire is a Rust proxy runtime with a database-backed control plane and a
-typed web UI. MySQL 8.4/InnoDB is the sole persistent source of truth for the
-runtime, CLI, and Black UI.
+Blackwire gives you a Rust proxy runtime, a database-backed control plane, and
+a typed web UI for personal, lab, and controlled VPS deployments. MySQL
+8.4/InnoDB is the only persistent source of truth for your runtime, CLI, and
+Black UI.
 
-## Requirements
+> Pre-production warning
+>
+> Blackwire is pre-1.0. Several protocol paths have strong tests and interop
+> evidence, but it is not stable production software. Use it only for personal,
+> lab, or tightly controlled deployments, and check the
+> [release contract](docs/release.md) before relying on a protocol path.
 
-- MySQL 8.4 with separate runtime, UI, and migrator accounts
-- A protected file containing a MySQL URL, or `BLACKWIRE_DATABASE_URL` for development
-- Rust stable when building from source
+## Features
 
-Blackwire never installs MySQL silently and services never migrate the schema
-at startup.
+- A MySQL-only control plane with separate runtime, UI, and migrator accounts.
+- A typed Black UI for users, inbounds, outbounds, routing & DNS, runtime, and
+  settings—without a raw server-configuration editor.
+- Immutable configuration revisions, validation, rollback, controlled
+  maintenance activation, and safe in-memory operation during a temporary
+  database outage.
+- Supported proxy protocols and transports documented with evidence in the
+  [Feature Matrix](docs/feature-matrix.md).
+- Hiddify-compatible client subscription content derived from your database
+  configuration.
+- Native systemd and Docker Compose deployment paths, plus CI, Rust tests, UI
+  QA, and external-client interoperability checks.
 
-## First run
+## Current Release Support
 
-Apply migrations explicitly with the migrator credential:
+| Status | What it means |
+| --- | --- |
+| Supported | Supported for documented personal, lab, or controlled pre-1.0 deployments. |
+| Experimental | Implemented, but still missing soak, hostile-network, observability, or breadth proof. |
+| Unsupported | Not implemented, intentionally out of scope, or rejected by validation. |
 
-```bash
-BLACKWIRE_DATABASE_URL_FILE=/run/credentials/migrator-database-url blackwire db init
-BLACKWIRE_DATABASE_URL_FILE=/run/credentials/runtime-database-url blackwire db status
-BLACKWIRE_DATABASE_URL_FILE=/run/credentials/runtime-database-url blackwire run
+You can find the exact contract in the [Release Guide](docs/release.md), the
+evidence and caveats in the [Feature Matrix](docs/feature-matrix.md), and
+release-facing changes in the [Changelog](CHANGELOG.md).
+
+## Quick Install
+
+Before installing, you need a reachable MySQL 8.4 server and protected files
+containing database URLs for the service accounts you use. Blackwire never
+installs MySQL silently, and the runtime never migrates your schema at startup.
+
+Download the current release installer, then provide the runtime credential
+file explicitly:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/mojindri/Blackwire/v0.2.0/scripts/install.sh
+chmod +x install.sh
+VERSION=v0.2.0 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url ./install.sh
 ```
 
-An empty inbound list is a valid idle control-plane state. Add configuration in
-Black UI or start from a relational preset:
+To have the installer apply migrations, opt in with a separate migrator
+credential. To install Black UI, provide a separate UI credential as well:
 
-```bash
+```sh
+RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url \
+MIGRATOR_DATABASE_URL_FILE=/secure/migrator-database-url \
+UI_DATABASE_URL_FILE=/secure/ui-database-url \
+RUN_DB_MIGRATIONS=1 INSTALL_BLACK_UI=1 VERSION=v0.2.0 ./install.sh
+```
+
+For Docker, use [the Compose deployment](deploy/docker/docker-compose.yml).
+Create its documented secret files before bringing the stack up. For a
+development-only local URL, you can use `BLACKWIRE_DATABASE_URL`; use protected
+`*_DATABASE_URL_FILE` credentials for deployed services.
+
+## After Install
+
+Confirm that the database and service are healthy:
+
+```sh
+blackwire db status
+sudo systemctl status blackwire --no-pager
+sudo journalctl -u blackwire -n 100 --no-pager
+```
+
+An empty inbound list is a valid idle control-plane state: Blackwire exposes no
+proxy ports until you add one. Add your first inbound in Black UI, or start
+with a relational preset:
+
+```sh
 blackwire db seed socks-local
 blackwire db seed vless-local
 blackwire db seed trojan-local
 blackwire db seed shadowsocks-local
 ```
 
-## Configuration lifecycle
+## Black UI Panel
 
-Every completed UI or CLI edit creates an immutable revision. The runtime polls
-MySQL, validates the desired revision, and either hot-swaps it, hands over a
-supported listener, or leaves it pending for confirmed maintenance activation.
-It continues serving the active in-memory revision during a temporary database
-outage and does not activate another revision until connectivity returns.
+Black UI manages Dashboard, Users, Inbounds, Outbounds, Routing & DNS,
+Runtime, and Settings. Its forms create typed relational revisions, so you do
+not need—or get—a raw server-configuration editor.
 
-Useful commands:
+The native service binds Black UI to `127.0.0.1:18080` by default. Keep it
+private or put it behind your own hardened HTTPS reverse proxy and access
+control. In Users, choose **Copy subscription** to copy database-derived
+client subscription content suitable for Hiddify.
 
-```bash
+## Common Operations
+
+```sh
+blackwire version
 blackwire db validate
 blackwire db status
 blackwire db history --limit 20
 blackwire db rollback REVISION
 blackwire db activate-maintenance REVISION
 blackwire explain-cost
+sudo systemctl restart blackwire
+sudo journalctl -u blackwire -f
 ```
 
-## Black UI
+Each UI or CLI edit creates an immutable revision. Blackwire polls MySQL,
+validates it, then hot-swaps it, hands over a supported listener, or leaves it
+pending until you confirm maintenance activation. It keeps serving the active
+in-memory revision through a temporary database outage.
 
-The UI provides Dashboard, Users, Inbounds, Outbounds, Routing & DNS, Runtime,
-and Settings views. Configuration forms write typed relational revisions; there
-is no raw server-configuration editor.
+## Configuration
 
-The user Copy subscription action remains supported. It copies database-derived
-client subscription content suitable for Hiddify. This is deliberately separate
-from production server configuration import/export, which is not supported.
+Configure Blackwire through Black UI or the database-backed CLI. You do not
+edit or import raw runtime JSON. Legacy JSON and SQLite data are reported as
+incompatible and left untouched; use MySQL dumps, snapshots, and binlogs for
+database recovery. Revision history helps you roll back configuration, but it
+is not a database backup.
 
-## Deployment
+- [User Guide](docs/user-guide.md) — configure, operate, and troubleshoot.
+- [Config For Dummies](docs/08-config-for-dummies.md) — configuration concepts.
+- [Feature Matrix](docs/feature-matrix.md) — supported paths and caveats.
 
-`deploy/docker/docker-compose.yml` includes MySQL 8.4, explicit migration,
-separate database accounts, health ordering, secrets, an InnoDB volume, the
-runtime, and Black UI. Native systemd units use protected credentials under
-`/etc/blackwire`.
+Repository lab JSON files are bootstrap fixtures only. Lab scripts load them
+into disposable MySQL databases with `blackwire db import-fixture`; do not use
+that command as an automatic legacy migration path or against production data.
 
-The native installer requires `RUNTIME_DATABASE_URL_FILE`; Black UI additionally
-requires `UI_DATABASE_URL_FILE`. Set `RUN_DB_MIGRATIONS=1` together with
-`MIGRATOR_DATABASE_URL_FILE` only when you explicitly want the installer to run
-`blackwire db migrate`.
+## Supported Platforms
 
-Legacy JSON and SQLite installations are detected and reported as incompatible.
-They are left untouched and are not imported automatically. Use MySQL
-dump/snapshot/binlog tooling for disaster recovery; application revision history
-is rollback history, not a database backup.
+The release installer supports Linux `x86_64`/`amd64` and
+Linux `aarch64`/`arm64`. You can use other development and test paths on macOS
+and Windows, subject to the support labels in [Release Guide](docs/release.md).
 
-## Development checks
+## Where To Go Next
 
-```bash
+- [User Guide](docs/user-guide.md) — install, operate, configure, troubleshoot, and Black UI.
+- [Release Guide](docs/release.md) — support contract and release process.
+- [Feature Matrix](docs/feature-matrix.md) — detailed evidence and caveats.
+- [Docs Index](docs/README.md) — developer, testing, performance, and roadmap docs.
+
+For development checks, run:
+
+```sh
 cargo check --workspace
 cargo test --workspace
 cd black-ui/frontend && npm run qa
 ```
 
-MySQL integration tests must run against MySQL 8.4; SQLite is not a substitute.
-
-Repository lab JSON files are bootstrap fixtures only. Lab scripts load them
-into explicitly disposable MySQL databases with `blackwire db import-fixture`
-before starting the normal database-backed runtime. This command is not an
-automatic legacy migration path and should not be used against production data.
+Run MySQL integration tests against MySQL 8.4; SQLite is not a substitute.
