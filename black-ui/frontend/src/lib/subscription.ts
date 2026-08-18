@@ -13,28 +13,39 @@ export function subscriptionUrl(settings: Settings | null, token: string): strin
   return `${subscriptionBaseUrl(settings)}/sub/${token}`;
 }
 
-export async function copySubscriptionUrl(url: string): Promise<CopyResult> {
-  return copyText(url);
-}
-
-export function subscriptionQrPayload(url: string): SubscriptionQrPayload {
-  const normalized = url.trim();
-  if (!normalized) return { ok: false, message: "Subscription URL is empty" };
+export async function fetchSubscriptionContent(url: string): Promise<{ ok: boolean; content: string; message: string }> {
+  if (!url) return { ok: false, content: "", message: "Nothing to copy" };
 
   try {
-    const parsed = new URL(normalized);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return { ok: false, message: "Subscription URL must use HTTP or HTTPS" };
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) {
+      return { ok: false, content: "", message: `Subscription returned ${response.status}` };
     }
+    const content = await response.text();
+    if (!content.trim()) {
+      return { ok: false, content: "", message: "Subscription is empty" };
+    }
+
+    return { ok: true, content, message: "Copied" };
   } catch {
-    return { ok: false, message: "Subscription URL is invalid" };
+    return { ok: false, content: "", message: "Subscription fetch failed" };
   }
+}
+
+export async function copySubscriptionContent(url: string): Promise<CopyResult> {
+  const subscription = await fetchSubscriptionContent(url);
+  return subscription.ok ? copyText(subscription.content) : subscription;
+}
+
+export function subscriptionQrPayload(content: string): SubscriptionQrPayload {
+  const normalized = content.trim();
+  if (!normalized) return { ok: false, message: "Subscription is empty" };
 
   const bytes = new TextEncoder().encode(normalized).byteLength;
   if (bytes > MAX_SUBSCRIPTION_QR_BYTES) {
     return {
       ok: false,
-      message: `Subscription URL is ${bytes.toLocaleString()} bytes. Keep it under ${MAX_SUBSCRIPTION_QR_BYTES.toLocaleString()} bytes for a reliably scannable QR code.`
+      message: `Subscription content is ${bytes.toLocaleString()} bytes. Keep it under ${MAX_SUBSCRIPTION_QR_BYTES.toLocaleString()} bytes for a reliably scannable QR code.`
     };
   }
   return { ok: true, content: normalized, bytes };

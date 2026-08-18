@@ -8,6 +8,13 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+### Fixed
+
+- Black UI subscription actions once again fetch and copy or encode the actual
+  base64 subscription content. The configured public URL is used only to fetch
+  that content, so Hiddify receives an importable payload without a loopback
+  panel address.
+
 ## 0.2.3 - 2026-08-19
 
 ### Fixed

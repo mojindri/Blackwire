@@ -1,30 +1,69 @@
-import { describe, expect, it } from "vitest";
-import { MAX_SUBSCRIPTION_QR_BYTES, subscriptionQrPayload } from "./subscription";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchSubscriptionContent, MAX_SUBSCRIPTION_QR_BYTES, subscriptionQrPayload } from "./subscription";
 
-describe("subscriptionQrPayload", () => {
-  it("prepares a trimmed public subscription URL for a scannable QR code", () => {
-    expect(subscriptionQrPayload("  https://panel.example/sub/token\n")).toEqual({
+describe("fetchSubscriptionContent", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the fetched subscription body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      content: "https://panel.example/sub/token",
-      bytes: 31
+      text: async () => "dmxlc3M6Ly9leGFtcGxl"
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchSubscriptionContent("http://panel/sub/token")).resolves.toEqual({
+      ok: true,
+      content: "dmxlc3M6Ly9leGFtcGxl",
+      message: "Copied"
+    });
+    expect(fetchMock).toHaveBeenCalledWith("http://panel/sub/token", { cache: "no-store" });
+  });
+
+  it("rejects empty subscription bodies", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => " \n"
+      })
+    );
+
+    await expect(fetchSubscriptionContent("http://panel/sub/token")).resolves.toEqual({
+      ok: false,
+      content: "",
+      message: "Subscription is empty"
     });
   });
 
-  it("rejects proxy links and malformed URLs", () => {
-    expect(subscriptionQrPayload("vless://example")).toEqual({
+  it("reports HTTP errors without returning content", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        text: async () => "not found"
+      })
+    );
+
+    await expect(fetchSubscriptionContent("http://panel/sub/token")).resolves.toEqual({
       ok: false,
-      message: "Subscription URL must use HTTP or HTTPS"
+      content: "",
+      message: "Subscription returned 404"
     });
-    expect(subscriptionQrPayload("not a URL")).toEqual({
-      ok: false,
-      message: "Subscription URL is invalid"
+  });
+
+  it("prepares trimmed subscription content for a scannable QR code", () => {
+    expect(subscriptionQrPayload("  vless://example\n")).toEqual({
+      ok: true,
+      content: "vless://example",
+      bytes: 15
     });
   });
 
   it("rejects QR payloads that would be too dense to scan reliably", () => {
-    const result = subscriptionQrPayload(
-      `https://panel.example/sub/${"x".repeat(MAX_SUBSCRIPTION_QR_BYTES)}`
-    );
+    const result = subscriptionQrPayload("x".repeat(MAX_SUBSCRIPTION_QR_BYTES + 1));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).toContain("reliably scannable QR code");
   });

@@ -2,7 +2,7 @@ import { AlertCircle, Copy, KeyRound, QrCode, RotateCcw, Save, X } from "lucide-
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Inbound, ManagedUser, Settings, UserInput } from "../../lib/types";
 import { formatBytes } from "../../lib/format";
-import { copySubscriptionUrl, subscriptionUrl } from "../../lib/subscription";
+import { copySubscriptionContent, subscriptionUrl } from "../../lib/subscription";
 import {
   activeUserProtocol,
   buildUserInput,
@@ -85,7 +85,7 @@ export function UserDrawer({
   };
 
   const copySubscription = async () => {
-    const result = await copySubscriptionUrl(subUrl);
+    const result = await copySubscriptionContent(subUrl);
     setCopyFeedback(result.ok ? "Copied" : result.message);
     window.setTimeout(() => setCopyFeedback(""), 2600);
   };
@@ -270,15 +270,15 @@ export function UserDrawer({
               <div className="section-editor-head">
                 <div>
                   <h3>Subscription</h3>
-                  <p>Copy or scan the managed subscription URL for Hiddify and other compatible clients.</p>
+                  <p>Copy or scan the managed subscription content without mixing it into the editable access fields.</p>
                 </div>
               </div>
               <div className="copy-row">
                 <Input value={subUrl} readOnly />
-                <IconButton label="Copy subscription URL" onClick={copySubscription} disabled={!subUrl}>
+                <IconButton label="Copy subscription content" onClick={copySubscription} disabled={!subUrl}>
                   <Copy size={16} />
                 </IconButton>
-                <IconButton label="Show subscription URL QR code" onClick={() => setQrOpen(true)} disabled={!subUrl}>
+                <IconButton label="Show subscription content QR code" onClick={() => setQrOpen(true)} disabled={!subUrl}>
                   <QrCode size={17} />
                 </IconButton>
               </div>

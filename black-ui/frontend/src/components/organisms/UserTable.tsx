@@ -2,7 +2,7 @@ import { Copy, Plus, QrCode, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import type { Inbound, ManagedUser, Settings } from "../../lib/types";
 import { formatBytes, formatDate } from "../../lib/format";
-import { copySubscriptionUrl, subscriptionUrl } from "../../lib/subscription";
+import { copySubscriptionContent, subscriptionUrl } from "../../lib/subscription";
 import { Badge } from "../atoms/Badge";
 import { Button } from "../atoms/Button";
 import { IconButton } from "../atoms/IconButton";
@@ -54,7 +54,7 @@ export function UserTable({
   const inboundById = new Map(inbounds.map((inbound) => [inbound.id, inbound]));
   const allSelected = users.length > 0 && users.every((user) => selectedIds.has(user.id));
   const copySubscription = async (value: string) => {
-    const result = await copySubscriptionUrl(value);
+    const result = await copySubscriptionContent(value);
     setCopyFeedback(result.message);
     window.setTimeout(() => setCopyFeedback(""), 2200);
   };
@@ -124,11 +124,11 @@ export function UserTable({
                   <td>{formatBytes(user.downloadBytes)}</td>
                   <td>
                     <div className="inline-icons">
-                      <IconButton label="Copy subscription URL" onClick={() => copySubscription(subUrl)} disabled={!subUrl}>
+                      <IconButton label="Copy subscription content" onClick={() => copySubscription(subUrl)} disabled={!subUrl}>
                         <Copy size={16} />
                       </IconButton>
                       <IconButton
-                        label="Show subscription URL QR code"
+                        label="Show subscription content QR code"
                         onClick={() => setQrSubscription({ url: subUrl, label: user.email })}
                         disabled={!subUrl}
                       >
