@@ -33,6 +33,10 @@ fuzz/artifacts/
 labs/realistic/reports/
 /reports/
 id_hetzner
+# Local lab credentials and generated client artifacts can contain real hosts,
+# passwords, or private keys. Keep them out of version control.
+labs/realistic/configs/matrix.env
+labs/realistic/external-clients/generated-packet-up-check/
 
 # Local benchmark/profiling artifacts (never commit).
 benches/reports/*.log
