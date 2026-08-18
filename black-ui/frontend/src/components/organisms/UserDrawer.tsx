@@ -1,4 +1,4 @@
-import { AlertCircle, Copy, KeyRound, RotateCcw, Save, X } from "lucide-react";
+import { AlertCircle, Copy, KeyRound, QrCode, RotateCcw, Save, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Inbound, ManagedUser, Settings, UserInput } from "../../lib/types";
 import { formatBytes } from "../../lib/format";
@@ -18,6 +18,7 @@ import { IconButton } from "../atoms/IconButton";
 import { Input, Select, Textarea } from "../atoms/Input";
 import { Switch } from "../atoms/Switch";
 import { Field } from "../molecules/Field";
+import { SubscriptionQrDialog } from "../molecules/SubscriptionQrDialog";
 
 export function UserDrawer({
   open,
@@ -47,12 +48,14 @@ export function UserDrawer({
   const [state, setState] = useState<UserEditorState>(() => createUserEditorState(user, inbounds));
   const stateRef = useRef(state);
   const [copyFeedback, setCopyFeedback] = useState("");
+  const [qrOpen, setQrOpen] = useState(false);
 
   useEffect(() => {
     const next = createUserEditorState(user, inbounds);
     stateRef.current = next;
     setState(next);
     setCopyFeedback("");
+    setQrOpen(false);
   }, [inbounds, user]);
 
   const protocol = useMemo(() => activeUserProtocol(inbounds, state.inboundId), [inbounds, state.inboundId]);
@@ -267,13 +270,16 @@ export function UserDrawer({
               <div className="section-editor-head">
                 <div>
                   <h3>Subscription</h3>
-                  <p>Copy the managed subscription link without mixing it into the editable access fields.</p>
+                  <p>Copy or scan the managed subscription content without mixing it into the editable access fields.</p>
                 </div>
               </div>
               <div className="copy-row">
                 <Input value={subUrl} readOnly />
                 <IconButton label="Copy subscription content" onClick={copySubscription} disabled={!subUrl}>
                   <Copy size={16} />
+                </IconButton>
+                <IconButton label="Show subscription content QR code" onClick={() => setQrOpen(true)} disabled={!subUrl}>
+                  <QrCode size={17} />
                 </IconButton>
               </div>
               {copyFeedback ? (
@@ -307,6 +313,7 @@ export function UserDrawer({
           Save User
         </Button>
       </div>
+      {qrOpen ? <SubscriptionQrDialog url={subUrl} label={user?.email || "Managed user"} onClose={() => setQrOpen(false)} /> : null}
     </aside>
   );
 }

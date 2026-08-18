@@ -997,6 +997,87 @@ tr.row-selected {
   justify-content: flex-end;
 }
 
+.subscription-qr-dialog {
+  width: min(460px, 100%);
+}
+
+.subscription-qr-body {
+  justify-items: center;
+  gap: 16px;
+  padding: 24px;
+}
+
+.subscription-qr-stage {
+  display: grid;
+  place-items: center;
+  width: min(352px, 100%);
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+}
+
+.subscription-qr-stage svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.subscription-qr-status {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  min-height: 280px;
+  align-content: center;
+  color: var(--teal-dark);
+  text-align: center;
+}
+
+.subscription-qr-status span,
+.subscription-qr-instructions span,
+.subscription-qr-error span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.subscription-qr-instructions,
+.subscription-qr-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.subscription-qr-instructions {
+  color: var(--teal-dark);
+  background: var(--teal-soft);
+}
+
+.subscription-qr-error {
+  color: var(--red);
+  background: #fff4f2;
+}
+
+.subscription-qr-instructions svg,
+.subscription-qr-error svg {
+  flex: 0 0 auto;
+}
+
+.subscription-qr-instructions div,
+.subscription-qr-error div {
+  display: grid;
+  gap: 3px;
+}
+
+.subscription-qr-size {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .inline-error {
   display: flex;
   align-items: center;

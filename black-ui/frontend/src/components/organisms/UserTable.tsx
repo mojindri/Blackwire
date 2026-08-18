@@ -1,4 +1,4 @@
-import { Copy, Plus, RotateCcw } from "lucide-react";
+import { Copy, Plus, QrCode, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import type { Inbound, ManagedUser, Settings } from "../../lib/types";
 import { formatBytes, formatDate } from "../../lib/format";
@@ -9,6 +9,7 @@ import { IconButton } from "../atoms/IconButton";
 import { ActionMenu } from "../molecules/ActionMenu";
 import { QuotaMeter } from "../molecules/QuotaMeter";
 import { SearchBar } from "../molecules/SearchBar";
+import { SubscriptionQrDialog } from "../molecules/SubscriptionQrDialog";
 
 function statusTone(user: ManagedUser): "green" | "red" | "gray" | "amber" {
   if (!user.enabled) return "gray";
@@ -49,6 +50,7 @@ export function UserTable({
   onBulk: (action: string) => void;
 }) {
   const [copyFeedback, setCopyFeedback] = useState("");
+  const [qrSubscription, setQrSubscription] = useState<{ url: string; label: string } | null>(null);
   const inboundById = new Map(inbounds.map((inbound) => [inbound.id, inbound]));
   const allSelected = users.length > 0 && users.every((user) => selectedIds.has(user.id));
   const copySubscription = async (value: string) => {
@@ -125,6 +127,13 @@ export function UserTable({
                       <IconButton label="Copy subscription content" onClick={() => copySubscription(subUrl)} disabled={!subUrl}>
                         <Copy size={16} />
                       </IconButton>
+                      <IconButton
+                        label="Show subscription content QR code"
+                        onClick={() => setQrSubscription({ url: subUrl, label: user.email })}
+                        disabled={!subUrl}
+                      >
+                        <QrCode size={17} />
+                      </IconButton>
                       <IconButton label="Reset usage" onClick={() => onReset(user)}>
                         <RotateCcw size={16} />
                       </IconButton>
@@ -145,6 +154,13 @@ export function UserTable({
         </table>
         {users.length === 0 ? <div className="empty">No users match the current view.</div> : null}
       </div>
+      {qrSubscription ? (
+        <SubscriptionQrDialog
+          url={qrSubscription.url}
+          label={qrSubscription.label}
+          onClose={() => setQrSubscription(null)}
+        />
+      ) : null}
     </section>
   );
 }

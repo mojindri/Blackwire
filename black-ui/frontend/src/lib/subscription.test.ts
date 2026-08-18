@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchSubscriptionContent } from "./subscription";
+import { fetchSubscriptionContent, MAX_SUBSCRIPTION_QR_BYTES, subscriptionQrPayload } from "./subscription";
 
 describe("fetchSubscriptionContent", () => {
   afterEach(() => {
@@ -52,5 +52,19 @@ describe("fetchSubscriptionContent", () => {
       content: "",
       message: "Subscription returned 404"
     });
+  });
+
+  it("prepares trimmed subscription content for a scannable QR code", () => {
+    expect(subscriptionQrPayload("  vless://example\n")).toEqual({
+      ok: true,
+      content: "vless://example",
+      bytes: 15
+    });
+  });
+
+  it("rejects QR payloads that would be too dense to scan reliably", () => {
+    const result = subscriptionQrPayload("x".repeat(MAX_SUBSCRIPTION_QR_BYTES + 1));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain("reliably scannable QR code");
   });
 });
