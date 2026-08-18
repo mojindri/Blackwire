@@ -217,6 +217,10 @@ main() {
         [ "$INSTALL_BLACK_UI" != 1 ] || sudo_cmd systemctl enable --now black-ui
     fi
     log "installed MySQL-only Blackwire; configure it with Black UI or named db seed presets"
+    # `work` is local to main, while EXIT runs after main returns.  Clean it
+    # here so strict mode does not dereference an unset local in the trap.
+    rm -rf "$work"
+    trap - EXIT
 }
 
 main "$@"
