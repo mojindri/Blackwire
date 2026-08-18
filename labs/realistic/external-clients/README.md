@@ -28,7 +28,8 @@ invocations.
 - Docker clients use the Blackwire server's stable lab address
   (`10.203.0.11`), and REALITY/Vision use the internal TLS cover at
   `10.203.0.10:443` with SNI `blackwire.local`; VPS renders retain the server
-  and cover configured in the private matrix environment.
+  and cover configured in the private matrix environment. Docker probes use
+  the isolated echo target at `10.203.0.12:8080`, avoiding client DNS variance.
 - Reused `matrix-probe` container for `nc` / `curl` (no `docker run --rm` per check).
 - `compose exec` to start/stop `blackwire` and sing-box per case.
 - **Xray** uses `compose run` per case (distroless image has no `/bin/sh` for idle holders).
