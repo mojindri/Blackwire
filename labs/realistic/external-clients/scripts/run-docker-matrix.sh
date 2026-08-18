@@ -575,7 +575,7 @@ run_protocol() {
     if [[ "$protocol" == "vless-reality" ]]; then
         stop_blackwire
         if start_blackwire "$server_cfg" && wait_for_server_port "$protocol"; then
-            run_client_case pass "hiddify-${protocol}-tcp-fragment" hiddify "hiddify/vless-reality.txt" \
+            run_client_case pass "hiddify-${protocol}-tcp-fragment" hiddify "$sing_cfg" \
                 "$REPORT_DIR/logs/hiddify-${protocol}-tcp-fragment.log" "$protocol" || overall=1
         else
             echo "FAIL hiddify-${protocol}-tcp-fragment (server restart)" | tee -a "$REPORT_DIR/summary.txt"
