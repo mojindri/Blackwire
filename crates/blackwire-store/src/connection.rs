@@ -7,7 +7,7 @@ use crate::{
     ActivationClass, ActivationState, ConfigurationState, RevisionSummary, StoreError, StoreResult,
 };
 
-pub const EXPECTED_SCHEMA_VERSION: i64 = 7;
+pub const EXPECTED_SCHEMA_VERSION: i64 = 8;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -34,6 +34,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (
         7,
         include_str!("../migrations/0007_reality_fallback_limits.sql"),
+    ),
+    (
+        8,
+        include_str!("../migrations/0008_inbound_protocol_network.sql"),
     ),
 ];
 
@@ -488,7 +492,7 @@ async fn copy_revision_rows(
         "INSERT INTO reality_server_names SELECT ?, endpoint_kind, endpoint_id, position, server_name FROM reality_server_names WHERE revision_id=?",
         "INSERT INTO reality_short_ids SELECT ?, endpoint_kind, endpoint_id, position, short_id FROM reality_short_ids WHERE revision_id=?",
         "INSERT INTO shadowtls_settings SELECT ?, endpoint_kind, endpoint_id, password_value, destination, version FROM shadowtls_settings WHERE revision_id=?",
-        "INSERT INTO inbound_protocol_settings SELECT ?, inbound_id, decryption, method, auth_value, up_mbps, down_mbps, endpoint_shards FROM inbound_protocol_settings WHERE revision_id=?",
+        "INSERT INTO inbound_protocol_settings SELECT ?, inbound_id, decryption, method, auth_value, up_mbps, down_mbps, endpoint_shards, network, auth_timeout_ms FROM inbound_protocol_settings WHERE revision_id=?",
         "INSERT INTO outbound_protocol_settings SELECT ?, outbound_id, password_value, auth_value, method, uuid_value, flow, server_name, skip_certificate_verify, endpoint_shards FROM outbound_protocol_settings WHERE revision_id=?",
         "INSERT INTO websocket_settings SELECT ?, endpoint_kind, endpoint_id, transport_kind, request_path FROM websocket_settings WHERE revision_id=?",
         "INSERT INTO transport_headers SELECT ?, endpoint_kind, endpoint_id, transport_kind, header_name, header_value FROM transport_headers WHERE revision_id=?",

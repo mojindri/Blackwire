@@ -505,11 +505,12 @@ async fn write_inbound_details(
     input: &InboundWrite,
 ) -> StoreResult<()> {
     if let Some(settings) = &input.settings {
-        sqlx::query("INSERT INTO inbound_protocol_settings (revision_id,inbound_id,decryption,method,auth_value,up_mbps,down_mbps,endpoint_shards) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE decryption=VALUES(decryption),method=VALUES(method),auth_value=VALUES(auth_value),up_mbps=VALUES(up_mbps),down_mbps=VALUES(down_mbps),endpoint_shards=VALUES(endpoint_shards)")
+        sqlx::query("INSERT INTO inbound_protocol_settings (revision_id,inbound_id,decryption,method,auth_value,up_mbps,down_mbps,endpoint_shards,network,auth_timeout_ms) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE decryption=VALUES(decryption),method=VALUES(method),auth_value=VALUES(auth_value),up_mbps=VALUES(up_mbps),down_mbps=VALUES(down_mbps),endpoint_shards=VALUES(endpoint_shards),network=VALUES(network),auth_timeout_ms=VALUES(auth_timeout_ms)")
             .bind(revision).bind(id).bind(&settings.decryption).bind(&settings.method)
             .bind(settings.auth.as_ref().map(|value| value.as_bytes()))
             .bind(settings.up_mbps).bind(settings.down_mbps)
             .bind(settings.endpoint_shards.map(|value| value as u64))
+            .bind(&settings.network).bind(settings.auth_timeout_ms)
             .execute(&mut **tx).await?;
         write_endpoint_tuning(tx, revision, "inbound", id, settings).await?;
     }

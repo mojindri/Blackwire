@@ -340,7 +340,7 @@ async fn load_inbounds(pool: &MySqlPool, revision: i64) -> StoreResult<Vec<Inbou
         let protocol = parse_protocol(&row.try_get::<String, _>("protocol")?)?;
         let clients = load_clients(pool, revision, inbound_id, &protocol).await?;
         let mut settings = EndpointSettings::default();
-        if let Some(protocol_row) = sqlx::query("SELECT decryption, method, auth_value, up_mbps, down_mbps, endpoint_shards FROM inbound_protocol_settings WHERE revision_id=? AND inbound_id=?")
+        if let Some(protocol_row) = sqlx::query("SELECT decryption, method, auth_value, up_mbps, down_mbps, endpoint_shards, network, auth_timeout_ms FROM inbound_protocol_settings WHERE revision_id=? AND inbound_id=?")
             .bind(revision).bind(inbound_id).fetch_optional(pool).await? {
             settings.decryption = protocol_row.try_get("decryption")?;
             settings.method = protocol_row.try_get("method")?;
@@ -348,6 +348,8 @@ async fn load_inbounds(pool: &MySqlPool, revision: i64) -> StoreResult<Vec<Inbou
             settings.up_mbps = protocol_row.try_get("up_mbps")?;
             settings.down_mbps = protocol_row.try_get("down_mbps")?;
             settings.endpoint_shards = protocol_row.try_get::<Option<u32>, _>("endpoint_shards")?.map(usize::try_from).transpose().map_err(decode_error)?;
+            settings.network = protocol_row.try_get("network")?;
+            settings.auth_timeout_ms = protocol_row.try_get("auth_timeout_ms")?;
         }
         load_endpoint_tuning(pool, revision, "inbound", inbound_id, &mut settings).await?;
         match protocol {

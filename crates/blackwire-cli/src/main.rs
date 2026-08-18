@@ -36,6 +36,7 @@ static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemall
 static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -149,6 +150,14 @@ enum DbCommand {
     Seed {
         #[arg(value_name = "PRESET")]
         preset: String,
+    },
+    /// Import a validated bootstrap fixture into an empty MySQL control plane.
+    ///
+    /// This is intended for interoperability labs. The runtime still reads
+    /// only relational state from MySQL.
+    ImportFixture {
+        #[arg(value_name = "FILE")]
+        path: PathBuf,
     },
     /// Create a maintenance revision restoring a historical snapshot.
     Rollback {
@@ -936,6 +945,9 @@ async fn cmd_db(command: DbCommand) -> Result<()> {
                 other => anyhow::bail!("unknown seed preset '{other}'; available: socks-local, vless-local, trojan-local, shadowsocks-local"),
             }
         }
+        DbCommand::ImportFixture { path } => {
+            import_bootstrap_fixture(&database, &path).await?;
+        }
         DbCommand::Rollback { revision } => {
             database.verify_schema().await?;
             let result = database.rollback(revision, "blackwire-cli").await?;
@@ -948,6 +960,235 @@ async fn cmd_db(command: DbCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn import_bootstrap_fixture(database: &Database, path: &std::path::Path) -> Result<()> {
+    use blackwire_config::schema::{EndpointUser, Protocol};
+    use blackwire_store::{CoreSettings, InboundWrite, OutboundWrite, UserWrite};
+
+    database.verify_schema().await?;
+    let existing = database.state().await?.desired_revision;
+    if !database.list_inbounds(existing).await?.is_empty() {
+        anyhow::bail!("db import requires an empty control plane; initialize a fresh database");
+    }
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("reading bootstrap fixture {}", path.display()))?;
+    let config: Config = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parsing bootstrap fixture {}", path.display()))?;
+    config
+        .validate()
+        .map_err(|error| anyhow::anyhow!("configuration validation error: {error}"))?;
+    if config.routing.is_some() {
+        anyhow::bail!(
+            "db import-fixture does not accept custom routing; use the control-plane APIs"
+        );
+    }
+
+    let core = CoreSettings {
+        profile: config.profile,
+        fast: config.fast.clone(),
+        budget: config.budget,
+        vision: config.vision,
+        first_packet_boost: config.first_packet_boost,
+        log: config.log.clone(),
+        metrics_addr: config.metrics_addr.clone(),
+        api: config.api.clone(),
+        stats: config.stats.clone(),
+        limits: config.limits.clone(),
+        quic: config.quic.clone(),
+        datagram: config.datagram.clone(),
+        fec: config.fec.clone(),
+        tun: config.tun.clone(),
+    };
+    let mut revision = database.state().await?.desired_revision;
+    revision = database
+        .save_core_settings("blackwire-db-import", revision, core)
+        .await?
+        .revision;
+
+    let existing_outbounds = database.list_outbounds(revision).await?;
+    for outbound in &config.outbounds {
+        let id = existing_outbounds
+            .iter()
+            .find(|record| record.tag == outbound.tag)
+            .map(|record| record.id);
+        let transport = outbound
+            .stream_settings
+            .as_ref()
+            .map(|stream| enum_name(&stream.network))
+            .transpose()?
+            .unwrap_or_else(|| "tcp".into());
+        let security = outbound
+            .stream_settings
+            .as_ref()
+            .map(|stream| enum_name(&stream.security))
+            .transpose()?
+            .unwrap_or_else(|| "none".into());
+        revision = database
+            .save_outbound(
+                "blackwire-db-import",
+                revision,
+                OutboundWrite {
+                    id,
+                    tag: outbound.tag.clone(),
+                    protocol: enum_name(&outbound.protocol)?,
+                    enabled: true,
+                    address: outbound
+                        .settings
+                        .address
+                        .clone()
+                        .or_else(|| outbound.settings.server.clone()),
+                    port: outbound.settings.port,
+                    transport,
+                    security,
+                    settings: Some(outbound.settings.clone()),
+                    stream_settings: outbound.stream_settings.clone(),
+                },
+            )
+            .await?
+            .revision;
+    }
+
+    for inbound in &config.inbounds {
+        let transport = inbound
+            .stream_settings
+            .as_ref()
+            .map(|stream| enum_name(&stream.network))
+            .transpose()?
+            .unwrap_or_else(|| "tcp".into());
+        let security = inbound
+            .stream_settings
+            .as_ref()
+            .map(|stream| enum_name(&stream.security))
+            .transpose()?
+            .unwrap_or_else(|| "none".into());
+        revision = database
+            .save_inbound(
+                "blackwire-db-import",
+                revision,
+                InboundWrite {
+                    id: None,
+                    tag: inbound.tag.clone(),
+                    listen: inbound.listen.to_string(),
+                    port: inbound.port,
+                    protocol: enum_name(&inbound.protocol)?,
+                    enabled: true,
+                    transport,
+                    security,
+                    settings: Some(inbound.settings.clone()),
+                    stream_settings: inbound.stream_settings.clone(),
+                    sniffing: inbound.sniffing.clone(),
+                    limits: inbound.limits.clone(),
+                },
+            )
+            .await?
+            .revision;
+        let inbound_id = database
+            .list_inbounds(revision)
+            .await?
+            .into_iter()
+            .find(|record| record.tag == inbound.tag)
+            .context("imported inbound is missing")?
+            .id;
+
+        let mut users: Vec<EndpointUser> = inbound
+            .settings
+            .clients
+            .iter()
+            .chain(&inbound.settings.users)
+            .cloned()
+            .collect();
+        if users.is_empty()
+            && (inbound.settings.uuid.is_some()
+                || inbound.settings.password.is_some()
+                || inbound.settings.auth.is_some())
+        {
+            users.push(EndpointUser {
+                id: inbound.settings.uuid.clone(),
+                password: inbound.settings.password.clone(),
+                auth: inbound.settings.auth.clone(),
+                email: inbound.settings.email.clone(),
+                name: inbound.settings.name.clone(),
+                flow: inbound.settings.flow.clone(),
+                up_mbps: inbound.settings.up_mbps,
+                down_mbps: inbound.settings.down_mbps,
+            });
+        }
+        for (position, user) in users.into_iter().enumerate() {
+            let credential_kind = match inbound.protocol {
+                Protocol::Vless | Protocol::Vmess | Protocol::Tuic => "uuid",
+                Protocol::Hysteria2 => "auth",
+                _ => "password",
+            };
+            revision = database
+                .save_user(
+                    "blackwire-db-import",
+                    revision,
+                    UserWrite {
+                        id: None,
+                        inbound_id,
+                        email: user
+                            .label()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("{}-{position}@interop.local", inbound.tag)),
+                        enabled: true,
+                        flow: user.flow,
+                        note: "Imported bootstrap fixture".into(),
+                        traffic_limit_bytes: None,
+                        expiry_at: None,
+                        subscription_token: uuid::Uuid::new_v4().simple().to_string(),
+                        credential_kind: credential_kind.into(),
+                        uuid: user.id,
+                        password: user.password,
+                        method: inbound.settings.method.clone(),
+                        auth: user.auth,
+                    },
+                )
+                .await?
+                .revision;
+        }
+    }
+
+    if let Some(dns) = &config.dns {
+        let mut routing = database.routing_dns(revision).await?;
+        routing.dns_servers.clone_from(&dns.servers);
+        if let Some(fake_ip) = &dns.fake_ip {
+            routing.fake_ip_enabled = fake_ip.enabled;
+            routing.fake_ip_pool.clone_from(&fake_ip.pool);
+        }
+        revision = database
+            .save_routing_dns(
+                "blackwire-db-import",
+                revision,
+                blackwire_store::RoutingDnsWrite {
+                    domain_strategy: routing.domain_strategy,
+                    geoip_file: routing.geoip_file,
+                    geosite_file: routing.geosite_file,
+                    dns_servers: routing.dns_servers,
+                    fake_ip_enabled: routing.fake_ip_enabled,
+                    fake_ip_pool: routing.fake_ip_pool,
+                    rules: routing.rules,
+                    balancers: routing.balancers,
+                },
+            )
+            .await?
+            .revision;
+    }
+
+    let stored = database.load_config(revision).await?;
+    stored
+        .config
+        .validate()
+        .map_err(|error| anyhow::anyhow!("imported configuration validation error: {error}"))?;
+    println!("imported revision {revision} from {}", path.display());
+    Ok(())
+}
+
+fn enum_name<T: serde::Serialize>(value: &T) -> Result<String> {
+    serde_json::to_value(value)?
+        .as_str()
+        .map(str::to_owned)
+        .context("expected a string-valued configuration enum")
 }
 
 async fn cmd_explain_cost(args: ExplainCostArgs) -> Result<()> {

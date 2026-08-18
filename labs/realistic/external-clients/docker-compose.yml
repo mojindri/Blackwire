@@ -1,4 +1,17 @@
 services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: blackwire-root
+      MYSQL_DATABASE: blackwire
+      MYSQL_USER: blackwire
+      MYSQL_PASSWORD: blackwire
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -pblackwire-root --silent"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   target-http:
     image: hashicorp/http-echo:1.0
     command:
@@ -31,12 +44,18 @@ services:
       - 127.0.0.11
     entrypoint: ["/bin/sh", "-c"]
     command: ["exec sleep infinity"]
+    environment:
+      BLACKWIRE_DATABASE_URL: mysql://blackwire:blackwire@mysql:3306/blackwire
     volumes:
       - ./generated/blackwire:/generated/blackwire:ro
       - ./generated/certs:/etc/blackwire/certs:ro
     depends_on:
-      - target-http
-      - tls-cover
+      mysql:
+        condition: service_healthy
+      target-http:
+        condition: service_started
+      tls-cover:
+        condition: service_started
 
   # sing-box image includes /bin/sh — idle holder + exec-driven runs.
   sing-box-client:

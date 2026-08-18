@@ -22,7 +22,9 @@ invocations.
 
 ### Fast harness (default)
 
-- `docker compose up -d` once (target, probe, server, clients).
+- `docker compose up -d` once (MySQL, target, probe, server, clients).
+- Each scenario resets the disposable lab database, imports its validated lab
+  fixture as relational rows, and starts Blackwire from that MySQL revision.
 - Reused `matrix-probe` container for `nc` / `curl` (no `docker run --rm` per check).
 - `compose exec` to start/stop `blackwire` and sing-box per case.
 - **Xray** uses `compose run` per case (distroless image has no `/bin/sh` for idle holders).
