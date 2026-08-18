@@ -971,7 +971,7 @@ pub async fn subscription_base64(
     headers: HeaderMap,
 ) -> Result<String, AppError> {
     let link = subscription_link(&state, &token, &headers).await?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(link))
+    Ok(encode_subscription_content(&link))
 }
 
 pub async fn subscription_raw(
@@ -998,6 +998,19 @@ async fn subscription_link(
     }
     let panel = state.store.panel_settings().await.map_err(store_error)?;
     let host = public_subscription_host(&panel.subscription_host, headers);
+    build_subscription_link(&user, &host)
+        .ok_or_else(|| AppError::not_found("subscription not available for this protocol"))
+}
+
+fn encode_subscription_content(link: &str) -> String {
+    base64::engine::general_purpose::STANDARD.encode(link)
+}
+
+fn build_subscription_link(
+    user: &blackwire_store::SubscriptionRecord,
+    public_host: &str,
+) -> Option<String> {
+    let authority_host = subscription_authority_host(public_host);
     let label = url_escape(&user.email);
     let network = if user.transport == "splithttp" {
         "xhttp"
@@ -1041,17 +1054,17 @@ async fn subscription_link(
     }
     let uuid = user.uuid.as_deref().unwrap_or_default();
     match user.protocol.as_str() {
-        "vless" => Ok(format!(
+        "vless" => Some(format!(
             "vless://{}@{}:{}?encryption=none&{}#{}",
             url_escape(uuid),
-            host,
+            authority_host,
             user.port,
             params.join("&"),
             label
         )),
         "vmess" => {
             let payload = json!({
-                "v": "2", "ps": user.email, "add": host, "port": user.port.to_string(),
+                "v": "2", "ps": user.email, "add": public_host.trim().trim_matches(['[', ']']), "port": user.port.to_string(),
                 "id": uuid, "aid": "0", "scy": "auto", "security": "auto",
                 "net": network, "type": if network == "grpc" { "gun" } else { "none" },
                 "host": user.transport_host.as_deref().unwrap_or_default(),
@@ -1059,7 +1072,7 @@ async fn subscription_link(
                 "tls": if user.security == "none" { "" } else { &user.security },
                 "sni": user.server_name.as_deref().unwrap_or_default(), "alpn": ""
             });
-            Ok(format!(
+            Some(format!(
                 "vmess://{}",
                 base64::engine::general_purpose::STANDARD
                     .encode(serde_json::to_vec(&payload).unwrap_or_default())
@@ -1067,10 +1080,10 @@ async fn subscription_link(
         }
         "trojan" => {
             let password = user.password.as_deref().unwrap_or(uuid);
-            Ok(format!(
+            Some(format!(
                 "trojan://{}@{}:{}?{}#{}",
                 url_escape(password),
-                host,
+                authority_host,
                 user.port,
                 params.join("&"),
                 label
@@ -1079,11 +1092,11 @@ async fn subscription_link(
         "shadowsocks" => {
             let method = user.method.as_deref().unwrap_or("2022-blake3-aes-256-gcm");
             let password = user.password.as_deref().unwrap_or(uuid);
-            let credentials = base64::engine::general_purpose::STANDARD_NO_PAD
+            let credentials = base64::engine::general_purpose::URL_SAFE_NO_PAD
                 .encode(format!("{method}:{password}"));
-            Ok(format!(
+            Some(format!(
                 "ss://{}@{}:{}#{}",
-                credentials, host, user.port, label
+                credentials, authority_host, user.port, label
             ))
         }
         "hysteria2" => {
@@ -1092,35 +1105,60 @@ async fn subscription_link(
                 .as_deref()
                 .or(user.password.as_deref())
                 .unwrap_or(uuid);
-            let security = if user.security == "tls" {
-                ""
+            let mut query = Vec::new();
+            if let Some(server_name) = user.server_name.as_deref() {
+                query.push(format!("sni={}", url_escape(server_name)));
+            }
+            if user.security != "tls" {
+                query.push("insecure=1".into());
+            }
+            let query = if query.is_empty() {
+                String::new()
             } else {
-                "?insecure=1"
+                format!("?{}", query.join("&"))
             };
-            Ok(format!(
-                "hysteria2://{}@{}:{}{}#{}",
+            Some(format!(
+                "hysteria2://{}@{}:{}/{}#{}",
                 url_escape(auth),
-                host,
+                authority_host,
                 user.port,
-                security,
+                query,
                 label
             ))
         }
         "tuic" => {
             let password = user.password.as_deref().unwrap_or(uuid);
-            Ok(format!(
-                "tuic://{}:{}@{}:{}?uuid={}#{}",
+            let mut query = vec![
+                "alpn=h3".to_string(),
+                "congestion_control=bbr".to_string(),
+                "udp_relay_mode=native".to_string(),
+            ];
+            if let Some(server_name) = user.server_name.as_deref() {
+                query.push(format!("sni={}", url_escape(server_name)));
+            }
+            if user.security != "tls" {
+                query.push("allow_insecure=1".into());
+            }
+            Some(format!(
+                "tuic://{}:{}@{}:{}?{}#{}",
                 url_escape(uuid),
                 url_escape(password),
-                host,
+                authority_host,
                 user.port,
-                url_escape(uuid),
+                query.join("&"),
                 label
             ))
         }
-        _ => Err(AppError::not_found(
-            "subscription not available for this protocol",
-        )),
+        _ => None,
+    }
+}
+
+fn subscription_authority_host(host: &str) -> String {
+    let host = host.trim();
+    if host.contains(':') && !(host.starts_with('[') && host.ends_with(']')) {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
     }
 }
 
@@ -1340,9 +1378,47 @@ impl From<blackwire_store::MutationResult> for ApplyResult {
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine as _;
+    use std::collections::HashMap;
 
-    use super::reality_public_key_base64url;
+    use base64::Engine as _;
+    use blackwire_store::SubscriptionRecord;
+    use url::Url;
+
+    use super::{
+        build_subscription_link, encode_subscription_content, reality_public_key_base64url,
+    };
+
+    fn record(protocol: &str) -> SubscriptionRecord {
+        SubscriptionRecord {
+            email: "Alice + mobile@example.com".into(),
+            enabled: true,
+            expiry_at: None,
+            uuid: Some("1791a4cd-09e3-4a29-a36d-fea98300c845".into()),
+            password: Some("p@ss:word/+".into()),
+            method: Some("2022-blake3-aes-256-gcm".into()),
+            auth: Some("auth:user/value".into()),
+            flow: String::new(),
+            protocol: protocol.into(),
+            port: 443,
+            transport: "tcp".into(),
+            security: "tls".into(),
+            server_name: Some("cover.example.com".into()),
+            reality_public_key: None,
+            reality_short_id: None,
+            reality_fingerprint: None,
+            transport_path: None,
+            transport_host: None,
+            grpc_service_name: None,
+        }
+    }
+
+    fn link(record: &SubscriptionRecord) -> String {
+        build_subscription_link(record, "203.0.113.7").expect("supported subscription")
+    }
+
+    fn query(url: &Url) -> HashMap<String, String> {
+        url.query_pairs().into_owned().collect()
+    }
 
     #[test]
     fn subscription_reality_key_is_canonical_base64url() {
@@ -1359,5 +1435,203 @@ mod tests {
         let canonical =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_with_standard_alphabet);
         assert_eq!(reality_public_key_base64url(&standard), canonical);
+    }
+
+    #[test]
+    fn hiddify_vless_reality_exports_every_supported_parameter() {
+        let key = [0xff; 32];
+        let mut value = record("vless");
+        value.security = "reality".into();
+        value.flow = "xtls-rprx-vision".into();
+        value.reality_public_key = Some(hex::encode(key));
+        value.reality_short_id = Some("aabbccdd00000001".into());
+        value.reality_fingerprint = Some("chrome".into());
+
+        let parsed = Url::parse(&link(&value)).expect("valid VLESS URI");
+        let params = query(&parsed);
+        assert_eq!(parsed.scheme(), "vless");
+        assert_eq!(parsed.username(), value.uuid.as_deref().unwrap());
+        assert_eq!(parsed.host_str(), Some("203.0.113.7"));
+        assert_eq!(parsed.port(), Some(443));
+        assert_eq!(params.get("encryption").map(String::as_str), Some("none"));
+        assert_eq!(params.get("type").map(String::as_str), Some("tcp"));
+        assert_eq!(params.get("security").map(String::as_str), Some("reality"));
+        assert_eq!(
+            params.get("flow").map(String::as_str),
+            Some("xtls-rprx-vision")
+        );
+        assert_eq!(
+            params.get("sni").map(String::as_str),
+            Some("cover.example.com")
+        );
+        assert_eq!(
+            params.get("sid").map(String::as_str),
+            Some("aabbccdd00000001")
+        );
+        assert_eq!(params.get("fp").map(String::as_str), Some("chrome"));
+        assert_eq!(
+            params.get("pbk").map(String::as_str),
+            Some(
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(key)
+                    .as_str()
+            )
+        );
+    }
+
+    #[test]
+    fn hiddify_vless_transports_preserve_transport_parameters() {
+        let cases = [
+            (
+                "ws",
+                "ws",
+                Some("/socket path"),
+                Some("cdn.example.com"),
+                None,
+            ),
+            (
+                "httpupgrade",
+                "httpupgrade",
+                Some("/upgrade"),
+                Some("cdn.example.com"),
+                None,
+            ),
+            (
+                "splithttp",
+                "xhttp",
+                Some("/split"),
+                Some("cdn.example.com"),
+                None,
+            ),
+            ("grpc", "grpc", None, None, Some("blackwire grpc")),
+        ];
+        for (transport, exported, path, host, service) in cases {
+            let mut value = record("vless");
+            value.transport = transport.into();
+            value.transport_path = path.map(str::to_owned);
+            value.transport_host = host.map(str::to_owned);
+            value.grpc_service_name = service.map(str::to_owned);
+            let parsed = Url::parse(&link(&value)).expect("valid VLESS transport URI");
+            let params = query(&parsed);
+            assert_eq!(params.get("type").map(String::as_str), Some(exported));
+            assert_eq!(params.get("path").map(String::as_str), path);
+            assert_eq!(params.get("host").map(String::as_str), host);
+            assert_eq!(params.get("serviceName").map(String::as_str), service);
+        }
+    }
+
+    #[test]
+    fn hiddify_vmess_payload_contains_all_supported_fields() {
+        let mut value = record("vmess");
+        value.transport = "grpc".into();
+        value.grpc_service_name = Some("blackwire-grpc".into());
+        value.transport_host = Some("edge.example.com".into());
+        let exported = link(&value);
+        let encoded = exported.strip_prefix("vmess://").unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(payload["v"], "2");
+        assert_eq!(payload["add"], "203.0.113.7");
+        assert_eq!(payload["port"], "443");
+        assert_eq!(payload["id"], value.uuid.as_deref().unwrap());
+        assert_eq!(payload["net"], "grpc");
+        assert_eq!(payload["type"], "gun");
+        assert_eq!(payload["path"], "blackwire-grpc");
+        assert_eq!(payload["host"], "edge.example.com");
+        assert_eq!(payload["tls"], "tls");
+        assert_eq!(payload["sni"], "cover.example.com");
+        assert_eq!(payload["ps"], value.email);
+    }
+
+    #[test]
+    fn hiddify_trojan_hysteria2_and_tuic_links_are_parseable() {
+        let trojan = Url::parse(&link(&record("trojan"))).unwrap();
+        assert_eq!(trojan.username(), "p%40ss%3Aword%2F%2B");
+        assert_eq!(
+            query(&trojan).get("sni").map(String::as_str),
+            Some("cover.example.com")
+        );
+        assert_eq!(query(&trojan).get("type").map(String::as_str), Some("tcp"));
+
+        let hysteria = Url::parse(&link(&record("hysteria2"))).unwrap();
+        assert_eq!(hysteria.username(), "auth%3Auser%2Fvalue");
+        assert_eq!(hysteria.path(), "/");
+        assert_eq!(
+            query(&hysteria).get("sni").map(String::as_str),
+            Some("cover.example.com")
+        );
+        assert!(!query(&hysteria).contains_key("insecure"));
+
+        let tuic = Url::parse(&link(&record("tuic"))).unwrap();
+        let params = query(&tuic);
+        assert_eq!(tuic.username(), "1791a4cd-09e3-4a29-a36d-fea98300c845");
+        assert_eq!(tuic.password(), Some("p%40ss%3Aword%2F%2B"));
+        assert_eq!(
+            params.get("sni").map(String::as_str),
+            Some("cover.example.com")
+        );
+        assert_eq!(params.get("alpn").map(String::as_str), Some("h3"));
+        assert_eq!(
+            params.get("congestion_control").map(String::as_str),
+            Some("bbr")
+        );
+        assert_eq!(
+            params.get("udp_relay_mode").map(String::as_str),
+            Some("native")
+        );
+
+        let mut insecure_hysteria = record("hysteria2");
+        insecure_hysteria.security = "none".into();
+        assert_eq!(
+            query(&Url::parse(&link(&insecure_hysteria)).unwrap())
+                .get("insecure")
+                .map(String::as_str),
+            Some("1")
+        );
+
+        let mut insecure_tuic = record("tuic");
+        insecure_tuic.security = "none".into();
+        assert_eq!(
+            query(&Url::parse(&link(&insecure_tuic)).unwrap())
+                .get("allow_insecure")
+                .map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn hiddify_shadowsocks_uses_unpadded_url_safe_sip002_credentials() {
+        let value = record("shadowsocks");
+        let parsed = Url::parse(&link(&value)).expect("valid Shadowsocks URI");
+        assert!(!parsed.username().contains(['+', '/', '=']));
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(parsed.username())
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(decoded).unwrap(),
+            "2022-blake3-aes-256-gcm:p@ss:word/+"
+        );
+    }
+
+    #[test]
+    fn subscription_export_encodes_labels_ipv6_and_base64_envelope() {
+        let value = record("vless");
+        let exported = build_subscription_link(&value, "2001:db8::7").unwrap();
+        let parsed = Url::parse(&exported).unwrap();
+        assert_eq!(parsed.host_str(), Some("[2001:db8::7]"));
+        assert_eq!(
+            parsed.fragment(),
+            Some("Alice%20%2B%20mobile%40example.com")
+        );
+        let envelope = encode_subscription_content(&exported);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(envelope)
+                .unwrap(),
+            exported.as_bytes()
+        );
+        assert!(build_subscription_link(&record("unsupported"), "example.com").is_none());
     }
 }

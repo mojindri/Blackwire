@@ -8,7 +8,7 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
-## 0.1.41 - 2026-08-17
+## 0.2.0 - 2026-08-18
 
 ### Added
 
@@ -28,6 +28,12 @@ This project is pre-1.0. The support contract is owned by
 
 ### Fixed
 
+- Hiddify-compatible subscription exports now cover VLESS/REALITY transports,
+  VMess, Trojan, Shadowsocks 2022, Hysteria2, and TUIC with canonical URL
+  encoding, SNI parameters, IPv6 authorities, and base64 subscription content.
+- Fast deterministic subscription tests now validate every supported exported
+  parameter, decoded VMess payloads, URL-safe SIP002 credentials, TLS/insecure
+  modes, and unsupported-protocol rejection without network or Docker startup.
 - External-client Docker scenarios now bootstrap fresh relational MySQL
   revisions instead of invoking the removed file-config runtime interface.
 - REALITY and Vision Docker interoperability scenarios now use the lab's live
