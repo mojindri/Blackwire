@@ -6,7 +6,8 @@ Wants=network-online.target
 [Service]
 User=blackwire
 Group=blackwire
-ExecStart=/usr/local/bin/blackwire run -c /etc/blackwire/server.json
+Environment=BLACKWIRE_DATABASE_URL_FILE=/etc/blackwire/runtime-database-url
+ExecStart=/usr/local/bin/blackwire run
 Restart=on-failure
 RestartSec=3
 AmbientCapabilities=CAP_NET_BIND_SERVICE

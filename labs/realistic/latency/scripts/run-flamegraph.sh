@@ -23,6 +23,7 @@
 #   PERF_FREQ         sampling frequency (default: 99)
 set -euo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VARIANT="${1:?Usage: run-flamegraph.sh <variant> <target-url>}"
 TARGET="${2:?Usage: run-flamegraph.sh <variant> <target-url>}"
 
@@ -75,8 +76,10 @@ mkdir -p "$REPORT_DIR"
 
 CLIENT_PID=
 if [ -n "$CLIENT_CONFIG" ]; then
-    log "starting client: $BW_BIN run -c $CLIENT_CONFIG"
-    $BW_BIN run -c "$CLIENT_CONFIG" >/tmp/bw-fg-client.log 2>&1 &
+    client_database_url="${BLACKWIRE_CLIENT_DATABASE_URL:?set BLACKWIRE_CLIENT_DATABASE_URL for the client fixture}"
+    bash "$HERE/../../scripts/prepare-mysql-fixture.sh" "$BW_BIN" "$CLIENT_CONFIG" "$client_database_url"
+    log "starting client from MySQL"
+    BLACKWIRE_DATABASE_URL="$client_database_url" "$BW_BIN" run >/tmp/bw-fg-client.log 2>&1 &
     CLIENT_PID=$!
     POLL_PORT="${CLIENT_PORT:-${PROXY_ADDR##*:}}"
     if [ -n "$POLL_PORT" ]; then
@@ -95,9 +98,11 @@ fi
 
 SERVER_PID=
 if [ -n "$SERVER_CONFIG" ]; then
-    log "starting server under perf: $BW_BIN run -c $SERVER_CONFIG"
+    server_database_url="${BLACKWIRE_SERVER_DATABASE_URL:?set BLACKWIRE_SERVER_DATABASE_URL for the server fixture}"
+    bash "$HERE/../../scripts/prepare-mysql-fixture.sh" "$BW_BIN" "$SERVER_CONFIG" "$server_database_url"
+    log "starting server under perf from MySQL"
     perf record -g -F "$PERF_FREQ" -o "$PERF_DATA" -- \
-        $BW_BIN run -c "$SERVER_CONFIG" >/tmp/bw-fg-server.log 2>&1 &
+        env BLACKWIRE_DATABASE_URL="$server_database_url" "$BW_BIN" run >/tmp/bw-fg-server.log 2>&1 &
     SERVER_PID=$!
     sleep 1
     log "server up under perf (pid $SERVER_PID)"

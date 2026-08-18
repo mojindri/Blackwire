@@ -30,6 +30,9 @@ This project is pre-1.0. The support contract is owned by
 
 - External-client Docker scenarios now bootstrap fresh relational MySQL
   revisions instead of invoking the removed file-config runtime interface.
+- Realistic, latency, competitive, and VPS lab runners now import fixtures into
+  disposable MySQL databases, preserve fixture outbound order, and start the
+  normal database-backed runtime.
 - Inbound protocol network mode and authentication timeout now survive MySQL
   revision persistence, restoring UDP-only Shadowsocks 2022 listeners.
 - Structured inbound and outbound editors preserve complete transport and

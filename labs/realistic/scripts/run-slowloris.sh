@@ -13,6 +13,7 @@ mkdir -p "$REPORT_DIR"
 cd "$PROJECT_ROOT"
 
 PROXY_PORT="${PROXY_PORT:-1080}"
+LAB_DATABASE_URL="${BLACKWIRE_LAB_DATABASE_URL:?set BLACKWIRE_LAB_DATABASE_URL to a disposable MySQL database}"
 SLOW_CLIENTS="${SLOW_CLIENTS:-25}"
 SLOW_INTERVAL="${SLOW_INTERVAL:-1.0}"
 SLOW_DURATION="${SLOW_DURATION:-15}"
@@ -52,8 +53,10 @@ cat > "$CONFIG" <<JSON
 JSON
 
 cargo build --release --bin blackwire
+bash "$SCRIPT_DIR/prepare-mysql-fixture.sh" target/release/blackwire "$CONFIG" "$LAB_DATABASE_URL"
 
-RUST_LOG="${RUST_LOG:-info}" target/release/blackwire run -c "$CONFIG" > "$REPORT_DIR/slowloris-proxy.log" 2>&1 &
+BLACKWIRE_DATABASE_URL="$LAB_DATABASE_URL" \
+  RUST_LOG="${RUST_LOG:-info}" target/release/blackwire run > "$REPORT_DIR/slowloris-proxy.log" 2>&1 &
 PROXY_PID=$!
 
 cleanup() {

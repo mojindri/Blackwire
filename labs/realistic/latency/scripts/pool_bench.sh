@@ -11,6 +11,8 @@ CONCURRENCY=16
 ORIGIN_PORT=18081
 PROXY_PORT=10080
 SOCKS_PORT=1082
+SERVER_DATABASE_URL="${BLACKWIRE_SERVER_DATABASE_URL:?set BLACKWIRE_SERVER_DATABASE_URL to a disposable MySQL 8.4 database}"
+CLIENT_DATABASE_URL="${BLACKWIRE_CLIENT_DATABASE_URL:?set BLACKWIRE_CLIENT_DATABASE_URL to a different disposable MySQL 8.4 database}"
 
 CLIENT_CFG=$(mktemp /tmp/bw-pool-client-XXXX.json)
 cat > "$CLIENT_CFG" <<EOF
@@ -32,11 +34,13 @@ run_variant() {
     local origin_pid=$!
 
     # start server
-    "$BINARY" run -c "$server_cfg" &
+    bash "$SCRIPTS/../../scripts/prepare-mysql-fixture.sh" "$BINARY" "$server_cfg" "$SERVER_DATABASE_URL"
+    BLACKWIRE_DATABASE_URL="$SERVER_DATABASE_URL" "$BINARY" run &
     local server_pid=$!
 
     # start client
-    "$BINARY" run -c "$CLIENT_CFG" &
+    bash "$SCRIPTS/../../scripts/prepare-mysql-fixture.sh" "$BINARY" "$CLIENT_CFG" "$CLIENT_DATABASE_URL"
+    BLACKWIRE_DATABASE_URL="$CLIENT_DATABASE_URL" "$BINARY" run &
     local client_pid=$!
 
     sleep 2  # let everything bind

@@ -63,6 +63,14 @@ Configs: `external-clients/generated/`. Reports: `reports/external-clients/`.
 
 Details: [external-clients/README.md](external-clients/README.md).
 
+Blackwire lab JSON files are bootstrap fixtures, not runtime configuration.
+Scripts initialize a disposable MySQL 8.4 database, import the fixture as
+relational state, and then start `blackwire run`. Local two-ended benchmarks
+require distinct `BLACKWIRE_SERVER_DATABASE_URL` and
+`BLACKWIRE_CLIENT_DATABASE_URL` values. VPS matrix scripts use
+`/etc/blackwire/lab-database-url` by default; that lab credential needs schema
+migration and write privileges.
+
 ## Two-VPS gate
 
 - **Client VPS:** runs matrix probes (Docker Xray/sing-box + curl).

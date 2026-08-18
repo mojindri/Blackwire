@@ -16,9 +16,15 @@ The scripts are intentionally fail-soft. Missing competitor binaries produce str
 ## Quick Start
 
 ```bash
+export BLACKWIRE_SERVER_DATABASE_URL='mysql://.../blackwire_competitive_server'
+export BLACKWIRE_CLIENT_DATABASE_URL='mysql://.../blackwire_competitive_client'
 make competitive-smoke
 make competitive-report
 ```
+
+The two databases must be disposable and distinct. The runner migrates them and
+replaces their relational configuration from each Blackwire lab fixture. Xray
+and sing-box continue to consume their native JSON files directly.
 
 VPS defaults are intentionally left unset in-repo; provide hosts via environment:
 
@@ -27,6 +33,11 @@ export COMPETITIVE_SERVER_HOST=<server-host>
 export COMPETITIVE_CLIENT_HOST=<client-host>
 COMPETITIVE_SSH_KEY=id_hetzner
 ```
+
+Each remote host also needs a migration-capable MySQL URL in
+`/etc/blackwire/lab-database-url`. Override that path with
+`BLACKWIRE_REMOTE_DATABASE_URL_FILE`. Server and client hosts must point at
+different disposable databases.
 
 Run remote inventory and runnable remote rows:
 

@@ -56,6 +56,9 @@ TUN_UDP_TIMEOUT_MS="${TUN_UDP_TIMEOUT_MS:-3000}"
 TUN_TCP_PAYLOAD="${TUN_TCP_PAYLOAD:-64m}"
 TUN_TCP_TIMEOUT_SEC="${TUN_TCP_TIMEOUT_SEC:-30}"
 TUN_TCP_TARGET_URL="${TUN_TCP_TARGET_URL:-}"
+BLACKWIRE_SERVER_DATABASE_URL="${BLACKWIRE_SERVER_DATABASE_URL:-}"
+BLACKWIRE_CLIENT_DATABASE_URL="${BLACKWIRE_CLIENT_DATABASE_URL:-}"
+BLACKWIRE_REMOTE_DATABASE_URL_FILE="${BLACKWIRE_REMOTE_DATABASE_URL_FILE:-/etc/blackwire/lab-database-url}"
 
 SERVER_HOST="${COMPETITIVE_SERVER_HOST:-<server-host>}"
 CLIENT_HOST="${COMPETITIVE_CLIENT_HOST:-<client-host>}"
@@ -157,6 +160,29 @@ start_proc() {
     echo "$pid"
 }
 
+prepare_local_blackwire() {
+    local binary="$1" fixture="$2" database_url="$3" role="$4"
+    [ -n "$database_url" ] || {
+        echo "ERROR: set BLACKWIRE_${role}_DATABASE_URL to a disposable MySQL database" >&2
+        return 1
+    }
+    bash "$ROOT/labs/realistic/scripts/prepare-mysql-fixture.sh" \
+        "$binary" "$fixture" "$database_url"
+}
+
+local_blackwire_command() {
+    local binary="$1" database_url="$2"
+    printf 'env BLACKWIRE_DATABASE_URL=%q %q run' "$database_url" "$binary"
+}
+
+remote_blackwire_command() {
+    local binary="$1" fixture="$2"
+    printf 'env BLACKWIRE_DATABASE_URL_FILE=%q %q db init && env BLACKWIRE_DATABASE_URL_FILE=%q %q db import-fixture --replace %q && env BLACKWIRE_DATABASE_URL_FILE=%q %q run' \
+        "$BLACKWIRE_REMOTE_DATABASE_URL_FILE" "$binary" \
+        "$BLACKWIRE_REMOTE_DATABASE_URL_FILE" "$binary" "$fixture" \
+        "$BLACKWIRE_REMOTE_DATABASE_URL_FILE" "$binary"
+}
+
 run_hey() {
     local variant="$1" payload="$2" proxy="${3:-}" protocol="${4:-direct}" transport="${5:-tcp}" profile="${6:-baseline}"
     if ! command -v "$HEY_BIN" >/dev/null 2>&1; then
@@ -212,8 +238,10 @@ run_local() {
 
         if [ -x "$BLACKWIRE_CURRENT_BIN" ]; then
             local s c
-            s="$(start_proc bw-current-server "'$BLACKWIRE_CURRENT_BIN' run -c '$CONFIG_DIR/blackwire/vless-server.json'" 10080)" || { emit_row blackwire-current failed "server did not start" vless tcp current "$payload"; continue; }
-            c="$(start_proc bw-current-client "'$BLACKWIRE_CURRENT_BIN' run -c '$CONFIG_DIR/blackwire/vless-client.json'" 1081)" || { kill "$s" 2>/dev/null || true; emit_row blackwire-current failed "client did not start" vless tcp current "$payload"; continue; }
+            prepare_local_blackwire "$BLACKWIRE_CURRENT_BIN" "$CONFIG_DIR/blackwire/vless-server.json" "$BLACKWIRE_SERVER_DATABASE_URL" SERVER
+            prepare_local_blackwire "$BLACKWIRE_CURRENT_BIN" "$CONFIG_DIR/blackwire/vless-client.json" "$BLACKWIRE_CLIENT_DATABASE_URL" CLIENT
+            s="$(start_proc bw-current-server "$(local_blackwire_command "$BLACKWIRE_CURRENT_BIN" "$BLACKWIRE_SERVER_DATABASE_URL")" 10080)" || { emit_row blackwire-current failed "server did not start" vless tcp current "$payload"; continue; }
+            c="$(start_proc bw-current-client "$(local_blackwire_command "$BLACKWIRE_CURRENT_BIN" "$BLACKWIRE_CLIENT_DATABASE_URL")" 1081)" || { kill "$s" 2>/dev/null || true; emit_row blackwire-current failed "client did not start" vless tcp current "$payload"; continue; }
             PIDS="${PIDS:-} $s $c"
             run_hey blackwire-current "$payload" 127.0.0.1:1081 vless tcp current
             kill "$s" "$c" 2>/dev/null || true
@@ -223,8 +251,10 @@ run_local() {
 
         if [ -x "$BLACKWIRE_CANDIDATE_BIN" ]; then
             local s2 c2
-            s2="$(start_proc bw-candidate-server "'$BLACKWIRE_CANDIDATE_BIN' run -c '$CONFIG_DIR/blackwire/vless-server-candidate.json'" 10090)" || { emit_row blackwire-candidate failed "server did not start" vless tcp candidate "$payload"; continue; }
-            c2="$(start_proc bw-candidate-client "'$BLACKWIRE_CANDIDATE_BIN' run -c '$CONFIG_DIR/blackwire/vless-client-candidate.json'" 1091)" || { kill "$s2" 2>/dev/null || true; emit_row blackwire-candidate failed "client did not start" vless tcp candidate "$payload"; continue; }
+            prepare_local_blackwire "$BLACKWIRE_CANDIDATE_BIN" "$CONFIG_DIR/blackwire/vless-server-candidate.json" "$BLACKWIRE_SERVER_DATABASE_URL" SERVER
+            prepare_local_blackwire "$BLACKWIRE_CANDIDATE_BIN" "$CONFIG_DIR/blackwire/vless-client-candidate.json" "$BLACKWIRE_CLIENT_DATABASE_URL" CLIENT
+            s2="$(start_proc bw-candidate-server "$(local_blackwire_command "$BLACKWIRE_CANDIDATE_BIN" "$BLACKWIRE_SERVER_DATABASE_URL")" 10090)" || { emit_row blackwire-candidate failed "server did not start" vless tcp candidate "$payload"; continue; }
+            c2="$(start_proc bw-candidate-client "$(local_blackwire_command "$BLACKWIRE_CANDIDATE_BIN" "$BLACKWIRE_CLIENT_DATABASE_URL")" 1091)" || { kill "$s2" 2>/dev/null || true; emit_row blackwire-candidate failed "client did not start" vless tcp candidate "$payload"; continue; }
             PIDS="${PIDS:-} $s2 $c2"
             run_hey blackwire-candidate "$payload" 127.0.0.1:1091 vless tcp candidate
             kill "$s2" "$c2" 2>/dev/null || true
@@ -304,8 +334,9 @@ run_remote() {
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "tc qdisc del dev '$iface' root >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
     }
     remote_start() {
-        local host="$1" dir="$2" name="$3" cmd="$4" port="${5:-}"
-        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "cd '$dir'; nohup bash -lc '$cmd' > '$name.log' 2>&1 & echo \$! > '$name.pid'"
+        local host="$1" dir="$2" name="$3" cmd="$4" port="${5:-}" encoded
+        encoded="$(printf '%s' "$cmd" | base64 | tr -d '\n')"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$host" "cd '$dir'; nohup bash -lc \"\$(printf '%s' '$encoded' | base64 -d)\" > '$name.log' 2>&1 & echo \$! > '$name.pid'"
         if [ -n "$port" ]; then
             remote_port_open "$host" "$port"
         else
@@ -640,7 +671,7 @@ PY
         if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$nginx_started" = "1" ]; then
             remote_tun_cleanup_client "$control_peer"
             remote_tun_safety_add "$control_peer"
-            if raw="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cd '$REMOTE_CLIENT_DIR'; VARIANT=blackwire-candidate-tun RUNTIME_NAME=blackwire-tun RUNTIME_CMD='./blackwire-candidate run -c blackwire-tun.json' SERVER_HOST='$SERVER_HOST' TS='$TS' SCENARIO='$SCENARIO' TUN_UDP_ECHO_PORT='$TUN_UDP_ECHO_PORT' TUN_UDP_COUNT='$TUN_UDP_COUNT' TUN_UDP_PAYLOAD_BYTES='$TUN_UDP_PAYLOAD_BYTES' TUN_UDP_TIMEOUT_MS='$TUN_UDP_TIMEOUT_MS' COMPETITIVE_REMOTE_UPSTREAM_PORT='$COMPETITIVE_REMOTE_UPSTREAM_PORT' TUN_TCP_PAYLOAD='$TUN_TCP_PAYLOAD' TUN_TCP_TIMEOUT_SEC='$TUN_TCP_TIMEOUT_SEC' TUN_TCP_TARGET_URL='$TUN_TCP_TARGET_URL' COMPETITIVE_CONCURRENCY='$COMPETITIVE_CONCURRENCY' COMPETITIVE_DURATION='$COMPETITIVE_DURATION' LOSS_PERCENT='$LOSS_PERCENT' RTT_MS='$RTT_MS' JITTER_MS='$JITTER_MS' ./tun_remote_once.sh" 2>&1)"; then
+            if raw="$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST" "cd '$REMOTE_CLIENT_DIR'; VARIANT=blackwire-candidate-tun RUNTIME_NAME=blackwire-tun RUNTIME_CMD='$(remote_blackwire_command ./blackwire-candidate blackwire-tun.json)' SERVER_HOST='$SERVER_HOST' TS='$TS' SCENARIO='$SCENARIO' TUN_UDP_ECHO_PORT='$TUN_UDP_ECHO_PORT' TUN_UDP_COUNT='$TUN_UDP_COUNT' TUN_UDP_PAYLOAD_BYTES='$TUN_UDP_PAYLOAD_BYTES' TUN_UDP_TIMEOUT_MS='$TUN_UDP_TIMEOUT_MS' COMPETITIVE_REMOTE_UPSTREAM_PORT='$COMPETITIVE_REMOTE_UPSTREAM_PORT' TUN_TCP_PAYLOAD='$TUN_TCP_PAYLOAD' TUN_TCP_TIMEOUT_SEC='$TUN_TCP_TIMEOUT_SEC' TUN_TCP_TARGET_URL='$TUN_TCP_TARGET_URL' COMPETITIVE_CONCURRENCY='$COMPETITIVE_CONCURRENCY' COMPETITIVE_DURATION='$COMPETITIVE_DURATION' LOSS_PERCENT='$LOSS_PERCENT' RTT_MS='$RTT_MS' JITTER_MS='$JITTER_MS' ./tun_remote_once.sh" 2>&1)"; then
                 printf '%s\n' "$raw" > "$REPORT_DIR/blackwire-candidate-tun-once-${TS}.raw.log"
                 printf '%s\n' "$raw" >> "$OUT"
                 scp "${SSH_OPTS[@]}" "$SSH_USER@$CLIENT_HOST:$REMOTE_CLIENT_DIR/blackwire-candidate-tun-"'*.log' "$REPORT_DIR/" >/dev/null 2>&1 || true
@@ -687,7 +718,7 @@ PY
         emit_row remote-inventory ok "wrote remote-inventory-${TS}.log" inventory ssh innerflow mixed
 
         if [ -x "$BLACKWIRE_BIN" ]; then
-            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-server "./blackwire run -c blackwire-hysteria2-server.json" ""; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-server "$(remote_blackwire_command ./blackwire blackwire-hysteria2-server.json)" ""; then
                 run_remote_hy2_udp_mix_bench blackwire-candidate blackwire-current-innerflow 10300 standard off
                 remote_capture_metrics "$SERVER_HOST" 19000 blackwire-current-innerflow server
             else
@@ -699,7 +730,7 @@ PY
         fi
 
         if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ]; then
-            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-candidate-server "./blackwire-candidate run -c blackwire-hysteria2-server-candidate.json" ""; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-candidate-server "$(remote_blackwire_command ./blackwire-candidate blackwire-hysteria2-server-candidate.json)" ""; then
                 run_remote_hy2_udp_mix_bench blackwire-candidate blackwire-candidate-innerflow 10310 h2-plus "$HYSTERIA2_CANDIDATE_FEC_MODE"
                 remote_capture_metrics "$SERVER_HOST" 19010 blackwire-candidate-innerflow server
             else
@@ -727,7 +758,7 @@ PY
         emit_row remote-inventory ok "wrote remote-inventory-${TS}.log" inventory ssh udp-dns "${HYSTERIA2_UDP_PAYLOAD_BYTES}b"
 
         if [ -x "$BLACKWIRE_BIN" ]; then
-            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-server "./blackwire run -c blackwire-hysteria2-server.json" ""; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-server "$(remote_blackwire_command ./blackwire blackwire-hysteria2-server.json)" ""; then
                 run_remote_hy2_udp_bench blackwire blackwire-current-hysteria2-udp 10300 standard off
                 remote_capture_metrics "$SERVER_HOST" 19000 blackwire-current-hysteria2-udp server
             else
@@ -739,7 +770,7 @@ PY
         fi
 
         if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ]; then
-            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-candidate-server "./blackwire-candidate run -c blackwire-hysteria2-server-candidate.json" ""; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-candidate-server "$(remote_blackwire_command ./blackwire-candidate blackwire-hysteria2-server-candidate.json)" ""; then
                 run_remote_hy2_udp_bench blackwire-candidate blackwire-candidate-h2plus-udp 10310 h2-plus "$HYSTERIA2_CANDIDATE_FEC_MODE"
                 remote_capture_metrics "$SERVER_HOST" 19010 blackwire-candidate-h2plus-udp server
             else
@@ -777,7 +808,7 @@ PY
         for payload in $COMPETITIVE_PAYLOADS; do
             emit_row remote-inventory ok "wrote remote-inventory-${TS}.log" inventory ssh badnet "$payload"
             if [ -x "$BLACKWIRE_BIN" ] && [ "$nginx_started" = "1" ] && has_tool "$client_inv" "hey"; then
-                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-server "./blackwire run -c blackwire-hysteria2-server.json" "" && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-hysteria2-client "./blackwire run -c blackwire-hysteria2-client.json" 1088; then
+                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-server "$(remote_blackwire_command ./blackwire blackwire-hysteria2-server.json)" "" && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-hysteria2-client "$(remote_blackwire_command ./blackwire blackwire-hysteria2-client.json)" 1088; then
                     run_remote_hey blackwire-current-hysteria2 "$payload" 1088 hysteria2 quic current
                     remote_capture_metrics "$SERVER_HOST" 19000 blackwire-current-hysteria2 server
                     remote_capture_metrics "$CLIENT_HOST" 19001 blackwire-current-hysteria2 client
@@ -793,7 +824,7 @@ PY
             fi
 
             if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ] && [ "$nginx_started" = "1" ] && has_tool "$client_inv" "hey"; then
-                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-candidate-server "./blackwire-candidate run -c blackwire-hysteria2-server-candidate.json" "" && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-hysteria2-candidate-client "./blackwire-candidate run -c blackwire-hysteria2-client-candidate.json" 1098; then
+                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-hysteria2-candidate-server "$(remote_blackwire_command ./blackwire-candidate blackwire-hysteria2-server-candidate.json)" "" && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-hysteria2-candidate-client "$(remote_blackwire_command ./blackwire-candidate blackwire-hysteria2-client-candidate.json)" 1098; then
                     run_remote_hey "$HYSTERIA2_CANDIDATE_VARIANT" "$payload" 1098 hysteria2 quic "$HYSTERIA2_CANDIDATE_MODE"
                     remote_capture_metrics "$SERVER_HOST" 19010 "$HYSTERIA2_CANDIDATE_VARIANT" server
                     remote_capture_metrics "$CLIENT_HOST" 19011 "$HYSTERIA2_CANDIDATE_VARIANT" client
@@ -836,7 +867,7 @@ PY
             fi
 
             if [ -x "$BLACKWIRE_BIN" ] && has_tool "$client_inv" "xray" && [ "$nginx_started" = "1" ]; then
-                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-vision-server "./blackwire run -c blackwire-vision-server.json" 10082 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" xray-vision-current-client "xray run -config xray-vision-current-client.json" 1086; then
+                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-vision-server "$(remote_blackwire_command ./blackwire blackwire-vision-server.json)" 10082 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" xray-vision-current-client "xray run -config xray-vision-current-client.json" 1086; then
                     run_remote_hey blackwire-current-vision "$payload" http://127.0.0.1:1086 vless reality-vision current
                 else
                     emit_row blackwire-current-vision failed "temporary Blackwire Vision server or Xray client did not become ready" vless reality-vision current "$payload"
@@ -848,7 +879,7 @@ PY
             fi
 
             if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ] && has_tool "$client_inv" "xray" && [ "$nginx_started" = "1" ]; then
-                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-vision-candidate-server "./blackwire-candidate run -c blackwire-vision-server-candidate.json" 10092 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" xray-vision-candidate-client "xray run -config xray-vision-candidate-client.json" 1096; then
+                if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-vision-candidate-server "$(remote_blackwire_command ./blackwire-candidate blackwire-vision-server-candidate.json)" 10092 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" xray-vision-candidate-client "xray run -config xray-vision-candidate-client.json" 1096; then
                     run_remote_hey blackwire-candidate-vision "$payload" http://127.0.0.1:1096 vless reality-vision candidate
                 else
                     emit_row blackwire-candidate-vision failed "temporary Blackwire candidate Vision server or Xray client did not become ready" vless reality-vision candidate "$payload"
@@ -882,7 +913,7 @@ PY
             emit_row direct-vps-native skipped "nginx on server or hey on client missing" direct tcp baseline "$payload"
         fi
         if [ -x "$BLACKWIRE_BIN" ] && [ "$nginx_started" = "1" ]; then
-            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-server "./blackwire run -c blackwire-server.json" 10080 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-client "./blackwire run -c blackwire-client.json" 1081; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-server "$(remote_blackwire_command ./blackwire blackwire-server.json)" 10080 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-client "$(remote_blackwire_command ./blackwire blackwire-client.json)" 1081; then
                 run_remote_hey blackwire-current "$payload" 1081 vless tcp current
             else
                 emit_row blackwire-current failed "temporary Blackwire server/client did not become ready" vless tcp current "$payload"
@@ -893,7 +924,7 @@ PY
             emit_row blackwire-current skipped "local BLACKWIRE_BIN not executable or nginx upstream unavailable: $BLACKWIRE_BIN" vless tcp current "$payload"
         fi
         if [ -x "$BLACKWIRE_CANDIDATE_BIN" ] && [ "$BLACKWIRE_CANDIDATE_BIN" != "$BLACKWIRE_BIN" ] && [ "$nginx_started" = "1" ]; then
-            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-candidate-server "./blackwire-candidate run -c blackwire-server-candidate.json" 10090 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-candidate-client "./blackwire-candidate run -c blackwire-client-candidate.json" 1091; then
+            if remote_start "$SERVER_HOST" "$REMOTE_SERVER_DIR" blackwire-candidate-server "$(remote_blackwire_command ./blackwire-candidate blackwire-server-candidate.json)" 10090 && remote_start "$CLIENT_HOST" "$REMOTE_CLIENT_DIR" blackwire-candidate-client "$(remote_blackwire_command ./blackwire-candidate blackwire-client-candidate.json)" 1091; then
                 run_remote_hey blackwire-candidate "$payload" 1091 vless tcp candidate
             else
                 emit_row blackwire-candidate failed "temporary Blackwire candidate server/client did not become ready" vless tcp candidate "$payload"

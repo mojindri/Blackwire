@@ -62,9 +62,14 @@ SSH_SERVER=1.2.3.4 SSH_CLIENT=5.6.7.8 SSH_KEY=~/.ssh/id_ed25519 make interop-ser
 ```
 
 The VPS runner assumes server/client setup already ran (`server-setup.sh` /
-`client-setup.sh`). It mirrors the Docker harness: **one blackwire start per
-protocol**, four sequential client cases (xray, sing-box, negatives), same
-`scenarios.env` and port-wait rules (including ShadowTLS cover on server `:443`).
+`client-setup.sh`) and that the server has a disposable MySQL 8.4 lab database.
+Its migration-capable lab URL defaults to `/etc/blackwire/lab-database-url`
+(override with `BLACKWIRE_VPS_DATABASE_URL_FILE`). Do not reuse the restricted
+production runtime credential. Each scenario imports its fixture into that
+database before starting the runtime. It mirrors the Docker
+harness: **one blackwire start per protocol**, four sequential client cases
+(xray, sing-box, negatives), same `scenarios.env` and port-wait rules (including
+ShadowTLS cover on server `:443`).
 Reports: `labs/realistic/reports/external-clients-vps/`.
 
 The runner keeps console output compact and writes full logs under:
