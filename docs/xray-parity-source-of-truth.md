@@ -20,7 +20,7 @@ Use the **primary** reference first; validate with the **secondary** when both a
 |------|-------------------|------------------------|
 | VLESS, VMess AEAD, Trojan, Freedom | [XTLS/Xray-core](https://github.com/XTLS/Xray-core) `proxy/*`, `transport/internet/*` | sing-box `protocol/*`, `transport/*` |
 | REALITY (TLS camouflage) | [XTLS/REALITY](https://github.com/XTLS/REALITY) + Xray `transport/internet/reality` | sing-box `common/tls/reality_*` — see [reality-interop.md](reality-interop.md) |
-| ShadowTLS, mKCP, Hysteria2 | Xray where implemented; else sing-box | Whichever ships the transport clients use |
+| ShadowTLS, Hysteria2 | Xray where implemented; else sing-box | Whichever ships the transport clients use |
 | SplitHTTP / xHTTP stream-one | [SagerNet/sing-box](https://github.com/SagerNet/sing-box) (leading client configs) | Xray `transport/internet/splithttp` |
 | SplitHTTP / xHTTP **packet-up** | Xray `transport/internet/splithttp` packet-up mode (matrix gate) | Optional reference: [hiddify/hiddify-sing-box](https://github.com/hiddify/hiddify-sing-box) `transport/v2rayxhttp` (upstream sing-box has no packet-up) |
 | Sniffing, routing, DNS, FakeIP | Xray `app/dispatcher`, `app/dns`, routing rules (`domainStrategy`: AsIs / IPIfNonMatch / IPOnDemand) | sing-box route/DNS when behavior differs—document delta |
@@ -71,7 +71,7 @@ On **FAIL**, use [external-client-failure-triage.md](external-client-failure-tri
 | blackwire crate | Upstream to read |
 |-----------------|------------------|
 | `blackwire-protocol` | Xray `proxy/vless`, `vmess`, `trojan`, `socks`, `http`, `shadowsocks_2022` |
-| `blackwire-transport` | Xray `transport/internet/{tcp,tls,websocket,grpc,httpupgrade,splithttp,quic,reality,kcp}`; sing-box for xHTTP stream-one; hiddify-sing-box `transport/v2rayxhttp` for packet-up |
+| `blackwire-transport` | Xray `transport/internet/{tcp,tls,websocket,grpc,httpupgrade,splithttp,quic,reality}`; sing-box for xHTTP stream-one; hiddify-sing-box `transport/v2rayxhttp` for packet-up |
 | `blackwire-tls` | uTLS/Chrome profiles as used by REALITY clients; Xray TLS settings |
 | `blackwire-app` | Xray `app/router`, `app/dispatcher`, `app/dns` |
 | `blackwire-config` | Shape inspired by Xray/sing-box JSON; **semantic** truth is still upstream behavior, not our schema |

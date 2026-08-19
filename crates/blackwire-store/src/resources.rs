@@ -300,7 +300,7 @@ impl Database {
             .bind(revision).bind(id).bind(&input.tag).bind(&input.listen).bind(input.port).bind(&input.protocol).bind(input.enabled).bind(position)
             .execute(&mut *tx).await?;
         // Update the stream envelope in place. Deleting this row cascades into
-        // TLS, REALITY, WebSocket, gRPC, and mKCP detail tables, so a basic
+        // TLS, REALITY, WebSocket, gRPC, and SplitHTTP detail tables, so a basic
         // panel edit must never replace it destructively.
         sqlx::query("INSERT INTO stream_settings (revision_id,endpoint_kind,endpoint_id,network,security) VALUES (?,'inbound',?,?,?) ON DUPLICATE KEY UPDATE network=VALUES(network),security=VALUES(security)")
             .bind(revision).bind(id).bind(&input.transport).bind(&input.security).execute(&mut *tx).await?;
@@ -668,21 +668,6 @@ async fn write_stream_details(
         .execute(&mut **tx)
         .await?;
     }
-    if let Some(kcp) = &stream.kcp_settings {
-        sqlx::query("INSERT INTO kcp_settings (revision_id,endpoint_kind,endpoint_id,header_type,mtu,tti_ms,uplink_capacity,downlink_capacity,congestion,read_buffer_size,write_buffer_size) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE header_type=VALUES(header_type),mtu=VALUES(mtu),tti_ms=VALUES(tti_ms),uplink_capacity=VALUES(uplink_capacity),downlink_capacity=VALUES(downlink_capacity),congestion=VALUES(congestion),read_buffer_size=VALUES(read_buffer_size),write_buffer_size=VALUES(write_buffer_size)")
-            .bind(revision).bind(kind).bind(id).bind(&kcp.header).bind(kcp.mtu).bind(kcp.tti)
-            .bind(kcp.uplink_capacity).bind(kcp.downlink_capacity).bind(kcp.congestion)
-            .bind(kcp.read_buffer_size).bind(kcp.write_buffer_size).execute(&mut **tx).await?;
-    } else {
-        sqlx::query(
-            "DELETE FROM kcp_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?",
-        )
-        .bind(revision)
-        .bind(kind)
-        .bind(id)
-        .execute(&mut **tx)
-        .await?;
-    }
     Ok(())
 }
 
@@ -779,7 +764,6 @@ fn network_name(value: &NetworkType) -> &'static str {
         NetworkType::HttpUpgrade => "httpupgrade",
         NetworkType::Grpc => "grpc",
         NetworkType::Quic => "quic",
-        NetworkType::Kcp => "kcp",
         NetworkType::SplitHttp => "splithttp",
     }
 }
@@ -936,7 +920,7 @@ fn validate_outbound(input: &OutboundWrite) -> StoreResult<()> {
 fn validate_transport_security(transport: &str, security: &str) -> StoreResult<()> {
     if !matches!(
         transport,
-        "tcp" | "ws" | "grpc" | "httpupgrade" | "splithttp" | "quic" | "kcp"
+        "tcp" | "ws" | "grpc" | "httpupgrade" | "splithttp" | "quic"
     ) {
         return Err(StoreError::InvalidConfiguration(format!(
             "unsupported transport '{transport}'"

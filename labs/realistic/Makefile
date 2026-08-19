@@ -76,7 +76,7 @@ xray: ## Deprecated: use make interop-client-reality
 	@echo "Deprecated alias: use make interop-client-reality"
 	$(MAKE) interop-client-reality
 
-advanced-features-smoke: ## Smoke tests: ShadowTLS, mKCP, QUIC/SplitHTTP VLESS, health/failover, DNS/geo routing guards
+advanced-features-smoke: ## Smoke tests: ShadowTLS, QUIC/SplitHTTP VLESS, health/failover, DNS/geo routing guards
 	@set -euo pipefail; \
 	log="$(CURDIR)/$(REPORTS)/advanced-features-smoke.log"; \
 	mkdir -p "$(CURDIR)/$(REPORTS)"; \
@@ -90,7 +90,6 @@ advanced-features-smoke: ## Smoke tests: ShadowTLS, mKCP, QUIC/SplitHTTP VLESS, 
 	run "VLESS QUIC" -p integration-tests --test e2e_vless_quic vless_quic_echo; \
 	run "VLESS SplitHTTP" -p integration-tests --test e2e_vless_splithttp vless_splithttp_echo; \
 	run "ShadowTLS v3" -p integration-tests --test e2e_vless_shadowtls vless_over_shadowtls_v3_transfers_data; \
-	run "mKCP" -p integration-tests --test e2e_vless_mkcp vless_over_mkcp; \
 	run "health / failover guards" -p blackwire-core --test production_readiness balancer_rejects_missing_selector_outbound; \
 	run "health / failover guards" -p blackwire-core --test production_readiness balancer_rejects_unsupported_health_check_scheme; \
 	run "health / failover guards" -p blackwire-core --test production_readiness routing_rule_can_target_registered_balancer; \
@@ -135,7 +134,6 @@ stress: ## Repeat high-signal data-plane tests to catch flaky behavior
 	cd $(ROOT) && bash -lc 'set -euo pipefail; \
 		for i in 1 2 3 4 5; do \
 			echo "=== stress iteration $$i ==="; \
-			cargo test -p integration-tests vless_over_mkcp_transfers_data; \
 			cargo test -p integration-tests vless_over_shadowtls_v3_transfers_data; \
 			cargo test -p integration-tests e2e_socks5_to_vless_to_freedom_transfers_data; \
 		done' 2>&1 | tee labs/realistic/$(REPORTS)/stress.log
@@ -155,7 +153,7 @@ report-summary: ## Build a compact summary from report logs
 
 realistic-all: docker-full advanced-features-smoke negative-auth restart-smoke stress report-summary ## Full local baseline + advanced-feature smoke tests
 
-docker-full: docker-up stable advanced-features-smoke interop-docker ## Stable matrix + ShadowTLS/mKCP smoke + Docker interop
+docker-full: docker-up stable advanced-features-smoke interop-docker ## Stable matrix + advanced transport smoke + Docker interop
 
 docker-down: ## Stop lab and interop containers
 	-docker compose -f docker-compose.yml down -v

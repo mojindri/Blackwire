@@ -29,6 +29,18 @@ export function optimizationModeFromSettings(settings: CoreSettings): Optimizati
   return "custom";
 }
 
+export function optimizationStatusFromSettings(settings: CoreSettings): { label: string; detail: string } {
+  const mode = optimizationModeFromSettings(settings);
+  const vision = settings.vision !== null ? " · Vision override preserved" : "";
+  if (mode === "automatic") {
+    return { label: "Blackwire managed", detail: `Fast profile defaults · adaptive pooling and splice · relay v2${vision}` };
+  }
+  if (mode === "compatibility") {
+    return { label: "Compatibility focused", detail: `Portable relay defaults${vision}` };
+  }
+  return { label: "Operator managed", detail: `Profile: ${settings.profile} · explicit policies preserved` };
+}
+
 export function applyOptimizationMode(settings: CoreSettings, mode: OptimizationMode): CoreSettings {
   if (mode === "automatic") {
     return {

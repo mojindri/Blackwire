@@ -291,7 +291,6 @@ Examples:
 - `ws`
 - `grpc`
 - `quic`
-- `kcp`
 
 ## `security`
 

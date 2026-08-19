@@ -6,7 +6,7 @@ import { Input, Select, Textarea } from "../components/atoms/Input";
 import { Switch as BaseSwitch } from "../components/atoms/Switch";
 import { Field as BaseField } from "../components/molecules/Field";
 import { getSettingsHelp } from "../lib/settingsHelp";
-import { applyOptimizationMode, defaultFastSettings, optimizationModeFromSettings, type OptimizationMode } from "../lib/optimizationMode";
+import { applyOptimizationMode, defaultFastSettings, optimizationModeFromSettings, optimizationStatusFromSettings, type OptimizationMode } from "../lib/optimizationMode";
 
 const optionalNumber = (value: string) => value === "" ? null : Number(value);
 const lines = (value: string) => value.split("\n").map((item) => item.trim()).filter(Boolean);
@@ -113,11 +113,7 @@ function OptimizationEditor({ value, onChange }: { value: CoreSettings; onChange
     setExpertOpen(next === "custom");
   };
 
-  const status = mode === "automatic"
-    ? { label: "Blackwire managed", detail: "Fast profile defaults · adaptive pooling and splice · relay v2" }
-    : mode === "compatibility"
-      ? { label: "Compatibility focused", detail: "Portable relay defaults · no explicit performance overrides" }
-      : { label: "Operator managed", detail: `Profile: ${value.profile} · explicit policies preserved` };
+  const status = optimizationStatusFromSettings(value);
 
   return <div className="optimization-editor">
     <div className="optimization-mode-list" role="radiogroup" aria-label="Optimization mode">

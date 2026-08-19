@@ -8,6 +8,13 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+### Removed
+
+- Removed the deprecated mKCP transport from the runtime, configuration schema,
+  Black UI, persistence layer, test labs, and capability reporting. Existing
+  configurations that select `network: "kcp"` are rejected instead of being
+  silently converted to another transport.
+
 ## 0.2.5 - 2026-08-19
 
 ### Fixed

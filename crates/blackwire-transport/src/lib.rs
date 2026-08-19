@@ -9,7 +9,6 @@
 //!   - **REALITY** — TLS camouflage using a real destination site
 //!   - **gRPC** — HTTP/2 framing via tonic
 //!   - **QUIC** — UDP-based transport for VLESS/VMess and Hysteria2
-//!   - **mKCP** — KCP ARQ over UDP for lossy links
 //!   - **TUN** — OS network interface for full-device routing
 //!
 //! Each transport converts its connection type into a `BoxedStream`, which
@@ -47,10 +46,6 @@ pub mod tun;
 // gRPC transport
 pub mod grpc;
 
-// mKCP transport
-/// mKCP transport implementation (KCP over UDP).
-pub mod mkcp;
-
 /// Generic QUIC transport for VLESS / VMess stream protocols.
 pub mod v2rayquic;
 
@@ -67,9 +62,6 @@ pub use hysteria2::{
     Hysteria2ServerConfig, Hysteria2UdpSession, UdpDestination,
 };
 pub use innerflow::{InnerFlowKey, InnerFlowPacket, InnerFlowScheduler, PacketClass};
-pub use mkcp::{
-    mkcp_accept_once, mkcp_accept_sessions, mkcp_connect, MkcpClientConfig, MkcpServerConfig,
-};
 pub use quic::{
     build_client_endpoint, build_client_endpoint_with_alpn, build_server_endpoint,
     build_server_endpoint_with_alpn, dev_self_signed, dev_self_signed_for_names,

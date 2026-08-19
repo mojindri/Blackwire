@@ -159,6 +159,7 @@ describe("inboundConfigurator", () => {
       hysteria2MaxQueueDelayMs: "120",
       hysteria2PacingGain: "1.4",
       hysteria2LossCompensation: false,
+      hysteria2TransportOverrides: true,
       hysteria2QuicReusePort: true,
       hysteria2QuicEndpoints: "cpu",
       hysteria2QuicRecvBufferBytes: "16777216",
@@ -259,6 +260,30 @@ describe("inboundConfigurator", () => {
     expect(settings.quic).toBeUndefined();
     expect(settings.datagram).toBeUndefined();
     expect(settings.fec).toBeUndefined();
+  });
+
+  it("persists explicit default-looking hysteria2 endpoint overrides", () => {
+    const state = syncAfterStructuredChange({
+      ...createInboundEditorState(),
+      protocol: "hysteria2",
+      hysteria2Auth: "shared-secret",
+      hysteria2TransportOverrides: true
+    });
+    const settings = parseObject(buildInboundInput(state).settings);
+
+    expect(settings.quic).toEqual({
+      reusePort: false,
+      endpoints: 1,
+      recvBufferBytes: 8388608,
+      sendBufferBytes: 8388608
+    });
+    expect(settings.datagram).toEqual({
+      enabled: false,
+      udpOverDatagram: true,
+      policy: "standard"
+    });
+    expect(settings.fec).toEqual({ mode: "off" });
+    expect(state.hysteria2TransportOverrides).toBe(true);
   });
 
   it("warns hysteria2 users about client TUN and FakeIP instability", () => {
@@ -528,51 +553,6 @@ describe("inboundConfigurator", () => {
     });
   });
 
-  it("serializes KCP tuning and preserves QUIC as a direct network selection", () => {
-    const kcpBuilt = buildInboundInput(
-      syncAfterStructuredChange({
-        ...createInboundEditorState(),
-        network: "kcp",
-        kcpHeader: "srtp",
-        kcpMtu: "1350",
-        kcpTti: "20",
-        kcpUplinkCapacity: "5",
-        kcpDownlinkCapacity: "20",
-        kcpCongestion: true,
-        kcpReadBufferSize: "2",
-        kcpWriteBufferSize: "2"
-      })
-    );
-    const quicBuilt = buildInboundInput(
-      syncAfterStructuredChange({
-        ...createInboundEditorState(),
-        network: "quic",
-        security: "tls",
-        tlsServerName: "quic.example.com"
-      })
-    );
-
-    expect(parseObject(kcpBuilt.streamSettings)).toMatchObject({
-      network: "kcp",
-      security: "none",
-      kcpSettings: {
-        header: "srtp",
-        mtu: 1350,
-        tti: 20,
-        uplink_capacity: 5,
-        downlink_capacity: 20,
-        congestion: true,
-        read_buffer_size: 2,
-        write_buffer_size: 2
-      }
-    });
-    expect(parseObject(quicBuilt.streamSettings)).toMatchObject({
-      network: "quic",
-      security: "tls",
-      tlsSettings: { serverName: "quic.example.com" }
-    });
-  });
-
   it("covers the structured inbound transport and security matrix", () => {
     const networks = [
       { network: "tcp", settings: {}, extras: {} },
@@ -580,7 +560,6 @@ describe("inboundConfigurator", () => {
       { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
       { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
       { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
-      { network: "kcp", settings: { kcpSettings: { header: "srtp", mtu: 1350 } }, extras: { kcpHeader: "srtp", kcpMtu: "1350" } },
       { network: "quic", settings: {}, extras: {} }
     ] as const;
 
@@ -650,7 +629,6 @@ describe("inboundConfigurator", () => {
       { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
       { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
       { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
-      { network: "kcp", settings: { kcpSettings: { header: "srtp", mtu: 1350 } }, extras: { kcpHeader: "srtp", kcpMtu: "1350" } },
       { network: "quic", settings: {}, extras: {} }
     ] as const;
     const securities = [

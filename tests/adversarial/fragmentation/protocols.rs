@@ -12,7 +12,6 @@ use blackwire_protocol::vmess::auth as vmess_auth;
 use blackwire_protocol::vmess::codec as vmess_codec;
 use blackwire_protocol::vmess::codec::Security as VmessSecurity;
 use blackwire_transport::hysteria2::proto::{decode_tcp_request, encode_tcp_request};
-use blackwire_transport::mkcp::segment::{Segment, CMD_PUSH};
 use blackwire_transport::WsConnectConfig;
 use blackwire_transport::{
     grpc_accept, grpc_connect, shadowtls_marker_accept, shadowtls_marker_connect, ws_accept,
@@ -352,28 +351,5 @@ async fn ss2022_stream_handles_random_1_to_32_byte_fragmentation() {
         server.read_exact(&mut got).await.unwrap();
         writer.await.unwrap();
         assert_eq!(got, payload);
-    }
-}
-
-#[test]
-fn mkcp_segment_decodes_after_fragmented_reassembly() {
-    let mut seg = Segment::new(7, CMD_PUSH);
-    seg.sn = 11;
-    seg.una = 10;
-    seg.data = bytes::Bytes::from_static(b"mkcp-fragment");
-    let mut wire = bytes::BytesMut::new();
-    seg.encode(&mut wire);
-
-    let raw = wire.to_vec();
-    for chunk in 1..=32usize {
-        let mut assembled = Vec::new();
-        for part in raw.chunks(chunk) {
-            assembled.extend_from_slice(part);
-        }
-        let mut slice = assembled.as_slice();
-        let decoded = Segment::decode(&mut slice).expect("decode");
-        assert_eq!(decoded.conv, 7);
-        assert_eq!(decoded.sn, 11);
-        assert_eq!(&decoded.data[..], b"mkcp-fragment");
     }
 }

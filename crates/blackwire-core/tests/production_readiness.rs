@@ -636,30 +636,6 @@ async fn shadowtls_requires_complete_settings() {
     assert!(Instance::from_config(Arc::new(cfg)).await.is_err());
 }
 
-#[tokio::test]
-async fn mkcp_rejects_invalid_header_instead_of_plain_tcp_fallback() {
-    let cfg = base_config(
-        json!([]),
-        json!([{
-            "tag": "vless-kcp",
-            "protocol": "vless",
-            "settings": {
-                "address": "127.0.0.1",
-                "port": 443,
-                "users": [{ "id": "00000000-0000-4000-8000-000000000001" }]
-            },
-            "streamSettings": {
-                "network": "kcp",
-                "kcpSettings": {
-                    "header": "bogus"
-                }
-            }
-        }]),
-    );
-
-    assert!(Instance::from_config(Arc::new(cfg)).await.is_err());
-}
-
 /// Regression guard: the TUN runtime is now implemented. `from_config` must
 /// no longer return the old "not production-ready" bail message.
 ///

@@ -52,7 +52,6 @@ port_for_protocol() {
         tuic) echo 9443 ;;
         vless-reality) echo 10443 ;;
         vless-shadowtls) echo 8450 ;;
-        vless-mkcp) echo 8451 ;;
         vless-sniff) echo 8452 ;;
         *) echo "" ;;
     esac
@@ -292,7 +291,7 @@ wait_for_server_port() {
         echo "tls-cover:443 or blackwire-server:${port} not ready for $protocol" >&2
         return 1
     fi
-    if [[ "$protocol" == "hysteria2" || "$protocol" == "tuic" || "$protocol" == "vless-quic" || "$protocol" == "vless-mkcp" ]]; then
+    if [[ "$protocol" == "hysteria2" || "$protocol" == "tuic" || "$protocol" == "vless-quic" ]]; then
         sleep 2
         return 0
     fi

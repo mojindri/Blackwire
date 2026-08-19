@@ -1,6 +1,6 @@
 import { AlertCircle, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { defaultHysteria2CongestionTuning, defaultHysteria2TransportTuning, hasCustomHysteria2Congestion, hasCustomHysteria2TransportTuning, HYSTERIA2_SIMPLE_CONGESTION_MODES } from "../../lib/hysteria2Tuning";
+import { defaultHysteria2CongestionTuning, defaultHysteria2TransportTuning, hasCustomHysteria2Congestion, HYSTERIA2_SIMPLE_CONGESTION_MODES } from "../../lib/hysteria2Tuning";
 import type { CapabilityMap, Outbound, OutboundInput } from "../../lib/types";
 import {
   buildOutboundInput,
@@ -47,13 +47,11 @@ export function OutboundDrawer({
   const [activeTab, setActiveTab] = useState<TabKey>("basic");
   const [state, setState] = useState<OutboundEditorState>(() => createOutboundEditorState(editing));
   const stateRef = useRef(state);
-  const [hysteria2TransportOverridesOpen, setHysteria2TransportOverridesOpen] = useState(() => hasCustomHysteria2TransportTuning(state, state.hysteria2EndpointShards));
 
   useEffect(() => {
     const next = createOutboundEditorState(editing);
     stateRef.current = next;
     setState(next);
-    setHysteria2TransportOverridesOpen(hasCustomHysteria2TransportTuning(next, next.hysteria2EndpointShards));
     setActiveTab("basic");
   }, [editing]);
 
@@ -112,7 +110,7 @@ export function OutboundDrawer({
   const validationIssues = validateOutboundState(state);
   const saveDisabled = busy || jsonErrors.length > 0 || validationIssues.length > 0;
   const hysteria2CustomCongestion = state.protocol === "hysteria2" && hasCustomHysteria2Congestion(state);
-  const hysteria2TransportOverrides = state.protocol === "hysteria2" && (hysteria2TransportOverridesOpen || hasCustomHysteria2TransportTuning(state, state.hysteria2EndpointShards));
+  const hysteria2TransportOverrides = state.protocol === "hysteria2" && state.hysteria2TransportOverrides;
 
   const updateStructured = (patch: Partial<OutboundEditorState>) => {
     const next = syncOutboundAfterStructuredChange({ ...stateRef.current, ...patch });
@@ -375,41 +373,16 @@ export function OutboundDrawer({
               <SplitHttpFields value={state.splitHttp} onChange={(splitHttp) => updateStructured({ splitHttp })} />
             ) : null}
 
-            {state.network === "kcp" ? (
-              <div className="configurator-grid">
-                <Field label="Header">
-                  <Input value={state.kcpHeader} onChange={(e) => updateStructured({ kcpHeader: e.target.value })} placeholder="srtp" />
-                </Field>
-                <Field label="MTU">
-                  <Input value={state.kcpMtu} onChange={(e) => updateStructured({ kcpMtu: e.target.value })} placeholder="1350" />
-                </Field>
-                <Field label="TTI">
-                  <Input value={state.kcpTti} onChange={(e) => updateStructured({ kcpTti: e.target.value })} placeholder="20" />
-                </Field>
-                <Field label="Uplink capacity">
-                  <Input value={state.kcpUplinkCapacity} onChange={(e) => updateStructured({ kcpUplinkCapacity: e.target.value })} placeholder="5" />
-                </Field>
-                <Field label="Downlink capacity">
-                  <Input value={state.kcpDownlinkCapacity} onChange={(e) => updateStructured({ kcpDownlinkCapacity: e.target.value })} placeholder="20" />
-                </Field>
-                <Field label="Read buffer size">
-                  <Input value={state.kcpReadBufferSize} onChange={(e) => updateStructured({ kcpReadBufferSize: e.target.value })} placeholder="2" />
-                </Field>
-                <Field label="Write buffer size">
-                  <Input value={state.kcpWriteBufferSize} onChange={(e) => updateStructured({ kcpWriteBufferSize: e.target.value })} placeholder="2" />
-                </Field>
-                <Switch checked={state.kcpCongestion} onChange={(kcpCongestion) => updateStructured({ kcpCongestion })} label="Enable congestion control" />
-              </div>
-            ) : null}
-
             {state.network === "quic" ? (
               <p className="field-hint">QUIC transport uses the runtime defaults. Hysteria2 exposes its additional socket tuning as typed controls below.</p>
             ) : null}
 
             {state.protocol === "hysteria2" ? <>
               <Switch checked={hysteria2TransportOverrides} onChange={(enabled) => {
-                setHysteria2TransportOverridesOpen(enabled);
-                if (!enabled) updateStructured(defaultHysteria2TransportTuning());
+                updateStructured({
+                  hysteria2TransportOverrides: enabled,
+                  ...(!enabled ? defaultHysteria2TransportTuning() : {})
+                });
               }} label="Override Hysteria2 transport defaults" />
               <p className="field-hint">Off inherits Blackwire's global QUIC, datagram, and FEC behavior.</p>
             </> : null}

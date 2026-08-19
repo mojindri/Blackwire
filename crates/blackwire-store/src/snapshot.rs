@@ -6,8 +6,8 @@ use blackwire_config::schema::{
     CongestionSettings, DatagramConfig, DatagramOverrides, DatagramSize, DnsConfig,
     DownloadSettings, EndpointCount, EndpointSettings, EndpointUser, FakeIpConfig, FastConfig,
     FastLinuxConfig, FastRelayConfig, FecConfig, FecOverrides, FirstPacketBoostConfig, GrpcConfig,
-    HealthCheckConfig, InboundConfig, InboundLimitsConfig, KcpConfig, LimitsConfig, LogConfig,
-    NetworkType, OutboundConfig, PaddingBounds, PaddingBytes, ProfileMode, Protocol, QuicConfig,
+    HealthCheckConfig, InboundConfig, InboundLimitsConfig, LimitsConfig, LogConfig, NetworkType,
+    OutboundConfig, PaddingBounds, PaddingBytes, ProfileMode, Protocol, QuicConfig,
     QuicSocketOverrides, RealityConfig, RealityFallbackLimitConfig, RoutingConfig, RoutingRule,
     SecurityType, ShadowTlsConfig, SniffingConfig, SplitHttpConfig, StatsConfig,
     StreamSettingsConfig, TlsConfig, TunBatchConfig, TunConfig, TunSessionConfig, VisionConfig,
@@ -572,19 +572,6 @@ async fn load_stream(
         .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {
         stream.grpc_settings = Some(GrpcConfig { service_name: grpc.try_get("service_name")?, multi_mode: grpc.try_get("multi_mode")? });
     }
-    if let Some(kcp) = sqlx::query("SELECT header_type, mtu, tti_ms, uplink_capacity, downlink_capacity, congestion, read_buffer_size, write_buffer_size FROM kcp_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
-        .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {
-        stream.kcp_settings = Some(KcpConfig {
-            header: kcp.try_get("header_type")?,
-            mtu: u16::try_from(kcp.try_get::<u32, _>("mtu")?).map_err(decode_error)?,
-            tti: kcp.try_get("tti_ms")?,
-            uplink_capacity: kcp.try_get("uplink_capacity")?,
-            downlink_capacity: kcp.try_get("downlink_capacity")?,
-            congestion: kcp.try_get("congestion")?,
-            read_buffer_size: kcp.try_get("read_buffer_size")?,
-            write_buffer_size: kcp.try_get("write_buffer_size")?,
-        });
-    }
     Ok(Some(stream))
 }
 
@@ -897,7 +884,6 @@ fn parse_network(value: &str) -> StoreResult<NetworkType> {
         "httpupgrade" => Ok(NetworkType::HttpUpgrade),
         "grpc" => Ok(NetworkType::Grpc),
         "quic" => Ok(NetworkType::Quic),
-        "kcp" => Ok(NetworkType::Kcp),
         "splithttp" | "xhttp" => Ok(NetworkType::SplitHttp),
         other => Err(value_error("network", other)),
     }

@@ -30,8 +30,8 @@ use blackwire_protocol::vless::{
 };
 use blackwire_protocol::vmess::{auth::cmd_key, connect_vmess_on_stream};
 use blackwire_transport::{
-    dial_httpupgrade, grpc_connect, mkcp_connect, quic_connect, shadowtls_v3_connect,
-    splithttp_connect, tls_connect, ws_connect, MkcpClientConfig, WsConnectConfig,
+    dial_httpupgrade, grpc_connect, quic_connect, shadowtls_v3_connect, splithttp_connect,
+    tls_connect, ws_connect, WsConnectConfig,
 };
 
 const OUTBOUND_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -209,14 +209,6 @@ async fn connect_transport(
         return quic_connect(server, server_name, allow_insecure).await;
     }
 
-    if network == Some(&NetworkType::Kcp) {
-        let cfg = build_mkcp_client_config(server, stream_settings)?;
-        let stream = mkcp_connect(&cfg)
-            .await
-            .map_err(|e| ProxyError::Transport(format!("mKCP connect failed: {e}")))?;
-        return Ok(Box::new(stream));
-    }
-
     if network == Some(&NetworkType::HttpUpgrade) {
         let Some(settings) = settings else {
             return Err(ProxyError::Protocol(
@@ -374,7 +366,6 @@ pub(crate) fn uses_outbound_transport(stream_settings: &Option<StreamSettingsCon
     uses_tls(stream_settings)
         || uses_shadowtls(stream_settings)
         || uses_quic(stream_settings)
-        || uses_kcp(stream_settings)
         || uses_httpupgrade(stream_settings)
         || uses_splithttp(stream_settings)
         || uses_ws(stream_settings)
@@ -421,34 +412,4 @@ fn uses_splithttp(stream_settings: &Option<StreamSettingsConfig>) -> bool {
     stream_settings
         .as_ref()
         .is_some_and(|s| s.network == NetworkType::SplitHttp)
-}
-
-fn uses_kcp(stream_settings: &Option<StreamSettingsConfig>) -> bool {
-    stream_settings
-        .as_ref()
-        .is_some_and(|s| s.network == NetworkType::Kcp)
-}
-
-fn build_mkcp_client_config(
-    server: SocketAddr,
-    stream_settings: &Option<StreamSettingsConfig>,
-) -> Result<MkcpClientConfig, ProxyError> {
-    let settings = stream_settings
-        .as_ref()
-        .and_then(|s| s.kcp_settings.as_ref());
-    let header = settings
-        .map(|k| k.header.parse())
-        .transpose()
-        .map_err(|e: String| ProxyError::Protocol(e))?
-        .unwrap_or_default();
-
-    Ok(MkcpClientConfig {
-        server,
-        conv: rand::random::<u32>(),
-        header,
-        interval_ms: settings.map(|k| k.tti).unwrap_or(50),
-        rcv_wnd: settings.map(|k| k.read_buffer_size as u16).unwrap_or(128),
-        snd_wnd: settings.map(|k| k.write_buffer_size as u16).unwrap_or(128),
-        nodelay: true,
-    })
 }

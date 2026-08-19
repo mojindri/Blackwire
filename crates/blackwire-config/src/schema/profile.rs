@@ -566,7 +566,6 @@ fn network_name(n: &NetworkType) -> &'static str {
         NetworkType::HttpUpgrade => "httpupgrade",
         NetworkType::Grpc => "grpc",
         NetworkType::Quic => "quic",
-        NetworkType::Kcp => "kcp",
         NetworkType::SplitHttp => "splithttp",
     }
 }
@@ -748,7 +747,7 @@ fn apply_transport_cost(
             *supports_direct_copy = false;
             *supports_splice = false;
         }
-        NetworkType::Quic | NetworkType::Kcp => {
+        NetworkType::Quic => {
             *cpu = bump_cost(*cpu, CostClass::Medium);
             *latency = bump_cost(*latency, CostClass::Medium);
             *copy_mode = CopyMode::Packet;

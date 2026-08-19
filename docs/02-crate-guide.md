@@ -261,7 +261,6 @@ This crate is about carrying bytes, not interpreting proxy headers.
 - gRPC
 - QUIC
 - Hysteria2 transport helpers
-- mKCP
 - TUN
 - ShadowTLS
 

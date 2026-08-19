@@ -81,7 +81,7 @@ The workspace root `Cargo.toml` declares these crates:
   Proxy protocols such as SOCKS5, VLESS, VMess, Trojan, and SS-2022.
 
 - `blackwire-transport`
-  TCP, TLS, WebSocket, gRPC, QUIC, REALITY, mKCP, TUN, ShadowTLS.
+  TCP, TLS, WebSocket, gRPC, QUIC, REALITY, TUN, ShadowTLS.
 
 - `blackwire-tls`
   Raw TLS ClientHello builder used by REALITY client camouflage.
@@ -331,7 +331,6 @@ If you want to understand the code in a practical order, use this path:
 If you are brand new to the repo, do not start with:
 
 - QUIC internals
-- mKCP
 - TUN
 - REALITY TLS transcript details
 - hot reload edge cases

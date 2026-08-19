@@ -1,6 +1,6 @@
 [package]
 name        = "blackwire-transport"
-description = "Transport layer implementations: TCP, WebSocket, TLS, REALITY, gRPC, QUIC, mKCP, TUN."
+description = "Transport layer implementations: TCP, WebSocket, TLS, REALITY, gRPC, QUIC, TUN."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::remove_dir_all(&output)?;
     }
     std::fs::create_dir_all(&output)?;
-    CoreSettings::export_all_to(output)?;
+    CoreSettings::export_all_to(&output)?;
     for entry in std::fs::read_dir(output)? {
         let path = entry?.path();
         if path.extension().and_then(std::ffi::OsStr::to_str) != Some("ts") {

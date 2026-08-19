@@ -57,7 +57,6 @@ use blackwire_config::schema::{
 };
 use blackwire_protocol::freedom::{FreedomIpStrategy, FreedomOutbound, PoolConfig};
 use blackwire_protocol::socks::Socks5Inbound;
-use blackwire_transport::mkcp_accept_sessions;
 use blackwire_transport::{
     create_tun, ensure_tun_runtime_supported, TunBatchConfig, TunConfig, TunRuntime,
 };
@@ -87,9 +86,9 @@ use crate::ss2022::{build_ss2022_inbound, build_ss2022_outbound};
 use crate::trojan::{build_trojan_inbound, build_trojan_outbound};
 use crate::vmess::{build_vmess_inbound, build_vmess_outbound};
 use helpers::{
-    build_dns_module, build_mkcp_server_config, build_vless_inbound, build_vless_outbound,
-    handshake_timeout_for, initial_health_states, reject_unfinished_transport_settings,
-    select_balancer_outbounds, InboundConnectionHandler,
+    build_dns_module, build_vless_inbound, build_vless_outbound, handshake_timeout_for,
+    initial_health_states, reject_unfinished_transport_settings, select_balancer_outbounds,
+    InboundConnectionHandler,
 };
 
 fn try_acquire_global_permit(
@@ -614,73 +613,6 @@ impl Instance {
             info!(tag = %handler.tag(), addr = %addr, "starting inbound listener");
 
             let dispatcher_for_handler = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
-
-            if helpers::uses_kcp(&in_cfg.stream_settings) {
-                let conn_handler = Arc::new(InboundConnectionHandler {
-                    inbound: Arc::clone(&handler),
-                    dispatcher: dispatcher_for_handler,
-                });
-                let cfg = build_mkcp_server_config(addr, &in_cfg.stream_settings)
-                    .with_context(|| format!("building mKCP inbound '{}'", in_cfg.tag))?;
-                let mkcp_sem = in_cfg
-                    .limits
-                    .as_ref()
-                    .and_then(|l| l.max_connections)
-                    .or(config.limits.max_connections_per_inbound)
-                    .map(|n| Arc::new(Semaphore::new(n)));
-                let mkcp_global_limiter = global_connection_limiter.as_ref().map(Arc::clone);
-
-                let task = tokio::spawn(async move {
-                    match mkcp_accept_sessions(&cfg).await {
-                        Ok(mut sessions) => {
-                            while let Some((stream, peer)) = sessions.recv().await {
-                                let conn_handler = Arc::clone(&conn_handler);
-                                let Some(global_permit) = try_acquire_global_permit(
-                                    mkcp_global_limiter.as_ref(),
-                                    addr,
-                                    "mkcp",
-                                ) else {
-                                    continue;
-                                };
-                                if let Some(sem) = &mkcp_sem {
-                                    match Arc::clone(sem).try_acquire_owned() {
-                                        Ok(permit) => {
-                                            tokio::spawn(async move {
-                                                let _permits = (global_permit, Some(permit));
-                                                if let Err(e) = conn_handler
-                                                    .handle_connection(Box::new(stream), peer)
-                                                    .await
-                                                {
-                                                    error!(addr = %addr, error = %e, "mKCP inbound session failed");
-                                                }
-                                            });
-                                        }
-                                        Err(_) => {
-                                            warn!(addr = %addr, "mKCP connection limit reached; dropping session");
-                                        }
-                                    }
-                                } else {
-                                    tokio::spawn(async move {
-                                        let _permits =
-                                            (global_permit, None::<OwnedSemaphorePermit>);
-                                        if let Err(e) = conn_handler
-                                            .handle_connection(Box::new(stream), peer)
-                                            .await
-                                        {
-                                            error!(addr = %addr, error = %e, "mKCP inbound session failed");
-                                        }
-                                    });
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!(addr = %addr, error = %e, "mKCP inbound listener failed");
-                        }
-                    }
-                });
-                tasks.push(task);
-                continue;
-            }
 
             if uses_quic(&in_cfg.stream_settings) {
                 let tls_cfg = in_cfg

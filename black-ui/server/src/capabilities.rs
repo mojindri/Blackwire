@@ -81,12 +81,6 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "security=shadowtls, not a protocol",
             ),
             item(
-                "kcp",
-                "mKCP",
-                "deprecated",
-                "Legacy/internal transport; external-client interop is not supported",
-            ),
-            item(
                 "quic",
                 "QUIC",
                 "supported",
@@ -255,18 +249,5 @@ mod tests {
         assert_eq!(vmess.status, "supported");
         assert!(vmess.notes.contains("AEAD body security"));
         assert!(vmess.notes.contains("body security=none"));
-    }
-
-    #[test]
-    fn mkcp_is_reported_as_deprecated() {
-        let capabilities = blackwire_capabilities();
-        let mkcp = capabilities
-            .transports
-            .iter()
-            .find(|item| item.key == "kcp")
-            .expect("mKCP capability should remain visible for legacy configs");
-
-        assert_eq!(mkcp.status, "deprecated");
-        assert!(mkcp.notes.contains("Legacy/internal"));
     }
 }

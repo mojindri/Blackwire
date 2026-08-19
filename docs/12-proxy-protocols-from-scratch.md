@@ -160,7 +160,6 @@ Examples:
 - HTTPUpgrade
 - SplitHTTP
 - QUIC
-- mKCP
 - REALITY
 - ShadowTLS
 - TUN
@@ -790,27 +789,6 @@ Code to read:
 
 - `crates/blackwire-transport/src/quic.rs`
 
-### mKCP
-
-mKCP is KCP over UDP.
-
-KCP is a reliable transport built on top of UDP.
-
-Shape:
-
-```text
-client -> UDP -> KCP reliability/framing -> proxy bytes
-```
-
-Status:
-
-- legacy/internal in Blackwire
-- retained for existing configs and local implementation tests
-- not recommended for new deployments or external-client sharing
-
-It is more advanced than TCP because packet loss, ordering, and retransmission
-are handled by the transport implementation.
-
 ### REALITY
 
 REALITY is one of the hardest pieces to understand because it overlaps with TLS
@@ -1276,7 +1254,7 @@ If you are a beginner, use this order:
 9. REALITY.
 10. Hysteria2 and QUIC.
 11. TUN.
-12. mKCP, SplitHTTP, ShadowTLS.
+12. SplitHTTP and ShadowTLS.
 
 Do not start with REALITY, Hysteria2, or TUN. They combine too many ideas.
 
@@ -1373,7 +1351,6 @@ For full config examples, read [08-config-for-dummies.md](08-config-for-dummies.
 | HTTPUpgrade | transport | HTTP upgrade tunnel |
 | SplitHTTP | transport | HTTP-shaped split upload/download channels |
 | QUIC | transport | encrypted UDP-based connection protocol |
-| mKCP | transport | KCP reliability over UDP |
 | REALITY | transport/disguise | browser-like TLS camouflage and auth |
 | ShadowTLS | transport/disguise | TLS-looking handshake/data switch |
 | TUN | OS network interface | captures IP packets through virtual device |

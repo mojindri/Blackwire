@@ -119,7 +119,6 @@ ufw allow 8448/tcp  # VLESS SplitHTTP
 ufw allow 10081/tcp # VLESS UDP (TCP control)
 ufw allow 10082/tcp # VLESS Vision
 ufw allow 8450/tcp  # VLESS ShadowTLS
-ufw allow 8451/udp  # VLESS mKCP
 ufw allow 8452/tcp  # VLESS + sniffing
 ufw --force enable
 

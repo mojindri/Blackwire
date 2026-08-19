@@ -15,11 +15,10 @@ use blackwire_app::router::{CompiledRule, DomainMatcher, IpMatcher};
 use blackwire_app::user_bandwidth::UserBandwidthLimit;
 use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_common::{BoxedStream, ProxyError};
-use blackwire_config::schema::{NetworkType, Protocol, SecurityType, StreamSettingsConfig};
+use blackwire_config::schema::{Protocol, SecurityType, StreamSettingsConfig};
 use blackwire_protocol::vless::{
     VlessInbound, VlessOutbound, VlessOutboundConfig, VlessUser, VlessUserRegistry,
 };
-use blackwire_transport::MkcpServerConfig;
 use dashmap::DashMap;
 
 use crate::net::socket_addr_from_address_port;
@@ -97,45 +96,7 @@ pub(crate) fn reject_unfinished_transport_settings(
         }
     }
 
-    if settings.network == NetworkType::Kcp {
-        let kcp = settings.kcp_settings.as_ref();
-        if let Some(kcp) = kcp {
-            kcp.header
-                .parse::<blackwire_transport::mkcp::header::HeaderType>()
-                .map_err(|e| anyhow::anyhow!("{side} '{tag}' has invalid mKCP header: {e}"))?;
-        }
-    }
-
     Ok(())
-}
-
-pub(crate) fn uses_kcp(stream_settings: &Option<StreamSettingsConfig>) -> bool {
-    stream_settings
-        .as_ref()
-        .is_some_and(|s| s.network == NetworkType::Kcp)
-}
-
-pub(crate) fn build_mkcp_server_config(
-    listen: SocketAddr,
-    stream_settings: &Option<StreamSettingsConfig>,
-) -> Result<MkcpServerConfig> {
-    let settings = stream_settings
-        .as_ref()
-        .and_then(|s| s.kcp_settings.as_ref());
-    let header = settings
-        .map(|k| k.header.parse())
-        .transpose()
-        .map_err(|e: String| anyhow::anyhow!("{e}"))?
-        .unwrap_or_default();
-
-    Ok(MkcpServerConfig {
-        listen,
-        header,
-        interval_ms: settings.map(|k| k.tti).unwrap_or(50),
-        rcv_wnd: settings.map(|k| k.read_buffer_size as u16).unwrap_or(128),
-        snd_wnd: settings.map(|k| k.write_buffer_size as u16).unwrap_or(128),
-        nodelay: true,
-    })
 }
 
 pub(crate) fn load_geo_data(

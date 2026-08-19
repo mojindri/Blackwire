@@ -33,8 +33,8 @@ pub use routing::{
     RoutingConfig, RoutingRule,
 };
 pub use transport::{
-    DownloadSettings, GrpcConfig, Hysteria2Config, KcpConfig, PaddingBounds, PaddingBytes,
-    RealityConfig, RealityFallbackLimitConfig, ShadowTlsConfig, SniffingConfig, SplitHttpConfig,
+    DownloadSettings, GrpcConfig, Hysteria2Config, PaddingBounds, PaddingBytes, RealityConfig,
+    RealityFallbackLimitConfig, ShadowTlsConfig, SniffingConfig, SplitHttpConfig,
     StreamSettingsConfig, TlsConfig, WsConfig, XmuxConfig,
 };
 pub use vision::{VisionConfig, VisionDirectCopyPolicy};
@@ -711,16 +711,6 @@ fn default_tun_tcp_max_sessions() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn mkcp_header_accepts_xray_object_form() {
-        let json = r#"{
-            "header": { "type": "none" },
-            "tti": 10
-        }"#;
-        let kcp: super::transport::KcpConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(kcp.header, "none");
-    }
 
     #[test]
     fn minimal_config_deserialises() {

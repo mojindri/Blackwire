@@ -40,7 +40,7 @@ When Fast is selected, Blackwire validates the stored revision at startup.
 | VLESS inbound | Allowed. |
 | VMess inbound | Rejected. |
 | TCP transport | Allowed. |
-| WebSocket, gRPC, mKCP, SplitHTTP, or TUN | Rejected. |
+| WebSocket, gRPC, SplitHTTP, or TUN | Rejected. |
 | TLS or REALITY | Allowed. |
 | No transport security | Rejected in strict production mode; warned about only when you explicitly disable strict production for a lab. |
 | Sniffing or FakeIP | Rejected. |

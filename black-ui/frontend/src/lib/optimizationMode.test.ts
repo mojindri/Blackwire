@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyOptimizationMode, defaultFastSettings, optimizationModeFromSettings } from "./optimizationMode";
+import { applyOptimizationMode, defaultFastSettings, optimizationModeFromSettings, optimizationStatusFromSettings } from "./optimizationMode";
 import type { CoreSettings } from "./types";
 
 function settings(overrides: Partial<CoreSettings> = {}): CoreSettings {
@@ -80,5 +80,7 @@ describe("optimization mode", () => {
       allowSpliceAfterDirect: true
     };
     expect(applyOptimizationMode(settings({ vision }), "automatic").vision).toEqual(vision);
+    expect(optimizationStatusFromSettings(settings({ profile: "fast", vision })).detail).toContain("Vision override preserved");
+    expect(optimizationStatusFromSettings(settings({ vision })).detail).toContain("Vision override preserved");
   });
 });

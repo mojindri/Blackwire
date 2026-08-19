@@ -102,7 +102,7 @@ impl From<SocketAddr> for Address {
 /// Whether a connection uses TCP (reliable, ordered stream) or UDP (unreliable datagrams).
 ///
 /// Most proxy protocols use TCP for the control channel and data stream.
-/// Protocols like Hysteria2 and mKCP use UDP as their underlying transport.
+/// Protocols like Hysteria2 and TUIC use UDP as their underlying transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Network {
     /// Transmission Control Protocol — reliable, ordered byte stream.

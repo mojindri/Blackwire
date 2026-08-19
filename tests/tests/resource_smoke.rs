@@ -8,7 +8,6 @@
 //! - FakeIP allocation pressure (1000 allocs; pool stays bounded, no panic)
 //! - DNS cache pressure (1000 unique domains; cache stays bounded, no panic)
 //! - WS/gRPC stream churn (20 pairs each; connect/disconnect without panic)
-//! - mKCP session churn (50 sessions; all accepted without panic)
 //! - connection-limit overflow (maxConnections=5, burst 20; server alive after)
 
 use std::sync::Arc;
@@ -194,74 +193,6 @@ async fn ws_and_grpc_stream_churn_no_panic() {
         let _ = srv.await.expect("grpc_accept join").expect("grpc_accept");
         cli.write_all(b"x").await.expect("grpc write");
     }
-}
-
-// ── mKCP session churn ────────────────────────────────────────────────────────
-
-/// 50 mKCP sessions are established and accepted without panic or resource leak.
-///
-/// Each client sends one byte so the KCP driver has data to flush on the first
-/// tick. Without an actual send the client driver would never transmit a UDP
-/// segment and the server would not create a session.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mkcp_session_churn_no_panic() {
-    use blackwire_transport::{
-        mkcp_accept_sessions, mkcp_connect, MkcpClientConfig, MkcpServerConfig,
-    };
-
-    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", unused_local_port())
-        .parse()
-        .expect("addr parse");
-
-    let server_cfg = MkcpServerConfig {
-        listen: addr,
-        header: blackwire_transport::mkcp::header::HeaderType::None,
-        interval_ms: 10,
-        rcv_wnd: 32,
-        snd_wnd: 32,
-        nodelay: true,
-    };
-
-    let mut rx = mkcp_accept_sessions(&server_cfg)
-        .await
-        .expect("mkcp listen");
-
-    const N: usize = 50;
-
-    // Collect accepted-session count in the background.
-    let accept_task = tokio::spawn(async move {
-        let mut count = 0usize;
-        while count < N {
-            if rx.recv().await.is_some() {
-                count += 1;
-            }
-        }
-        count
-    });
-
-    // Each client writes one byte so the KCP driver has payload to flush on
-    // its next tick, triggering the first UDP segment to the server.
-    let mut streams = Vec::with_capacity(N);
-    for i in 0..N as u32 {
-        let cfg = MkcpClientConfig {
-            server: addr,
-            conv: i + 1,
-            interval_ms: 10,
-            ..Default::default()
-        };
-        let mut s = mkcp_connect(&cfg).await.expect("mkcp_connect");
-        s.write_all(b"x").await.expect("mkcp write");
-        streams.push(s);
-    }
-
-    // Wait for all sessions to be accepted (drivers tick at 10 ms).
-    let accepted = timeout(Duration::from_secs(10), accept_task)
-        .await
-        .expect("mkcp session churn timed out")
-        .expect("accept task panicked");
-
-    drop(streams);
-    assert_eq!(accepted, N, "accepted {accepted} sessions, expected {N}");
 }
 
 // ── connection-limit overflow ─────────────────────────────────────────────────

@@ -89,7 +89,7 @@ labs/realistic/reports/external-clients/
 
 The automated matrix is driven by `external-clients/scenarios.env`.
 
-`scenarios.env` drives the matrix (20 scenario rows including `tuic`, `trojan-udp`, `vless-mux`, ShadowTLS, mKCP, sniffing, and SplitHTTP packet-up).
+`scenarios.env` drives the matrix (including `tuic`, `trojan-udp`, `vless-mux`, ShadowTLS, sniffing, and SplitHTTP packet-up).
 
 **Mux.Cool:** `vless-mux` runs **Xray only** (`sing-box` column is `-` — smux is not wire-compatible with Mux.Cool).
 Both Docker and VPS runners read the same file; tune waits with `MATRIX_PORT_WAIT_*`
@@ -111,7 +111,6 @@ blackwire lacks the server transport. See [docs/parity-status.md](../../../docs/
 | `vless-splithttp` | stream-one only (not packet-up); was SKIP until mode aligned |
 | `vless-splithttp-packet-up` | Xray PASS; sing-box SKIP (upstream has no packet-up) |
 | `vless-shadowtls` | Xray/sing-box client models differ from VLESS+`shadowtls` stream |
-| `vless-mkcp` | sing-box has no mKCP; Xray uses new finalmask — server proven in e2e |
 
 Hiddify remains a manual validation target using generated import artifacts
 after the automated scenarios pass.

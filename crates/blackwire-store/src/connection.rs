@@ -7,7 +7,7 @@ use crate::{
     ActivationClass, ActivationState, ConfigurationState, RevisionSummary, StoreError, StoreResult,
 };
 
-pub const EXPECTED_SCHEMA_VERSION: i64 = 10;
+pub const EXPECTED_SCHEMA_VERSION: i64 = 11;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -46,6 +46,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (
         10,
         include_str!("../migrations/0010_remove_ineffective_performance_fields.sql"),
+    ),
+    (
+        11,
+        include_str!("../migrations/0011_remove_legacy_transport.sql"),
     ),
 ];
 
@@ -446,7 +450,6 @@ async fn copy_revision_rows(
         "INSERT INTO splithttp_settings SELECT ?, endpoint_kind, endpoint_id, method_value, mode_value, uplink_http_method, padding_kind, padding_fixed, padding_range, padding_min, padding_max, padding_from, padding_to, padding_method, padding_header, padding_key, padding_placement, session_placement, session_key, seq_placement, seq_key, uplink_data_placement, uplink_data_key, uplink_chunk_size, sc_max_buffered_posts, xmux_configured, xmux_max_concurrency, xmux_max_connections, xmux_c_max_reuse_times, xmux_h_max_request_times, xmux_h_max_reusable_secs, xmux_h_keep_alive_period, download_configured, download_network, download_security FROM splithttp_settings WHERE revision_id=?",
         "INSERT INTO splithttp_hosts SELECT ?, endpoint_kind, endpoint_id, position, host_value FROM splithttp_hosts WHERE revision_id=?",
         "INSERT INTO grpc_settings SELECT ?, endpoint_kind, endpoint_id, service_name, multi_mode FROM grpc_settings WHERE revision_id=?",
-        "INSERT INTO kcp_settings SELECT ?, endpoint_kind, endpoint_id, header_type, mtu, tti_ms, uplink_capacity, downlink_capacity, congestion, read_buffer_size, write_buffer_size FROM kcp_settings WHERE revision_id=?",
         "INSERT INTO endpoint_tuning SELECT ?, endpoint_kind, endpoint_id, congestion_mode, min_ack_rate, max_queue_delay_ms, pacing_gain, loss_compensation, quic_reuse_port, quic_endpoints, quic_recv_buffer_bytes, quic_send_buffer_bytes, datagram_enabled, udp_over_datagram, datagram_policy, fec_mode, fec_max_overhead_percent FROM endpoint_tuning WHERE revision_id=?",
         "INSERT INTO sniffing_settings SELECT ?, inbound_id, enabled, metadata_only, route_only FROM sniffing_settings WHERE revision_id=?",
         "INSERT INTO sniffing_overrides SELECT ?, inbound_id, position, protocol FROM sniffing_overrides WHERE revision_id=?",
