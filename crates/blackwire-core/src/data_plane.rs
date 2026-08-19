@@ -413,7 +413,6 @@ mod tests {
         Config {
             profile: ProfileMode::Fast,
             fast: None,
-            budget: None,
             vision: None,
             first_packet_boost: None,
             quic: None,

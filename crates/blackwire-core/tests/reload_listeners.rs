@@ -14,7 +14,6 @@ fn minimal_config(port: u16) -> Config {
     Config {
         profile: ProfileMode::default(),
         fast: None,
-        budget: None,
         vision: None,
         first_packet_boost: None,
         quic: None,

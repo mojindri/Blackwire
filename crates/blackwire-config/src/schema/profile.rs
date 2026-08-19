@@ -13,17 +13,6 @@ pub enum ProfileMode {
     /// Latency-first production path: narrow protocol/transport matrix, strict
     /// defaults, and active rejection of features that add per-connection overhead.
     Fast,
-    /// Latency budget profile. This is less restrictive than `fast` and is
-    /// evaluated by the cost-budget/explain-cost layer.
-    Latency,
-    /// Throughput budget profile for bulk-transfer oriented deployments.
-    Throughput,
-    /// Bad-network profile for lossy/high-RTT links.
-    Badnet,
-    /// Mobile profile for roaming/radio-pause sensitive links.
-    Mobile,
-    /// Stealth profile for compatibility/camouflage-heavy paths.
-    Stealth,
 }
 
 /// First-packet acceleration knobs.
@@ -62,11 +51,6 @@ impl std::fmt::Display for ProfileMode {
         match self {
             ProfileMode::Compat => f.write_str("compat"),
             ProfileMode::Fast => f.write_str("fast"),
-            ProfileMode::Latency => f.write_str("latency"),
-            ProfileMode::Throughput => f.write_str("throughput"),
-            ProfileMode::Badnet => f.write_str("badnet"),
-            ProfileMode::Mobile => f.write_str("mobile"),
-            ProfileMode::Stealth => f.write_str("stealth"),
         }
     }
 }
@@ -78,57 +62,9 @@ impl std::str::FromStr for ProfileMode {
         match s {
             "compat" => Ok(ProfileMode::Compat),
             "fast" => Ok(ProfileMode::Fast),
-            "latency" => Ok(ProfileMode::Latency),
-            "throughput" => Ok(ProfileMode::Throughput),
-            "badnet" => Ok(ProfileMode::Badnet),
-            "mobile" => Ok(ProfileMode::Mobile),
-            "stealth" => Ok(ProfileMode::Stealth),
             other => Err(format!(
-                "unknown profile '{other}'; expected compat, fast, latency, throughput, badnet, mobile, or stealth"
+                "unknown profile '{other}'; expected compat or fast"
             )),
-        }
-    }
-}
-
-/// Performance budget constraints used by `blackwire explain-cost`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-pub struct BudgetConfig {
-    #[serde(default = "BudgetConfig::default_max_protocol_layers")]
-    /// Maximum number of hot-path protocol layers before a violation is raised.
-    pub max_protocol_layers: usize,
-    #[serde(default)]
-    /// Whether protocol sniffing is permitted within budget.
-    pub allow_sniffing: bool,
-    #[serde(default = "BudgetConfig::default_max_route_rules")]
-    /// Maximum number of routing rules before a violation is raised.
-    pub max_route_rules: usize,
-    #[serde(default = "BudgetConfig::default_true")]
-    /// Prefer zero-copy / splice paths when available.
-    pub prefer_direct_copy: bool,
-}
-
-impl BudgetConfig {
-    fn default_max_protocol_layers() -> usize {
-        3
-    }
-
-    fn default_max_route_rules() -> usize {
-        50
-    }
-
-    fn default_true() -> bool {
-        true
-    }
-}
-
-impl Default for BudgetConfig {
-    fn default() -> Self {
-        Self {
-            max_protocol_layers: Self::default_max_protocol_layers(),
-            allow_sniffing: false,
-            max_route_rules: Self::default_max_route_rules(),
-            prefer_direct_copy: true,
         }
     }
 }
@@ -439,8 +375,6 @@ pub struct ProtocolCost {
 pub struct CostReport {
     /// Active performance profile.
     pub profile: ProfileMode,
-    /// Budget constraints applied during analysis.
-    pub budget: BudgetConfig,
     /// Number of hot-path protocol layers in the config.
     pub layer_count: usize,
     /// Names of the hot-path protocol layers.
@@ -771,30 +705,6 @@ fn apply_transport_cost(
 
 /// Compute a [`CostReport`] summarising the protocol cost and profile compliance of `config`.
 pub fn explain_cost(config: &Config) -> CostReport {
-    let budget = config.budget.unwrap_or_else(|| match config.profile {
-        ProfileMode::Latency | ProfileMode::Fast => BudgetConfig {
-            max_protocol_layers: 3,
-            allow_sniffing: false,
-            max_route_rules: 50,
-            prefer_direct_copy: true,
-        },
-        ProfileMode::Throughput => BudgetConfig {
-            max_protocol_layers: 4,
-            max_route_rules: 200,
-            ..BudgetConfig::default()
-        },
-        ProfileMode::Badnet | ProfileMode::Mobile => BudgetConfig {
-            max_protocol_layers: 4,
-            ..BudgetConfig::default()
-        },
-        ProfileMode::Compat | ProfileMode::Stealth => BudgetConfig {
-            max_protocol_layers: 8,
-            allow_sniffing: true,
-            max_route_rules: 1000,
-            prefer_direct_copy: false,
-        },
-    });
-
     let mut layers = Vec::new();
     add_unique(&mut layers, "TCP accept");
 
@@ -880,39 +790,37 @@ pub fn explain_cost(config: &Config) -> CostReport {
     let mut findings = Vec::new();
     let mut suggestions = Vec::new();
 
-    if layers.len() > budget.max_protocol_layers {
+    if config.profile == ProfileMode::Fast && layers.len() > 3 {
         findings.push(ProfileViolation::Warning(format!(
-            "hot path has {} layers; budget allows {}",
-            layers.len(),
-            budget.max_protocol_layers
+            "hot path has {} layers; Fast profile works best with 3 or fewer",
+            layers.len()
         )));
-        suggestions.push("remove one wrapper layer or move to a less strict profile".into());
+        suggestions.push("remove one wrapper layer or use compatibility mode".into());
     }
 
-    if !budget.allow_sniffing
+    if config.profile == ProfileMode::Fast
         && config
             .inbounds
             .iter()
             .any(|i| i.sniffing.as_ref().is_some_and(|s| s.enabled))
     {
         findings.push(ProfileViolation::Warning(
-            "sniffing is enabled but this profile budget disallows it".into(),
+            "sniffing adds work to the Fast profile hot path".into(),
         ));
-        suggestions.push("disable inbound sniffing or use compat/stealth profile".into());
+        suggestions.push("disable inbound sniffing or use compatibility mode".into());
     }
 
     if let Some(routing) = &config.routing {
-        if routing.rules.len() > budget.max_route_rules {
+        if config.profile == ProfileMode::Fast && routing.rules.len() > 50 {
             findings.push(ProfileViolation::Warning(format!(
-                "routing has {} rules; budget allows {}",
-                routing.rules.len(),
-                budget.max_route_rules
+                "routing has {} rules; large rule sets add Fast profile latency",
+                routing.rules.len()
             )));
-            suggestions.push("compile/prune routing rules or raise budget.maxRouteRules".into());
+            suggestions.push("compile or prune routing rules".into());
         }
     }
 
-    if budget.prefer_direct_copy && !cost.supports_direct_copy {
+    if config.profile == ProfileMode::Fast && !cost.supports_direct_copy {
         findings.push(ProfileViolation::Warning(
             "direct copy is preferred but this path cannot lower to direct copy".into(),
         ));
@@ -921,14 +829,13 @@ pub fn explain_cost(config: &Config) -> CostReport {
         );
     }
 
-    if budget.prefer_direct_copy && !cost.supports_splice {
+    if config.profile == ProfileMode::Fast && !cost.supports_splice {
         suggestions
             .push("use relay.engine=v2 for wrapped streams where splice is unavailable".into());
     }
 
     CostReport {
         profile: config.profile,
-        budget,
         layer_count: layers.len(),
         layers,
         cost,
@@ -1086,7 +993,6 @@ mod tests {
         Config {
             profile: ProfileMode::Fast,
             fast: None,
-            budget: None,
             vision: None,
             first_packet_boost: None,
             quic: None,
@@ -1350,22 +1256,6 @@ mod tests {
     }
 
     #[test]
-    fn budget_profiles_deserialise_from_json() {
-        for (raw, expected) in [
-            ("latency", ProfileMode::Latency),
-            ("throughput", ProfileMode::Throughput),
-            ("badnet", ProfileMode::Badnet),
-            ("mobile", ProfileMode::Mobile),
-            ("stealth", ProfileMode::Stealth),
-        ] {
-            let json = format!(r#"{{"profile": "{raw}"}}"#);
-            let m: serde_json::Value = serde_json::from_str(&json).unwrap();
-            let mode: ProfileMode = serde_json::from_value(m["profile"].clone()).unwrap();
-            assert_eq!(mode, expected);
-        }
-    }
-
-    #[test]
     fn profile_defaults_to_compat() {
         let mode = ProfileMode::default();
         assert_eq!(mode, ProfileMode::Compat);
@@ -1374,8 +1264,7 @@ mod tests {
     #[test]
     fn explain_cost_flags_expensive_latency_path() {
         let mut cfg = fast_vless_config();
-        cfg.profile = ProfileMode::Latency;
-        cfg.budget = Some(BudgetConfig::default());
+        cfg.profile = ProfileMode::Fast;
         cfg.inbounds[0].sniffing = Some(SniffingConfig {
             enabled: true,
             dest_override: vec!["tls".into()],
@@ -1391,10 +1280,10 @@ mod tests {
 
         let report = explain_cost(&cfg);
         let rendered = report.render_text();
-        assert_eq!(report.profile, ProfileMode::Latency);
+        assert_eq!(report.profile, ProfileMode::Fast);
         assert_eq!(report.cost.cpu, CostClass::High);
         assert!(!report.cost.supports_direct_copy);
-        assert!(rendered.contains("sniffing is enabled"));
+        assert!(rendered.contains("sniffing adds work"));
         assert!(rendered.contains("direct copy is preferred"));
         assert!(rendered.contains("relay.engine=v2"));
     }
@@ -1402,11 +1291,7 @@ mod tests {
     #[test]
     fn explain_cost_accepts_simple_direct_path() {
         let mut cfg = fast_vless_config();
-        cfg.profile = ProfileMode::Latency;
-        cfg.budget = Some(BudgetConfig {
-            max_protocol_layers: 8,
-            ..BudgetConfig::default()
-        });
+        cfg.profile = ProfileMode::Compat;
         cfg.inbounds[0].stream_settings = Some(StreamSettingsConfig {
             security: SecurityType::None,
             ..Default::default()

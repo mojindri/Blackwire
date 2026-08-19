@@ -339,7 +339,6 @@ pub fn requires_instance_handover(old: &Config, new: &Config) -> bool {
     if old.metrics_addr != new.metrics_addr
         || old.profile != new.profile
         || serialized_value_changed(&old.fast, &new.fast)
-        || old.budget != new.budget
         || old.vision != new.vision
         || old.first_packet_boost != new.first_packet_boost
         || serialized_value_changed(&old.log, &new.log)

@@ -13,7 +13,6 @@ const lines = (value: string) => value.split("\n").map((item) => item.trim()).fi
 const defaultQuic = { reusePort: false, endpoints: 1, recvBufferBytes: 8388608, sendBufferBytes: 8388608, maxDatagramSize: "auto" as number | string };
 const defaultDatagram = { enabled: true, udpOverDatagram: true, policy: "standard" as const, maxQueueDelayMs: 25, fastDnsRetry: false, fastDnsRetryDelayMs: 20 };
 const defaultFec = { mode: "auto" as const, maxOverheadPercent: 20, protectClasses: ["dns", "interactive", "control"], avoidBulkTcp: true, disableForSequentialDns: true, minConcurrencyForBlockFec: 4, maxGenerationPackets: 4, maxGenerationDelayMs: 20, recoveryDeadlineMs: 100, dedupWindowPackets: 1024 };
-const defaultBudget: NonNullable<CoreSettings["budget"]> = { maxProtocolLayers: 3, allowSniffing: false, maxRouteRules: 50, preferDirectCopy: true };
 const defaultVision: NonNullable<CoreSettings["vision"]> = { directCopy: "auto", maxPacketsToFilter: 8, allowSpliceAfterDirect: true };
 const defaultBoost: NonNullable<CoreSettings["firstPacketBoost"]> = { enabled: false, dns: true, sendEarlyPayload: true };
 
@@ -54,7 +53,7 @@ export function SettingsPage({ settings, coreSettings, busy, onSave, onSaveCore 
       <div className="settings-grid settings-grid-3">{([['maxConnections','Process connections'],['maxConnectionsPerInbound','Per-inbound connections'],['maxConnectionsPerUser','Per-user connections'],['maxHandshakeSeconds','Handshake timeout (s)'],['maxIdleSeconds','Idle timeout (s)']] as const).map(([key, label]) => <Field key={key} label={label}><Input type="number" value={core.limits[key] ?? ""} placeholder="Unlimited" onChange={(e) => setCore({ ...core, limits: { ...core.limits, [key]: optionalNumber(e.target.value) } })} /></Field>)}</div>
     </SettingsSection>
 
-    <SettingsSection icon={<Gauge size={19} />} title="Optimization" copy="Choose how much relay behavior Blackwire should decide for you." recommendation="Use Automatic unless a protocol needs the more conservative compatibility path. Open Custom only for measured troubleshooting or benchmarking." impact="Automatic · maintenance" details="Automatic uses Blackwire's tested Fast profile defaults without storing duplicate low-level values. Compatibility favors portable relay behavior. Existing specialized profiles remain available under Custom." defaultOpen>
+    <SettingsSection icon={<Gauge size={19} />} title="Optimization" copy="Choose the managed relay behavior for this server." recommendation="Use Automatic unless a protocol needs the more conservative compatibility path. Expert overrides remain available for measured troubleshooting." impact="Automatic · maintenance" details="Automatic uses Blackwire's tested Fast profile defaults without storing duplicate low-level values. Compatibility favors portable relay behavior. Cost reporting remains available without configurable pseudo-budgets." defaultOpen>
       <OptimizationEditor value={core} onChange={setCore} />
     </SettingsSection>
 
@@ -78,20 +77,16 @@ function ScalarField({ label, value, keyword, onChange }: { label: string; value
 
 const optimizationModes: Array<{ mode: OptimizationMode; title: string; description: string }> = [
   { mode: "automatic", title: "Automatic", description: "Use tested Fast defaults with adaptive relay paths and safe fallbacks." },
-  { mode: "compatibility", title: "Compatibility", description: "Favor portable behavior when a client, transport, or host is sensitive." },
-  { mode: "custom", title: "Custom", description: "Keep specialized profiles and low-level overrides under your control." }
+  { mode: "compatibility", title: "Compatibility", description: "Favor portable behavior when a client, transport, or host is sensitive." }
 ];
 
 function OptimizationEditor({ value, onChange }: { value: CoreSettings; onChange: (value: CoreSettings) => void }) {
   const mode = optimizationModeFromSettings(value);
-  const [expertOpen, setExpertOpen] = useState(mode === "custom");
-  useEffect(() => {
-    if (mode === "custom") setExpertOpen(true);
-  }, [mode]);
+  const [expertOpen, setExpertOpen] = useState(false);
 
   const selectMode = (next: OptimizationMode) => {
     onChange(applyOptimizationMode(value, next));
-    setExpertOpen(next === "custom");
+    setExpertOpen(false);
   };
 
   const status = optimizationStatusFromSettings(value);
@@ -117,12 +112,10 @@ function OptimizationEditor({ value, onChange }: { value: CoreSettings; onChange
     </div>
 
     <details className="optimization-expert" open={expertOpen} onToggle={(event) => setExpertOpen(event.currentTarget.open)}>
-      <summary><span>Expert overrides</span><small>Profiles, relay internals, Vision, and first-packet controls</small></summary>
+      <summary><span>Expert overrides</span><small>Relay internals, Vision, and first-packet controls</small></summary>
       <div className="optimization-expert-body">
-        <Field label="Runtime profile"><Select value={value.profile} onChange={(e) => onChange({ ...value, profile: e.target.value as CoreSettings["profile"] })}>{["compat", "fast", "latency", "throughput", "badnet", "mobile", "stealth"].map((profile) => <option key={profile}>{profile}</option>)}</Select></Field>
-        <div className="settings-toggle-strip"><Switch checked={value.fast !== null} onChange={(enabled) => onChange({ ...value, fast: enabled ? defaultFastSettings : null })} label="Fast-path overrides" /><Switch checked={value.budget !== null} onChange={(enabled) => onChange({ ...value, budget: enabled ? defaultBudget : null })} label="Performance budget override" /><Switch checked={value.vision !== null} onChange={(enabled) => onChange({ ...value, vision: enabled ? defaultVision : null })} label="Vision override" /><Switch checked={value.firstPacketBoost?.enabled ?? false} onChange={(enabled) => onChange({ ...value, firstPacketBoost: enabled ? { ...(value.firstPacketBoost ?? defaultBoost), enabled: true } : null })} label="First-packet boost" /></div>
+        <div className="settings-toggle-strip">{mode === "automatic" ? <Switch checked={value.fast !== null} onChange={(enabled) => onChange({ ...value, fast: enabled ? defaultFastSettings : null })} label="Fast-path overrides" /> : null}<Switch checked={value.vision !== null} onChange={(enabled) => onChange({ ...value, vision: enabled ? defaultVision : null })} label="Vision override" /><Switch checked={value.firstPacketBoost?.enabled ?? false} onChange={(enabled) => onChange({ ...value, firstPacketBoost: enabled ? { ...(value.firstPacketBoost ?? defaultBoost), enabled: true } : null })} label="First-packet boost" /></div>
         {value.fast ? <FastEditor value={value.fast} onChange={(fast) => onChange({ ...value, fast })} /> : null}
-        {value.budget ? <BudgetEditor value={value.budget} onChange={(budget) => onChange({ ...value, budget })} /> : null}
         {value.vision ? <div className="settings-subsection"><h3>Vision optimization</h3><div className="settings-grid settings-grid-3"><Field label="Direct-copy policy"><Select value={value.vision.directCopy} onChange={(e) => onChange({ ...value, vision: { ...value.vision!, directCopy: e.target.value as typeof value.vision.directCopy } })}>{["auto", "disabled", "require"].map((policy) => <option key={policy}>{policy}</option>)}</Select></Field><NumberField label="Packets to filter" value={value.vision.maxPacketsToFilter} onChange={(maxPacketsToFilter) => onChange({ ...value, vision: { ...value.vision!, maxPacketsToFilter } })} /><Switch checked={value.vision.allowSpliceAfterDirect} onChange={(allowSpliceAfterDirect) => onChange({ ...value, vision: { ...value.vision!, allowSpliceAfterDirect } })} label="Allow splice after direct copy" /></div></div> : null}
         {value.firstPacketBoost ? <BoostEditor value={value.firstPacketBoost} onChange={(firstPacketBoost) => onChange({ ...value, firstPacketBoost })} /> : null}
       </div>
@@ -132,10 +125,6 @@ function OptimizationEditor({ value, onChange }: { value: CoreSettings; onChange
 
 function FastEditor({ value, onChange }: { value: NonNullable<CoreSettings["fast"]>; onChange: (value: NonNullable<CoreSettings["fast"]>) => void }) {
   return <div className="settings-subsection"><h3>Fast-path relay</h3><div className="settings-grid settings-grid-3"><Switch checked={value.strictProduction} onChange={(strictProduction) => onChange({ ...value, strictProduction })} label="Strict production mode" /><EnumField label="Pool policy" value={value.pool} options={["adaptive", "disabled", "fixed"]} onChange={(pool) => onChange({ ...value, pool: pool as typeof value.pool })} /><EnumField label="Splice policy" value={value.splice} options={["adaptive", "disabled", "always"]} onChange={(splice) => onChange({ ...value, splice: splice as typeof value.splice })} /><Field label="Relay engine" hint="Keep Legacy only as a temporary troubleshooting fallback."><Select value={value.relay.engine} onChange={(e) => onChange({ ...value, relay: { ...value.relay, engine: e.target.value as typeof value.relay.engine } })}><option value="v2">V2 — recommended</option><option value="legacy">Legacy — troubleshooting only</option></Select></Field>{value.relay.engine === "v2" ? <><EnumField label="Flush policy" value={value.relay.flush} options={["immediate", "deferred", "adaptive"]} onChange={(flush) => onChange({ ...value, relay: { ...value.relay, flush: flush as typeof value.relay.flush } })} /><NumberField label="Initial relay buffer" value={value.relay.initialBuffer} onChange={(initialBuffer) => onChange({ ...value, relay: { ...value.relay, initialBuffer } })} /><NumberField label="Maximum relay buffer" value={value.relay.maxBuffer} onChange={(maxBuffer) => onChange({ ...value, relay: { ...value.relay, maxBuffer } })} /></> : null}<EnumField label="Linux zero-copy" value={value.linux.zerocopy} options={["disabled", "bulk", "always"]} onChange={(zerocopy) => onChange({ ...value, linux: { ...value.linux, zerocopy: zerocopy as typeof value.linux.zerocopy } })} /><NumberField label="Zero-copy minimum bytes" value={value.linux.zerocopyMinBytes} onChange={(zerocopyMinBytes) => onChange({ ...value, linux: { ...value.linux, zerocopyMinBytes } })} /><EnumField label="io_uring" value={value.linux.ioUring} options={["disabled", "auto", "require"]} onChange={(ioUring) => onChange({ ...value, linux: { ...value.linux, ioUring: ioUring as typeof value.linux.ioUring } })} /></div></div>;
-}
-
-function BudgetEditor({ value, onChange }: { value: NonNullable<CoreSettings["budget"]>; onChange: (value: NonNullable<CoreSettings["budget"]>) => void }) {
-  return <div className="settings-subsection"><h3>Performance budget</h3><div className="settings-grid settings-grid-3"><NumberField label="Maximum protocol layers" value={value.maxProtocolLayers} onChange={(maxProtocolLayers) => onChange({ ...value, maxProtocolLayers })} /><NumberField label="Maximum route rules" value={value.maxRouteRules} onChange={(maxRouteRules) => onChange({ ...value, maxRouteRules })} /><Switch checked={value.allowSniffing} onChange={(allowSniffing) => onChange({ ...value, allowSniffing })} label="Allow sniffing" /><Switch checked={value.preferDirectCopy} onChange={(preferDirectCopy) => onChange({ ...value, preferDirectCopy })} label="Prefer direct copy" /></div></div>;
 }
 
 function BoostEditor({ value, onChange }: { value: NonNullable<CoreSettings["firstPacketBoost"]>; onChange: (value: NonNullable<CoreSettings["firstPacketBoost"]>) => void }) {

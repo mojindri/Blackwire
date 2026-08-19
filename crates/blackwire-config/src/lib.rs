@@ -5,7 +5,7 @@
 pub mod schema;
 
 pub use schema::{
-    BudgetConfig, Config, CostReport, DatagramConfig, FecConfig, FecMode, Hysteria2Config,
-    InboundConfig, LogConfig, NetworkType, OutboundConfig, Protocol, QuicConfig, SecurityType,
+    Config, CostReport, DatagramConfig, FecConfig, FecMode, Hysteria2Config, InboundConfig,
+    LogConfig, NetworkType, OutboundConfig, Protocol, QuicConfig, SecurityType,
     StreamSettingsConfig,
 };

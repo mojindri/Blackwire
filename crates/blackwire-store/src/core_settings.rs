@@ -1,6 +1,6 @@
 use blackwire_config::schema::{
-    BudgetConfig, DatagramConfig, FastConfig, FecConfig, FirstPacketBoostConfig, LimitsConfig,
-    ProfileMode, QuicConfig, StatsConfig, VisionConfig,
+    DatagramConfig, FastConfig, FecConfig, FirstPacketBoostConfig, LimitsConfig, ProfileMode,
+    QuicConfig, StatsConfig, VisionConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +12,6 @@ use crate::{ActivationClass, ActivationState, Database, MutationResult, StoreErr
 pub struct CoreSettings {
     pub profile: ProfileMode,
     pub fast: Option<FastConfig>,
-    pub budget: Option<BudgetConfig>,
     pub vision: Option<VisionConfig>,
     pub first_packet_boost: Option<FirstPacketBoostConfig>,
     pub metrics_addr: Option<String>,
@@ -30,7 +29,6 @@ impl Database {
         Ok(CoreSettings {
             profile: config.profile,
             fast: config.fast,
-            budget: config.budget,
             vision: config.vision,
             first_packet_boost: config.first_packet_boost,
             metrics_addr: config.metrics_addr,
@@ -73,10 +71,9 @@ impl Database {
             .bind(revision).execute(&mut *tx).await?;
 
         let fast = input.fast.as_ref();
-        let budget = input.budget.as_ref();
         let vision = input.vision.as_ref();
         let boost = input.first_packet_boost.as_ref();
-        sqlx::query("UPDATE global_performance_settings SET fast_configured=?,fast_strict_production=?,fast_pool=?,fast_splice=?,fast_relay_engine=?,fast_relay_flush=?,fast_relay_initial_buffer=?,fast_relay_max_buffer=?,fast_linux_zerocopy=?,fast_linux_zerocopy_min_bytes=?,fast_linux_io_uring=?,budget_configured=?,budget_max_protocol_layers=?,budget_allow_sniffing=?,budget_max_route_rules=?,budget_prefer_direct_copy=?,vision_configured=?,vision_direct_copy=?,vision_max_packets_to_filter=?,vision_allow_splice_after_direct=?,first_packet_boost_configured=?,first_packet_boost_enabled=?,first_packet_boost_dns=?,first_packet_boost_send_early_payload=? WHERE revision_id=?")
+        sqlx::query("UPDATE global_performance_settings SET fast_configured=?,fast_strict_production=?,fast_pool=?,fast_splice=?,fast_relay_engine=?,fast_relay_flush=?,fast_relay_initial_buffer=?,fast_relay_max_buffer=?,fast_linux_zerocopy=?,fast_linux_zerocopy_min_bytes=?,fast_linux_io_uring=?,vision_configured=?,vision_direct_copy=?,vision_max_packets_to_filter=?,vision_allow_splice_after_direct=?,first_packet_boost_configured=?,first_packet_boost_enabled=?,first_packet_boost_dns=?,first_packet_boost_send_early_payload=? WHERE revision_id=?")
             .bind(fast.is_some()).bind(fast.map(|v| v.strict_production).unwrap_or(true))
             .bind(fast.map(|v| scalar_text(&v.pool)).transpose()?.unwrap_or_else(|| "adaptive".into()))
             .bind(fast.map(|v| scalar_text(&v.splice)).transpose()?.unwrap_or_else(|| "adaptive".into()))
@@ -86,10 +83,6 @@ impl Database {
             .bind(fast.map(|v| scalar_text(&v.linux.zerocopy)).transpose()?.unwrap_or_else(|| "disabled".into()))
             .bind(fast.map(|v| v.linux.zerocopy_min_bytes as u64).unwrap_or(16384))
             .bind(fast.map(|v| scalar_text(&v.linux.io_uring)).transpose()?.unwrap_or_else(|| "disabled".into()))
-            .bind(budget.is_some()).bind(budget.map(|v| v.max_protocol_layers as u64).unwrap_or(3))
-            .bind(budget.map(|v| v.allow_sniffing).unwrap_or(false))
-            .bind(budget.map(|v| v.max_route_rules as u64).unwrap_or(50))
-            .bind(budget.map(|v| v.prefer_direct_copy).unwrap_or(true))
             .bind(vision.is_some()).bind(vision.map(|v| scalar_text(&v.direct_copy)).transpose()?.unwrap_or_else(|| "auto".into()))
             .bind(vision.map(|v| v.max_packets_to_filter).unwrap_or(8)).bind(vision.map(|v| v.allow_splice_after_direct).unwrap_or(true))
             .bind(boost.is_some()).bind(boost.map(|v| v.enabled).unwrap_or(false)).bind(boost.map(|v| v.dns).unwrap_or(true))

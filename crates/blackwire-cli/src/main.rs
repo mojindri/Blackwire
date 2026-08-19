@@ -978,7 +978,6 @@ async fn import_bootstrap_fixture(
     let core = CoreSettings {
         profile: config.profile,
         fast: config.fast.clone(),
-        budget: config.budget,
         vision: config.vision,
         first_packet_boost: config.first_packet_boost,
         metrics_addr: config.metrics_addr.clone(),

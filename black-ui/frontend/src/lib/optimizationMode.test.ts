@@ -6,7 +6,6 @@ function settings(overrides: Partial<CoreSettings> = {}): CoreSettings {
   return {
     profile: "compat",
     fast: null,
-    budget: null,
     vision: null,
     firstPacketBoost: null,
     metricsAddr: null,
@@ -31,9 +30,8 @@ describe("optimization mode", () => {
     expect(optimizationModeFromSettings(settings())).toBe("compatibility");
   });
 
-  it("treats existing profiles and explicit policies as custom", () => {
-    expect(optimizationModeFromSettings(settings({ profile: "throughput" }))).toBe("custom");
-    expect(optimizationModeFromSettings(settings({ profile: "fast", fast: defaultFastSettings }))).toBe("custom");
+  it("keeps explicit policies within the selected managed mode", () => {
+    expect(optimizationModeFromSettings(settings({ profile: "fast", fast: defaultFastSettings }))).toBe("automatic");
   });
 
   it("ignores a legacy disabled boost object", () => {
@@ -49,7 +47,7 @@ describe("optimization mode", () => {
 
   it("applies automatic mode without persisting duplicate defaults", () => {
     const result = applyOptimizationMode(settings({
-      profile: "throughput",
+      profile: "compat",
       fast: defaultFastSettings,
       firstPacketBoost: {
         enabled: true,
@@ -60,15 +58,7 @@ describe("optimization mode", () => {
 
     expect(result.profile).toBe("fast");
     expect(result.fast).toBeNull();
-    expect(result.budget).toBeNull();
     expect(result.firstPacketBoost).toBeNull();
-  });
-
-  it("opens a real custom state from an automatic configuration", () => {
-    const result = applyOptimizationMode(settings({ profile: "fast" }), "custom");
-    expect(result.profile).toBe("fast");
-    expect(result.fast).toEqual(defaultFastSettings);
-    expect(result.fast).not.toBe(defaultFastSettings);
   });
 
   it("does not alter protocol-specific Vision settings", () => {

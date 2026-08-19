@@ -2,15 +2,15 @@ use std::net::IpAddr;
 
 use crate::sqlx;
 use blackwire_config::schema::{
-    AdaptiveBalancerConfig, BalancerConfig, BalancerProfileConfig, BudgetConfig, Config,
-    CongestionSettings, DatagramConfig, DatagramOverrides, DatagramSize, DnsConfig,
-    DownloadSettings, EndpointCount, EndpointSettings, EndpointUser, FastConfig, FastLinuxConfig,
-    FastRelayConfig, FecConfig, FecOverrides, FirstPacketBoostConfig, GrpcConfig,
-    HealthCheckConfig, InboundConfig, InboundLimitsConfig, LimitsConfig, LogConfig, NetworkType,
-    OutboundConfig, PaddingBounds, PaddingBytes, ProfileMode, Protocol, QuicConfig,
-    QuicSocketOverrides, RealityConfig, RealityFallbackLimitConfig, RoutingConfig, RoutingRule,
-    SecurityType, ShadowTlsConfig, SniffingConfig, SplitHttpConfig, StatsConfig,
-    StreamSettingsConfig, TlsConfig, VisionConfig, WsConfig, XmuxConfig,
+    AdaptiveBalancerConfig, BalancerConfig, BalancerProfileConfig, Config, CongestionSettings,
+    DatagramConfig, DatagramOverrides, DatagramSize, DnsConfig, DownloadSettings, EndpointCount,
+    EndpointSettings, EndpointUser, FastConfig, FastLinuxConfig, FastRelayConfig, FecConfig,
+    FecOverrides, FirstPacketBoostConfig, GrpcConfig, HealthCheckConfig, InboundConfig,
+    InboundLimitsConfig, LimitsConfig, LogConfig, NetworkType, OutboundConfig, PaddingBounds,
+    PaddingBytes, ProfileMode, Protocol, QuicConfig, QuicSocketOverrides, RealityConfig,
+    RealityFallbackLimitConfig, RoutingConfig, RoutingRule, SecurityType, ShadowTlsConfig,
+    SniffingConfig, SplitHttpConfig, StatsConfig, StreamSettingsConfig, TlsConfig, VisionConfig,
+    WsConfig, XmuxConfig,
 };
 use sqlx::{MySqlPool, Row};
 
@@ -44,7 +44,6 @@ impl Database {
             config: Config {
                 profile: parse_profile(&profile)?,
                 fast: performance.fast,
-                budget: performance.budget,
                 vision: performance.vision,
                 first_packet_boost: performance.first_packet_boost,
                 quic: load_quic(self.pool(), revision).await?,
@@ -76,7 +75,6 @@ impl Database {
 
 struct PerformanceSettings {
     fast: Option<FastConfig>,
-    budget: Option<BudgetConfig>,
     vision: Option<VisionConfig>,
     first_packet_boost: Option<FirstPacketBoostConfig>,
 }
@@ -114,21 +112,6 @@ async fn load_performance(pool: &MySqlPool, revision: i64) -> StoreResult<Perfor
             })
         })
         .transpose()?;
-    let budget = row
-        .try_get::<bool, _>("budget_configured")?
-        .then(|| {
-            Ok::<_, StoreError>(BudgetConfig {
-                max_protocol_layers: usize::try_from(
-                    row.try_get::<u64, _>("budget_max_protocol_layers")?,
-                )
-                .map_err(decode_error)?,
-                allow_sniffing: row.try_get("budget_allow_sniffing")?,
-                max_route_rules: usize::try_from(row.try_get::<u64, _>("budget_max_route_rules")?)
-                    .map_err(decode_error)?,
-                prefer_direct_copy: row.try_get("budget_prefer_direct_copy")?,
-            })
-        })
-        .transpose()?;
     let vision = row
         .try_get::<bool, _>("vision_configured")?
         .then(|| {
@@ -151,7 +134,6 @@ async fn load_performance(pool: &MySqlPool, revision: i64) -> StoreResult<Perfor
         .transpose()?;
     Ok(PerformanceSettings {
         fast,
-        budget,
         vision,
         first_packet_boost,
     })
@@ -785,11 +767,6 @@ fn parse_profile(value: &str) -> StoreResult<ProfileMode> {
     match value {
         "compat" => Ok(ProfileMode::Compat),
         "fast" => Ok(ProfileMode::Fast),
-        "latency" => Ok(ProfileMode::Latency),
-        "throughput" => Ok(ProfileMode::Throughput),
-        "badnet" => Ok(ProfileMode::Badnet),
-        "mobile" => Ok(ProfileMode::Mobile),
-        "stealth" => Ok(ProfileMode::Stealth),
         other => Err(value_error("profile", other)),
     }
 }

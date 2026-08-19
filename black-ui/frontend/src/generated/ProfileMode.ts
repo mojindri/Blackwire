@@ -3,4 +3,4 @@
 /**
  * Operating profile for the proxy.
  */
-export type ProfileMode = "compat" | "fast" | "latency" | "throughput" | "badnet" | "mobile" | "stealth";
+export type ProfileMode = "compat" | "fast";

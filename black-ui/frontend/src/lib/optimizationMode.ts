@@ -1,6 +1,6 @@
 import type { CoreSettings } from "./types";
 
-export type OptimizationMode = "automatic" | "compatibility" | "custom";
+export type OptimizationMode = "automatic" | "compatibility";
 
 export const defaultFastSettings: NonNullable<CoreSettings["fast"]> = {
   strictProduction: true,
@@ -20,25 +20,19 @@ export const defaultFastSettings: NonNullable<CoreSettings["fast"]> = {
 };
 
 export function optimizationModeFromSettings(settings: CoreSettings): OptimizationMode {
-  const hasManualPerformancePolicy = settings.fast !== null
-    || settings.budget !== null
-    || (settings.firstPacketBoost?.enabled ?? false);
-
-  if (!hasManualPerformancePolicy && settings.profile === "fast") return "automatic";
-  if (!hasManualPerformancePolicy && settings.profile === "compat") return "compatibility";
-  return "custom";
+  return settings.profile === "fast" ? "automatic" : "compatibility";
 }
 
 export function optimizationStatusFromSettings(settings: CoreSettings): { label: string; detail: string } {
   const mode = optimizationModeFromSettings(settings);
   const vision = settings.vision !== null ? " · Vision override preserved" : "";
+  const overrides = settings.fast !== null || (settings.firstPacketBoost?.enabled ?? false)
+    ? " · expert overrides active"
+    : "";
   if (mode === "automatic") {
-    return { label: "Blackwire managed", detail: `Fast profile defaults · adaptive pooling and splice · relay v2${vision}` };
+    return { label: "Blackwire managed", detail: `Fast profile defaults · adaptive pooling and splice · relay v2${overrides}${vision}` };
   }
-  if (mode === "compatibility") {
-    return { label: "Compatibility focused", detail: `Portable relay defaults${vision}` };
-  }
-  return { label: "Operator managed", detail: `Profile: ${settings.profile} · explicit policies preserved` };
+  return { label: "Compatibility focused", detail: `Portable relay defaults${overrides}${vision}` };
 }
 
 export function applyOptimizationMode(settings: CoreSettings, mode: OptimizationMode): CoreSettings {
@@ -47,30 +41,14 @@ export function applyOptimizationMode(settings: CoreSettings, mode: Optimization
       ...settings,
       profile: "fast",
       fast: null,
-      budget: null,
       firstPacketBoost: null
     };
   }
-
-  if (mode === "compatibility") {
-    return {
-      ...settings,
-      profile: "compat",
-      fast: null,
-      budget: null,
-      firstPacketBoost: null
-    };
-  }
-
-  if (optimizationModeFromSettings(settings) === "custom") return settings;
 
   return {
     ...settings,
-    profile: "fast",
-    fast: {
-      ...defaultFastSettings,
-      relay: { ...defaultFastSettings.relay },
-      linux: { ...defaultFastSettings.linux }
-    }
+    profile: "compat",
+    fast: null,
+    firstPacketBoost: null
   };
 }

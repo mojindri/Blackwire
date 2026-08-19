@@ -22,7 +22,7 @@ pub use endpoint::{
 };
 pub use logging_dns::{DnsConfig, FakeIpConfig, LogConfig};
 pub use profile::{
-    explain_cost, validate_fast_profile, BudgetConfig, CopyMode, CostClass, CostReport, FastConfig,
+    explain_cost, validate_fast_profile, CopyMode, CostClass, CostReport, FastConfig,
     FastExperimentalBackendPolicy, FastLinuxConfig, FastPoolPolicy, FastRelayConfig,
     FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy, FastZerocopyPolicy,
     FirstPacketBoostConfig, ProfileMode, ProfileViolation, ProtocolCost,
@@ -56,10 +56,6 @@ pub struct Config {
     /// Extra settings that apply only when `profile = "fast"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast: Option<FastConfig>,
-
-    /// Performance budget used by `blackwire explain-cost`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget: Option<BudgetConfig>,
 
     /// XTLS Vision optimization policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
