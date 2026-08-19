@@ -4,14 +4,13 @@ use crate::sqlx;
 use blackwire_config::schema::{
     AdaptiveBalancerConfig, ApiConfig, BalancerConfig, BalancerProfileConfig, BudgetConfig, Config,
     CongestionSettings, DatagramConfig, DatagramOverrides, DatagramSize, DnsConfig,
-    DownloadSettings, EndpointCount, EndpointSettings, EndpointUser, FakeIpConfig, FastConfig,
-    FastLinuxConfig, FastRelayConfig, FecConfig, FecOverrides, FirstPacketBoostConfig, GrpcConfig,
+    DownloadSettings, EndpointCount, EndpointSettings, EndpointUser, FastConfig, FastLinuxConfig,
+    FastRelayConfig, FecConfig, FecOverrides, FirstPacketBoostConfig, GrpcConfig,
     HealthCheckConfig, InboundConfig, InboundLimitsConfig, LimitsConfig, LogConfig, NetworkType,
     OutboundConfig, PaddingBounds, PaddingBytes, ProfileMode, Protocol, QuicConfig,
     QuicSocketOverrides, RealityConfig, RealityFallbackLimitConfig, RoutingConfig, RoutingRule,
     SecurityType, ShadowTlsConfig, SniffingConfig, SplitHttpConfig, StatsConfig,
-    StreamSettingsConfig, TlsConfig, TunBatchConfig, TunConfig, TunSessionConfig, VisionConfig,
-    WsConfig, XmuxConfig,
+    StreamSettingsConfig, TlsConfig, VisionConfig, WsConfig, XmuxConfig,
 };
 use sqlx::{MySqlPool, Row};
 
@@ -60,7 +59,7 @@ impl Database {
                 },
                 dns: load_dns(self.pool(), revision).await?,
                 routing: load_routing(self.pool(), revision).await?,
-                tun: load_tun(self.pool(), revision).await?,
+                tun: None,
                 limits: load_limits(self.pool(), revision).await?,
                 inbounds: load_inbounds(self.pool(), revision).await?,
                 outbounds: load_outbounds(self.pool(), revision).await?,
@@ -249,45 +248,6 @@ async fn load_fec(pool: &MySqlPool, revision: i64) -> StoreResult<Option<FecConf
         recovery_deadline_ms: row.try_get("fec_recovery_deadline_ms")?,
         dedup_window_packets: usize::try_from(row.try_get::<u64, _>("fec_dedup_window_packets")?)
             .map_err(decode_error)?,
-    }))
-}
-
-async fn load_tun(pool: &MySqlPool, revision: i64) -> StoreResult<Option<TunConfig>> {
-    let Some(row) = sqlx::query("SELECT * FROM tun_settings WHERE revision_id=?")
-        .bind(revision)
-        .fetch_optional(pool)
-        .await?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(TunConfig {
-        name: row.try_get("interface_name")?,
-        address: row.try_get("address_value")?,
-        netmask: row.try_get("netmask")?,
-        mtu: u16::try_from(row.try_get::<u32, _>("mtu")?).map_err(decode_error)?,
-        bypass_mark: u32::try_from(row.try_get::<u64, _>("bypass_mark")?).map_err(decode_error)?,
-        outbound_interface: row.try_get("outbound_interface")?,
-        redirect_port: u16::try_from(row.try_get::<u32, _>("redirect_port")?)
-            .map_err(decode_error)?,
-        dns_port: u16::try_from(row.try_get::<u32, _>("dns_port")?).map_err(decode_error)?,
-        wintun_file: row.try_get("wintun_file")?,
-        batch: TunBatchConfig {
-            enabled: row.try_get("batch_enabled")?,
-            max_packets: usize::try_from(row.try_get::<u64, _>("batch_max_packets")?)
-                .map_err(decode_error)?,
-            max_delay_us: row.try_get("batch_max_delay_us")?,
-            latency_flush_bytes: usize::try_from(
-                row.try_get::<u64, _>("batch_latency_flush_bytes")?,
-            )
-            .map_err(decode_error)?,
-        },
-        sessions: TunSessionConfig {
-            udp_max: usize::try_from(row.try_get::<u64, _>("udp_max_sessions")?)
-                .map_err(decode_error)?,
-            udp_idle_timeout_sec: row.try_get("udp_idle_timeout_sec")?,
-            tcp_max: usize::try_from(row.try_get::<u64, _>("tcp_max_sessions")?)
-                .map_err(decode_error)?,
-        },
     }))
 }
 
@@ -686,12 +646,10 @@ async fn load_sniffing(
 }
 
 async fn load_dns(pool: &MySqlPool, revision: i64) -> StoreResult<Option<DnsConfig>> {
-    let Some(row) = sqlx::query(
-        "SELECT enabled, fake_ip_enabled, fake_ip_pool FROM dns_config WHERE revision_id = ?",
-    )
-    .bind(revision)
-    .fetch_optional(pool)
-    .await?
+    let Some(row) = sqlx::query("SELECT enabled FROM dns_config WHERE revision_id = ?")
+        .bind(revision)
+        .fetch_optional(pool)
+        .await?
     else {
         return Ok(None);
     };
@@ -704,17 +662,10 @@ async fn load_dns(pool: &MySqlPool, revision: i64) -> StoreResult<Option<DnsConf
     .bind(revision)
     .fetch_all(pool)
     .await?;
-    let fake_ip = row
-        .try_get::<bool, _>("fake_ip_enabled")?
-        .then(|| FakeIpConfig {
-            enabled: true,
-            pool: row
-                .try_get::<Option<String>, _>("fake_ip_pool")
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| "198.18.0.0/15".into()),
-        });
-    Ok(Some(DnsConfig { servers, fake_ip }))
+    Ok(Some(DnsConfig {
+        servers,
+        fake_ip: None,
+    }))
 }
 
 async fn load_routing(pool: &MySqlPool, revision: i64) -> StoreResult<Option<RoutingConfig>> {

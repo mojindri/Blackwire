@@ -21,7 +21,7 @@ const emptyData: AppData = {
   capabilities: null,
   service: null,
   revisions: [],
-  routingDns: { domainStrategy: "AsIs", geoipFile: null, geositeFile: null, dnsServers: [], fakeIpEnabled: false, fakeIpPool: "198.18.0.0/15", rules: [], balancers: [] },
+  routingDns: { domainStrategy: "AsIs", geoipFile: null, geositeFile: null, dnsServers: [], rules: [], balancers: [] },
   coreSettings: null
 };
 

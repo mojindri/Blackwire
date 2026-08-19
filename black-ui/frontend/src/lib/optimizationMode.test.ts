@@ -22,7 +22,6 @@ function settings(overrides: Partial<CoreSettings> = {}): CoreSettings {
     quic: null,
     datagram: null,
     fec: null,
-    tun: null,
     ...overrides
   };
 }

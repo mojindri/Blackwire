@@ -13,7 +13,7 @@
 -include .env.vm
 include make/verify.mk
 
-.PHONY: all ci build dev test fmt fmt-check lint lint-strict mysql-only-check audit deny update-geoip fuzz-build \
+.PHONY: all ci build build-client dev dev-client test fmt fmt-check lint lint-strict mysql-only-check audit deny update-geoip fuzz-build \
 	fmt fmt-check lint audit audit-optional deny-optional fuzz-smoke \
 	clean clean-generated clean-all-generated clean-reports clean-pcaps clean-lima-artifacts clean-bench \
 	bench bench-build bench-xray bench-singbox bench-smoke \
@@ -40,9 +40,17 @@ ci:
 build:
 	cargo build --release --bin blackwire
 
+## build-client: Compile the standalone device client in release mode.
+build-client:
+	cargo build --release --bin blackwire-client
+
 ## dev: Compile in debug mode (faster compile, slower binary).
 dev:
 	cargo build --bin blackwire
+
+## dev-client: Compile the standalone device client in debug mode.
+dev-client:
+	cargo build --bin blackwire-client
 
 ## test: Run all unit and integration tests.
 test:

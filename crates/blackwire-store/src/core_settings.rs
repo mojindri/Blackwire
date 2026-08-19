@@ -1,6 +1,6 @@
 use blackwire_config::schema::{
     ApiConfig, BudgetConfig, DatagramConfig, FastConfig, FecConfig, FirstPacketBoostConfig,
-    LimitsConfig, ProfileMode, QuicConfig, StatsConfig, TunConfig, VisionConfig,
+    LimitsConfig, ProfileMode, QuicConfig, StatsConfig, VisionConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,6 @@ pub struct CoreSettings {
     pub quic: Option<QuicConfig>,
     pub datagram: Option<DatagramConfig>,
     pub fec: Option<FecConfig>,
-    pub tun: Option<TunConfig>,
 }
 
 impl Database {
@@ -42,7 +41,6 @@ impl Database {
             quic: config.quic,
             datagram: config.datagram,
             fec: config.fec,
-            tun: config.tun,
         })
     }
 
@@ -154,19 +152,6 @@ impl Database {
                 sqlx::query("INSERT INTO global_fec_protect_classes (revision_id,position,packet_class) VALUES (?,?,?)")
                     .bind(revision).bind(position as u32).bind(packet_class.trim()).execute(&mut *tx).await?;
             }
-        }
-
-        sqlx::query("DELETE FROM tun_settings WHERE revision_id=?")
-            .bind(revision)
-            .execute(&mut *tx)
-            .await?;
-        if let Some(tun) = &input.tun {
-            sqlx::query("INSERT INTO tun_settings (revision_id,interface_name,address_value,netmask,mtu,bypass_mark,outbound_interface,redirect_port,dns_port,wintun_file,batch_enabled,batch_max_packets,batch_max_delay_us,batch_latency_flush_bytes,udp_max_sessions,udp_idle_timeout_sec,tcp_max_sessions) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-                .bind(revision).bind(tun.name.trim()).bind(tun.address.trim()).bind(tun.netmask.trim()).bind(u32::from(tun.mtu)).bind(u64::from(tun.bypass_mark))
-                .bind(trimmed_option(tun.outbound_interface.clone())).bind(u32::from(tun.redirect_port)).bind(u32::from(tun.dns_port)).bind(trimmed_option(tun.wintun_file.clone()))
-                .bind(tun.batch.enabled).bind(tun.batch.max_packets as u64).bind(tun.batch.max_delay_us).bind(tun.batch.latency_flush_bytes as u64)
-                .bind(tun.sessions.udp_max as u64).bind(tun.sessions.udp_idle_timeout_sec).bind(tun.sessions.tcp_max as u64)
-                .execute(&mut *tx).await?;
         }
 
         Database::publish_revision(&mut tx, revision, class).await?;

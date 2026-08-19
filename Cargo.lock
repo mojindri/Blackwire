@@ -503,6 +503,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "blackwire-client"
+version = "0.2.5"
+dependencies = [
+ "anyhow",
+ "blackwire-common",
+ "blackwire-config",
+ "blackwire-core",
+ "blackwire-transport",
+ "clap",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "validator",
+]
+
+[[package]]
 name = "blackwire-common"
 version = "0.2.5"
 dependencies = [

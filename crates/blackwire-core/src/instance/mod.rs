@@ -36,7 +36,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -48,18 +47,11 @@ use blackwire_app::router::LiveRouter;
 use blackwire_app::set_user_bandwidth_policies;
 use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_app::{Balancer, ADAPTIVE_SPLICE_LONG_STREAM_AFTER, ADAPTIVE_SPLICE_MIN_BYTES};
-use blackwire_common::{
-    clear_outbound_bypass_mark, clear_outbound_interface_index, set_outbound_bypass_mark,
-    set_outbound_interface_name,
-};
 use blackwire_config::schema::{
     Config, EndpointSettings, FastPoolPolicy, PoolSettings, ProfileMode, Protocol,
 };
 use blackwire_protocol::freedom::{FreedomIpStrategy, FreedomOutbound, PoolConfig};
 use blackwire_protocol::socks::Socks5Inbound;
-use blackwire_transport::{
-    create_tun, ensure_tun_runtime_supported, TunBatchConfig, TunConfig, TunRuntime,
-};
 use tokio::net::UdpSocket as TokioUdpSocket;
 
 use crate::data_plane::{compile_data_plane, DataPlaneStore};
@@ -206,13 +198,6 @@ use crate::ws_tls::{
 pub struct Instance {
     /// Background task handles. Kept alive as long as `Instance` is alive.
     tasks: Vec<JoinHandle<()>>,
-    /// If a TUN runtime is active, sending `true` here triggers graceful
-    /// shutdown (which runs `cleanup_routes` before the task exits).
-    shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
-    /// Process-wide outbound bypass mark configured for this TUN instance.
-    outbound_bypass_mark: Option<u32>,
-    /// Process-wide outbound interface configured for this TUN instance.
-    outbound_interface: Option<String>,
     /// Hot-reload state shared with the config watcher.
     pub reload: ReloadState,
     /// Immutable hot-path data-plane snapshot.
@@ -244,57 +229,7 @@ impl Instance {
     ///   - A required config field is missing or malformed
     pub async fn from_config(config: Arc<Config>) -> Result<Self> {
         let mut tasks = Vec::with_capacity(config.inbounds.len().saturating_add(4));
-        let mut shutdown_tx: Option<tokio::sync::watch::Sender<bool>> = None;
-        let mut outbound_bypass_mark = None;
-        let mut outbound_interface = None;
         let data_plane = compile_data_plane(config.as_ref());
-
-        // ── Optional: TUN transparent-proxy runtime ──────────────────────────
-        if let Some(tun_cfg) = &config.tun {
-            ensure_tun_runtime_supported()?;
-            outbound_bypass_mark = Some(tun_cfg.bypass_mark);
-            let tun_outbound_interface = tun_cfg.outbound_interface.clone();
-            outbound_interface = tun_outbound_interface.clone();
-
-            let tc = TunConfig {
-                name: tun_cfg.name.clone(),
-                address: tun_cfg
-                    .address
-                    .parse()
-                    .with_context(|| format!("invalid TUN address '{}'", tun_cfg.address))?,
-                netmask: tun_cfg
-                    .netmask
-                    .parse()
-                    .with_context(|| format!("invalid TUN netmask '{}'", tun_cfg.netmask))?,
-                mtu: tun_cfg.mtu,
-                bypass_mark: tun_cfg.bypass_mark,
-                outbound_interface: tun_outbound_interface,
-                redirect_port: tun_cfg.redirect_port,
-                dns_port: tun_cfg.dns_port,
-                wintun_file: tun_cfg.wintun_file.clone(),
-                batch: TunBatchConfig {
-                    enabled: tun_cfg.batch.enabled,
-                    max_packets: tun_cfg.batch.max_packets,
-                    max_delay: Duration::from_micros(tun_cfg.batch.max_delay_us),
-                    latency_flush_bytes: tun_cfg.batch.latency_flush_bytes,
-                },
-                udp_max_sessions: tun_cfg.sessions.udp_max,
-                udp_idle_timeout: Duration::from_secs(tun_cfg.sessions.udp_idle_timeout_sec),
-                tcp_max_sessions: tun_cfg.sessions.tcp_max,
-            };
-            let device =
-                create_tun(&tc).context("TUN device creation failed (are we running as root?)")?;
-            let (tx, rx) = tokio::sync::watch::channel(false);
-            shutdown_tx = Some(tx);
-            let runtime = TunRuntime::new(tc);
-            let tun_task = tokio::spawn(async move {
-                if let Err(e) = runtime.run(device, rx).await {
-                    error!(error = %e, "TUN runtime exited with error");
-                }
-            });
-            tasks.push(tun_task);
-            info!("TUN runtime started");
-        }
 
         // ── Step 1: DNS module (shared by dispatcher + freedom outbounds) ─────
         let dns = build_dns_module(config.dns.as_ref()).await?;
@@ -831,19 +766,8 @@ impl Instance {
             tasks.push(handle);
         }
 
-        if let Some(mark) = outbound_bypass_mark {
-            set_outbound_bypass_mark(mark);
-        }
-        if let Some(interface) = &outbound_interface {
-            set_outbound_interface_name(interface)
-                .with_context(|| format!("invalid TUN outbound interface '{interface}'"))?;
-        }
-
         Ok(Self {
             tasks,
-            shutdown_tx,
-            outbound_bypass_mark,
-            outbound_interface,
             reload,
             data_plane: DataPlaneStore::new(data_plane),
         })
@@ -867,46 +791,8 @@ impl Instance {
     }
 }
 
-impl Instance {
-    /// Signal graceful shutdown to the TUN runtime (if active).
-    ///
-    /// The runtime will run `cleanup_routes` before its task exits. Call this
-    /// before `wait()` or before dropping the instance so route cleanup has a
-    /// chance to complete.
-    pub fn shutdown(&self) {
-        if let Some(tx) = &self.shutdown_tx {
-            let _ = tx.send(true);
-        }
-    }
-
-    /// Reassert process-wide TUN socket settings after an old instance is dropped.
-    /// A prepared handover briefly owns both instances, so the old instance's
-    /// destructor must not leave the replacement's global socket policy cleared.
-    pub fn restore_process_network_settings(&self) -> Result<()> {
-        if let Some(mark) = self.outbound_bypass_mark {
-            set_outbound_bypass_mark(mark);
-        }
-        if let Some(interface) = &self.outbound_interface {
-            set_outbound_interface_name(interface)
-                .with_context(|| format!("invalid TUN outbound interface '{interface}'"))?;
-        }
-        Ok(())
-    }
-}
-
 impl Drop for Instance {
     fn drop(&mut self) {
-        // Signal graceful shutdown first so the TUN runtime can clean up
-        // iptables rules before we abort the task.
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(true);
-        }
-        if self.outbound_bypass_mark.take().is_some() {
-            clear_outbound_bypass_mark();
-        }
-        if self.outbound_interface.take().is_some() {
-            clear_outbound_interface_index();
-        }
         for task in &self.tasks {
             task.abort();
         }

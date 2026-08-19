@@ -345,6 +345,25 @@ This is the executable, `blackwire`.
 - how a real run starts
 - what command-line tools exist for operators
 
+## `blackwire-client`
+
+### Purpose
+
+This is the separate local proxy and full-device client executable.
+
+### Main Responsibilities
+
+- validate a file-owned client configuration
+- require a matching loopback SOCKS interception inbound
+- own the TUN device, routes, protected egress, and graceful cleanup
+- reuse the shared core, DNS/FakeIP, protocol, and transport implementations
+
+### Read First
+
+- `crates/blackwire-client/src/main.rs`
+- `crates/blackwire-client/src/lib.rs`
+- `docs/client-app.md`
+
 ## `blackwire-api`
 
 ### Purpose

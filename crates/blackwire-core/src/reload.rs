@@ -443,15 +443,6 @@ pub fn requires_instance_handover(old: &Config, new: &Config) -> bool {
     }
 
     match (
-        serde_json::to_value(&old.tun),
-        serde_json::to_value(&new.tun),
-    ) {
-        (Ok(a), Ok(b)) if a != b => return true,
-        (Err(_), _) | (_, Err(_)) => return true,
-        _ => {}
-    }
-
-    match (
         serde_json::to_value(&old.outbounds),
         serde_json::to_value(&new.outbounds),
     ) {

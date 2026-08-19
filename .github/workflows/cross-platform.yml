@@ -52,7 +52,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build Linux arm64 release binary
-        run: cargo build --release --locked --bin blackwire
+        run: cargo build --release --locked --bin blackwire --bin blackwire-client
       - name: Build and inspect Debian arm64 package
         shell: bash
         run: |

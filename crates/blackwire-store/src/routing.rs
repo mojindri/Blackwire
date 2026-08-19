@@ -11,8 +11,6 @@ pub struct RoutingDnsRecord {
     pub geoip_file: Option<String>,
     pub geosite_file: Option<String>,
     pub dns_servers: Vec<String>,
-    pub fake_ip_enabled: bool,
-    pub fake_ip_pool: String,
     pub rules: Vec<RouteWrite>,
     pub balancers: Vec<BalancerWrite>,
 }
@@ -24,8 +22,6 @@ pub struct RoutingDnsWrite {
     pub geoip_file: Option<String>,
     pub geosite_file: Option<String>,
     pub dns_servers: Vec<String>,
-    pub fake_ip_enabled: bool,
-    pub fake_ip_pool: String,
     pub rules: Vec<RouteWrite>,
     pub balancers: Vec<BalancerWrite>,
 }
@@ -102,20 +98,6 @@ impl Database {
             .as_ref()
             .and_then(|row| row.try_get("geosite_file").ok())
             .flatten();
-        let dns = sqlx::query("SELECT fake_ip_enabled,fake_ip_pool FROM dns_config WHERE revision_id=? AND enabled=TRUE")
-            .bind(revision).fetch_optional(self.pool()).await?;
-        let fake_ip_enabled = dns
-            .as_ref()
-            .and_then(|row| row.try_get("fake_ip_enabled").ok())
-            .unwrap_or(false);
-        let fake_ip_pool = dns
-            .as_ref()
-            .and_then(|row| {
-                row.try_get::<Option<String>, _>("fake_ip_pool")
-                    .ok()
-                    .flatten()
-            })
-            .unwrap_or_else(|| "198.18.0.0/15".into());
         let dns_servers = sqlx::query_scalar(
             "SELECT address FROM dns_servers WHERE revision_id=? ORDER BY position",
         )
@@ -211,8 +193,6 @@ impl Database {
             geoip_file,
             geosite_file,
             dns_servers,
-            fake_ip_enabled,
-            fake_ip_pool,
             rules,
             balancers,
         })
@@ -231,24 +211,16 @@ impl Database {
                 ));
             }
         }
-        if input.fake_ip_enabled && input.fake_ip_pool.trim().is_empty() {
-            return Err(StoreError::InvalidConfiguration(
-                "FakeIP pool must not be empty when FakeIP is enabled".into(),
-            ));
-        }
         let state = self.state().await?;
         let class = ActivationClass::HotSwap;
         let (mut tx, revision) = self
             .fork_revision(expected_revision, actor, "Save routing and DNS", class)
             .await?;
-        // Only replace the fields represented by this write model. Removing
-        // routing_config would cascade into balancers and would also discard
-        // GeoIP/GeoSite paths; replacing dns_config would silently disable
-        // FakeIP. Both are core settings that a basic UI edit must preserve.
+        // Only replace the fields represented by this server write model.
         sqlx::query("INSERT INTO routing_config (revision_id,enabled,domain_strategy,geoip_file,geosite_file) VALUES (?,TRUE,?,?,?) ON DUPLICATE KEY UPDATE enabled=TRUE,domain_strategy=VALUES(domain_strategy),geoip_file=VALUES(geoip_file),geosite_file=VALUES(geosite_file)")
             .bind(revision).bind(input.domain_strategy).bind(trimmed_option(input.geoip_file)).bind(trimmed_option(input.geosite_file)).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO dns_config (revision_id,enabled,fake_ip_enabled,fake_ip_pool) VALUES (?,TRUE,?,?) ON DUPLICATE KEY UPDATE enabled=TRUE,fake_ip_enabled=VALUES(fake_ip_enabled),fake_ip_pool=VALUES(fake_ip_pool)")
-            .bind(revision).bind(input.fake_ip_enabled).bind(input.fake_ip_enabled.then(|| input.fake_ip_pool.trim().to_owned())).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO dns_config (revision_id,enabled) VALUES (?,TRUE) ON DUPLICATE KEY UPDATE enabled=TRUE")
+            .bind(revision).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM routing_rules WHERE revision_id=?")
             .bind(revision)
             .execute(&mut *tx)

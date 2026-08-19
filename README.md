@@ -27,6 +27,8 @@ Black UI.
   [Feature Matrix](docs/feature-matrix.md).
 - Hiddify-compatible client subscription content derived from your database
   configuration.
+- A separate `blackwire-client` executable for local SOCKS and full-device TUN
+  operation without giving the server process route or device ownership.
 - Native systemd and Docker Compose deployment paths, plus CI, Rust tests, UI
   QA, and external-client interoperability checks.
 
@@ -121,6 +123,13 @@ The native service binds Black UI to `127.0.0.1:18080` by default. Keep it
 private or put it behind your own hardened HTTPS reverse proxy and access
 control. In Users, choose **Copy subscription** to copy database-derived
 client subscription content suitable for Hiddify.
+
+## Local Device Client
+
+TUN, protected egress, and FakeIP configuration belong to the separate client
+application, not Black UI or the server database. See the
+[client application guide](docs/client-app.md) and the typed
+[direct-mode example](examples/client-direct.json).
 
 ## Common Operations
 

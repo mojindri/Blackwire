@@ -742,14 +742,7 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                         })
                     };
                     if let Some(old) = old {
-                        old.instance.shutdown();
                         drop(old);
-                    }
-                    let guard = live_instance.lock().await;
-                    if let Some(running) = guard.as_ref() {
-                        if let Err(error) = running.instance.restore_process_network_settings() {
-                            error!(revision = stored.revision, %error, "failed to restore process network settings after handover");
-                        }
                     }
                 } else {
                     let reload = {
@@ -810,7 +803,6 @@ async fn prepare_instance_handover(
         .take()
         .context("active instance disappeared during exclusive handover")?;
     let previous_config = Arc::clone(&previous.config);
-    previous.instance.shutdown();
     drop(previous);
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -913,9 +905,7 @@ async fn shutdown_signal(instance: Arc<tokio::sync::Mutex<Option<RunningInstance
     }
 
     let mut guard = instance.lock().await;
-    if let Some(running) = guard.take() {
-        running.instance.shutdown();
-    }
+    guard.take();
 }
 
 impl RuntimeControl {
@@ -1162,7 +1152,6 @@ async fn import_bootstrap_fixture(
         quic: config.quic.clone(),
         datagram: config.datagram.clone(),
         fec: config.fec.clone(),
-        tun: config.tun.clone(),
     };
     revision = database
         .save_core_settings("blackwire-db-import", revision, core)
@@ -1185,8 +1174,6 @@ async fn import_bootstrap_fixture(
                 geoip_file: routing.geoip_file.clone(),
                 geosite_file: routing.geosite_file.clone(),
                 dns_servers: routing.dns_servers.clone(),
-                fake_ip_enabled: routing.fake_ip_enabled,
-                fake_ip_pool: routing.fake_ip_pool.clone(),
                 rules: vec![],
                 balancers: vec![],
             },
@@ -1340,10 +1327,6 @@ async fn import_bootstrap_fixture(
 
     if let Some(dns) = &config.dns {
         routing.dns_servers.clone_from(&dns.servers);
-        if let Some(fake_ip) = &dns.fake_ip {
-            routing.fake_ip_enabled = fake_ip.enabled;
-            routing.fake_ip_pool.clone_from(&fake_ip.pool);
-        }
     }
     revision = database
         .save_routing_dns(
@@ -1354,8 +1337,6 @@ async fn import_bootstrap_fixture(
                 geoip_file: routing.geoip_file,
                 geosite_file: routing.geosite_file,
                 dns_servers: routing.dns_servers,
-                fake_ip_enabled: routing.fake_ip_enabled,
-                fake_ip_pool: routing.fake_ip_pool,
                 rules: vec![],
                 balancers: vec![],
             },
@@ -1901,16 +1882,16 @@ fn effective_config(
     Arc::new(cfg)
 }
 
-/// The CLI owns the gRPC API server so HandlerService can rebuild the live
-/// `Instance`. Strip `api` before handing config to core to avoid a second API
-/// server being started by direct `Instance::from_config` compatibility code.
+/// The server CLI owns the gRPC API and never starts client-only TUN capture.
+/// Strip both before handing config to core.
 fn instance_runtime_config(base: &Arc<Config>) -> Arc<Config> {
-    if base.api.is_none() && base.metrics_addr.is_none() {
+    if base.api.is_none() && base.metrics_addr.is_none() && base.tun.is_none() {
         return Arc::clone(base);
     }
     let mut cfg = base.as_ref().clone();
     cfg.api = None;
     cfg.metrics_addr = None;
+    cfg.tun = None;
     Arc::new(cfg)
 }
 

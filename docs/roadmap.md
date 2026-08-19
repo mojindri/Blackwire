@@ -55,7 +55,7 @@ P1:
 
 - DNS bootstrap hardening for DoH/DoT.
 - DNS-over-proxy option for client-side modes.
-- DNS/FakeIP presets in Black UI.
+- DNS/FakeIP presets in a future graphical client shell.
 - No-leakage checklist for server, local proxy, and TUN modes.
 - Tests for DNS route, blocked route, and log-redaction behavior.
 

@@ -38,7 +38,12 @@ if rg -n 'pub\s+[^:]+:\s*(Option<)?serde_json::Value' \
     fail "a generic JSON value remains in a persistent configuration model"
 fi
 
+# Server and Black UI configuration must remain MySQL-only. The standalone
+# device client intentionally uses a local file because it has no control-plane
+# database dependency.
 if rg -n --glob '!docs/release.md' --glob '!docs/panel-qa.md' \
+    --glob '!docs/client-app.md' --glob '!docs/feature-matrix.md' \
+    --glob '!examples/client-*.json' \
     -- '--config\b|CONFIG_PATH\b|CONFIG_URL\b|BLACK_UI_CONFIG_PATH\b|config\.json' \
     crates/blackwire-cli crates/blackwire-app black-ui deploy README.md docs examples; then
     fail "an active file-configuration path or deployment instruction remains"

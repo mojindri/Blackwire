@@ -15,6 +15,14 @@ This project is pre-1.0. The support contract is owned by
   configurations that select `network: "kcp"` are rejected instead of being
   silently converted to another transport.
 
+### Changed
+
+- Moved TUN device capture, protected egress, and FakeIP configuration out of
+  the server runtime and Black UI into the dedicated `blackwire-client`
+  application. Shared protocol and platform implementations remain available;
+  only product ownership and configuration moved. Existing database values are
+  retained in archival tables for manual migration or rollback.
+
 ## 0.2.5 - 2026-08-19
 
 ### Fixed

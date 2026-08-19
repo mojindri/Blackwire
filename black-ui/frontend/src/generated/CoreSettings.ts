@@ -9,7 +9,6 @@ import type { LimitsConfig } from "./LimitsConfig";
 import type { ProfileMode } from "./ProfileMode";
 import type { QuicConfig } from "./QuicConfig";
 import type { StatsConfig } from "./StatsConfig";
-import type { TunConfig } from "./TunConfig";
 import type { VisionConfig } from "./VisionConfig";
 
-export type CoreSettings = { profile: ProfileMode, fast: FastConfig | null, budget: BudgetConfig | null, vision: VisionConfig | null, firstPacketBoost: FirstPacketBoostConfig | null, metricsAddr: string | null, api: ApiConfig | null, stats: StatsConfig | null, limits: LimitsConfig, quic: QuicConfig | null, datagram: DatagramConfig | null, fec: FecConfig | null, tun: TunConfig | null, };
+export type CoreSettings = { profile: ProfileMode, fast: FastConfig | null, budget: BudgetConfig | null, vision: VisionConfig | null, firstPacketBoost: FirstPacketBoostConfig | null, metricsAddr: string | null, api: ApiConfig | null, stats: StatsConfig | null, limits: LimitsConfig, quic: QuicConfig | null, datagram: DatagramConfig | null, fec: FecConfig | null, };

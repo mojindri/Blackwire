@@ -206,8 +206,6 @@ export interface RoutingDns {
   geoipFile: string | null;
   geositeFile: string | null;
   dnsServers: string[];
-  fakeIpEnabled: boolean;
-  fakeIpPool: string;
   rules: RouteInput[];
   balancers: BalancerInput[];
 }

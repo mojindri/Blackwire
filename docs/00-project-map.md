@@ -89,6 +89,9 @@ The workspace root `Cargo.toml` declares these crates:
 - `blackwire-cli`
   The `blackwire` binary entrypoint.
 
+- `blackwire-client`
+  The separate local/TUN client entrypoint and device-lifecycle owner.
+
 - `blackwire-api`
   gRPC management/stats surface (Handler + Stats services) used by runtime control-plane operations.
 
@@ -98,6 +101,9 @@ The workspace root `Cargo.toml` declares these crates:
 ## How Startup Works
 
 The startup path begins in `crates/blackwire-cli/src/main.rs`.
+
+Device-client startup begins in `crates/blackwire-client/src/main.rs`; see
+[client-app.md](client-app.md).
 
 The normal `run` command does this:
 
@@ -384,3 +390,6 @@ Use this simplified map:
 
 - `blackwire-cli`
   the executable
+
+- `blackwire-client`
+  the local proxy and full-device client executable
