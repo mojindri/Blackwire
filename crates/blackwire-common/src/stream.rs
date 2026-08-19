@@ -172,8 +172,6 @@ pub enum RelayCapability {
     WebSocketFrames,
     /// HTTP/2 DATA frames carrying proxy payload.
     Http2Data,
-    /// QUIC stream (reliable, ordered).
-    QuicStream,
     /// QUIC DATAGRAM (unreliable, unordered).
     QuicDatagram,
     /// Raw packet mode (UDP-like encapsulation).

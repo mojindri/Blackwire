@@ -81,12 +81,6 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "security=shadowtls, not a protocol",
             ),
             item(
-                "quic",
-                "QUIC",
-                "supported",
-                "V2Ray QUIC transport; sing-box interop covered, Xray 26+ legacy-client row is skipped",
-            ),
-            item(
                 "httpupgrade",
                 "HTTPUpgrade",
                 "supported",
@@ -207,20 +201,6 @@ mod tests {
         assert_eq!(tuic.status, "supported");
         assert!(tuic.notes.contains("native UDP relay"));
         assert!(tuic.notes.contains("network path"));
-    }
-
-    #[test]
-    fn quic_transport_is_supported_with_documented_client_limits() {
-        let capabilities = blackwire_capabilities();
-        let quic = capabilities
-            .transports
-            .iter()
-            .find(|item| item.key == "quic")
-            .expect("QUIC transport should remain visible to Black UI");
-
-        assert_eq!(quic.status, "supported");
-        assert!(quic.notes.contains("sing-box"));
-        assert!(quic.notes.contains("Xray 26+"));
     }
 
     #[test]

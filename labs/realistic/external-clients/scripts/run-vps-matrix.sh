@@ -106,7 +106,6 @@ port_for_protocol() {
         vless-udp) echo 10081 ;;
         vless-ws) echo 8443 ;;
         vless-httpupgrade) echo 8446 ;;
-        vless-quic) echo 8447 ;;
         vless-splithttp|vless-splithttp-packet-up) echo 8448 ;;
         vmess-grpc) echo 8444 ;;
         ss2022) echo 8388 ;;
@@ -168,7 +167,7 @@ wait_for_server_port() {
             sleep ${PORT_WAIT_SLEEP}; done; exit 1" || return 1
         return 0
     fi
-    if [[ "$protocol" == "hysteria2" || "$protocol" == "tuic" || "$protocol" == "vless-quic" ]]; then
+    if [[ "$protocol" == "hysteria2" || "$protocol" == "tuic" ]]; then
         sleep 2
         return 0
     fi

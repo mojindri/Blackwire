@@ -423,6 +423,10 @@ export function validateOutboundState(state: OutboundEditorState): OutboundValid
   }
   if (!state.enabled) return issues;
 
+  if (state.network === "quic" && state.protocol !== "hysteria2" && state.protocol !== "tuic") {
+    issues.push({ field: "network", message: "Generic V2Ray QUIC was removed. Choose a supported stream transport." });
+  }
+
   if (state.protocol === "vless" || state.protocol === "vmess") {
     validateAddressPort(issues, state, state.protocol.toUpperCase());
     if (!state.userId.trim()) {

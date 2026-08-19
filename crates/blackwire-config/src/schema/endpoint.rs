@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use serde::{Deserialize, Serialize};
 use validator::{Validate, ValidationError, ValidationErrors};
 
-use super::{Protocol, SecurityType, SniffingConfig, StreamSettingsConfig};
+use super::{NetworkType, Protocol, SecurityType, SniffingConfig, StreamSettingsConfig};
 
 fn reject_shadowtls_protocol(protocol: &Protocol) -> Result<(), ValidationError> {
     if *protocol == Protocol::ShadowTls {
@@ -11,6 +11,23 @@ fn reject_shadowtls_protocol(protocol: &Protocol) -> Result<(), ValidationError>
         error.message = Some(
             "protocol 'shadowtls' is not a standalone proxy protocol; \
              use 'security: shadowtls' in streamSettings on a VLESS, Trojan, or VMess endpoint"
+                .into(),
+        );
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn reject_generic_quic_transport(
+    protocol: &Protocol,
+    stream: &StreamSettingsConfig,
+) -> Result<(), ValidationError> {
+    if stream.network == NetworkType::Quic
+        && !matches!(protocol, Protocol::Hysteria2 | Protocol::Tuic)
+    {
+        let mut error = ValidationError::new("unsupported_transport");
+        error.message = Some(
+            "generic V2Ray QUIC transport was removed; use Hysteria2/TUIC or a supported stream transport"
                 .into(),
         );
         return Err(error);
@@ -70,6 +87,9 @@ impl Validate for InboundConfig {
         }
 
         if let Some(stream) = &self.stream_settings {
+            if let Err(error) = reject_generic_quic_transport(&self.protocol, stream) {
+                errors.add("streamSettings.network", error);
+            }
             if stream.security == SecurityType::Reality {
                 match stream.reality_settings.as_ref() {
                     Some(reality) if reality.dest.trim().is_empty() => {
@@ -145,6 +165,12 @@ impl Validate for OutboundConfig {
             let mut error = ValidationError::new("range");
             error.message = Some("outbound settings.port must be between 1 and 65535".into());
             errors.add("settings.port", error);
+        }
+
+        if let Some(stream) = &self.stream_settings {
+            if let Err(error) = reject_generic_quic_transport(&self.protocol, stream) {
+                errors.add("streamSettings.network", error);
+            }
         }
 
         if errors.is_empty() {

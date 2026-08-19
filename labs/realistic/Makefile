@@ -76,7 +76,7 @@ xray: ## Deprecated: use make interop-client-reality
 	@echo "Deprecated alias: use make interop-client-reality"
 	$(MAKE) interop-client-reality
 
-advanced-features-smoke: ## Smoke tests: ShadowTLS, QUIC/SplitHTTP VLESS, health/failover, DNS/geo routing guards
+advanced-features-smoke: ## Smoke tests: ShadowTLS/SplitHTTP VLESS, health/failover, DNS/geo routing guards
 	@set -euo pipefail; \
 	log="$(CURDIR)/$(REPORTS)/advanced-features-smoke.log"; \
 	mkdir -p "$(CURDIR)/$(REPORTS)"; \
@@ -87,7 +87,6 @@ advanced-features-smoke: ## Smoke tests: ShadowTLS, QUIC/SplitHTTP VLESS, health
 	  shift; \
 	  cargo test --locked "$$@" 2>&1 | tee -a "$$log"; \
 	}; \
-	run "VLESS QUIC" -p integration-tests --test e2e_vless_quic vless_quic_echo; \
 	run "VLESS SplitHTTP" -p integration-tests --test e2e_vless_splithttp vless_splithttp_echo; \
 	run "ShadowTLS v3" -p integration-tests --test e2e_vless_shadowtls vless_over_shadowtls_v3_transfers_data; \
 	run "health / failover guards" -p blackwire-core --test production_readiness balancer_rejects_missing_selector_outbound; \

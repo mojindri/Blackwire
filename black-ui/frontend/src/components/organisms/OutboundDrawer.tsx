@@ -74,25 +74,33 @@ export function OutboundDrawer({
     () => {
       const visible =
         capabilities?.transports.filter((item) =>
-          ["tcp", "ws", "grpc", "httpupgrade", "splithttp", "quic"].includes(item.key)
+          ["tcp", "ws", "grpc", "httpupgrade", "splithttp"].includes(item.key)
         ) ?? [
           { key: "tcp", label: "TCP", status: "supported", notes: "" },
           { key: "ws", label: "WebSocket", status: "supported", notes: "" },
           { key: "grpc", label: "gRPC", status: "supported", notes: "" },
           { key: "httpupgrade", label: "HTTPUpgrade", status: "supported", notes: "" },
-          { key: "splithttp", label: "SplitHTTP", status: "supported", notes: "" },
-          { key: "quic", label: "QUIC", status: "supported", notes: "" }
+          { key: "splithttp", label: "SplitHTTP", status: "supported", notes: "" }
         ];
+      if (
+        (state.protocol === "hysteria2" || state.protocol === "tuic") &&
+        !visible.some((item) => item.key === "quic")
+      ) {
+        return [
+          ...visible,
+          { key: "quic", label: "Native QUIC", status: "supported", notes: "Built into this protocol" }
+        ];
+      }
       const current = capabilities?.transports.find((item) => item.key === state.network);
       if (current && !visible.some((item) => item.key === current.key)) {
         return [...visible, current];
       }
-      if (!current && state.network && !visible.some((item) => item.key === state.network)) {
+      if (!current && state.network !== "quic" && state.network && !visible.some((item) => item.key === state.network)) {
         return [...visible, { key: state.network, label: state.network, status: "deprecated", notes: "Legacy transport retained for editing existing configs" }];
       }
       return visible;
     },
-    [capabilities, state.network]
+    [capabilities, state.network, state.protocol]
   );
   const securityOptions = useMemo(
     () =>
@@ -371,10 +379,6 @@ export function OutboundDrawer({
 
             {state.network === "splithttp" ? (
               <SplitHttpFields value={state.splitHttp} onChange={(splitHttp) => updateStructured({ splitHttp })} />
-            ) : null}
-
-            {state.network === "quic" ? (
-              <p className="field-hint">QUIC transport uses the runtime defaults. Hysteria2 exposes its additional socket tuning as typed controls below.</p>
             ) : null}
 
             {state.protocol === "hysteria2" ? <>

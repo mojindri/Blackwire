@@ -455,11 +455,10 @@ export function inboundCompatibilityNotice(
         "TUIC v5 is supported for QUIC TCP proxying and native UDP relay. Throughput and UDP behavior still depend on the client, firewall, NAT, and network path."
     };
   }
-  if (network === "quic") {
-    const prefix = protocol === "vmess" ? "VMess over QUIC" : "QUIC transport";
+  if (network === "quic" && protocol !== "hysteria2" && protocol !== "tuic") {
     return {
       tone: "warning",
-      message: `${prefix} remains available, but external-client support varies and UDP route issues can break global/TUN traffic. Prefer TCP, WebSocket, gRPC, or SplitHTTP for the main profile.`
+      message: "Generic V2Ray QUIC transport was removed. Choose TCP, WebSocket, gRPC, HTTPUpgrade, or SplitHTTP before saving."
     };
   }
   if (protocol === "hysteria2") {
@@ -496,6 +495,9 @@ export function validateInboundState(state: InboundEditorState): InboundValidati
   }
   if (!Number.isInteger(state.port) || state.port < 1 || state.port > 65535) {
     issues.push({ field: "port", message: "Port must be between 1 and 65535." });
+  }
+  if (state.network === "quic" && state.protocol !== "hysteria2" && state.protocol !== "tuic") {
+    issues.push({ field: "network", message: "Generic V2Ray QUIC was removed. Choose a supported stream transport." });
   }
   if (state.security === "tls") {
     if (!state.tlsServerName.trim()) {

@@ -106,7 +106,6 @@ blackwire lacks the server transport. See [docs/parity-status.md](../../../docs/
 
 | Row | Typical SKIP reason |
 |-----|---------------------|
-| `vless-quic` | Xray 26+ removed QUIC client transport (sing-box proves row) |
 | `tuic` | Xray client is SKIP; sing-box row exercises TUIC v5 TCP and native UDP |
 | `vless-splithttp` | stream-one only (not packet-up); was SKIP until mode aligned |
 | `vless-splithttp-packet-up` | Xray PASS; sing-box SKIP (upstream has no packet-up) |

@@ -42,7 +42,7 @@ A **SKIP** in `reports/external-clients/summary.txt` means the lab did not run t
 | Typical pattern | Meaning |
 |-----------------|--------|
 | Server e2e PASS + matrix client SKIP | blackwire implements the transport; latest Xray/sing-box clients cannot be configured the way the row expects (or we skip by policy). |
-| sing-box PASS + Xray SKIP | Row is proven for interop; document Xray upstream limitation (e.g. QUIC on Xray 26+). |
+| sing-box PASS + Xray SKIP | Row is proven for interop; document the relevant upstream limitation. |
 | Both clients SKIP, negatives PASS | Server config loads; auth rejection works; no positive client proof in matrix. |
 
 See the SKIP table in [parity-status.md](parity-status.md).

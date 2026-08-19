@@ -12,7 +12,7 @@ It has two jobs:
 | Goal | Command |
 |------|---------|
 | Everyday Rust confidence | `make -C labs/realistic stable` |
-| ShadowTLS, QUIC/SplitHTTP e2e, health/DNS guards + failover runtime | `make -C labs/realistic advanced-features-smoke` |
+| ShadowTLS/SplitHTTP e2e, health/DNS guards + failover runtime | `make -C labs/realistic advanced-features-smoke` |
 | Health-check outbound failover (e2e + optional Docker) | `make -C labs/realistic health-failover` |
 | Xray/sing-box clients → our server (Docker) | `make -C labs/realistic interop-server-docker` |
 | All local pre-push checks | `make -C labs/realistic finalize` |
@@ -35,7 +35,7 @@ make -C labs/realistic docker-full
 Reports: `labs/realistic/reports/`.
 
 ```sh
-make -C labs/realistic advanced-features-smoke   # ShadowTLS, QUIC/SplitHTTP, guards
+make -C labs/realistic advanced-features-smoke   # ShadowTLS/SplitHTTP, guards
 make -C labs/realistic negative-auth
 make -C labs/realistic restart-smoke
 make -C labs/realistic stress

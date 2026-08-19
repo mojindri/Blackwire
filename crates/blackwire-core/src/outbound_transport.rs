@@ -30,8 +30,8 @@ use blackwire_protocol::vless::{
 };
 use blackwire_protocol::vmess::{auth::cmd_key, connect_vmess_on_stream};
 use blackwire_transport::{
-    dial_httpupgrade, grpc_connect, quic_connect, shadowtls_v3_connect, splithttp_connect,
-    tls_connect, ws_connect, WsConnectConfig,
+    dial_httpupgrade, grpc_connect, shadowtls_v3_connect, splithttp_connect, tls_connect,
+    ws_connect, WsConnectConfig,
 };
 
 const OUTBOUND_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -194,21 +194,6 @@ async fn connect_transport(
     let network = settings.map(|s| &s.network);
     let security = settings.map(|s| &s.security);
 
-    if network == Some(&NetworkType::Quic) {
-        let Some(settings) = settings else {
-            return Err(ProxyError::Protocol(
-                "network=quic requested without streamSettings".into(),
-            ));
-        };
-        let tls = settings.tls_settings.as_ref();
-        let server_name = tls
-            .map(|t| t.server_name.as_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or("localhost");
-        let allow_insecure = tls.is_some_and(|t| t.allow_insecure);
-        return quic_connect(server, server_name, allow_insecure).await;
-    }
-
     if network == Some(&NetworkType::HttpUpgrade) {
         let Some(settings) = settings else {
             return Err(ProxyError::Protocol(
@@ -365,17 +350,10 @@ async fn connect_transport(
 pub(crate) fn uses_outbound_transport(stream_settings: &Option<StreamSettingsConfig>) -> bool {
     uses_tls(stream_settings)
         || uses_shadowtls(stream_settings)
-        || uses_quic(stream_settings)
         || uses_httpupgrade(stream_settings)
         || uses_splithttp(stream_settings)
         || uses_ws(stream_settings)
         || uses_grpc(stream_settings)
-}
-
-pub(crate) fn uses_quic(stream_settings: &Option<StreamSettingsConfig>) -> bool {
-    stream_settings
-        .as_ref()
-        .is_some_and(|s| s.network == NetworkType::Quic)
 }
 
 fn uses_httpupgrade(stream_settings: &Option<StreamSettingsConfig>) -> bool {

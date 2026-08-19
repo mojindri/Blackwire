@@ -888,7 +888,7 @@ fn validate_inbound(input: &InboundWrite) -> StoreResult<()> {
             input.protocol
         )));
     }
-    validate_transport_security(&input.transport, &input.security)
+    validate_transport_security(&input.protocol, &input.transport, &input.security)
 }
 
 fn validate_outbound(input: &OutboundWrite) -> StoreResult<()> {
@@ -914,10 +914,10 @@ fn validate_outbound(input: &OutboundWrite) -> StoreResult<()> {
             "non-freedom outbounds require a server address and port".into(),
         ));
     }
-    validate_transport_security(&input.transport, &input.security)
+    validate_transport_security(&input.protocol, &input.transport, &input.security)
 }
 
-fn validate_transport_security(transport: &str, security: &str) -> StoreResult<()> {
+fn validate_transport_security(protocol: &str, transport: &str, security: &str) -> StoreResult<()> {
     if !matches!(
         transport,
         "tcp" | "ws" | "grpc" | "httpupgrade" | "splithttp" | "quic"
@@ -930,6 +930,12 @@ fn validate_transport_security(transport: &str, security: &str) -> StoreResult<(
         return Err(StoreError::InvalidConfiguration(format!(
             "unsupported security mode '{security}'"
         )));
+    }
+    if transport == "quic" && !matches!(protocol, "hysteria2" | "tuic") {
+        return Err(StoreError::InvalidConfiguration(
+            "generic V2Ray QUIC transport was removed; use Hysteria2/TUIC or a supported stream transport"
+                .into(),
+        ));
     }
     Ok(())
 }

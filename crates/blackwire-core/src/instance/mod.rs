@@ -34,11 +34,10 @@ use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
-use tracing::{error, info, warn};
+use tracing::info;
 
 use blackwire_app::dispatcher::{DefaultDispatcher, Dispatcher};
 use blackwire_app::features::{ConnectionHandler, InboundHandler, OutboundHandler};
@@ -56,11 +55,8 @@ use tokio::net::UdpSocket as TokioUdpSocket;
 
 use crate::data_plane::{compile_data_plane, DataPlaneStore};
 use crate::http::build_http_inbound;
-use crate::hysteria2::{
-    build_hysteria2_outbound, socket_config_from_quic, start_hysteria2_inbound,
-};
+use crate::hysteria2::{build_hysteria2_outbound, start_hysteria2_inbound};
 use crate::net::listen_socket_addr;
-use crate::outbound_transport::uses_quic;
 use crate::tuic::{build_tuic_outbound, start_tuic_inbound};
 mod helpers;
 
@@ -82,27 +78,6 @@ use helpers::{
     initial_health_states, reject_unfinished_transport_settings, select_balancer_outbounds,
     InboundConnectionHandler,
 };
-
-fn try_acquire_global_permit(
-    limiter: Option<&Arc<Semaphore>>,
-    addr: SocketAddr,
-    transport: &'static str,
-) -> Option<Option<OwnedSemaphorePermit>> {
-    let Some(limiter) = limiter else {
-        return Some(None);
-    };
-    match Arc::clone(limiter).try_acquire_owned() {
-        Ok(permit) => Some(Some(permit)),
-        Err(_) => {
-            warn!(
-                addr = %addr,
-                transport,
-                "global connection limit reached; dropping inbound connection"
-            );
-            None
-        }
-    }
-}
 
 fn apply_pool_overrides(mut cfg: PoolConfig, source: &PoolSettings) -> PoolConfig {
     if let Some(v) = source.max_per_dest {
@@ -552,109 +527,6 @@ impl Instance {
             info!(tag = %handler.tag(), addr = %addr, "starting inbound listener");
 
             let dispatcher_for_handler = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
-
-            if uses_quic(&in_cfg.stream_settings) {
-                let tls_cfg = in_cfg
-                    .stream_settings
-                    .as_ref()
-                    .and_then(|s| s.tls_settings.as_ref())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "inbound '{}' uses network=quic but has no tlsSettings",
-                            in_cfg.tag
-                        )
-                    })?;
-                if tls_cfg.certificate_file.is_empty() || tls_cfg.key_file.is_empty() {
-                    anyhow::bail!(
-                        "inbound '{}' uses network=quic and requires certificateFile/keyFile",
-                        in_cfg.tag
-                    );
-                }
-
-                let cert_pem =
-                    std::fs::read_to_string(&tls_cfg.certificate_file).with_context(|| {
-                        format!("cannot read QUIC cert file '{}'", tls_cfg.certificate_file)
-                    })?;
-                let key_pem = std::fs::read_to_string(&tls_cfg.key_file)
-                    .with_context(|| format!("cannot read QUIC key file '{}'", tls_cfg.key_file))?;
-                let endpoint = blackwire_transport::quic_server_endpoint_with_socket_config(
-                    addr,
-                    &cert_pem,
-                    &key_pem,
-                    socket_config_from_quic(config.quic.as_ref()),
-                )
-                .with_context(|| format!("binding QUIC inbound '{}'", in_cfg.tag))?;
-                let conn_handler = Arc::new(InboundConnectionHandler {
-                    inbound: Arc::clone(&handler),
-                    dispatcher: dispatcher_for_handler,
-                });
-
-                let quic_sem = in_cfg
-                    .limits
-                    .as_ref()
-                    .and_then(|l| l.max_connections)
-                    .or(config.limits.max_connections_per_inbound)
-                    .map(|n| Arc::new(Semaphore::new(n)));
-                let quic_global_limiter = global_connection_limiter.as_ref().map(Arc::clone);
-
-                let task = tokio::spawn(async move {
-                    while let Some(connecting) = endpoint.accept().await {
-                        let conn_handler = Arc::clone(&conn_handler);
-                        let Some(global_permit) =
-                            try_acquire_global_permit(quic_global_limiter.as_ref(), addr, "quic")
-                        else {
-                            continue;
-                        };
-                        let local_permit = if let Some(sem) = &quic_sem {
-                            match Arc::clone(sem).try_acquire_owned() {
-                                Ok(p) => Some(p),
-                                Err(_) => {
-                                    warn!(addr = %addr, "QUIC connection limit reached; dropping connection");
-                                    continue;
-                                }
-                            }
-                        } else {
-                            None
-                        };
-                        tokio::spawn(async move {
-                            let _permits = (global_permit, local_permit);
-                            let connection = match connecting.await {
-                                Ok(connection) => connection,
-                                Err(e) => {
-                                    error!(addr = %addr, error = %e, "QUIC connection handshake failed");
-                                    return;
-                                }
-                            };
-                            let peer = connection.remote_address();
-                            loop {
-                                match connection.accept_bi().await {
-                                    Ok((send, recv)) => {
-                                        let conn_handler = Arc::clone(&conn_handler);
-                                        let stream = blackwire_transport::accepted_quic_stream(
-                                            connection.clone(),
-                                            recv,
-                                            send,
-                                        );
-                                        tokio::spawn(async move {
-                                            if let Err(e) =
-                                                conn_handler.handle_connection(stream, peer).await
-                                            {
-                                                error!(addr = %addr, error = %e, "QUIC inbound stream failed");
-                                            }
-                                        });
-                                    }
-                                    Err(e) => {
-                                        let _ = e;
-                                        break;
-                                    }
-                                }
-                            }
-                        });
-                    }
-                });
-                tasks.push(task);
-                continue;
-            }
 
             // Choose the connection handler stack based on stream settings.
             let conn_handler: Arc<dyn ConnectionHandler> = if uses_reality(&in_cfg.stream_settings)

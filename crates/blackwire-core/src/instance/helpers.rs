@@ -72,12 +72,20 @@ pub(crate) fn initial_health_states(
 pub(crate) fn reject_unfinished_transport_settings(
     side: &str,
     tag: &str,
-    _protocol: Protocol,
+    protocol: Protocol,
     stream_settings: &Option<StreamSettingsConfig>,
 ) -> Result<()> {
     let Some(settings) = stream_settings else {
         return Ok(());
     };
+
+    if settings.network == blackwire_config::schema::NetworkType::Quic
+        && !matches!(protocol, Protocol::Hysteria2 | Protocol::Tuic)
+    {
+        anyhow::bail!(
+            "{side} '{tag}' requests removed generic V2Ray QUIC transport; use Hysteria2/TUIC or a supported stream transport"
+        );
+    }
 
     if settings.security == SecurityType::ShadowTls {
         let shadow = settings.shadow_tls_settings.as_ref().ok_or_else(|| {

@@ -93,7 +93,7 @@ Done/matrix-proven highlights:
 - SS2022 UDP
 - Trojan/VLESS UDP outbound
 - Health-check outbound failover
-- QUIC server with documented Xray SKIP / sing-box PASS
+- Native Hysteria2 and TUIC QUIC servers
 - XTLS Vision
 - Hot-reload routing/users
 - Handler gRPC structural operations

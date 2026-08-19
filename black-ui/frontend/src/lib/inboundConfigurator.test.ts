@@ -406,7 +406,7 @@ describe("inboundConfigurator", () => {
   it("surfaces non-blocking compatibility notices for client-sensitive inbounds", () => {
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "tuic" })?.tone).toBe("info");
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "tuic" })?.message).toContain("TUIC v5 is supported");
-    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "vmess", network: "quic" })?.message).toContain("VMess over QUIC");
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "vmess", network: "quic" })?.message).toContain("was removed");
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "hysteria2" })?.tone).toBe("info");
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), network: "ws", security: "reality" })?.message).toContain(
       "REALITY is best on TCP-compatible transport paths"
@@ -559,8 +559,7 @@ describe("inboundConfigurator", () => {
       { network: "ws", settings: { wsSettings: { path: "/ws", headers: { Host: "ws.example.com" } } }, extras: { wsPath: "/ws", wsHost: "ws.example.com" } },
       { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
       { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
-      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
-      { network: "quic", settings: {}, extras: {} }
+      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } }
     ] as const;
 
     const securities = [
@@ -628,8 +627,7 @@ describe("inboundConfigurator", () => {
       { network: "ws", settings: { wsSettings: { path: "/ws", headers: { Host: "ws.example.com" } } }, extras: { wsPath: "/ws", wsHost: "ws.example.com" } },
       { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
       { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
-      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
-      { network: "quic", settings: {}, extras: {} }
+      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } }
     ] as const;
     const securities = [
       { security: "none", patch: {}, settings: {} },
@@ -743,6 +741,16 @@ describe("inboundConfigurator", () => {
         listen: "127.0.0.1"
       }).some((issue) => issue.field === "listen")
     ).toBe(false);
+  });
+
+  it("rejects the removed generic V2Ray QUIC transport", () => {
+    const issues = validateInboundState({
+      ...createInboundEditorState(),
+      protocol: "vless",
+      network: "quic"
+    });
+
+    expect(issues.some((issue) => issue.field === "network")).toBe(true);
   });
 
   it("serializes sniffing and limits while clearing them when no longer needed", () => {

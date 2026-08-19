@@ -114,7 +114,6 @@ ufw allow 8389/udp  # SS2022 UDP
 ufw allow 4433/udp  # Hysteria2 QUIC
 ufw allow 9443/udp  # TUIC v5 QUIC
 ufw allow 8446/tcp  # VLESS HTTPUpgrade
-ufw allow 8447/udp  # VLESS QUIC
 ufw allow 8448/tcp  # VLESS SplitHTTP
 ufw allow 10081/tcp # VLESS UDP (TCP control)
 ufw allow 10082/tcp # VLESS Vision

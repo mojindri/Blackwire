@@ -8,7 +8,7 @@
 //!   - **WebSocket** — HTTP upgrade to WebSocket protocol
 //!   - **REALITY** — TLS camouflage using a real destination site
 //!   - **gRPC** — HTTP/2 framing via tonic
-//!   - **QUIC** — UDP-based transport for VLESS/VMess and Hysteria2
+//!   - **QUIC** — UDP-based transport for native Hysteria2 and TUIC
 //!   - **TUN** — OS network interface for full-device routing
 //!
 //! Each transport converts its connection type into a `BoxedStream`, which
@@ -21,7 +21,7 @@ mod pem;
 pub mod reality;
 pub mod tcp;
 
-// QUIC and Hysteria2
+// Native QUIC protocols
 pub mod hysteria2;
 /// Packet classification and deficit-round-robin scheduler for TUN inner flows.
 pub mod innerflow;
@@ -45,9 +45,6 @@ pub mod tun;
 
 // gRPC transport
 pub mod grpc;
-
-/// Generic QUIC transport for VLESS / VMess stream protocols.
-pub mod v2rayquic;
 
 // ShadowTLS v3 transport
 pub mod shadowtls;
@@ -98,10 +95,6 @@ pub use tun::{
     build_tcp_packet, build_tcp_rst, create_tun, current_tun_support, ensure_tun_runtime_supported,
     IpPacket, TransportProtocol, TunBatchConfig, TunConfig, TunDevice, TunPlatformSupport,
     TunRuntime, UdpNatTable,
-};
-pub use v2rayquic::{
-    accepted_quic_stream, quic_connect, quic_connect_with_socket_config, quic_server_endpoint,
-    quic_server_endpoint_with_socket_config, QuicStream,
 };
 pub use ws::{ws_accept, ws_connect, WsConnectConfig};
 

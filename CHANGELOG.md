@@ -10,6 +10,11 @@ This project is pre-1.0. The support contract is owned by
 
 ### Removed
 
+- Removed the legacy generic V2Ray QUIC transport for VLESS, VMess, and Trojan,
+  including runtime wiring, Black UI controls, subscription capability claims,
+  external-client labs, and e2e coverage. Hysteria2 and TUIC retain their
+  native QUIC implementations; legacy `network: "quic"` stream configurations
+  now fail validation.
 - Removed the deprecated mKCP transport from the runtime, configuration schema,
   Black UI, persistence layer, test labs, and capability reporting. Existing
   configurations that select `network: "kcp"` are rejected instead of being

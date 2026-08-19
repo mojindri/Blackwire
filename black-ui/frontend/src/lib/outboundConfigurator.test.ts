@@ -170,6 +170,19 @@ describe("outboundConfigurator", () => {
     expect(issues.map((issue) => issue.field)).toEqual(["address", "port"]);
   });
 
+  it("rejects the removed generic V2Ray QUIC transport", () => {
+    const issues = validateOutboundState({
+      ...createOutboundEditorState(),
+      protocol: "trojan",
+      address: "203.0.113.10",
+      port: "443",
+      password: "secret",
+      network: "quic"
+    });
+
+    expect(issues.some((issue) => issue.field === "network")).toBe(true);
+  });
+
   it("serializes freedom IP strategy and IPv6 literal guard", () => {
     const built = buildOutboundInput(
       syncOutboundAfterStructuredChange({
@@ -438,8 +451,7 @@ describe("outboundConfigurator", () => {
       { network: "ws", settings: { wsSettings: { path: "/ws", headers: { Host: "ws.example.com" } } }, extras: { wsPath: "/ws", wsHost: "ws.example.com" } },
       { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
       { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
-      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
-      { network: "quic", settings: {}, extras: {} }
+      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } }
     ] as const;
 
     const securities = [

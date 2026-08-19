@@ -783,7 +783,8 @@ client -> UDP packets carrying QUIC -> server
 
 QUIC is not just "TCP over UDP". It has its own connection model.
 
-Hysteria2 and some V2Ray QUIC paths rely on QUIC behavior.
+Hysteria2 and TUIC rely on QUIC behavior. The legacy generic V2Ray QUIC stream
+transport is intentionally unsupported.
 
 Code to read:
 
