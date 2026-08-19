@@ -130,6 +130,10 @@ pub async fn relay_bidirectional_with_policies_and_recorder(
             Err(inbound) => {
                 let inbound = match try_into_vision_stream(inbound) {
                     Ok(vision) => {
+                        tracing::debug!(
+                            phase = ?vision.lower_state(),
+                            "recovered XTLS Vision stream for specialized relay"
+                        );
                         return relay_vision_inbound_with_splice_policy(
                             vision,
                             outbound,
@@ -369,6 +373,7 @@ async fn relay_vision_inbound_portable(
                     if let Some(recorder) = &traffic_recorder {
                         recorder.record(n as u64, 0);
                     }
+                    inbound.complete_server_direct_handoff().await?;
                 }
             }
         }
@@ -434,6 +439,7 @@ async fn relay_vision_inbound_with_splice_policy(
 
     loop {
         if inbound.is_direct_copy_ready() && inbound.inner_is_tcp_like() && !up_eof && !down_eof {
+            tracing::debug!("XTLS Vision relay entering authenticated direct-copy mode");
             metrics::counter!("blackwire_vision_direct_copy_ready_total").increment(1);
 
             let inbound_inner = inbound.into_inner();
@@ -629,6 +635,7 @@ async fn relay_vision_inbound_with_splice_policy(
                     if let Some(recorder) = &traffic_recorder {
                         recorder.record(report.bytes as u64, 0);
                     }
+                    inbound.complete_server_direct_handoff().await?;
                 }
             }
         }

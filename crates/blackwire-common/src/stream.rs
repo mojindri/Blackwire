@@ -396,6 +396,7 @@ pub struct VisionStream<S> {
     write_pos: usize,
     write_pending_consumed: usize,
     write_pending_direct: bool,
+    server_inbound: bool,
 }
 
 impl<S> VisionStream<S> {
@@ -414,25 +415,47 @@ impl<S> VisionStream<S> {
             write_pos: 0,
             write_pending_consumed: 0,
             write_pending_direct: false,
+            server_inbound: false,
         }
     }
 
     /// Wrap a server-side inbound Vision stream.
     ///
-    /// Xray clients accept raw downlink bytes when no Vision UUID padding frame
-    /// is present, while uplink still needs Vision unpadding. This keeps the
-    /// server path compatible with Xray and lets direct copy become ready after
-    /// the client switches its uplink to direct mode.
+    /// Server downlink must remain Vision-framed until both peers authenticate
+    /// the direct-copy transition. Destination handshake bytes use `continue`;
+    /// after the client's uplink `direct` command, the server sends its own
+    /// `direct` command before either direction leaves outer REALITY TLS.
     pub fn new_server_inbound(inner: S, uuid: [u8; 16]) -> Self {
         let mut stream = Self::new(inner, uuid);
-        stream.write_uuid_once = false;
-        stream.write_direct_copy = true;
+        stream.server_inbound = true;
         stream
     }
 
     /// Unwrap the underlying stream after Vision processing.
     pub fn into_inner(self) -> S {
         self.inner
+    }
+
+    /// Restore plaintext that an outer peeking adapter already consumed.
+    ///
+    /// Sniffing runs above Vision and therefore sees bytes after Vision
+    /// unpadding.  When relay infrastructure removes that outer adapter, the
+    /// bytes must be queued here instead of being inserted below Vision and
+    /// parsed as padding a second time.
+    fn prepend_plaintext(&mut self, prefix: Vec<u8>) {
+        if prefix.is_empty() {
+            return;
+        }
+
+        if self.read_buf.is_empty() {
+            self.read_buf = BytesMut::from(prefix.as_slice());
+            return;
+        }
+
+        let mut combined = BytesMut::with_capacity(prefix.len() + self.read_buf.len());
+        combined.extend_from_slice(&prefix);
+        combined.extend_from_slice(&self.read_buf);
+        self.read_buf = combined;
     }
 
     /// Whether Vision has switched both directions to direct copy and has no buffered plaintext.
@@ -453,6 +476,11 @@ impl<S> VisionStream<S> {
             LowerState::NotYet
         }
     }
+
+    /// Whether the server owes the client its authenticated downlink handoff.
+    pub fn needs_server_direct_handoff(&self) -> bool {
+        self.server_inbound && self.read_direct_copy && !self.write_direct_copy
+    }
 }
 
 impl VisionStream<BoxedStream> {
@@ -470,12 +498,11 @@ impl VisionStream<BoxedStream> {
 }
 
 fn boxed_stream_can_unwrap_direct(stream: &BoxedStream) -> bool {
-    if let Some(direct) = (*stream).as_any().downcast_ref::<DirectCopyStream>() {
+    if let Some(direct) = AsyncReadWrite::as_any(&**stream).downcast_ref::<DirectCopyStream>() {
         return direct.inner.direct_copy_ready();
     }
-    if let Some(prepended) = (*stream)
-        .as_any()
-        .downcast_ref::<PrependedStream<BoxedStream>>()
+    if let Some(prepended) =
+        AsyncReadWrite::as_any(&**stream).downcast_ref::<PrependedStream<BoxedStream>>()
     {
         return prepended.prefix_pos >= prepended.prefix.len()
             && boxed_stream_can_unwrap_direct(&prepended.inner);
@@ -509,10 +536,6 @@ impl<S: AsyncRead + Unpin> AsyncRead for VisionStream<S> {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if self.read_direct_copy {
-            return Pin::new(&mut self.inner).poll_read(cx, buf);
-        }
-
         loop {
             if !self.read_buf.is_empty() {
                 let n = buf.remaining().min(self.read_buf.len());
@@ -523,6 +546,15 @@ impl<S: AsyncRead + Unpin> AsyncRead for VisionStream<S> {
                     self.read_buf.advance(n);
                 }
                 return Poll::Ready(Ok(()));
+            }
+
+            // The authenticated direct command can share a decoded Vision
+            // frame with more plaintext than the caller's buffer can accept.
+            // Drain that plaintext before bypassing Vision and reading the raw
+            // transport; otherwise raw destination TLS is sent back through
+            // the outer REALITY record decoder while `read_buf` remains stuck.
+            if self.read_direct_copy {
+                return Pin::new(&mut self.inner).poll_read(cx, buf);
             }
 
             let mut tmp = [0u8; 8192];
@@ -538,6 +570,10 @@ impl<S: AsyncRead + Unpin> AsyncRead for VisionStream<S> {
                     let switch_to_direct = self.read_state.feed(&uuid, rb.filled(), &mut scratch);
                     self.feed_scratch = scratch;
                     if switch_to_direct {
+                        tracing::debug!(
+                            plaintext_bytes = self.feed_scratch.len(),
+                            "XTLS Vision authenticated direct-copy command received"
+                        );
                         self.read_direct_copy = true;
                     }
                     if self.feed_scratch.is_empty() {
@@ -560,6 +596,32 @@ impl<S: AsyncRead + Unpin> AsyncRead for VisionStream<S> {
 }
 
 impl<S: AsyncWrite + Unpin> VisionStream<S> {
+    /// Send an empty Vision `direct` command through outer TLS, then permit raw
+    /// downlink. This avoids reading client raw bytes through outer TLS while
+    /// waiting for the destination to produce its next response record.
+    pub async fn complete_server_direct_handoff(&mut self) -> io::Result<()> {
+        if !self.needs_server_direct_handoff() {
+            return Ok(());
+        }
+
+        tokio::io::AsyncWriteExt::flush(self).await?;
+        let include_uuid = self.write_uuid_once;
+        self.write_uuid_once = false;
+        let mut frame = Vec::with_capacity(if include_uuid { 21 } else { 5 });
+        fill_vision_chunk(
+            &mut frame,
+            &self.uuid,
+            &[],
+            VISION_COMMAND_PADDING_DIRECT as u8,
+            include_uuid,
+        );
+        tokio::io::AsyncWriteExt::write_all(&mut self.inner, &frame).await?;
+        tokio::io::AsyncWriteExt::flush(&mut self.inner).await?;
+        self.write_direct_copy = true;
+        tracing::debug!("XTLS Vision authenticated downlink direct-copy command sent");
+        Ok(())
+    }
+
     fn poll_drain_write_buf(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -619,7 +681,13 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for VisionStream<S> {
         if include_uuid {
             self.write_uuid_once = false;
         }
-        let command = if looks_like_tls_application_data(buf) && is_complete_tls_record(buf) {
+        let command = if self.server_inbound {
+            if self.read_direct_copy {
+                VISION_COMMAND_PADDING_DIRECT as u8
+            } else {
+                VISION_COMMAND_PADDING_CONTINUE as u8
+            }
+        } else if looks_like_tls_application_data(buf) && is_complete_tls_record(buf) {
             VISION_COMMAND_PADDING_DIRECT as u8
         } else {
             VISION_COMMAND_PADDING_END as u8
@@ -831,17 +899,16 @@ pub fn try_into_tcp_stream(stream: BoxedStream) -> Result<TcpStream, BoxedStream
 ///
 /// # Type detection note
 ///
-/// We use `(*stream).as_any()` (deref through the Box) rather than
-/// `stream.as_any()` to force vtable dispatch.  The blanket impl that makes
-/// `Box<dyn AsyncReadWrite>` itself implement `AsyncReadWrite` would otherwise
-/// intercept `as_any()` and return the box type instead of the concrete inner
-/// type.  Dereffing ensures the vtable for the concrete type is used.
+/// We call `AsyncReadWrite::as_any(&**stream)` explicitly to force vtable
+/// dispatch. The blanket impl also makes `Box<dyn AsyncReadWrite>` implement
+/// `AsyncReadWrite`, so ordinary method syntax can inspect the erased box
+/// instead of the concrete adapter on some targets.
 #[cfg(target_os = "linux")]
 pub fn try_into_tcp_stream_with_prefix(
     stream: BoxedStream,
 ) -> Result<(TcpStream, Vec<u8>), BoxedStream> {
     // Check the concrete type via vtable dispatch (`*stream` not `stream`).
-    if (*stream).as_any().is::<TcpStream>() {
+    if AsyncReadWrite::as_any(&*stream).is::<TcpStream>() {
         let any = stream.into_any();
         let tcp = any
             .downcast::<TcpStream>()
@@ -849,7 +916,7 @@ pub fn try_into_tcp_stream_with_prefix(
         return Ok((*tcp, Vec::new()));
     }
 
-    if (*stream).as_any().is::<PrependedStream<TcpStream>>() {
+    if AsyncReadWrite::as_any(&*stream).is::<PrependedStream<TcpStream>>() {
         let any = stream.into_any();
         let prepended = any
             .downcast::<PrependedStream<TcpStream>>()
@@ -858,7 +925,7 @@ pub fn try_into_tcp_stream_with_prefix(
         return Ok((tcp, prefix));
     }
 
-    if (*stream).as_any().is::<PooledStream<TcpStream>>() {
+    if AsyncReadWrite::as_any(&*stream).is::<PooledStream<TcpStream>>() {
         let any = stream.into_any();
         let pooled = any
             .downcast::<PooledStream<TcpStream>>()
@@ -867,7 +934,7 @@ pub fn try_into_tcp_stream_with_prefix(
         return Ok((tcp, Vec::new()));
     }
 
-    if (*stream).as_any().is::<PrependedStream<BoxedStream>>() {
+    if AsyncReadWrite::as_any(&*stream).is::<PrependedStream<BoxedStream>>() {
         let any = stream.into_any();
         let prepended = any
             .downcast::<PrependedStream<BoxedStream>>()
@@ -903,7 +970,7 @@ pub fn try_into_tcp_stream_with_prefix(
 pub fn try_unwrap_direct_copy_stream_with_prefix(
     stream: BoxedStream,
 ) -> Result<(BoxedStream, Vec<u8>), BoxedStream> {
-    if (*stream).as_any().is::<DirectCopyStream>() {
+    if AsyncReadWrite::as_any(&*stream).is::<DirectCopyStream>() {
         let any = stream.into_any();
         let direct = any
             .downcast::<DirectCopyStream>()
@@ -913,7 +980,7 @@ pub fn try_unwrap_direct_copy_stream_with_prefix(
             .map_err(|direct| Box::new(direct) as BoxedStream);
     }
 
-    if (*stream).as_any().is::<PrependedStream<BoxedStream>>() {
+    if AsyncReadWrite::as_any(&*stream).is::<PrependedStream<BoxedStream>>() {
         let any = stream.into_any();
         let prepended = any
             .downcast::<PrependedStream<BoxedStream>>()
@@ -952,12 +1019,11 @@ pub fn try_into_direct_copy_tcp_stream_with_prefix(
 
 #[cfg(target_os = "linux")]
 fn boxed_stream_is_tcp_like(stream: &BoxedStream) -> bool {
-    (*stream).as_any().is::<TcpStream>()
-        || (*stream).as_any().is::<PrependedStream<TcpStream>>()
-        || (*stream).as_any().is::<PooledStream<TcpStream>>()
-        || (*stream).as_any().is::<PrependedStream<BoxedStream>>()
-        || (*stream)
-            .as_any()
+    AsyncReadWrite::as_any(&**stream).is::<TcpStream>()
+        || AsyncReadWrite::as_any(&**stream).is::<PrependedStream<TcpStream>>()
+        || AsyncReadWrite::as_any(&**stream).is::<PooledStream<TcpStream>>()
+        || AsyncReadWrite::as_any(&**stream).is::<PrependedStream<BoxedStream>>()
+        || AsyncReadWrite::as_any(&**stream)
             .downcast_ref::<DirectCopyStream>()
             .is_some_and(DirectCopyStream::is_ready)
 }
@@ -966,13 +1032,29 @@ fn boxed_stream_is_tcp_like(stream: &BoxedStream) -> bool {
 pub fn try_into_vision_stream(
     stream: BoxedStream,
 ) -> Result<VisionStream<BoxedStream>, BoxedStream> {
-    if (*stream).as_any().is::<VisionStream<BoxedStream>>() {
+    if AsyncReadWrite::as_any(&*stream).is::<VisionStream<BoxedStream>>() {
         let any = stream.into_any();
         let vision = any
             .downcast::<VisionStream<BoxedStream>>()
             .expect("stream type checked as VisionStream<BoxedStream> before downcast");
         return Ok(*vision);
     }
+
+    if AsyncReadWrite::as_any(&*stream).is::<PrependedStream<BoxedStream>>() {
+        let any = stream.into_any();
+        let prepended = any
+            .downcast::<PrependedStream<BoxedStream>>()
+            .expect("stream type checked as PrependedStream<BoxedStream> before downcast");
+        let (inner, prefix) = prepended.into_parts();
+        return match try_into_vision_stream(inner) {
+            Ok(mut vision) => {
+                vision.prepend_plaintext(prefix);
+                Ok(vision)
+            }
+            Err(inner) => Err(Box::new(PrependedStream::new(inner, prefix))),
+        };
+    }
+
     Err(stream)
 }
 
@@ -1161,6 +1243,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncWrite for ReunionStream<R
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     struct ReadyDirectStream {
         inner: std::io::Cursor<Vec<u8>>,
@@ -1304,6 +1387,93 @@ mod tests {
         assert_eq!(raw, b"raw");
     }
 
+    #[tokio::test]
+    async fn vision_recovery_preserves_sniffed_plaintext_and_direct_transition() {
+        let uuid = [0x2au8; 16];
+        let (mut peer, transport) = tokio::io::duplex(4096);
+        let transport = Box::new(transport) as BoxedStream;
+        let vision = VisionStream::new_server_inbound(transport, uuid);
+        let stream = Box::new(PrependedStream::new(
+            Box::new(vision) as BoxedStream,
+            b"sniffed".to_vec(),
+        )) as BoxedStream;
+
+        let mut vision = match try_into_vision_stream(stream) {
+            Ok(vision) => vision,
+            Err(_) => panic!("Vision stream should be recoverable through sniff replay"),
+        };
+
+        let mut replay = [0u8; 7];
+        vision.read_exact(&mut replay).await.unwrap();
+        assert_eq!(&replay, b"sniffed");
+
+        let mut direct_frame = uuid.to_vec();
+        direct_frame.extend_from_slice(&[
+            VISION_COMMAND_PADDING_DIRECT as u8,
+            0,
+            3,
+            0,
+            0,
+            b'r',
+            b'a',
+            b'w',
+        ]);
+        peer.write_all(&direct_frame).await.unwrap();
+
+        let mut content = [0u8; 3];
+        vision.read_exact(&mut content).await.unwrap();
+        assert_eq!(&content, b"raw");
+        assert!(vision.needs_server_direct_handoff());
+        vision.complete_server_direct_handoff().await.unwrap();
+        let mut downlink_direct = [0u8; 21];
+        peer.read_exact(&mut downlink_direct).await.unwrap();
+        assert_eq!(&downlink_direct[..16], &uuid);
+        assert_eq!(downlink_direct[16], VISION_COMMAND_PADDING_DIRECT as u8);
+        assert_eq!(&downlink_direct[17..], &[0, 0, 0, 0]);
+        assert!(vision.is_direct_copy_ready());
+    }
+
+    #[tokio::test]
+    async fn vision_drains_transition_plaintext_before_raw_direct_bytes() {
+        let uuid = [0x3bu8; 16];
+        let (mut peer, transport) = tokio::io::duplex(4096);
+        let mut vision = VisionStream::new_server_inbound(transport, uuid);
+
+        let mut direct_frame = uuid.to_vec();
+        direct_frame.extend_from_slice(&[
+            VISION_COMMAND_PADDING_DIRECT as u8,
+            0,
+            6,
+            0,
+            0,
+            b'c',
+            b'a',
+            b'c',
+            b'h',
+            b'e',
+            b'd',
+        ]);
+        peer.write_all(&direct_frame).await.unwrap();
+
+        let mut first = [0u8; 2];
+        vision.read_exact(&mut first).await.unwrap();
+        assert_eq!(&first, b"ca");
+
+        // These raw bytes arrive after the direct transition. Cached frame
+        // plaintext must still be returned before them.
+        peer.write_all(b"raw").await.unwrap();
+        let mut remainder = [0u8; 4];
+        vision.read_exact(&mut remainder).await.unwrap();
+        assert_eq!(&remainder, b"ched");
+        assert!(vision.needs_server_direct_handoff());
+        vision.complete_server_direct_handoff().await.unwrap();
+        assert!(vision.is_direct_copy_ready());
+
+        let mut raw = [0u8; 3];
+        vision.read_exact(&mut raw).await.unwrap();
+        assert_eq!(&raw, b"raw");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn generic_tcp_recovery_never_triggers_direct_unwrap() {
@@ -1316,7 +1486,22 @@ mod tests {
             Ok(_) => panic!("generic recovery must not unwrap protocol framing"),
             Err(stream) => stream,
         };
-        assert!((*returned).as_any().is::<DirectCopyStream>());
+        assert!(AsyncReadWrite::as_any(&*returned).is::<DirectCopyStream>());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn boxed_prepended_stream_is_tcp_like() {
+        let direct = DirectCopyStream::new(ReadyDirectStream {
+            inner: std::io::Cursor::new(b"raw".to_vec()),
+            prefix: Vec::new(),
+        });
+        let stream = Box::new(PrependedStream::new(
+            Box::new(direct) as BoxedStream,
+            Vec::new(),
+        )) as BoxedStream;
+
+        assert!(boxed_stream_is_tcp_like(&stream));
     }
 
     #[test]

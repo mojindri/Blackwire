@@ -1066,16 +1066,13 @@ impl Tls13Stream {
 
 impl DirectCopyUnwrap for Tls13Stream {
     fn direct_copy_ready(&self) -> bool {
-        if !self.write_buf.is_empty() {
-            return false;
-        }
-
-        match self.read_phase {
-            RPHASE_PLAINTEXT => true,
-            RPHASE_HEADER => self.header_pos == 0,
-            RPHASE_BODY => false,
-            _ => false,
-        }
+        self.write_buf.is_empty()
+            && match self.read_phase {
+                RPHASE_PLAINTEXT => true,
+                RPHASE_HEADER => self.header_pos == 0,
+                RPHASE_BODY => false,
+                _ => false,
+            }
     }
 
     fn try_unwrap_direct(

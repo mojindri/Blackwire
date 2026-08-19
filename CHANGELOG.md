@@ -8,6 +8,19 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+### Fixed
+
+- VLESS Reality Vision now remains eligible for authenticated direct-copy
+  handoff after traffic sniffing replays an already-unpadded prefix. This
+  prevents raw destination TLS records from being misread as outer Reality TLS
+  records when sniffing is enabled.
+- Server-side Vision now completes the authenticated handoff in both
+  directions before removing outer Reality TLS, matching Xray and sing-box
+  clients and preventing intermittent TLS `bad record MAC` disconnects.
+- Vision preserves plaintext buffered at the transition boundary and reliably
+  recovers nested stream adapters on Linux without adding work to the steady
+  state relay hot path.
+
 ## 0.2.4 - 2026-08-19
 
 ### Fixed
