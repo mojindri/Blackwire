@@ -71,10 +71,6 @@ const REP_SUCCESS: u8 = 0x00;
 /// Reply code: command not supported.
 const REP_CMD_NOT_SUPPORTED: u8 = 0x07;
 
-/// Reply code: address type not supported.
-#[allow(dead_code)]
-const REP_ATYP_NOT_SUPPORTED: u8 = 0x08;
-
 // ── SOCKS5 inbound ────────────────────────────────────────────────────────────
 
 /// The SOCKS5 inbound handler.

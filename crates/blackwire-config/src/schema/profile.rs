@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::{Config, NetworkType, Protocol, SecurityType};
 
 /// Operating profile for the proxy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum ProfileMode {
     /// Broad compatibility mode: all protocols, transports, and features enabled.
@@ -27,7 +27,7 @@ pub enum ProfileMode {
 }
 
 /// First-packet acceleration knobs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FirstPacketBoostConfig {
     /// Master switch for first-packet acceleration.
@@ -36,18 +36,9 @@ pub struct FirstPacketBoostConfig {
     /// Pre-resolve DNS where route strategy can use IP rules.
     #[serde(default = "FirstPacketBoostConfig::default_enabled")]
     pub dns: bool,
-    /// Treat TLS ClientHello forwarding as an eligible first-packet boost.
-    #[serde(default = "FirstPacketBoostConfig::default_enabled")]
-    pub tls_client_hello: bool,
     /// Forward first data bytes as early payload where protocol handlers support it.
     #[serde(default = "FirstPacketBoostConfig::default_enabled")]
     pub send_early_payload: bool,
-    /// Duplicate first control packet on bad-network paths when supported.
-    #[serde(default)]
-    pub duplicate_control_on_badnet: bool,
-    /// Packet scheduling priority for first-packet work.
-    #[serde(default)]
-    pub priority: FirstPacketPriority,
 }
 
 impl FirstPacketBoostConfig {
@@ -61,25 +52,9 @@ impl Default for FirstPacketBoostConfig {
         Self {
             enabled: false,
             dns: true,
-            tls_client_hello: true,
             send_early_payload: true,
-            duplicate_control_on_badnet: false,
-            priority: FirstPacketPriority::High,
         }
     }
-}
-
-/// Scheduling priority assigned to first-packet work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FirstPacketPriority {
-    /// Standard OS scheduling priority.
-    Normal,
-    #[default]
-    /// Elevated scheduling priority (default).
-    High,
-    /// Highest scheduling priority; use for latency-critical deployments.
-    Critical,
 }
 
 impl std::fmt::Display for ProfileMode {
@@ -116,7 +91,7 @@ impl std::str::FromStr for ProfileMode {
 }
 
 /// Performance budget constraints used by `blackwire explain-cost`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BudgetConfig {
     #[serde(default = "BudgetConfig::default_max_protocol_layers")]
@@ -131,15 +106,9 @@ pub struct BudgetConfig {
     #[serde(default = "BudgetConfig::default_max_route_rules")]
     /// Maximum number of routing rules before a violation is raised.
     pub max_route_rules: usize,
-    #[serde(default = "BudgetConfig::default_max_handshake_ms")]
-    /// Maximum acceptable TLS/QUIC handshake time in milliseconds.
-    pub max_handshake_ms: u64,
     #[serde(default = "BudgetConfig::default_true")]
     /// Prefer zero-copy / splice paths when available.
     pub prefer_direct_copy: bool,
-    #[serde(default = "BudgetConfig::default_true")]
-    /// Prefer QUIC datagram lane for UDP flows when available.
-    pub prefer_datagram_for_udp: bool,
 }
 
 impl BudgetConfig {
@@ -149,10 +118,6 @@ impl BudgetConfig {
 
     fn default_max_route_rules() -> usize {
         50
-    }
-
-    fn default_max_handshake_ms() -> u64 {
-        300
     }
 
     fn default_true() -> bool {
@@ -167,15 +132,13 @@ impl Default for BudgetConfig {
             allow_sniffing: false,
             allow_fake_ip: false,
             max_route_rules: Self::default_max_route_rules(),
-            max_handshake_ms: Self::default_max_handshake_ms(),
             prefer_direct_copy: true,
-            prefer_datagram_for_udp: true,
         }
     }
 }
 
 /// Extra settings that only apply when `profile = "fast"`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FastConfig {
     /// Reject `security = none` when `true` (default). Set `false` only in lab /
@@ -236,7 +199,7 @@ impl Default for FastConfig {
 }
 
 /// Linux-only relay extensions for bulk TCP paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FastLinuxConfig {
     /// Optional MSG_ZEROCOPY use for raw TCP userspace bulk writes.
@@ -279,7 +242,7 @@ impl Default for FastLinuxConfig {
 }
 
 /// MSG_ZEROCOPY policy for raw TCP userspace writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastZerocopyPolicy {
     /// Do not use MSG_ZEROCOPY.
@@ -292,7 +255,7 @@ pub enum FastZerocopyPolicy {
 }
 
 /// Selector for Linux experimental backends that need privileged/kernel support.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastExperimentalBackendPolicy {
     /// Do not select this backend.
@@ -305,7 +268,7 @@ pub enum FastExperimentalBackendPolicy {
 }
 
 /// Relay engine and buffer policy for Fast Profile userspace copy paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FastRelayConfig {
     /// Userspace relay implementation. `legacy` preserves the current pooled
@@ -339,8 +302,8 @@ impl FastRelayConfig {
 impl Default for FastRelayConfig {
     fn default() -> Self {
         Self {
-            engine: FastRelayEngine::default(),
-            flush: FastRelayFlushPolicy::default(),
+            engine: FastRelayEngine::V2,
+            flush: FastRelayFlushPolicy::Adaptive,
             initial_buffer: Self::default_initial_buffer(),
             max_buffer: Self::default_max_buffer(),
         }
@@ -348,18 +311,18 @@ impl Default for FastRelayConfig {
 }
 
 /// Userspace relay engine selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastRelayEngine {
     /// Existing pooled relay implementation.
-    #[default]
     Legacy,
     /// Relay Engine v2: one-task duplex relay with growable ring buffers.
+    #[default]
     V2,
 }
 
 /// Flush policy for Relay Engine v2.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastRelayFlushPolicy {
     /// Flush after each write, matching legacy semantics.
@@ -373,7 +336,7 @@ pub enum FastRelayFlushPolicy {
 }
 
 /// TCP connection pool strategy for the Fast Profile outbound.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastPoolPolicy {
     /// Ramp pool size based on destination hotness (default).
@@ -388,7 +351,7 @@ pub enum FastPoolPolicy {
 }
 
 /// Splice relay strategy for the Fast Profile dispatcher.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastSplicePolicy {
     /// Use splice only after `ADAPTIVE_SPLICE_MIN_BYTES` have been relayed (default).
@@ -819,9 +782,7 @@ pub fn explain_cost(config: &Config) -> CostReport {
             allow_sniffing: false,
             allow_fake_ip: false,
             max_route_rules: 50,
-            max_handshake_ms: 300,
             prefer_direct_copy: true,
-            prefer_datagram_for_udp: true,
         },
         ProfileMode::Throughput => BudgetConfig {
             max_protocol_layers: 4,
@@ -830,8 +791,6 @@ pub fn explain_cost(config: &Config) -> CostReport {
         },
         ProfileMode::Badnet | ProfileMode::Mobile => BudgetConfig {
             max_protocol_layers: 4,
-            max_handshake_ms: 700,
-            prefer_datagram_for_udp: true,
             ..BudgetConfig::default()
         },
         ProfileMode::Compat | ProfileMode::Stealth => BudgetConfig {
@@ -839,9 +798,7 @@ pub fn explain_cost(config: &Config) -> CostReport {
             allow_sniffing: true,
             allow_fake_ip: true,
             max_route_rules: 1000,
-            max_handshake_ms: 1500,
             prefer_direct_copy: false,
-            prefer_datagram_for_udp: false,
         },
     });
 
@@ -1186,7 +1143,7 @@ mod tests {
     }
 
     #[test]
-    fn first_packet_boost_config_parses_camel_case() {
+    fn first_packet_boost_ignores_retired_legacy_fields() {
         let cfg: Config = serde_json::from_value(serde_json::json!({
             "firstPacketBoost": {
                 "enabled": true,
@@ -1212,10 +1169,7 @@ mod tests {
         let boost = cfg.first_packet_boost.unwrap();
         assert!(boost.enabled);
         assert!(!boost.dns);
-        assert!(boost.tls_client_hello);
         assert!(boost.send_early_payload);
-        assert!(boost.duplicate_control_on_badnet);
-        assert_eq!(boost.priority, FirstPacketPriority::Critical);
     }
 
     #[test]
@@ -1407,6 +1361,13 @@ mod tests {
         let decoded: FastConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(decoded.relay.engine, FastRelayEngine::V2);
         assert_eq!(decoded.relay.flush, FastRelayFlushPolicy::Adaptive);
+
+        let relay: FastRelayConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(relay.engine, FastRelayEngine::V2);
+        assert_eq!(relay.flush, FastRelayFlushPolicy::Adaptive);
+
+        let legacy: FastRelayConfig = serde_json::from_str(r#"{"engine":"legacy"}"#).unwrap();
+        assert_eq!(legacy.engine, FastRelayEngine::Legacy);
     }
 
     #[test]

@@ -226,13 +226,79 @@ fn parse_client_config(
 }
 
 pub(crate) fn socket_config_from_quic(quic: Option<&QuicConfig>) -> QuicSocketConfig {
-    let quic = quic.cloned().unwrap_or_default();
+    let Some(quic) = quic else {
+        return automatic_quic_socket_config(detected_cpu_count(), detected_memory_bytes());
+    };
     QuicSocketConfig {
         reuse_port: quic.reuse_port,
         endpoint_count: quic.endpoint_count(),
         recv_buffer_bytes: quic.recv_buffer_bytes,
         send_buffer_bytes: quic.send_buffer_bytes,
     }
+}
+
+/// Conservative automatic QUIC sizing used only when no explicit global QUIC
+/// override exists. Caps keep per-process socket memory predictable even on
+/// large hosts; endpoint-specific settings still take precedence afterward.
+fn automatic_quic_socket_config(cpu_count: usize, memory_bytes: Option<u64>) -> QuicSocketConfig {
+    const MIB: usize = 1024 * 1024;
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    let memory = memory_bytes.unwrap_or(2 * GIB);
+    let buffer_bytes = match memory {
+        bytes if bytes < GIB => MIB,
+        bytes if bytes < 4 * GIB => 2 * MIB,
+        bytes if bytes < 16 * GIB => 4 * MIB,
+        _ => 8 * MIB,
+    };
+    let memory_limited_shards = match memory {
+        bytes if bytes < GIB => 1,
+        bytes if bytes < 4 * GIB => 2,
+        _ => 4,
+    };
+    let cpu_limited_shards = match cpu_count.max(1) {
+        1..=2 => 1,
+        3..=8 => 2,
+        _ => 4,
+    };
+    #[cfg(unix)]
+    let endpoint_count = cpu_limited_shards.min(memory_limited_shards);
+    #[cfg(not(unix))]
+    let endpoint_count = 1;
+
+    QuicSocketConfig {
+        reuse_port: endpoint_count > 1,
+        endpoint_count,
+        recv_buffer_bytes: buffer_bytes,
+        send_buffer_bytes: buffer_bytes,
+    }
+}
+
+fn detected_cpu_count() -> usize {
+    std::thread::available_parallelism().map_or(1, usize::from)
+}
+
+#[cfg(unix)]
+fn detected_memory_bytes() -> Option<u64> {
+    let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    (pages > 0 && page_size > 0).then(|| (pages as u64).saturating_mul(page_size as u64))
+}
+
+#[cfg(windows)]
+fn detected_memory_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    (unsafe { GlobalMemoryStatusEx(&mut status) } != 0).then_some(status.ullTotalPhys)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn detected_memory_bytes() -> Option<u64> {
+    None
 }
 
 fn parse_socket_config(settings: &EndpointSettings, quic: Option<&QuicConfig>) -> QuicSocketConfig {
@@ -447,7 +513,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        datagram_enabled, hysteria2_user_label, parse_congestion_config, require_hysteria2_auth,
+        automatic_quic_socket_config, datagram_enabled, hysteria2_user_label,
+        parse_congestion_config, require_hysteria2_auth, socket_config_from_quic,
     };
 
     fn settings(value: serde_json::Value) -> EndpointSettings {
@@ -569,5 +636,35 @@ mod tests {
         };
 
         assert!(datagram_enabled(&EndpointSettings::default(), Some(&cfg)));
+    }
+
+    #[test]
+    fn automatic_quic_tuning_is_bounded_by_cpu_and_memory() {
+        let tiny = automatic_quic_socket_config(32, Some(512 * 1024 * 1024));
+        assert_eq!(tiny.endpoint_count, 1);
+        assert_eq!(tiny.recv_buffer_bytes, 1024 * 1024);
+
+        let large = automatic_quic_socket_config(32, Some(32 * 1024 * 1024 * 1024));
+        #[cfg(unix)]
+        assert_eq!(large.endpoint_count, 4);
+        #[cfg(not(unix))]
+        assert_eq!(large.endpoint_count, 1);
+        assert_eq!(large.recv_buffer_bytes, 8 * 1024 * 1024);
+        assert_eq!(large.send_buffer_bytes, 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn explicit_quic_settings_override_automatic_tuning() {
+        let explicit = blackwire_config::schema::QuicConfig {
+            reuse_port: false,
+            endpoints: blackwire_config::schema::EndpointCount::Fixed(3),
+            recv_buffer_bytes: 3 * 1024 * 1024,
+            send_buffer_bytes: 5 * 1024 * 1024,
+            max_datagram_size: blackwire_config::schema::DatagramSize::Named("auto".into()),
+        };
+        let socket = socket_config_from_quic(Some(&explicit));
+        assert_eq!(socket.endpoint_count, 3);
+        assert_eq!(socket.recv_buffer_bytes, 3 * 1024 * 1024);
+        assert_eq!(socket.send_buffer_bytes, 5 * 1024 * 1024);
     }
 }

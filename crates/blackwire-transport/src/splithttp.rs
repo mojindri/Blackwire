@@ -978,58 +978,6 @@ impl AsyncWrite for PrependStream {
     }
 }
 
-#[allow(dead_code)]
-struct PrependedChunkStream {
-    inner: SplitHttpStream<BoxedStream>,
-    prepended: Vec<u8>,
-    prep_offset: usize,
-}
-
-impl PrependedChunkStream {
-    #[allow(dead_code)]
-    fn new(stream: BoxedStream, prepended: Vec<u8>) -> Self {
-        Self {
-            inner: SplitHttpStream::new(stream),
-            prepended,
-            prep_offset: 0,
-        }
-    }
-}
-
-impl AsyncRead for PrependedChunkStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        if self.prep_offset < self.prepended.len() {
-            let n = buf.remaining().min(self.prepended.len() - self.prep_offset);
-            buf.put_slice(&self.prepended[self.prep_offset..self.prep_offset + n]);
-            self.prep_offset += n;
-            return Poll::Ready(Ok(()));
-        }
-        Pin::new(&mut self.inner).poll_read(cx, buf)
-    }
-}
-
-impl AsyncWrite for PrependedChunkStream {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write(cx, buf)
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
-    }
-}
-
 struct SplitHttpStream<S> {
     inner: S,
     // BytesMut so front-consumption is O(1) `advance` rather than O(n) `Vec::drain`.

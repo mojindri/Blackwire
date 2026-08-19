@@ -29,13 +29,12 @@ aws-lc-rs.workspace    = true
 aes-gcm.workspace      = true
 chacha20poly1305.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libc.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
 io-uring.workspace = true
 nix.workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libc.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys.workspace = true

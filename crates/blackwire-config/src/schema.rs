@@ -25,7 +25,7 @@ pub use profile::{
     explain_cost, validate_fast_profile, BudgetConfig, CopyMode, CostClass, CostReport, FastConfig,
     FastExperimentalBackendPolicy, FastLinuxConfig, FastPoolPolicy, FastRelayConfig,
     FastRelayEngine, FastRelayFlushPolicy, FastSplicePolicy, FastZerocopyPolicy,
-    FirstPacketBoostConfig, FirstPacketPriority, ProfileMode, ProfileViolation, ProtocolCost,
+    FirstPacketBoostConfig, ProfileMode, ProfileViolation, ProtocolCost,
 };
 pub use protocol::{NetworkType, Protocol, SecurityType};
 pub use routing::{
@@ -140,7 +140,7 @@ pub struct Config {
     pub metrics_addr: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 /// Controls whether runtime traffic statistics are collected.
 pub struct StatsConfig {
@@ -149,7 +149,7 @@ pub struct StatsConfig {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 /// Management API listener and authentication settings.
 pub struct ApiConfig {
@@ -168,7 +168,8 @@ pub struct ApiConfig {
 /// These are intentionally conservative knobs for production hardening.
 /// `max_connections` is a process-wide cap shared by TCP and QUIC inbound
 /// accept loops that support admission limiting.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(rename_all = "camelCase")]
 pub struct LimitsConfig {
     /// Maximum concurrent connections for the whole process (optional).
     #[serde(
@@ -205,6 +206,7 @@ pub struct LimitsConfig {
         alias = "max_handshake_seconds",
         skip_serializing_if = "Option::is_none"
     )]
+    #[ts(type = "number | null")]
     pub max_handshake_seconds: Option<u64>,
 
     /// Close idle connections after this many seconds (reserved; not wired yet).
@@ -214,11 +216,12 @@ pub struct LimitsConfig {
         alias = "max_idle_seconds",
         skip_serializing_if = "Option::is_none"
     )]
+    #[ts(type = "number | null")]
     pub max_idle_seconds: Option<u64>,
 }
 
 /// QUIC UDP socket tuning.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct QuicConfig {
     /// Enable SO_REUSEPORT where supported so multiple server endpoints can bind the same UDP port.
@@ -242,7 +245,7 @@ pub struct QuicConfig {
     pub max_datagram_size: DatagramSize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(untagged)]
 /// Maximum QUIC datagram size expressed as bytes or a named policy.
 pub enum DatagramSize {
@@ -284,7 +287,7 @@ impl Default for QuicConfig {
 }
 
 /// QUIC DATAGRAM lane policy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DatagramConfig {
     /// Enable QUIC DATAGRAM support for unreliable traffic.
@@ -305,6 +308,7 @@ pub struct DatagramConfig {
 
     /// H2+ queue delay budget for delayed non-priority packets.
     #[serde(default = "DatagramConfig::default_max_queue_delay_ms")]
+    #[ts(type = "number")]
     pub max_queue_delay_ms: u64,
 
     /// Enable DNS shadow retry in H2+ mode.
@@ -313,11 +317,12 @@ pub struct DatagramConfig {
 
     /// DNS shadow retry delay in H2+ mode.
     #[serde(default = "DatagramConfig::default_fast_dns_retry_delay_ms")]
+    #[ts(type = "number")]
     pub fast_dns_retry_delay_ms: u64,
 }
 
 /// H2+ lane policy for QUIC DATAGRAM traffic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "kebab-case")]
 #[derive(Default)]
 pub enum DatagramPolicy {
@@ -353,7 +358,7 @@ impl Default for DatagramConfig {
 }
 
 /// Forward error correction mode for QUIC DATAGRAM traffic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum FecMode {
     /// FEC disabled.
@@ -370,7 +375,7 @@ pub enum FecMode {
 }
 
 /// FEC policy for unreliable datagram classes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FecConfig {
     /// FEC algorithm to apply.
@@ -403,10 +408,12 @@ pub struct FecConfig {
 
     /// Maximum milliseconds to wait before closing a partial FEC generation.
     #[serde(default = "FecConfig::default_max_generation_delay_ms")]
+    #[ts(type = "number")]
     pub max_generation_delay_ms: u64,
 
     /// Deadline in milliseconds for a FEC recovery attempt before giving up.
     #[serde(default = "FecConfig::default_recovery_deadline_ms")]
+    #[ts(type = "number")]
     pub recovery_deadline_ms: u64,
 
     /// Sliding-window size in packets for duplicate suppression.
@@ -500,7 +507,9 @@ fn default_true() -> bool {
 }
 
 /// Top-level TUN interception settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct TunConfig {
     /// TUN interface name (e.g. `"tun0"`).
     #[serde(default = "default_tun_name")]
@@ -515,7 +524,11 @@ pub struct TunConfig {
     #[serde(default = "default_tun_mtu")]
     pub mtu: u16,
     /// Linux packet mark for packets that should bypass the TUN path.
-    #[serde(default = "default_tun_bypass_mark")]
+    #[serde(
+        default = "default_tun_bypass_mark",
+        rename = "bypassMark",
+        alias = "bypass_mark"
+    )]
     pub bypass_mark: u32,
     /// Physical interface used by protected outbound sockets on macOS/Windows.
     ///
@@ -531,10 +544,18 @@ pub struct TunConfig {
     )]
     pub outbound_interface: Option<String>,
     /// Local port where redirected TCP connections are accepted.
-    #[serde(default = "default_tun_redirect_port")]
+    #[serde(
+        default = "default_tun_redirect_port",
+        rename = "redirectPort",
+        alias = "redirect_port"
+    )]
     pub redirect_port: u16,
     /// Local DNS port used by the transparent-proxy DNS path.
-    #[serde(default = "default_tun_dns_port")]
+    #[serde(
+        default = "default_tun_dns_port",
+        rename = "dnsPort",
+        alias = "dns_port"
+    )]
     pub dns_port: u16,
     /// Windows-only path to `wintun.dll`.
     ///
@@ -556,7 +577,8 @@ pub struct TunConfig {
 }
 
 /// Packet batching controls for TUN writeback.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(rename_all = "camelCase")]
 pub struct TunBatchConfig {
     /// Enable TUN writeback batching.
     #[serde(default = "default_true")]
@@ -573,6 +595,7 @@ pub struct TunBatchConfig {
         rename = "maxDelayUs",
         alias = "max_delay_us"
     )]
+    #[ts(type = "number")]
     /// Maximum time in microseconds to hold a batch before flushing.
     pub max_delay_us: u64,
     #[serde(
@@ -596,7 +619,8 @@ impl Default for TunBatchConfig {
 }
 
 /// TUN session and NAT table sizing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(rename_all = "camelCase")]
 pub struct TunSessionConfig {
     #[serde(
         default = "default_tun_udp_max_sessions",
@@ -610,6 +634,7 @@ pub struct TunSessionConfig {
         rename = "udpIdleTimeoutSec",
         alias = "udp_idle_timeout_sec"
     )]
+    #[ts(type = "number")]
     /// Idle timeout in seconds before a UDP session is evicted.
     pub udp_idle_timeout_sec: u64,
     #[serde(
@@ -768,6 +793,9 @@ mod tests {
             r#"{
                 "outbound_interface": "Ethernet",
                 "wintun_file": ".\\wintun.dll",
+                "bypass_mark": 77,
+                "redirect_port": 12346,
+                "dns_port": 5353,
                 "batch": {
                     "enabled": false,
                     "max_packets": 16,
@@ -784,6 +812,9 @@ mod tests {
         .unwrap();
         assert_eq!(snake.outbound_interface.as_deref(), Some("Ethernet"));
         assert_eq!(snake.wintun_file.as_deref(), Some(r#".\wintun.dll"#));
+        assert_eq!(snake.bypass_mark, 77);
+        assert_eq!(snake.redirect_port, 12346);
+        assert_eq!(snake.dns_port, 5353);
         assert!(!snake.batch.enabled);
         assert_eq!(snake.batch.max_packets, 16);
         assert_eq!(snake.batch.max_delay_us, 500);

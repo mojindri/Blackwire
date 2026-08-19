@@ -1,6 +1,7 @@
 import { AlertCircle, KeyRound, Save, Terminal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api";
+import { defaultHysteria2CongestionTuning, defaultHysteria2TransportTuning, hasCustomHysteria2Congestion, hasCustomHysteria2TransportTuning, HYSTERIA2_SIMPLE_CONGESTION_MODES } from "../../lib/hysteria2Tuning";
 import type { CapabilityMap, Inbound, InboundInput } from "../../lib/types";
 import {
   buildInboundInput,
@@ -23,11 +24,11 @@ import { Input, Select } from "../atoms/Input";
 import { Switch } from "../atoms/Switch";
 import { Field } from "../molecules/Field";
 import { SplitHttpFields } from "./SplitHttpFields";
+import { Hysteria2TuningFields } from "./Hysteria2TuningFields";
 
 type TabKey = "basic" | "protocol" | "transport" | "security" | "sniffing";
 
 const sniffingOptions = ["http", "tls", "fakedns"];
-const hysteria2SimpleModes = new Set(["standard", "brutal-compatible", "badnet-low-latency"]);
 const tabOrder: Array<{ key: TabKey; label: string }> = [
   { key: "basic", label: "Basic" },
   { key: "protocol", label: "Protocol" },
@@ -35,25 +36,6 @@ const tabOrder: Array<{ key: TabKey; label: string }> = [
   { key: "security", label: "Security" },
   { key: "sniffing", label: "Sniffing & limits" }
 ];
-
-function hysteria2HasCustomTuning(state: InboundEditorState): boolean {
-  return (
-    !hysteria2SimpleModes.has(state.hysteria2CongestionMode) ||
-    state.hysteria2MinAckRate !== "0.8" ||
-    state.hysteria2MaxQueueDelayMs !== "80" ||
-    state.hysteria2PacingGain !== "1.25" ||
-    !state.hysteria2LossCompensation ||
-    state.hysteria2QuicReusePort ||
-    state.hysteria2QuicEndpoints !== "1" ||
-    state.hysteria2QuicRecvBufferBytes !== "8388608" ||
-    state.hysteria2QuicSendBufferBytes !== "8388608" ||
-    state.hysteria2DatagramEnabled ||
-    !state.hysteria2DatagramUdpOverDatagram ||
-    state.hysteria2DatagramPolicy !== "standard" ||
-    state.hysteria2FecMode !== "off" ||
-    state.hysteria2FecMaxOverheadPercent.trim() !== ""
-  );
-}
 
 export function InboundDrawer({
   editing,
@@ -84,6 +66,7 @@ export function InboundDrawer({
   const [tlsSelfSigned, setTlsSelfSigned] = useState<TlsSelfSignedValues>(() => defaultTlsSelfSignedValues(""));
   const [tlsSelfSignedBusy, setTlsSelfSignedBusy] = useState(false);
   const [tlsSelfSignedMessage, setTlsSelfSignedMessage] = useState("");
+  const [hysteria2TransportOverridesOpen, setHysteria2TransportOverridesOpen] = useState(() => hasCustomHysteria2TransportTuning(state));
 
   useEffect(() => {
     const next = createInboundEditorState(editing);
@@ -94,6 +77,7 @@ export function InboundDrawer({
     setTlsSelfSignedOpen(false);
     setTlsSelfSignedBusy(false);
     setTlsSelfSignedMessage("");
+    setHysteria2TransportOverridesOpen(hasCustomHysteria2TransportTuning(next));
     setActiveTab("basic");
   }, [editing]);
 
@@ -155,7 +139,8 @@ export function InboundDrawer({
   const canDelete = !busy && inboundsCount > 1;
   const saveDisabled = busy || jsonErrors.length > 0 || validationIssues.length > 0;
   const tlsSelfSignedPreview = useMemo(() => expectedTlsSelfSignedPaths(tlsSelfSigned.serverName), [tlsSelfSigned.serverName]);
-  const hysteria2CustomTuning = state.protocol === "hysteria2" && hysteria2HasCustomTuning(state);
+  const hysteria2CustomCongestion = state.protocol === "hysteria2" && hasCustomHysteria2Congestion(state);
+  const hysteria2TransportOverrides = state.protocol === "hysteria2" && (hysteria2TransportOverridesOpen || hasCustomHysteria2TransportTuning(state));
 
   const updateStructured = (patch: Partial<InboundEditorState>) => {
     const next = syncAfterStructuredChange({ ...stateRef.current, ...patch });
@@ -167,28 +152,13 @@ export function InboundDrawer({
     if (value === "custom") {
       const current = stateRef.current;
       updateStructured({
-        hysteria2CongestionMode: hysteria2SimpleModes.has(current.hysteria2CongestionMode)
+        hysteria2CongestionMode: HYSTERIA2_SIMPLE_CONGESTION_MODES.has(current.hysteria2CongestionMode)
           ? "badnet-throughput"
           : current.hysteria2CongestionMode
       });
       return;
     }
-    updateStructured({
-      hysteria2CongestionMode: value,
-      hysteria2MinAckRate: "0.8",
-      hysteria2MaxQueueDelayMs: "80",
-      hysteria2PacingGain: "1.25",
-      hysteria2LossCompensation: true,
-      hysteria2QuicReusePort: false,
-      hysteria2QuicEndpoints: "1",
-      hysteria2QuicRecvBufferBytes: "8388608",
-      hysteria2QuicSendBufferBytes: "8388608",
-      hysteria2DatagramEnabled: false,
-      hysteria2DatagramUdpOverDatagram: true,
-      hysteria2DatagramPolicy: "standard",
-      hysteria2FecMode: "off",
-      hysteria2FecMaxOverheadPercent: ""
-    });
+    updateStructured(defaultHysteria2CongestionTuning(value));
   };
 
   const submit = () => {
@@ -392,7 +362,7 @@ export function InboundDrawer({
                   </Field>
                   <Field label="Performance mode" hint="Throughput restores the aggressive Hysteria2-style behavior; Balanced is conservative.">
                     <Select
-                      value={hysteria2CustomTuning ? "custom" : state.hysteria2CongestionMode}
+                      value={hysteria2CustomCongestion ? "custom" : state.hysteria2CongestionMode}
                       onChange={(e) => updateHysteria2PerformanceMode(e.target.value)}
                     >
                       <option value="standard">Balanced</option>
@@ -402,7 +372,7 @@ export function InboundDrawer({
                     </Select>
                   </Field>
                 </div>
-                {hysteria2CustomTuning ? (
+                {hysteria2CustomCongestion ? (
                   <div className="configurator-grid">
                     <Field label="Congestion mode">
                       <Select value={state.hysteria2CongestionMode} onChange={(e) => updateStructured({ hysteria2CongestionMode: e.target.value })}>
@@ -514,45 +484,14 @@ export function InboundDrawer({
               <p className="field-hint">QUIC transport uses the runtime defaults. Hysteria2 exposes its additional socket tuning as typed controls below.</p>
             ) : null}
 
-            {hysteria2CustomTuning ? (
-              <>
-                <p className="field-hint">Custom Hysteria2 transport tuning is active for this inbound.</p>
-                <div className="configurator-grid">
-                  <Switch checked={state.hysteria2QuicReusePort} onChange={(hysteria2QuicReusePort) => updateStructured({ hysteria2QuicReusePort })} label="QUIC reuse port" />
-                  <Field label="QUIC endpoints" hint="Number or cpu. Leave empty for default.">
-                    <Input value={state.hysteria2QuicEndpoints} onChange={(e) => updateStructured({ hysteria2QuicEndpoints: e.target.value })} placeholder="1" />
-                  </Field>
-                  <Field label="Receive buffer bytes">
-                    <Input value={state.hysteria2QuicRecvBufferBytes} onChange={(e) => updateStructured({ hysteria2QuicRecvBufferBytes: e.target.value })} placeholder="16777216" />
-                  </Field>
-                  <Field label="Send buffer bytes">
-                    <Input value={state.hysteria2QuicSendBufferBytes} onChange={(e) => updateStructured({ hysteria2QuicSendBufferBytes: e.target.value })} placeholder="16777216" />
-                  </Field>
-                </div>
-                <div className="configurator-grid">
-                  <Switch checked={state.hysteria2DatagramEnabled} onChange={(hysteria2DatagramEnabled) => updateStructured({ hysteria2DatagramEnabled })} label="Enable datagram UDP relay" />
-                  <Switch checked={state.hysteria2DatagramUdpOverDatagram} onChange={(hysteria2DatagramUdpOverDatagram) => updateStructured({ hysteria2DatagramUdpOverDatagram })} label="UDP over datagram" />
-                  <Field label="Datagram policy">
-                    <Select value={state.hysteria2DatagramPolicy} onChange={(e) => updateStructured({ hysteria2DatagramPolicy: e.target.value })}>
-                      <option value="standard">standard</option>
-                      <option value="h2-plus">h2-plus</option>
-                    </Select>
-                  </Field>
-                  <Field label="FEC mode">
-                    <Select value={state.hysteria2FecMode} onChange={(e) => updateStructured({ hysteria2FecMode: e.target.value })}>
-                      <option value="off">off</option>
-                      <option value="auto">auto</option>
-                      <option value="xor1-of-n">xor1-of-n</option>
-                      <option value="reed-solomon">reed-solomon</option>
-                      <option value="raptor-like">raptor-like</option>
-                    </Select>
-                  </Field>
-                  <Field label="FEC overhead percent">
-                    <Input value={state.hysteria2FecMaxOverheadPercent} onChange={(e) => updateStructured({ hysteria2FecMaxOverheadPercent: e.target.value })} placeholder="20" />
-                  </Field>
-                </div>
-              </>
-            ) : null}
+            {state.protocol === "hysteria2" ? <>
+              <Switch checked={hysteria2TransportOverrides} onChange={(enabled) => {
+                setHysteria2TransportOverridesOpen(enabled);
+                if (!enabled) updateStructured(defaultHysteria2TransportTuning());
+              }} label="Override Hysteria2 transport defaults" />
+              <p className="field-hint">Off inherits Blackwire's global QUIC, datagram, and FEC behavior.</p>
+            </> : null}
+            {hysteria2TransportOverrides ? <Hysteria2TuningFields direction="inbound" value={state} onChange={updateStructured} /> : null}
           </section>
         ) : null}
 

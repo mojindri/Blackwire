@@ -136,9 +136,7 @@ async fn load_performance(pool: &MySqlPool, revision: i64) -> StoreResult<Perfor
                 allow_fake_ip: row.try_get("budget_allow_fake_ip")?,
                 max_route_rules: usize::try_from(row.try_get::<u64, _>("budget_max_route_rules")?)
                     .map_err(decode_error)?,
-                max_handshake_ms: row.try_get("budget_max_handshake_ms")?,
                 prefer_direct_copy: row.try_get("budget_prefer_direct_copy")?,
-                prefer_datagram_for_udp: row.try_get("budget_prefer_datagram_for_udp")?,
             })
         })
         .transpose()?;
@@ -158,13 +156,7 @@ async fn load_performance(pool: &MySqlPool, revision: i64) -> StoreResult<Perfor
             Ok::<_, StoreError>(FirstPacketBoostConfig {
                 enabled: row.try_get("first_packet_boost_enabled")?,
                 dns: row.try_get("first_packet_boost_dns")?,
-                tls_client_hello: row.try_get("first_packet_boost_tls_client_hello")?,
                 send_early_payload: row.try_get("first_packet_boost_send_early_payload")?,
-                duplicate_control_on_badnet: row
-                    .try_get("first_packet_boost_duplicate_control_on_badnet")?,
-                priority: parse_string_enum(
-                    &row.try_get::<String, _>("first_packet_boost_priority")?,
-                )?,
             })
         })
         .transpose()?;

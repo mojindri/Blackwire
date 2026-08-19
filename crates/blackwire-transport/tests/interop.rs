@@ -69,16 +69,6 @@ const TEST_SHORT_ID_HEX: &str = "aabbccdd00000001";
 /// A short ID that is NOT in the server's allow-list.
 const BAD_SHORT_ID_HEX: &str = "deadbeefdeadbeef";
 
-/// JA3 hash that a Chrome 131 ClientHello must produce (used in comments /
-/// pcap assertions — see `make analyze`).
-#[allow(dead_code)]
-const CHROME_131_JA3: &str = concat!(
-    "771,",
-    "4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,",
-    "0-23-65281-10-11-35-16-5-13-18-51-45-43-27-21,",
-    "29-23-24,0"
-);
-
 // ── Key helpers ───────────────────────────────────────────────────────────────
 
 /// Path to the interop key directory, relative to the workspace root.

@@ -334,7 +334,7 @@ pub struct QuicSocketOverrides {
     pub send_buffer_bytes: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
 #[serde(untagged)]
 /// Endpoint shard count expressed directly or as a named policy.
 pub enum EndpointCount {

@@ -92,7 +92,6 @@ pub struct TcpConfig {
 /// wall-clock timeout would also kill healthy long-lived proxy sessions.
 pub struct TcpServerTransport {
     /// Stored for future use (SO_MARK on accepted streams, TFO).
-    #[allow(dead_code)]
     config: TcpConfig,
     shared_limiter: Option<Arc<Semaphore>>,
 }

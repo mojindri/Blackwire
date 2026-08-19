@@ -1,10 +1,11 @@
 import type { Inbound, InboundInput } from "./types";
+import { HYSTERIA2_DEFAULTS } from "./hysteria2Tuning";
 import { buildSplitHttp, readSplitHttp, type SplitHttpEditorState } from "./splitHttpConfigurator";
 
-export type JsonObject = Record<string, unknown>;
+type JsonObject = Record<string, unknown>;
 export type SliceKey = "settings" | "streamSettings" | "sniffing" | "limits";
 
-export interface SliceState {
+interface SliceState {
   text: string;
   value: JsonObject;
   error: string;
@@ -95,14 +96,14 @@ export interface InboundCompatibilityNotice {
 const DEFAULT_PROTOCOL = "vless";
 const DEFAULT_NETWORK = "tcp";
 const DEFAULT_SECURITY = "none";
-const DEFAULT_HYSTERIA2_CONGESTION_MODE = "standard";
-const DEFAULT_HYSTERIA2_MIN_ACK_RATE = "0.8";
-const DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS = "80";
-const DEFAULT_HYSTERIA2_PACING_GAIN = "1.25";
-const DEFAULT_HYSTERIA2_QUIC_ENDPOINTS = "1";
-const DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES = "8388608";
-const DEFAULT_HYSTERIA2_DATAGRAM_POLICY = "standard";
-const DEFAULT_HYSTERIA2_FEC_MODE = "off";
+const DEFAULT_HYSTERIA2_CONGESTION_MODE = HYSTERIA2_DEFAULTS.congestionMode;
+const DEFAULT_HYSTERIA2_MIN_ACK_RATE = HYSTERIA2_DEFAULTS.minAckRate;
+const DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS = HYSTERIA2_DEFAULTS.maxQueueDelayMs;
+const DEFAULT_HYSTERIA2_PACING_GAIN = HYSTERIA2_DEFAULTS.pacingGain;
+const DEFAULT_HYSTERIA2_QUIC_ENDPOINTS = HYSTERIA2_DEFAULTS.quicEndpoints;
+const DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES = HYSTERIA2_DEFAULTS.quicBufferBytes;
+const DEFAULT_HYSTERIA2_DATAGRAM_POLICY = HYSTERIA2_DEFAULTS.datagramPolicy;
+const DEFAULT_HYSTERIA2_FEC_MODE = HYSTERIA2_DEFAULTS.fecMode;
 
 export function createInboundEditorState(inbound?: Inbound | null): InboundEditorState {
   const settings = createSliceState(inbound?.settings);
