@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tonic::{Request, Status};
 use tracing::{error, info};
@@ -54,6 +55,13 @@ pub fn start_api_server(
     let expose_stats = service_enabled(services, "StatsService");
     let expose_handler = service_enabled(services, "HandlerService");
     let token = Arc::new(token);
+    let std_listener = std::net::TcpListener::bind(addr)
+        .with_context(|| format!("blackwire-api failed to bind {addr}"))?;
+    std_listener
+        .set_nonblocking(true)
+        .with_context(|| format!("blackwire-api failed to configure {addr}"))?;
+    let listener = tokio::net::TcpListener::from_std(std_listener)
+        .with_context(|| format!("blackwire-api failed to adopt listener {addr}"))?;
     let task = tokio::spawn(async move {
         info!(addr = %addr, authenticated = token.is_some(), loopback_only = allow_unauthenticated_loopback, "blackwire-api gRPC server starting");
         let stats_token = Arc::clone(&token);
@@ -82,7 +90,7 @@ pub fn start_api_server(
         if let Err(e) = Server::builder()
             .add_optional_service(stats_service)
             .add_optional_service(handler_service)
-            .serve(addr)
+            .serve_with_incoming(TcpListenerStream::new(listener))
             .await
         {
             error!(error = %e, "blackwire-api gRPC server failed");

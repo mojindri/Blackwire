@@ -21,9 +21,8 @@ Black UI.
 - A MySQL-only control plane with separate runtime, UI, and migrator accounts.
 - A typed Black UI for users, inbounds, outbounds, routing & DNS, runtime, and
   settings—without a raw server-configuration editor.
-- Immutable configuration revisions, validation, rollback, controlled
-  maintenance activation, and safe in-memory operation during a temporary
-  database outage.
+- Immutable configuration revisions, validation, automatic live reload,
+  rollback, and safe in-memory operation during a temporary database outage.
 - Supported proxy protocols and transports documented with evidence in the
   [Feature Matrix](docs/feature-matrix.md).
 - Hiddify-compatible client subscription content derived from your database
@@ -131,16 +130,15 @@ blackwire db validate
 blackwire db status
 blackwire db history --limit 20
 blackwire db rollback REVISION
-blackwire db activate-maintenance REVISION
 blackwire explain-cost
-sudo systemctl restart blackwire
 sudo journalctl -u blackwire -f
 ```
 
 Each UI or CLI edit creates an immutable revision. Blackwire polls MySQL,
-validates it, then hot-swaps it, hands over a supported listener, or leaves it
-pending until you confirm maintenance activation. It keeps serving the active
-in-memory revision through a temporary database outage.
+validates it, then applies it automatically with an atomic state swap or a
+prepared in-process instance handover. It keeps serving the active in-memory
+revision through a temporary database outage, and retains the last working
+revision if validation or preparation fails.
 
 ## Configuration
 

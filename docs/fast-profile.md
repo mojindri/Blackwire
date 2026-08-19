@@ -67,7 +67,7 @@ When enabled, these controls are stored relationally with the revision:
 | Splice policy | Keep adaptive; it uses the best available safe relay path. |
 | Relay engine and flush policy | Keep the supplied defaults unless profiling identifies a bottleneck. |
 | Buffer sizes | Do not increase them blindly; they affect memory per active connection. |
-| Linux zero-copy, io_uring, AF_XDP | Experimental or host-dependent; enable only on prepared Linux hosts with measurements. |
+| Linux zero-copy and io_uring | Experimental or host-dependent; enable only on prepared Linux hosts with measurements. |
 
 Fast Profile keeps extra compatibility work off the hot path. It never skips
 REALITY key checks, TLS certificate validation, UUID/password validation, or
@@ -79,8 +79,8 @@ protocol error handling.
   internet.
 - Treat `security: none` as an internal disposable-lab case, never an operator
   recipe.
-- Check Runtime after changing profiles: a revision may require maintenance
-  activation if its listeners must change.
+- Check Runtime after changing profiles to confirm the automatic reload or
+  in-process handover completed.
 - Benchmark in an environment resembling your deployment before tuning. A
   setting that improves one destination or connection pattern can harm another.
 

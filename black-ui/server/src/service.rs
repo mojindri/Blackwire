@@ -24,10 +24,6 @@ pub fn blackwire_status() -> ServiceStatus {
     }
 }
 
-pub fn restart_blackwire() -> anyhow::Result<ServiceStatus> {
-    control_blackwire("restart")
-}
-
 pub fn start_blackwire() -> anyhow::Result<ServiceStatus> {
     control_blackwire("start")
 }

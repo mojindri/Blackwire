@@ -10,9 +10,9 @@ blackwire db seed trojan-local
 blackwire db seed shadowsocks-local
 ```
 
-Each command creates an immutable desired revision. Credential-bearing presets
-print their generated credential and subscription token once. Review the new
-revision in Black UI and activate it according to its reported activation class.
+Each command creates an immutable desired revision that Blackwire validates and
+applies automatically. Credential-bearing presets print their generated
+credential and subscription token once.
 
 Client links remain available from each user's Copy subscription action in
 Black UI. These links are derived from MySQL state and can be pasted into

@@ -104,9 +104,8 @@ pub use tuic::{
 };
 pub use tun::{
     build_tcp_packet, build_tcp_rst, create_tun, current_tun_support, ensure_tun_runtime_supported,
-    AfXdpBackend, AfXdpCapabilities, IpPacket, TransportProtocol, TunAfXdpConfig, TunBatchConfig,
-    TunConfig, TunDevice, TunLinuxBackend, TunLinuxConfig, TunPlatformSupport, TunRuntime,
-    UdpNatTable,
+    IpPacket, TransportProtocol, TunBatchConfig, TunConfig, TunDevice, TunPlatformSupport,
+    TunRuntime, UdpNatTable,
 };
 pub use v2rayquic::{
     accepted_quic_stream, quic_connect, quic_connect_with_socket_config, quic_server_endpoint,

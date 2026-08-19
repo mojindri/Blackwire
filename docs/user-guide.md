@@ -105,8 +105,8 @@ Hiddify. It is intentionally not a server configuration export or import.
 
 Use [Configuration For Dummies](08-config-for-dummies.md) to build your first
 inbound, outbound, and routing rule. Blackwire validates every revision and
-will either apply it, hand over a supported listener, or hold it for confirmed
-maintenance activation.
+applies it automatically through an atomic reload or prepared in-process
+handover.
 
 During a temporary MySQL outage, the runtime continues serving its active
 in-memory revision. Edits and new activations wait for MySQL to return.
@@ -118,7 +118,6 @@ blackwire db validate
 blackwire db status
 blackwire db history --limit 20
 blackwire db rollback REVISION
-blackwire db activate-maintenance REVISION
 sudo systemctl status blackwire --no-pager
 sudo journalctl -u blackwire -n 100 --no-pager
 ```

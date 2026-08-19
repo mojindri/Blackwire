@@ -282,29 +282,6 @@ impl Instance {
                 udp_max_sessions: tun_cfg.sessions.udp_max,
                 udp_idle_timeout: Duration::from_secs(tun_cfg.sessions.udp_idle_timeout_sec),
                 tcp_max_sessions: tun_cfg.sessions.tcp_max,
-                linux: tun_cfg
-                    .linux
-                    .as_ref()
-                    .map(|linux| blackwire_transport::TunLinuxConfig {
-                        backend: match linux.backend {
-                            blackwire_config::schema::TunLinuxBackend::Tun => {
-                                blackwire_transport::TunLinuxBackend::Tun
-                            }
-                            blackwire_config::schema::TunLinuxBackend::Afxdp => {
-                                blackwire_transport::TunLinuxBackend::AfXdp
-                            }
-                        },
-                        af_xdp: blackwire_transport::TunAfXdpConfig {
-                            interface: linux.af_xdp.interface.clone(),
-                            queue_id: linux.af_xdp.queue_id,
-                            ring_entries: linux.af_xdp.ring_entries,
-                            frame_count: linux.af_xdp.frame_count,
-                            frame_size: linux.af_xdp.frame_size,
-                            force_copy: linux.af_xdp.force_copy,
-                            force_zerocopy: linux.af_xdp.force_zerocopy,
-                        },
-                    })
-                    .unwrap_or_default(),
             };
             let device =
                 create_tun(&tc).context("TUN device creation failed (are we running as root?)")?;
@@ -968,6 +945,20 @@ impl Instance {
         if let Some(tx) = &self.shutdown_tx {
             let _ = tx.send(true);
         }
+    }
+
+    /// Reassert process-wide TUN socket settings after an old instance is dropped.
+    /// A prepared handover briefly owns both instances, so the old instance's
+    /// destructor must not leave the replacement's global socket policy cleared.
+    pub fn restore_process_network_settings(&self) -> Result<()> {
+        if let Some(mark) = self.outbound_bypass_mark {
+            set_outbound_bypass_mark(mark);
+        }
+        if let Some(interface) = &self.outbound_interface {
+            set_outbound_interface_name(interface)
+                .with_context(|| format!("invalid TUN outbound interface '{interface}'"))?;
+        }
+        Ok(())
     }
 }
 

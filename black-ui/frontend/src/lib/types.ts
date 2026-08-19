@@ -18,12 +18,11 @@ export interface CoreSettings {
   fast: null | {
     strictProduction: boolean; pool: "adaptive" | "disabled" | "fixed"; splice: "adaptive" | "disabled" | "always";
     relay: { engine: "legacy" | "v2"; flush: "immediate" | "deferred" | "adaptive"; initialBuffer: number; maxBuffer: number };
-    linux: { zerocopy: "disabled" | "bulk" | "always"; zerocopyMinBytes: number; ioUring: "disabled" | "auto" | "require"; afXdp: "disabled" | "auto" | "require" };
+    linux: { zerocopy: "disabled" | "bulk" | "always"; zerocopyMinBytes: number; ioUring: "disabled" | "auto" | "require" };
   };
   budget: null | { maxProtocolLayers: number; allowSniffing: boolean; allowFakeIp: boolean; maxRouteRules: number; maxHandshakeMs: number; preferDirectCopy: boolean; preferDatagramForUdp: boolean };
   vision: null | { directCopy: "auto" | "disabled" | "require"; maxPacketsToFilter: number; allowSpliceAfterDirect: boolean };
   firstPacketBoost: null | { enabled: boolean; dns: boolean; tlsClientHello: boolean; sendEarlyPayload: boolean; duplicateControlOnBadnet: boolean; priority: "normal" | "high" | "critical" };
-  log: { level: string; json: boolean; file: string };
   metricsAddr: string | null;
   api: null | { listen: string; token: string | null; services: string[] };
   stats: null | { enabled: boolean };
@@ -41,7 +40,6 @@ export interface CoreSettings {
     name: string; address: string; netmask: string; mtu: number; bypassMark: number; outboundInterface: string | null; redirectPort: number; dnsPort: number; wintunFile: string | null;
     batch: { enabled: boolean; maxPackets: number; maxDelayUs: number; latencyFlushBytes: number };
     sessions: { udpMax: number; udpIdleTimeoutSec: number; tcpMax: number };
-    linux: null | { backend: "tun" | "afxdp"; afXdp: { interface: string | null; queueId: number; ringEntries: number; frameCount: number; frameSize: number; forceCopy: boolean; forceZerocopy: boolean } };
   };
 }
 
@@ -51,8 +49,7 @@ export interface Status {
   schemaVersion: number;
   desiredRevision: number;
   activeRevision: number | null;
-  pendingMaintenanceRevision: number | null;
-  activationState: "active" | "activating" | "pendingMaintenance" | "failed";
+  activationState: "active" | "activating" | "failed";
   lastActivationError: string | null;
   runtimeReachable: boolean;
   lastReconciliation: string;
@@ -210,8 +207,8 @@ export interface ApplyResult {
   revision: number;
   parentRevision: number;
   activeRevision: number | null;
-  state: "active" | "activating" | "pendingMaintenance" | "failed";
-  activationClass: "hotSwap" | "listenerHandover" | "maintenanceRequired";
+  state: "active" | "activating" | "failed";
+  activationClass: "hotSwap" | "listenerHandover";
   message: string;
 }
 
@@ -277,7 +274,7 @@ export interface RevisionSummary {
   parentRevision: number | null;
   actor: string;
   summary: string;
-  activationClass: "hotSwap" | "listenerHandover" | "maintenanceRequired";
+  activationClass: "hotSwap" | "listenerHandover";
   createdAt: string;
 }
 

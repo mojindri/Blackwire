@@ -98,8 +98,8 @@ This project is pre-1.0. The support contract is owned by
 
 - Runtime configuration files, SQLite persistence, raw server configuration
   editing, and deployable JSON examples were removed.
-- Runtime activation now supports hot swap, listener handover, maintenance
-  confirmation, rollback, and database-outage reconciliation.
+- Runtime activation now supports automatic hot swap, prepared in-process
+  handover, rollback, last-known-good retention, and database-outage reconciliation.
 
 ### Fixed
 
@@ -955,7 +955,7 @@ This project is pre-1.0. The support contract is owned by
 
 - Aggregate Black UI QA command covering the smoke flow, structured inbound matrix, structured outbound matrix, and advanced config panel checks.
 - Competitive and latency benchmark harnesses for relay, Fast Profile, Hysteria2 bad-network behavior, QUIC/datagram/FEC, TUN, and memory/CPU profiling.
-- Connection manager, runtime stats, data-plane planning, AF_XDP scaffolding, and expanded metrics coverage.
+- Connection manager, runtime stats, data-plane planning, and expanded metrics coverage.
 - InnerFlow, QUIC bad-network controls, Hysteria2 datagram/FEC work, and expanded TUN packet/session/runtime paths.
 - Release-facing performance evidence, license policy, third-party reference docs, and Black UI panel QA reports.
 

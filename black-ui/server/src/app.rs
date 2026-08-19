@@ -137,15 +137,7 @@ fn api_router() -> Router<AppState> {
         )
         .route("/runtime/revisions", get(handlers::revision_history))
         .route("/runtime/rollback", post(handlers::rollback_revision))
-        .route(
-            "/runtime/activate-maintenance",
-            post(handlers::activate_maintenance),
-        )
         .route("/service/status", get(handlers::service_status))
-        .route(
-            "/service/restart-blackwire",
-            post(handlers::service_restart_blackwire),
-        )
         .route(
             "/service/start-blackwire",
             post(handlers::service_start_blackwire),

@@ -311,11 +311,7 @@ impl Database {
             &state,
             revision,
             class,
-            if class == ActivationClass::MaintenanceRequired {
-                "Inbound saved; mKCP activation requires maintenance confirmation"
-            } else {
-                "Inbound saved"
-            },
+            "Inbound saved; applying automatically",
         ))
     }
 
@@ -343,11 +339,7 @@ impl Database {
             &state,
             revision,
             class,
-            if class == ActivationClass::MaintenanceRequired {
-                "Inbound deleted; mKCP shutdown requires maintenance confirmation"
-            } else {
-                "Inbound deleted"
-            },
+            "Inbound deleted; applying automatically",
         ))
     }
 
@@ -359,7 +351,7 @@ impl Database {
     ) -> StoreResult<MutationResult> {
         validate_outbound(&input)?;
         let state = self.state().await?;
-        let class = ActivationClass::HotSwap;
+        let class = ActivationClass::ListenerHandover;
         let (mut tx, revision) = self
             .fork_revision(expected_revision, actor, "Save outbound", class)
             .await?;
@@ -402,7 +394,7 @@ impl Database {
         id: i64,
     ) -> StoreResult<MutationResult> {
         let state = self.state().await?;
-        let class = ActivationClass::HotSwap;
+        let class = ActivationClass::ListenerHandover;
         let (mut tx, revision) = self
             .fork_revision(expected_revision, actor, "Delete outbound", class)
             .await?;
@@ -473,28 +465,11 @@ impl Database {
 
     async fn inbound_activation_class(
         &self,
-        revision: i64,
-        inbound_id: Option<i64>,
-        next_transport: &str,
+        _revision: i64,
+        _inbound_id: Option<i64>,
+        _next_transport: &str,
     ) -> StoreResult<ActivationClass> {
-        if next_transport == "kcp" {
-            return Ok(ActivationClass::MaintenanceRequired);
-        }
-        let Some(inbound_id) = inbound_id else {
-            return Ok(ActivationClass::ListenerHandover);
-        };
-        let current_transport: Option<String> = sqlx::query_scalar(
-            "SELECT COALESCE(s.network,'tcp') FROM inbounds i LEFT JOIN stream_settings s ON s.revision_id=i.revision_id AND s.endpoint_kind='inbound' AND s.endpoint_id=i.inbound_id WHERE i.revision_id=? AND i.inbound_id=?",
-        )
-        .bind(revision)
-        .bind(inbound_id)
-        .fetch_optional(self.pool())
-        .await?;
-        Ok(if current_transport.as_deref() == Some("kcp") {
-            ActivationClass::MaintenanceRequired
-        } else {
-            ActivationClass::ListenerHandover
-        })
+        Ok(ActivationClass::ListenerHandover)
     }
 }
 
@@ -985,11 +960,7 @@ fn mutation_result(
         revision,
         parent_revision: state.desired_revision,
         active_revision: state.active_revision,
-        state: if class == ActivationClass::MaintenanceRequired {
-            ActivationState::PendingMaintenance
-        } else {
-            ActivationState::Activating
-        },
+        state: ActivationState::Activating,
         activation_class: class,
         message: message.into(),
     }

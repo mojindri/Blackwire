@@ -256,11 +256,6 @@ pub struct FastLinuxConfig {
     /// specific host.
     #[serde(default = "FastLinuxConfig::default_io_uring")]
     pub io_uring: FastExperimentalBackendPolicy,
-
-    /// AF_XDP backend preference. This is intentionally experimental and is not
-    /// selected automatically for normal proxy streams.
-    #[serde(default)]
-    pub af_xdp: FastExperimentalBackendPolicy,
 }
 
 impl FastLinuxConfig {
@@ -279,7 +274,6 @@ impl Default for FastLinuxConfig {
             zerocopy: FastZerocopyPolicy::default(),
             zerocopy_min_bytes: Self::default_zerocopy_min_bytes(),
             io_uring: Self::default_io_uring(),
-            af_xdp: FastExperimentalBackendPolicy::default(),
         }
     }
 }

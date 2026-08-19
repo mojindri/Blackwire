@@ -4,8 +4,6 @@
 //! an OS TUN device: device creation, packet parsing, UDP NAT, runtime loop,
 //! and platform route helpers.
 
-/// Experimental Linux AF_XDP socket backend.
-pub mod af_xdp;
 /// Platform support contract for the TUN runtime.
 pub mod backend;
 /// Packet batching helpers for the TUN runtime.
@@ -26,14 +24,11 @@ pub mod session;
 #[cfg(any(test, target_os = "linux", target_os = "windows"))]
 pub mod tcp;
 
-pub use af_xdp::{AfXdpBackend, AfXdpCapabilities};
 pub use backend::{current_tun_support, ensure_tun_runtime_supported, TunPlatformSupport};
 pub use batch::{TunBatchConfig, TunPacketBatch};
 #[cfg(target_os = "macos")]
 pub use device::tun_device_name;
-pub use device::{
-    create_tun, TunAfXdpConfig, TunConfig, TunDevice, TunLinuxBackend, TunLinuxConfig,
-};
+pub use device::{create_tun, TunConfig, TunDevice};
 pub use nat::UdpNatTable;
 pub use packet::{
     build_tcp_packet, build_tcp_rst, build_udp_response_packet, parse_ip_packet, IpPacket,

@@ -12,14 +12,15 @@
 //!   - **Per-user connection cap** — `limits.maxConnectionsPerUser`
 //!   - **Per-user bandwidth policy** — `upMbps` / `downMbps` fields on client entries
 //!
-//! # What does NOT hot-reload (yet)?
+//! # What uses prepared handover?
 //!
-//! These require a process restart because they are wired at startup:
+//! Structural settings are applied automatically by building a replacement
+//! instance inside the running process:
 //!
 //!   - Inbound listen addresses / ports
 //!   - Outbound server addresses
 //!   - TLS / REALITY key material on existing listeners
-//!   - New inbound or outbound tags (handlers are not created on the fly)
+//!   - New inbound or outbound tags
 //!
 //! # How it works
 //!
@@ -390,9 +391,7 @@ impl ReloadState {
     }
 }
 
-/// Returns inbound tags whose listen address/port changed (requires process restart).
-///
-/// Matches Xray behavior: listener sockets are not recreated on `reload`.
+/// Returns inbound tags whose listen address/port changed and need instance handover.
 pub fn inbound_listener_changes(old: &Config, new: &Config) -> Vec<String> {
     let mut changed = Vec::new();
     for new_in in &new.inbounds {
@@ -412,18 +411,26 @@ pub fn inbound_listener_changes(old: &Config, new: &Config) -> Vec<String> {
     changed
 }
 
-/// Returns `true` when a validated config change requires rebuilding the running instance.
+/// Returns `true` when a validated config change needs a prepared in-process handover.
 ///
 /// Routing, DNS, sniffing, and supported inbound auth lists are hot-swappable via [`ReloadState::apply`].
 /// Structural changes such as listeners, transport wrappers, and outbound definitions
-/// need a fresh `Instance` because the handler graph is built at startup.
-pub fn requires_instance_restart(old: &Config, new: &Config) -> bool {
+/// use a fresh `Instance` because the handler graph is built at startup. The runtime
+/// prepares it before atomically swapping, without restarting the process.
+pub fn requires_instance_handover(old: &Config, new: &Config) -> bool {
     if !inbound_listener_changes(old, new).is_empty() {
         return true;
     }
 
     if old.metrics_addr != new.metrics_addr
         || old.api != new.api
+        || old.profile != new.profile
+        || serialized_value_changed(&old.fast, &new.fast)
+        || old.budget != new.budget
+        || old.vision != new.vision
+        || old.first_packet_boost != new.first_packet_boost
+        || serialized_value_changed(&old.log, &new.log)
+        || old.stats != new.stats
         || old.quic != new.quic
         || old.datagram != new.datagram
         || old.fec != new.fec
@@ -467,6 +474,13 @@ pub fn requires_instance_restart(old: &Config, new: &Config) -> bool {
     }
 
     false
+}
+
+fn serialized_value_changed<T: serde::Serialize>(old: &T, new: &T) -> bool {
+    match (serde_json::to_value(old), serde_json::to_value(new)) {
+        (Ok(old), Ok(new)) => old != new,
+        _ => true,
+    }
 }
 
 fn normalized_limits_value(limits: &blackwire_config::schema::LimitsConfig) -> Vec<u8> {

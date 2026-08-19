@@ -6,8 +6,8 @@ Blackwire releases are MySQL-only. Do not publish a dual-source build.
 
 1. Run workspace tests and Black UI QA.
 2. Run migration and relational round-trip tests against MySQL 8.4/InnoDB.
-3. Test stale writers, deadlocks, rollback, maintenance failure restoration,
-   listener handover, and temporary database loss.
+3. Test stale writers, deadlocks, automatic rollback reload, failed handover
+   last-known-good retention, and temporary database loss.
 4. Verify Docker health ordering and distinct runtime, UI, and migrator secrets.
 5. Verify systemd credential loading and that services refuse incompatible
    schema versions without migrating them.

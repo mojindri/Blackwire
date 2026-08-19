@@ -41,6 +41,7 @@ rust-version = "1.85"
 # ── Async runtime ──────────────────────────────────────────────────────────────
 [workspace.dependencies]
 tokio       = { version = "1.52", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["net"] }
 tokio-util  = { version = "0.7", features = ["codec", "io", "net"] }
 futures     = "0.3"
 
@@ -147,7 +148,6 @@ socket2     = { version = "0.6", features = ["all"] }
 nix         = { version = "0.31", features = ["socket", "net", "sched", "user"] }
 libc        = "0.2"
 io-uring    = "0.7"
-xdp         = "0.7.3"
 windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
 
 # ── Security ───────────────────────────────────────────────────────────────────

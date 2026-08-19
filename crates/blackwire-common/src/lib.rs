@@ -14,7 +14,6 @@
 
 pub mod address;
 pub mod aead;
-pub mod af_xdp;
 pub mod buf;
 pub mod connect;
 pub mod error;

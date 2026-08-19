@@ -40,7 +40,6 @@ const help: Record<string, HelpContent> = {
   "Linux zero-copy": { description: "Disabled avoids MSG_ZEROCOPY; bulk uses it for large writes; always attempts it for every write.", recommended: "Disabled until benchmarked on the target kernel." },
   "Zero-copy minimum bytes": { description: "Minimum payload size before Linux zero-copy is attempted.", recommended: "16,384 bytes." },
   "io_uring": { description: "Disabled uses the standard backend; auto probes safely; require fails if io_uring is unavailable.", recommended: "Disabled unless benchmarked on this host.", warning: "Require can prevent startup." },
-  "AF_XDP": { description: "Selects the experimental AF_XDP fast-path policy: disabled, auto or require.", recommended: "Auto only on prepared Linux hosts.", warning: "Requires compatible drivers and privileges." },
   "Maximum protocol layers": { description: "Largest accepted number of protocol layers in the performance budget.", recommended: "3." },
   "Maximum route rules": { description: "Largest routing table accepted by the performance budget.", recommended: "50." },
   "Maximum handshake (ms)": { description: "Maximum handshake latency accepted by cost analysis.", recommended: "300 ms, adjusted for your users' geography." },
@@ -88,11 +87,6 @@ const help: Record<string, HelpContent> = {
   "Outbound interface": { description: "Optional physical interface used for traffic leaving the TUN path.", recommended: "Leave empty for automatic routing." },
   "Wintun DLL": { description: "Optional path to the Wintun library on Windows.", recommended: "Leave empty on Linux and macOS." },
   "Batch packet writeback": { description: "Groups TUN packet writes to reduce syscall overhead.", recommended: "On for normal throughput workloads." },
-  "Configure Linux packet backend": { description: "Enables Linux-specific TUN or AF_XDP packet backend settings.", recommended: "Off unless deploying on a prepared Linux host." },
-  "Linux backend": { description: "tun uses the kernel TUN device; afxdp uses the experimental high-performance AF_XDP path.", recommended: "tun." },
-  "AF_XDP interface": { description: "Physical interface bound to the AF_XDP packet path.", recommended: "Set only to the verified data-plane interface." },
-  "Force copy mode": { description: "Forces AF_XDP to copy frames instead of requesting zero-copy.", recommended: "On for widest driver compatibility." },
-  "Force zero-copy mode": { description: "Requires AF_XDP zero-copy frame handling.", recommended: "Off unless the driver and NIC support it.", warning: "Can prevent the backend from starting." }
 };
 
 const numericHelp: Array<[RegExp, HelpContent]> = [

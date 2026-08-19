@@ -1,4 +1,4 @@
-//! Benchmarks for Linux-specific extreme data-plane code paths (AF_XDP, splice, etc.).
+//! Benchmarks for Linux-specific extreme TCP data-plane paths.
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -8,7 +8,6 @@ mod linux {
     use anyhow::{Context as _, Result};
     use blackwire_common::splice::{splice_bidirectional_with_backend, SpliceBackendPolicy};
     use blackwire_common::zerocopy::{enable_tcp_zerocopy, write_all_maybe_zerocopy};
-    use blackwire_transport::{AfXdpBackend, TunAfXdpConfig};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
@@ -76,20 +75,6 @@ mod linux {
             Err(err) => println!(
                 "| splice_io_uring | n/a | n/a | unavailable: {} |",
                 escape_md(&err.to_string())
-            ),
-        }
-
-        match env::var("BLACKWIRE_AF_XDP_IFACE") {
-            Ok(interface) if !interface.is_empty() => match bench_af_xdp_open(&interface) {
-                Ok(row) => print_row(&row),
-                Err(err) => println!(
-                    "| af_xdp_open | n/a | n/a | unavailable on `{}`: {} |",
-                    escape_md(&interface),
-                    escape_md(&err.to_string())
-                ),
-            },
-            _ => println!(
-                "| af_xdp_open | n/a | n/a | skipped: set `BLACKWIRE_AF_XDP_IFACE` for privileged AF_XDP bring-up |"
             ),
         }
 
@@ -194,32 +179,6 @@ mod linux {
             iterations,
             elapsed: start.elapsed(),
             notes: format!("policy={policy:?}"),
-        })
-    }
-
-    fn bench_af_xdp_open(interface: &str) -> Result<Row> {
-        // AF_XDP binds exclusive state to a NIC queue. Repeated open/drop cycles
-        // can race queue teardown on virtual NICs, so measure one bring-up unless
-        // a caller explicitly asks for stress iterations.
-        let iterations = env_usize("BLACKWIRE_AF_XDP_ITERS").unwrap_or(1);
-        let mut zero_copy_available = None;
-        let start = Instant::now();
-        for _ in 0..iterations {
-            let backend = AfXdpBackend::open(&TunAfXdpConfig {
-                interface: Some(interface.to_string()),
-                ..TunAfXdpConfig::default()
-            })?;
-            zero_copy_available = Some(backend.capabilities().zero_copy_available);
-        }
-        Ok(Row {
-            name: "af_xdp_open",
-            bytes: 0,
-            iterations,
-            elapsed: start.elapsed(),
-            notes: format!(
-                "interface={interface}, zero_copy_available={}",
-                zero_copy_available.unwrap_or(false)
-            ),
         })
     }
 

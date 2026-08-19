@@ -7,7 +7,7 @@ use crate::{
     ActivationClass, ActivationState, ConfigurationState, RevisionSummary, StoreError, StoreResult,
 };
 
-pub const EXPECTED_SCHEMA_VERSION: i64 = 8;
+pub const EXPECTED_SCHEMA_VERSION: i64 = 9;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -38,6 +38,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (
         8,
         include_str!("../migrations/0008_inbound_protocol_network.sql"),
+    ),
+    (
+        9,
+        include_str!("../migrations/0009_automatic_reload_and_remove_xdp.sql"),
     ),
 ];
 
@@ -181,7 +185,7 @@ impl Database {
 
     pub async fn state(&self) -> StoreResult<ConfigurationState> {
         let row = sqlx::query(
-            "SELECT desired_revision, active_revision, pending_maintenance_revision, activation_state, last_error, updated_at FROM configuration_state WHERE singleton_id = 1",
+            "SELECT desired_revision, active_revision, activation_state, last_error, updated_at FROM configuration_state WHERE singleton_id = 1",
         )
         .fetch_one(&self.pool)
         .await?;
@@ -189,7 +193,6 @@ impl Database {
         Ok(ConfigurationState {
             desired_revision: row.try_get("desired_revision")?,
             active_revision: row.try_get("active_revision")?,
-            pending_maintenance_revision: row.try_get("pending_maintenance_revision")?,
             activation_state: parse_activation_state(&state)?,
             last_error: row.try_get("last_error")?,
             updated_at: row.try_get("updated_at")?,
@@ -279,7 +282,7 @@ impl Database {
 
     pub async fn mark_active(&self, revision: i64) -> StoreResult<()> {
         sqlx::query(
-            "UPDATE configuration_state SET active_revision = ?, pending_maintenance_revision = NULL, activation_state = 'active', last_error = NULL, updated_at = UTC_TIMESTAMP(6) WHERE singleton_id = 1 AND desired_revision = ?",
+            "UPDATE configuration_state SET active_revision = ?, activation_state = 'active', last_error = NULL, updated_at = UTC_TIMESTAMP(6) WHERE singleton_id = 1 AND desired_revision = ?",
         )
         .bind(revision)
         .bind(revision)
@@ -320,66 +323,22 @@ impl Database {
             state.desired_revision,
             actor,
             &format!("Rollback to revision {target_revision}"),
-            ActivationClass::MaintenanceRequired,
+            ActivationClass::ListenerHandover,
         )
         .await?;
         copy_revision_rows(&mut tx, target_revision, revision).await?;
-        Self::publish_revision(&mut tx, revision, ActivationClass::MaintenanceRequired).await?;
+        Self::publish_revision(&mut tx, revision, ActivationClass::ListenerHandover).await?;
         tx.commit().await?;
         Ok(crate::MutationResult {
             revision,
             parent_revision: state.desired_revision,
             active_revision: state.active_revision,
-            state: ActivationState::PendingMaintenance,
-            activation_class: ActivationClass::MaintenanceRequired,
+            state: ActivationState::Activating,
+            activation_class: ActivationClass::ListenerHandover,
             message: format!(
-                "Rollback revision created from {target_revision}; maintenance activation required"
+                "Rollback revision created from {target_revision}; applying automatically"
             ),
         })
-    }
-
-    pub async fn confirm_maintenance(&self, revision: i64) -> StoreResult<()> {
-        let result = sqlx::query("UPDATE configuration_state SET pending_maintenance_revision=NULL, activation_state='activating', last_error=NULL, updated_at=UTC_TIMESTAMP(6) WHERE singleton_id=1 AND desired_revision=? AND pending_maintenance_revision=?")
-            .bind(revision).bind(revision).execute(&self.pool).await?;
-        if result.rows_affected() != 1 {
-            return Err(StoreError::RevisionConflict {
-                expected: revision,
-                actual: self.state().await?.desired_revision,
-            });
-        }
-        Ok(())
-    }
-
-    pub async fn activation_class(&self, revision: i64) -> StoreResult<ActivationClass> {
-        let value: String = sqlx::query_scalar(
-            "SELECT activation_class FROM configuration_revisions WHERE revision=?",
-        )
-        .bind(revision)
-        .fetch_one(&self.pool)
-        .await?;
-        parse_activation_class(&value)
-    }
-
-    pub async fn restore_active_after_maintenance_failure(
-        &self,
-        failed_revision: i64,
-        error: &str,
-    ) -> StoreResult<()> {
-        let mut tx = self.begin_revision(failed_revision).await?;
-        let active: Option<i64> = sqlx::query_scalar(
-            "SELECT active_revision FROM configuration_state WHERE singleton_id=1",
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-        let active = active.ok_or_else(|| {
-            StoreError::InvalidConfiguration(
-                "no prior active revision is available for restoration".into(),
-            )
-        })?;
-        sqlx::query("UPDATE configuration_state SET desired_revision=?, pending_maintenance_revision=NULL, activation_state='active', last_error=?, updated_at=UTC_TIMESTAMP(6) WHERE singleton_id=1")
-            .bind(active).bind(error).execute(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(())
     }
 
     pub async fn create_revision_metadata(
@@ -392,7 +351,6 @@ impl Database {
         let class = match class {
             ActivationClass::HotSwap => "hot_swap",
             ActivationClass::ListenerHandover => "listener_handover",
-            ActivationClass::MaintenanceRequired => "maintenance_required",
         };
         let result = sqlx::query(
             "INSERT INTO configuration_revisions (parent_revision, actor, summary, activation_class, created_at) VALUES (?, ?, ?, ?, UTC_TIMESTAMP(6))",
@@ -409,26 +367,12 @@ impl Database {
     pub async fn publish_revision(
         tx: &mut Transaction<'_, MySql>,
         revision: i64,
-        class: ActivationClass,
+        _class: ActivationClass,
     ) -> StoreResult<()> {
-        let (state, pending) = match class {
-            ActivationClass::MaintenanceRequired => {
-                (ActivationState::PendingMaintenance, Some(revision))
-            }
-            _ => (ActivationState::Activating, None),
-        };
-        let state = match state {
-            ActivationState::Activating => "activating",
-            ActivationState::PendingMaintenance => "pending_maintenance",
-            ActivationState::Active => "active",
-            ActivationState::Failed => "failed",
-        };
         sqlx::query(
-            "UPDATE configuration_state SET desired_revision = ?, pending_maintenance_revision = ?, activation_state = ?, last_error = NULL, updated_at = UTC_TIMESTAMP(6) WHERE singleton_id = 1",
+            "UPDATE configuration_state SET desired_revision = ?, activation_state = 'activating', last_error = NULL, updated_at = UTC_TIMESTAMP(6) WHERE singleton_id = 1",
         )
         .bind(revision)
-        .bind(pending)
-        .bind(state)
         .execute(&mut **tx)
         .await?;
         Ok(())
@@ -461,7 +405,6 @@ fn parse_activation_state(value: &str) -> StoreResult<ActivationState> {
     match value {
         "active" => Ok(ActivationState::Active),
         "activating" => Ok(ActivationState::Activating),
-        "pending_maintenance" => Ok(ActivationState::PendingMaintenance),
         "failed" => Ok(ActivationState::Failed),
         other => Err(StoreError::Sql(sqlx::Error::Decode(
             format!("invalid activation state '{other}'").into(),
@@ -480,9 +423,9 @@ async fn copy_revision_rows(
         "INSERT INTO global_limits SELECT ?, max_connections, max_connections_per_inbound, max_connections_per_user, max_handshake_seconds, max_idle_seconds FROM global_limits WHERE revision_id=?",
         "INSERT INTO global_api_services SELECT ?, position, service_name FROM global_api_services WHERE revision_id=?",
         "INSERT INTO global_transport_settings SELECT ?, quic_configured, quic_reuse_port, quic_endpoints, quic_recv_buffer_bytes, quic_send_buffer_bytes, quic_max_datagram_size, datagram_configured, datagram_enabled, udp_over_datagram, tun_packets_over_datagram, datagram_policy, datagram_max_queue_delay_ms, fast_dns_retry, fast_dns_retry_delay_ms, fec_configured, fec_mode, fec_max_overhead_percent, fec_avoid_bulk_tcp, fec_disable_for_sequential_dns, fec_min_concurrency, fec_max_generation_packets, fec_max_generation_delay_ms, fec_recovery_deadline_ms, fec_dedup_window_packets FROM global_transport_settings WHERE revision_id=?",
-        "INSERT INTO global_performance_settings SELECT ?, fast_configured, fast_strict_production, fast_pool, fast_splice, fast_relay_engine, fast_relay_flush, fast_relay_initial_buffer, fast_relay_max_buffer, fast_linux_zerocopy, fast_linux_zerocopy_min_bytes, fast_linux_io_uring, fast_linux_af_xdp, budget_configured, budget_max_protocol_layers, budget_allow_sniffing, budget_allow_fake_ip, budget_max_route_rules, budget_max_handshake_ms, budget_prefer_direct_copy, budget_prefer_datagram_for_udp, vision_configured, vision_direct_copy, vision_max_packets_to_filter, vision_allow_splice_after_direct, first_packet_boost_configured, first_packet_boost_enabled, first_packet_boost_dns, first_packet_boost_tls_client_hello, first_packet_boost_send_early_payload, first_packet_boost_duplicate_control_on_badnet, first_packet_boost_priority FROM global_performance_settings WHERE revision_id=?",
+        "INSERT INTO global_performance_settings SELECT ?, fast_configured, fast_strict_production, fast_pool, fast_splice, fast_relay_engine, fast_relay_flush, fast_relay_initial_buffer, fast_relay_max_buffer, fast_linux_zerocopy, fast_linux_zerocopy_min_bytes, fast_linux_io_uring, budget_configured, budget_max_protocol_layers, budget_allow_sniffing, budget_allow_fake_ip, budget_max_route_rules, budget_max_handshake_ms, budget_prefer_direct_copy, budget_prefer_datagram_for_udp, vision_configured, vision_direct_copy, vision_max_packets_to_filter, vision_allow_splice_after_direct, first_packet_boost_configured, first_packet_boost_enabled, first_packet_boost_dns, first_packet_boost_tls_client_hello, first_packet_boost_send_early_payload, first_packet_boost_duplicate_control_on_badnet, first_packet_boost_priority FROM global_performance_settings WHERE revision_id=?",
         "INSERT INTO global_fec_protect_classes SELECT ?, position, packet_class FROM global_fec_protect_classes WHERE revision_id=?",
-        "INSERT INTO tun_settings SELECT ?, interface_name, address_value, netmask, mtu, bypass_mark, outbound_interface, redirect_port, dns_port, wintun_file, batch_enabled, batch_max_packets, batch_max_delay_us, batch_latency_flush_bytes, udp_max_sessions, udp_idle_timeout_sec, tcp_max_sessions, linux_configured, linux_backend, af_xdp_interface, af_xdp_queue_id, af_xdp_ring_entries, af_xdp_frame_count, af_xdp_frame_size, af_xdp_force_copy, af_xdp_force_zerocopy FROM tun_settings WHERE revision_id=?",
+        "INSERT INTO tun_settings SELECT ?, interface_name, address_value, netmask, mtu, bypass_mark, outbound_interface, redirect_port, dns_port, wintun_file, batch_enabled, batch_max_packets, batch_max_delay_us, batch_latency_flush_bytes, udp_max_sessions, udp_idle_timeout_sec, tcp_max_sessions FROM tun_settings WHERE revision_id=?",
         "INSERT INTO inbounds SELECT ?, inbound_id, tag, listen_address, listen_port, protocol, enabled, position FROM inbounds WHERE revision_id=?",
         "INSERT INTO outbounds SELECT ?, outbound_id, tag, protocol, enabled, position, server_address, server_port, domain_strategy, deny_loopback, reject_ipv6_literal FROM outbounds WHERE revision_id=?",
         "INSERT INTO stream_settings SELECT ?, endpoint_kind, endpoint_id, network, security FROM stream_settings WHERE revision_id=?",
@@ -528,7 +471,6 @@ fn parse_activation_class(value: &str) -> StoreResult<ActivationClass> {
     match value {
         "hot_swap" => Ok(ActivationClass::HotSwap),
         "listener_handover" => Ok(ActivationClass::ListenerHandover),
-        "maintenance_required" => Ok(ActivationClass::MaintenanceRequired),
         other => Err(StoreError::Sql(sqlx::Error::Decode(
             format!("invalid activation class '{other}'").into(),
         ))),

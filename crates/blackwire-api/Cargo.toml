@@ -15,6 +15,7 @@ tonic.workspace = true
 tonic-prost.workspace = true
 prost.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
 thiserror.workspace = true
 tracing.workspace   = true
 anyhow.workspace    = true

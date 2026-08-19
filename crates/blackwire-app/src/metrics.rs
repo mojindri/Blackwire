@@ -58,7 +58,7 @@
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
@@ -102,10 +102,16 @@ pub fn start_metrics_server(addr: &str) -> anyhow::Result<JoinHandle<()>> {
         .map_err(|e| anyhow::anyhow!("invalid metrics addr '{addr}': {e}"))?;
 
     // Install the Prometheus recorder.
-    let builder = metrics_exporter_prometheus::PrometheusBuilder::new();
-    let handle = builder
-        .install_recorder()
-        .map_err(|e| anyhow::anyhow!("failed to install Prometheus recorder: {e}"))?;
+    static HANDLE: OnceLock<metrics_exporter_prometheus::PrometheusHandle> = OnceLock::new();
+    let handle = if let Some(handle) = HANDLE.get() {
+        handle.clone()
+    } else {
+        let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+            .install_recorder()
+            .map_err(|e| anyhow::anyhow!("failed to install Prometheus recorder: {e}"))?;
+        let _ = HANDLE.set(handle.clone());
+        handle
+    };
     METRICS_ENABLED.store(true, Ordering::Relaxed);
 
     // Describe metrics so Prometheus scrape shows help text.

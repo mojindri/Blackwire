@@ -6,7 +6,9 @@
 - Saving returns revision, parent, active revision, activation class/state, and a
   useful message.
 - Runtime displays database health, schema version, desired/active revisions,
-  last reconciliation, activation errors, history, rollback, and maintenance review.
+  last reconciliation, reload errors, immutable history, and rollback.
+- Every valid write enters `activating` and applies automatically; no confirmation
+  control or process-restart action is present.
 - Stale edits are rejected and database loss makes mutation views read-only.
 - No raw server configuration editor, file path, write/apply/import control,
   SQLite backup, or user-facing gRPC configuration control is present.

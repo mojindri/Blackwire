@@ -70,4 +70,3 @@ tun.workspace               = true
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace              = true
 nix.workspace               = true
-xdp.workspace               = true

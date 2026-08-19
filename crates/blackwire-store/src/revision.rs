@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 pub enum ActivationClass {
     HotSwap,
     ListenerHandover,
-    MaintenanceRequired,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -14,7 +13,6 @@ pub enum ActivationClass {
 pub enum ActivationState {
     Active,
     Activating,
-    PendingMaintenance,
     Failed,
 }
 
@@ -34,7 +32,6 @@ pub struct Revision {
 pub struct ConfigurationState {
     pub desired_revision: i64,
     pub active_revision: Option<i64>,
-    pub pending_maintenance_revision: Option<i64>,
     pub activation_state: ActivationState,
     pub last_error: Option<String>,
     pub updated_at: DateTime<Utc>,

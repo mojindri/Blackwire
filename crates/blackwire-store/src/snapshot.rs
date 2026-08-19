@@ -10,8 +10,8 @@ use blackwire_config::schema::{
     NetworkType, OutboundConfig, PaddingBounds, PaddingBytes, ProfileMode, Protocol, QuicConfig,
     QuicSocketOverrides, RealityConfig, RealityFallbackLimitConfig, RoutingConfig, RoutingRule,
     SecurityType, ShadowTlsConfig, SniffingConfig, SplitHttpConfig, StatsConfig,
-    StreamSettingsConfig, TlsConfig, TunAfXdpConfig, TunBatchConfig, TunConfig, TunLinuxConfig,
-    TunSessionConfig, VisionConfig, WsConfig, XmuxConfig,
+    StreamSettingsConfig, TlsConfig, TunBatchConfig, TunConfig, TunSessionConfig, VisionConfig,
+    WsConfig, XmuxConfig,
 };
 use sqlx::{MySqlPool, Row};
 
@@ -120,7 +120,6 @@ async fn load_performance(pool: &MySqlPool, revision: i64) -> StoreResult<Perfor
                     )
                     .map_err(decode_error)?,
                     io_uring: parse_string_enum(&row.try_get::<String, _>("fast_linux_io_uring")?)?,
-                    af_xdp: parse_string_enum(&row.try_get::<String, _>("fast_linux_af_xdp")?)?,
                 },
             })
         })
@@ -269,24 +268,6 @@ async fn load_tun(pool: &MySqlPool, revision: i64) -> StoreResult<Option<TunConf
     else {
         return Ok(None);
     };
-    let linux = row
-        .try_get::<bool, _>("linux_configured")?
-        .then(|| TunLinuxConfig {
-            backend: parse_string_enum(
-                &row.try_get::<String, _>("linux_backend")
-                    .unwrap_or_else(|_| "tun".into()),
-            )
-            .unwrap_or_default(),
-            af_xdp: TunAfXdpConfig {
-                interface: row.try_get("af_xdp_interface").ok().flatten(),
-                queue_id: row.try_get::<u64, _>("af_xdp_queue_id").unwrap_or(0) as u32,
-                ring_entries: row.try_get::<u64, _>("af_xdp_ring_entries").unwrap_or(2048) as u32,
-                frame_count: row.try_get::<u64, _>("af_xdp_frame_count").unwrap_or(4096) as u32,
-                frame_size: row.try_get::<u64, _>("af_xdp_frame_size").unwrap_or(2048) as u32,
-                force_copy: row.try_get("af_xdp_force_copy").unwrap_or(true),
-                force_zerocopy: row.try_get("af_xdp_force_zerocopy").unwrap_or(false),
-            },
-        });
     Ok(Some(TunConfig {
         name: row.try_get("interface_name")?,
         address: row.try_get("address_value")?,
@@ -315,7 +296,6 @@ async fn load_tun(pool: &MySqlPool, revision: i64) -> StoreResult<Option<TunConf
             tcp_max: usize::try_from(row.try_get::<u64, _>("tcp_max_sessions")?)
                 .map_err(decode_error)?,
         },
-        linux,
     }))
 }
 

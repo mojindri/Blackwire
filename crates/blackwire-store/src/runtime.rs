@@ -91,7 +91,7 @@ impl Database {
     }
 
     pub async fn prune_revision_history(&self) -> StoreResult<()> {
-        sqlx::query("DELETE FROM configuration_revisions WHERE revision NOT IN (SELECT revision FROM (SELECT revision FROM configuration_revisions ORDER BY revision DESC LIMIT 20) recent) AND revision NOT IN (SELECT desired_revision FROM configuration_state UNION SELECT active_revision FROM configuration_state WHERE active_revision IS NOT NULL UNION SELECT pending_maintenance_revision FROM configuration_state WHERE pending_maintenance_revision IS NOT NULL) AND revision NOT IN (SELECT active_revision FROM runtime_instances WHERE active_revision IS NOT NULL)")
+        sqlx::query("DELETE FROM configuration_revisions WHERE revision NOT IN (SELECT revision FROM (SELECT revision FROM configuration_revisions ORDER BY revision DESC LIMIT 20) recent) AND revision NOT IN (SELECT desired_revision FROM configuration_state UNION SELECT active_revision FROM configuration_state WHERE active_revision IS NOT NULL) AND revision NOT IN (SELECT active_revision FROM runtime_instances WHERE active_revision IS NOT NULL)")
             .execute(self.pool()).await?;
         Ok(())
     }
