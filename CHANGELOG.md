@@ -8,6 +8,8 @@ This project is pre-1.0. The support contract is owned by
 
 ## Unreleased
 
+## 0.2.5 - 2026-08-19
+
 ### Fixed
 
 - VLESS Reality Vision now remains eligible for authenticated direct-copy

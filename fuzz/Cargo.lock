@@ -292,7 +292,7 @@ checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
 
 [[package]]
 name = "blackwire-app"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -324,7 +324,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-common"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "aes-gcm",
  "aws-lc-rs",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-config"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -353,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-connmgr"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "dashmap",
  "metrics",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-protocol"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -418,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-tls"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "bytes",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "blackwire-transport"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "aes-gcm",
  "anyhow",

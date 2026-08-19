@@ -26,9 +26,9 @@ but never migrate your database at startup.
 Download the release installer and provide your runtime credential file:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/mojindri/Blackwire/v0.2.4/scripts/install.sh
+curl -fsSLO https://raw.githubusercontent.com/mojindri/Blackwire/v0.2.5/scripts/install.sh
 chmod +x install.sh
-VERSION=v0.2.4 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url ./install.sh
+VERSION=v0.2.5 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url ./install.sh
 ```
 
 To explicitly migrate the schema during installation, provide the migrator
@@ -38,7 +38,7 @@ credential. To install Black UI, provide its separate credential too:
 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url \
 MIGRATOR_DATABASE_URL_FILE=/secure/migrator-database-url \
 UI_DATABASE_URL_FILE=/secure/ui-database-url \
-RUN_DB_MIGRATIONS=1 INSTALL_BLACK_UI=1 VERSION=v0.2.4 ./install.sh
+RUN_DB_MIGRATIONS=1 INSTALL_BLACK_UI=1 VERSION=v0.2.5 ./install.sh
 ```
 
 The installer copies service credentials into protected locations under
