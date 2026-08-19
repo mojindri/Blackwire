@@ -7,7 +7,7 @@ use crate::{
     ActivationClass, ActivationState, ConfigurationState, RevisionSummary, StoreError, StoreResult,
 };
 
-pub const EXPECTED_SCHEMA_VERSION: i64 = 12;
+pub const EXPECTED_SCHEMA_VERSION: i64 = 13;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -54,6 +54,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (
         12,
         include_str!("../migrations/0012_move_client_settings.sql"),
+    ),
+    (
+        13,
+        include_str!("../migrations/0013_remove_client_only_policy_fields.sql"),
     ),
 ];
 
@@ -434,8 +438,8 @@ async fn copy_revision_rows(
         "INSERT INTO global_config SELECT ?, profile, metrics_enabled, metrics_address, api_enabled, api_listen_address, api_token_value, stats_enabled, log_level, log_structured, log_file FROM global_config WHERE revision_id=?",
         "INSERT INTO global_limits SELECT ?, max_connections, max_connections_per_inbound, max_connections_per_user, max_handshake_seconds, max_idle_seconds FROM global_limits WHERE revision_id=?",
         "INSERT INTO global_api_services SELECT ?, position, service_name FROM global_api_services WHERE revision_id=?",
-        "INSERT INTO global_transport_settings SELECT ?, quic_configured, quic_reuse_port, quic_endpoints, quic_recv_buffer_bytes, quic_send_buffer_bytes, quic_max_datagram_size, datagram_configured, datagram_enabled, udp_over_datagram, tun_packets_over_datagram, datagram_policy, datagram_max_queue_delay_ms, fast_dns_retry, fast_dns_retry_delay_ms, fec_configured, fec_mode, fec_max_overhead_percent, fec_avoid_bulk_tcp, fec_disable_for_sequential_dns, fec_min_concurrency, fec_max_generation_packets, fec_max_generation_delay_ms, fec_recovery_deadline_ms, fec_dedup_window_packets FROM global_transport_settings WHERE revision_id=?",
-        "INSERT INTO global_performance_settings SELECT ?, fast_configured, fast_strict_production, fast_pool, fast_splice, fast_relay_engine, fast_relay_flush, fast_relay_initial_buffer, fast_relay_max_buffer, fast_linux_zerocopy, fast_linux_zerocopy_min_bytes, fast_linux_io_uring, budget_configured, budget_max_protocol_layers, budget_allow_sniffing, budget_allow_fake_ip, budget_max_route_rules, budget_prefer_direct_copy, vision_configured, vision_direct_copy, vision_max_packets_to_filter, vision_allow_splice_after_direct, first_packet_boost_configured, first_packet_boost_enabled, first_packet_boost_dns, first_packet_boost_send_early_payload FROM global_performance_settings WHERE revision_id=?",
+        "INSERT INTO global_transport_settings SELECT ?, quic_configured, quic_reuse_port, quic_endpoints, quic_recv_buffer_bytes, quic_send_buffer_bytes, quic_max_datagram_size, datagram_configured, datagram_enabled, udp_over_datagram, datagram_policy, datagram_max_queue_delay_ms, fast_dns_retry, fast_dns_retry_delay_ms, fec_configured, fec_mode, fec_max_overhead_percent, fec_avoid_bulk_tcp, fec_disable_for_sequential_dns, fec_min_concurrency, fec_max_generation_packets, fec_max_generation_delay_ms, fec_recovery_deadline_ms, fec_dedup_window_packets FROM global_transport_settings WHERE revision_id=?",
+        "INSERT INTO global_performance_settings SELECT ?, fast_configured, fast_strict_production, fast_pool, fast_splice, fast_relay_engine, fast_relay_flush, fast_relay_initial_buffer, fast_relay_max_buffer, fast_linux_zerocopy, fast_linux_zerocopy_min_bytes, fast_linux_io_uring, budget_configured, budget_max_protocol_layers, budget_allow_sniffing, budget_max_route_rules, budget_prefer_direct_copy, vision_configured, vision_direct_copy, vision_max_packets_to_filter, vision_allow_splice_after_direct, first_packet_boost_configured, first_packet_boost_enabled, first_packet_boost_dns, first_packet_boost_send_early_payload FROM global_performance_settings WHERE revision_id=?",
         "INSERT INTO global_fec_protect_classes SELECT ?, position, packet_class FROM global_fec_protect_classes WHERE revision_id=?",
         "INSERT INTO inbounds SELECT ?, inbound_id, tag, listen_address, listen_port, protocol, enabled, position FROM inbounds WHERE revision_id=?",
         "INSERT INTO outbounds SELECT ?, outbound_id, tag, protocol, enabled, position, server_address, server_port, domain_strategy, deny_loopback, reject_ipv6_literal FROM outbounds WHERE revision_id=?",

@@ -22,6 +22,8 @@ This project is pre-1.0. The support contract is owned by
   application. Shared protocol and platform implementations remain available;
   only product ownership and configuration moved. Existing database values are
   retained in archival tables for manual migration or rollback.
+- Removed the unused TUN-over-datagram toggle and the obsolete FakeIP budget
+  override from the shared schema, server settings API, and database.
 
 ## 0.2.5 - 2026-08-19
 

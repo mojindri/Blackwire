@@ -11,9 +11,9 @@ import { applyOptimizationMode, defaultFastSettings, optimizationModeFromSetting
 const optionalNumber = (value: string) => value === "" ? null : Number(value);
 const lines = (value: string) => value.split("\n").map((item) => item.trim()).filter(Boolean);
 const defaultQuic = { reusePort: false, endpoints: 1, recvBufferBytes: 8388608, sendBufferBytes: 8388608, maxDatagramSize: "auto" as number | string };
-const defaultDatagram = { enabled: true, udpOverDatagram: true, tunPacketsOverDatagram: false, policy: "standard" as const, maxQueueDelayMs: 25, fastDnsRetry: false, fastDnsRetryDelayMs: 20 };
+const defaultDatagram = { enabled: true, udpOverDatagram: true, policy: "standard" as const, maxQueueDelayMs: 25, fastDnsRetry: false, fastDnsRetryDelayMs: 20 };
 const defaultFec = { mode: "auto" as const, maxOverheadPercent: 20, protectClasses: ["dns", "interactive", "control"], avoidBulkTcp: true, disableForSequentialDns: true, minConcurrencyForBlockFec: 4, maxGenerationPackets: 4, maxGenerationDelayMs: 20, recoveryDeadlineMs: 100, dedupWindowPackets: 1024 };
-const defaultBudget: NonNullable<CoreSettings["budget"]> = { maxProtocolLayers: 3, allowSniffing: false, allowFakeIp: false, maxRouteRules: 50, preferDirectCopy: true };
+const defaultBudget: NonNullable<CoreSettings["budget"]> = { maxProtocolLayers: 3, allowSniffing: false, maxRouteRules: 50, preferDirectCopy: true };
 const defaultVision: NonNullable<CoreSettings["vision"]> = { directCopy: "auto", maxPacketsToFilter: 8, allowSpliceAfterDirect: true };
 const defaultBoost: NonNullable<CoreSettings["firstPacketBoost"]> = { enabled: false, dns: true, sendEarlyPayload: true };
 

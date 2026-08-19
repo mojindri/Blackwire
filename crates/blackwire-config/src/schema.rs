@@ -298,10 +298,6 @@ pub struct DatagramConfig {
     #[serde(default = "default_true")]
     pub udp_over_datagram: bool,
 
-    /// Reserved for TUN packet DATAGRAM mode.
-    #[serde(default = "default_true")]
-    pub tun_packets_over_datagram: bool,
-
     /// H2+ lane policy (standard = unchanged behavior, h2-plus = priority lane + DNS retry knobs).
     #[serde(default)]
     pub policy: DatagramPolicy,
@@ -348,7 +344,6 @@ impl Default for DatagramConfig {
         Self {
             enabled: true,
             udp_over_datagram: true,
-            tun_packets_over_datagram: true,
             policy: DatagramPolicy::Standard,
             max_queue_delay_ms: Self::default_max_queue_delay_ms(),
             fast_dns_retry: false,
@@ -976,8 +971,7 @@ mod tests {
         let json = r#"{
             "datagram": {
                 "enabled": true,
-                "udpOverDatagram": true,
-                "tunPacketsOverDatagram": true
+                "udpOverDatagram": true
             },
             "fec": {
                 "mode": "auto",

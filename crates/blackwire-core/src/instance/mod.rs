@@ -228,6 +228,10 @@ impl Instance {
     ///   - A listen address is invalid
     ///   - A required config field is missing or malformed
     pub async fn from_config(config: Arc<Config>) -> Result<Self> {
+        anyhow::ensure!(
+            config.tun.is_none(),
+            "TUN configuration is client-owned; start it through blackwire-client"
+        );
         let mut tasks = Vec::with_capacity(config.inbounds.len().saturating_add(4));
         let data_plane = compile_data_plane(config.as_ref());
 

@@ -13,10 +13,6 @@ maxProtocolLayers: number,
  */
 allowSniffing: boolean,
 /**
- * Whether fake-IP DNS is permitted within budget.
- */
-allowFakeIp: boolean,
-/**
  * Maximum number of routing rules before a violation is raised.
  */
 maxRouteRules: number,

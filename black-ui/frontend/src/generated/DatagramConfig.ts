@@ -14,10 +14,6 @@ enabled: boolean,
  */
 udpOverDatagram: boolean,
 /**
- * Reserved for TUN packet DATAGRAM mode.
- */
-tunPacketsOverDatagram: boolean,
-/**
  * H2+ lane policy (standard = unchanged behavior, h2-plus = priority lane + DNS retry knobs).
  */
 policy: DatagramPolicy,

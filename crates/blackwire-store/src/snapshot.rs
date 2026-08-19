@@ -132,7 +132,6 @@ async fn load_performance(pool: &MySqlPool, revision: i64) -> StoreResult<Perfor
                 )
                 .map_err(decode_error)?,
                 allow_sniffing: row.try_get("budget_allow_sniffing")?,
-                allow_fake_ip: row.try_get("budget_allow_fake_ip")?,
                 max_route_rules: usize::try_from(row.try_get::<u64, _>("budget_max_route_rules")?)
                     .map_err(decode_error)?,
                 prefer_direct_copy: row.try_get("budget_prefer_direct_copy")?,
@@ -214,7 +213,6 @@ async fn load_datagram(pool: &MySqlPool, revision: i64) -> StoreResult<Option<Da
     Ok(Some(DatagramConfig {
         enabled: row.try_get("datagram_enabled")?,
         udp_over_datagram: row.try_get("udp_over_datagram")?,
-        tun_packets_over_datagram: row.try_get("tun_packets_over_datagram")?,
         policy: parse_string_enum(&row.try_get::<String, _>("datagram_policy")?)?,
         max_queue_delay_ms: row.try_get("datagram_max_queue_delay_ms")?,
         fast_dns_retry: row.try_get("fast_dns_retry")?,

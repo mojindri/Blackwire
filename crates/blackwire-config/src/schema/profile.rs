@@ -100,9 +100,6 @@ pub struct BudgetConfig {
     #[serde(default)]
     /// Whether protocol sniffing is permitted within budget.
     pub allow_sniffing: bool,
-    #[serde(default)]
-    /// Whether fake-IP DNS is permitted within budget.
-    pub allow_fake_ip: bool,
     #[serde(default = "BudgetConfig::default_max_route_rules")]
     /// Maximum number of routing rules before a violation is raised.
     pub max_route_rules: usize,
@@ -130,7 +127,6 @@ impl Default for BudgetConfig {
         Self {
             max_protocol_layers: Self::default_max_protocol_layers(),
             allow_sniffing: false,
-            allow_fake_ip: false,
             max_route_rules: Self::default_max_route_rules(),
             prefer_direct_copy: true,
         }
@@ -779,7 +775,6 @@ pub fn explain_cost(config: &Config) -> CostReport {
         ProfileMode::Latency | ProfileMode::Fast => BudgetConfig {
             max_protocol_layers: 3,
             allow_sniffing: false,
-            allow_fake_ip: false,
             max_route_rules: 50,
             prefer_direct_copy: true,
         },
@@ -795,7 +790,6 @@ pub fn explain_cost(config: &Config) -> CostReport {
         ProfileMode::Compat | ProfileMode::Stealth => BudgetConfig {
             max_protocol_layers: 8,
             allow_sniffing: true,
-            allow_fake_ip: true,
             max_route_rules: 1000,
             prefer_direct_copy: false,
         },
@@ -905,19 +899,6 @@ pub fn explain_cost(config: &Config) -> CostReport {
             "sniffing is enabled but this profile budget disallows it".into(),
         ));
         suggestions.push("disable inbound sniffing or use compat/stealth profile".into());
-    }
-
-    if !budget.allow_fake_ip
-        && config
-            .dns
-            .as_ref()
-            .and_then(|d| d.fake_ip.as_ref())
-            .is_some_and(|f| f.enabled)
-    {
-        findings.push(ProfileViolation::Warning(
-            "FakeIP is enabled but this profile budget disallows it".into(),
-        ));
-        suggestions.push("disable dns.fakeIp for latency profiles".into());
     }
 
     if let Some(routing) = &config.routing {
