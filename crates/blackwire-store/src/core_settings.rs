@@ -1,6 +1,6 @@
 use blackwire_config::schema::{
-    ApiConfig, BudgetConfig, DatagramConfig, FastConfig, FecConfig, FirstPacketBoostConfig,
-    LimitsConfig, ProfileMode, QuicConfig, StatsConfig, VisionConfig,
+    BudgetConfig, DatagramConfig, FastConfig, FecConfig, FirstPacketBoostConfig, LimitsConfig,
+    ProfileMode, QuicConfig, StatsConfig, VisionConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +16,6 @@ pub struct CoreSettings {
     pub vision: Option<VisionConfig>,
     pub first_packet_boost: Option<FirstPacketBoostConfig>,
     pub metrics_addr: Option<String>,
-    pub api: Option<ApiConfig>,
     pub stats: Option<StatsConfig>,
     pub limits: LimitsConfig,
     pub quic: Option<QuicConfig>,
@@ -35,7 +34,6 @@ impl Database {
             vision: config.vision,
             first_packet_boost: config.first_packet_boost,
             metrics_addr: config.metrics_addr,
-            api: config.api,
             stats: config.stats,
             limits: config.limits,
             quic: config.quic,
@@ -61,17 +59,9 @@ impl Database {
             )
             .await?;
 
-        let api_enabled = input.api.is_some();
-        let api_listen = input.api.as_ref().map(|value| value.listen.trim());
-        if api_enabled && api_listen == Some("") {
-            return Err(StoreError::InvalidConfiguration(
-                "API listen address must not be empty".into(),
-            ));
-        }
-        sqlx::query("UPDATE global_config SET profile=?,metrics_enabled=?,metrics_address=?,api_enabled=?,api_listen_address=?,api_token_value=?,stats_enabled=? WHERE revision_id=?")
+        sqlx::query("UPDATE global_config SET profile=?,metrics_enabled=?,metrics_address=?,stats_enabled=? WHERE revision_id=?")
             .bind(input.profile.to_string())
             .bind(input.metrics_addr.is_some()).bind(trimmed_option(input.metrics_addr.clone()))
-            .bind(api_enabled).bind(api_listen).bind(input.api.as_ref().and_then(|value| value.token.as_deref()).map(str::as_bytes))
             .bind(input.stats.as_ref().map(|value| value.enabled))
             .bind(revision).execute(&mut *tx).await?;
 
@@ -105,22 +95,6 @@ impl Database {
             .bind(boost.is_some()).bind(boost.map(|v| v.enabled).unwrap_or(false)).bind(boost.map(|v| v.dns).unwrap_or(true))
             .bind(boost.map(|v| v.send_early_payload).unwrap_or(true))
             .bind(revision).execute(&mut *tx).await?;
-
-        sqlx::query("DELETE FROM global_api_services WHERE revision_id=?")
-            .bind(revision)
-            .execute(&mut *tx)
-            .await?;
-        if let Some(api) = &input.api {
-            for (position, service) in api
-                .services
-                .iter()
-                .filter(|value| !value.trim().is_empty())
-                .enumerate()
-            {
-                sqlx::query("INSERT INTO global_api_services (revision_id,position,service_name) VALUES (?,?,?)")
-                    .bind(revision).bind(position as u32).bind(service.trim()).execute(&mut *tx).await?;
-            }
-        }
 
         let quic = input.quic.as_ref();
         let datagram = input.datagram.as_ref();

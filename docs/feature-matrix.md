@@ -183,8 +183,7 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 | Per-inbound / global `max_connections`     | **Supported**    | TCP (`transport/tcp.rs`), QUIC, and Hysteria2 accept loops honour the 3-level hierarchy (`limits.maxConnections` per-inbound → per-inbound-class → global) |
 | Prometheus HTTP (`metricsAddr`)            | **Supported**    | `metrics.rs` — `/metrics`, `/healthz`, `/readyz`, `/version`                                                                                                                                                      |
 | Per-connection Prometheus counters         | **Supported**    | `record_connection_`* called from `dispatcher` after each relay                                                                                                                                                   |
-| Stats API (gRPC)                           | **Experimental** | `blackwire-api` StatsService + `runtime_stats`; starts when `api` listen set                                                                                                                                      |
-| Handler API (gRPC)                         | **Read-only**    | Runtime inspection and connection operations remain; configuration mutations are rejected because MySQL revisions are the only write path                                                                         |
+| Dashboard traffic statistics              | **Supported**    | Internal `runtime_stats` counters are persisted to MySQL and served through Black UI's authenticated HTTP API                                                                                                      |
 
 
 ---
@@ -250,7 +249,6 @@ pre-1.0 project into a stable production application.
 
 - Relational configuration — no V2Ray/Xray server-config import or paste path.
 - VMess legacy non-AEAD / alterId — not implemented.
-- Handler API (gRPC) — configuration mutation RPCs are rejected; writes use MySQL revisions.
 - Structural config changes (listeners/outbounds/TLS material) trigger CLI-driven instance handover; not in-place listener mutation.
 
 ---

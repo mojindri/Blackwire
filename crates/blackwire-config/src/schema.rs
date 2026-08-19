@@ -124,10 +124,6 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<StatsConfig>,
 
-    /// Management API settings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api: Option<ApiConfig>,
-
     /// Metrics/health HTTP server listen address, e.g. `"127.0.0.1:8080"`.
     ///
     /// When set, the proxy starts a Prometheus metrics endpoint at this address.
@@ -147,20 +143,6 @@ pub struct StatsConfig {
     /// Enables statistics collection.
     #[serde(default = "default_true")]
     pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[serde(rename_all = "camelCase")]
-/// Management API listener and authentication settings.
-pub struct ApiConfig {
-    /// Socket address on which the management API listens.
-    pub listen: String,
-    /// Optional bearer token required by API clients.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token: Option<String>,
-    /// Management service names exposed by the API.
-    #[serde(default)]
-    pub services: Vec<String>,
 }
 
 /// Runtime safety limits.

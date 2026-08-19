@@ -45,14 +45,11 @@ export function SettingsPage({ settings, coreSettings, busy, onSave, onSaveCore 
       <Button variant="primary" icon={<Save size={16} />} onClick={() => onSave(panel)} disabled={busy}>Save panel settings</Button>
     </SettingsSection>
 
-    <SettingsSection icon={<Terminal size={19} />} title="Runtime & observability" copy="Metrics, statistics, API, and connection limits." recommendation="Keep API and metrics listeners local unless remote access is protected with authentication and firewall rules." impact="Applies automatically" details="Metrics and statistics control runtime visibility. Limits protect the process from excessive connections and stalled sessions." defaultOpen>
+    <SettingsSection icon={<Terminal size={19} />} title="Runtime & observability" copy="Dashboard statistics, Prometheus metrics, and connection limits." recommendation="Keep the Prometheus listener local unless a private network or firewall protects it." impact="Applies automatically" details="Internal statistics feed the dashboard and quotas. Prometheus is optional. Limits protect the process from excessive connections and stalled sessions." defaultOpen>
       <div className="settings-grid settings-grid-3">
         <Switch checked={core.stats?.enabled ?? false} onChange={(enabled) => setCore({ ...core, stats: { enabled } })} label="Traffic statistics" />
         <Field label="Metrics listen address" hint="Empty disables metrics."><Input value={core.metricsAddr ?? ""} onChange={(e) => setCore({ ...core, metricsAddr: e.target.value || null })} /></Field>
       </div>
-      <div className="settings-divider" />
-      <Switch checked={core.api !== null} onChange={(enabled) => setCore({ ...core, api: enabled ? { listen: "127.0.0.1:62789", token: null, services: ["HandlerService", "StatsService"] } : null })} label="Enable management API" />
-      {core.api ? <><div className="settings-grid"><Field label="API listen address"><Input value={core.api.listen} onChange={(e) => setCore({ ...core, api: { ...core.api!, listen: e.target.value } })} /></Field><Field label="Bearer token"><Input type="password" value={core.api.token ?? ""} onChange={(e) => setCore({ ...core, api: { ...core.api!, token: e.target.value || null } })} /></Field></div><ApiServicesEditor services={core.api.services} onChange={(services) => setCore({ ...core, api: { ...core.api!, services } })} /></> : null}
       <div className="settings-divider" />
       <div className="settings-grid settings-grid-3">{([['maxConnections','Process connections'],['maxConnectionsPerInbound','Per-inbound connections'],['maxConnectionsPerUser','Per-user connections'],['maxHandshakeSeconds','Handshake timeout (s)'],['maxIdleSeconds','Idle timeout (s)']] as const).map(([key, label]) => <Field key={key} label={label}><Input type="number" value={core.limits[key] ?? ""} placeholder="Unlimited" onChange={(e) => setCore({ ...core, limits: { ...core.limits, [key]: optionalNumber(e.target.value) } })} /></Field>)}</div>
     </SettingsSection>
@@ -78,16 +75,6 @@ function SettingsSection({ icon, title, copy, recommendation, impact, details, d
 }
 function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) { return <Field label={label}><Input type="number" min={0} value={value} onChange={(e) => onChange(Number(e.target.value))} /></Field>; }
 function ScalarField({ label, value, keyword, onChange }: { label: string; value: number | string; keyword: string; onChange: (value: number | string) => void }) { return <Field label={label}><Input value={value} onChange={(e) => onChange(e.target.value === keyword ? keyword : Number(e.target.value))} /></Field>; }
-
-function ApiServicesEditor({ services, onChange }: { services: string[]; onChange: (services: string[]) => void }) {
-  const selected = services.length === 0 ? ["HandlerService", "StatsService"] : services;
-  const toggle = (name: string, enabled: boolean) => {
-    const next = enabled ? [...selected.filter((service) => service !== name), name] : selected.filter((service) => service !== name);
-    if (next.some((service) => service === "HandlerService" || service === "StatsService")) onChange(next);
-  };
-  const enabledCount = ["HandlerService", "StatsService"].filter((service) => selected.includes(service)).length;
-  return <div className="api-services"><div className="api-services-head"><div><h3>API capabilities</h3><p>Choose exactly what connected management clients can access.</p></div><span>{enabledCount} enabled</span></div><div className="api-service-list"><div className="api-service-row"><div><strong>Runtime management</strong><small>Add, remove, and inspect inbound or outbound handlers.</small></div><Switch checked={selected.includes("HandlerService")} onChange={(enabled) => toggle("HandlerService", enabled)} label="Handler service" /></div><div className="api-service-row"><div><strong>Traffic statistics</strong><small>Read transfer counters and runtime usage measurements.</small></div><Switch checked={selected.includes("StatsService")} onChange={(enabled) => toggle("StatsService", enabled)} label="Statistics service" /></div></div><p className="api-services-empty">Keep at least one capability enabled, or turn off the management API.</p></div>;
-}
 
 const optimizationModes: Array<{ mode: OptimizationMode; title: string; description: string }> = [
   { mode: "automatic", title: "Automatic", description: "Use tested Fast defaults with adaptive relay paths and safe fallbacks." },

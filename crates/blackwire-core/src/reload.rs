@@ -38,7 +38,6 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-use async_trait::async_trait;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use tracing::info;
@@ -102,10 +101,6 @@ pub struct ReloadState {
     >,
     /// Shared per-user connection limiter updated in place on reload.
     pub user_connection_limiter: Arc<UserConnectionLimiter>,
-    /// Inbound tags from the active config (HandlerService ListInbounds).
-    pub inbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
-    /// Outbound tags from the active config (HandlerService ListOutbounds).
-    pub outbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
     /// Cached geo matchers; skips file re-read when path and mtime are unchanged.
     geo_cache: Arc<Mutex<GeoCache>>,
 }
@@ -126,8 +121,6 @@ impl ReloadState {
                 std::collections::HashMap<String, Arc<blackwire_config::schema::SniffingConfig>>,
             >,
         >,
-        inbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
-        outbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
         user_connection_limiter: Arc<UserConnectionLimiter>,
     ) -> Self {
         Self {
@@ -139,8 +132,6 @@ impl ReloadState {
             hysteria2_auth_stores,
             tuic_auth_stores,
             sniffing,
-            inbound_tags,
-            outbound_tags,
             user_connection_limiter,
             geo_cache: Arc::new(Mutex::new(GeoCache::default())),
         }
@@ -177,17 +168,6 @@ impl ReloadState {
         let count = new_sniffing.len();
         self.sniffing.store(Arc::new(new_sniffing));
         info!(count, "sniffing map hot-swapped");
-
-        if let Ok(mut tags) = self.inbound_tags.write() {
-            let mut next = Vec::with_capacity(config.inbounds.len());
-            next.extend(config.inbounds.iter().map(|i| i.tag.clone()));
-            *tags = next;
-        }
-        if let Ok(mut tags) = self.outbound_tags.write() {
-            let mut next = Vec::with_capacity(config.outbounds.len());
-            next.extend(config.outbounds.iter().map(|o| o.tag.clone()));
-            *tags = next;
-        }
 
         set_user_bandwidth_policies(build_user_bandwidth_policies(&config.inbounds));
         info!("per-user bandwidth policy hot-swapped");
@@ -261,73 +241,7 @@ impl ReloadState {
     }
 }
 
-#[async_trait]
-impl blackwire_api::management::InboundManagement for ReloadState {
-    async fn list_inbound_tags(&self) -> Vec<String> {
-        self.inbound_tags
-            .read()
-            .map(|t| t.clone())
-            .unwrap_or_default()
-    }
-
-    async fn list_outbound_tags(&self) -> Vec<String> {
-        self.outbound_tags
-            .read()
-            .map(|t| t.clone())
-            .unwrap_or_default()
-    }
-
-    async fn vless_user_count(&self, inbound_tag: &str) -> Option<i64> {
-        self.vless_registry(inbound_tag).map(|r| r.len() as i64)
-    }
-
-    async fn list_vless_users(
-        &self,
-        inbound_tag: &str,
-        email: &str,
-    ) -> Result<Vec<blackwire_api::management::VlessUserRecord>, String> {
-        let registry = self
-            .vless_registry(inbound_tag)
-            .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))?;
-        Ok(registry
-            .list_users(email)
-            .into_iter()
-            .map(|u| blackwire_api::management::VlessUserRecord {
-                email: u.email.to_string(),
-                uuid: uuid::Uuid::from_bytes(u.uuid).to_string(),
-                flow: u.flow.clone(),
-                level: 0,
-            })
-            .collect())
-    }
-
-    async fn list_connections(&self) -> Vec<blackwire_connmgr::ConnectionSnapshot> {
-        blackwire_connmgr::global_manager().list()
-    }
-
-    async fn close_connections(
-        &self,
-        selector: blackwire_connmgr::CloseSelector,
-    ) -> Result<usize, String> {
-        Ok(blackwire_connmgr::global_manager().close(selector).matched)
-    }
-}
-
 impl ReloadState {
-    fn vless_registry(&self, inbound_tag: &str) -> Option<Arc<VlessUserRegistry>> {
-        if !self
-            .inbound_tags
-            .read()
-            .map(|tags| tags.iter().any(|t| t == inbound_tag))
-            .unwrap_or(false)
-        {
-            return None;
-        }
-        self.vless_registries
-            .get(inbound_tag)
-            .map(|r| Arc::clone(r.value()))
-    }
-
     /// Load geo data, reusing the cached matchers when the files haven't changed.
     ///
     /// Checks file size + mtime before re-reading. The expensive part (protobuf
@@ -423,7 +337,6 @@ pub fn requires_instance_handover(old: &Config, new: &Config) -> bool {
     }
 
     if old.metrics_addr != new.metrics_addr
-        || old.api != new.api
         || old.profile != new.profile
         || serialized_value_changed(&old.fast, &new.fast)
         || old.budget != new.budget

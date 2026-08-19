@@ -335,12 +335,6 @@ impl Instance {
         let router = LiveRouter::new(rules, default_tag, geoip, geosite, domain_strategy.clone());
         let sniffing_shared = Arc::new(ArcSwap::from_pointee(build_sniffing_map(&config.inbounds)));
         // Shared with the config watcher: router swap + inbound auth refresh on reload.
-        let inbound_tags: Arc<std::sync::RwLock<Vec<String>>> = Arc::new(std::sync::RwLock::new(
-            config.inbounds.iter().map(|i| i.tag.clone()).collect(),
-        ));
-        let outbound_tags: Arc<std::sync::RwLock<Vec<String>>> = Arc::new(std::sync::RwLock::new(
-            config.outbounds.iter().map(|o| o.tag.clone()).collect(),
-        ));
         let user_connection_limiter = Arc::new(UserConnectionLimiter::new(
             config.limits.max_connections_per_user.unwrap_or(usize::MAX),
         ));
@@ -353,8 +347,6 @@ impl Instance {
             Arc::new(DashMap::new()),
             Arc::new(DashMap::new()),
             Arc::clone(&sniffing_shared),
-            Arc::clone(&inbound_tags),
-            Arc::clone(&outbound_tags),
             Arc::clone(&user_connection_limiter),
         );
         let vless_registries = Arc::clone(&reload.vless_registries);
@@ -613,28 +605,6 @@ impl Instance {
         }
 
         // ── Optional: start metrics/health HTTP server ───────────────────────
-        if let Some(api_config) = config
-            .api
-            .as_ref()
-            .and_then(blackwire_api::server::api_server_config)
-        {
-            let management: blackwire_api::management::ManagementHandle = Arc::new(reload.clone());
-            let handle = blackwire_api::server::start_api_server(
-                &api_config.listen_addr,
-                management,
-                api_config.token.clone(),
-                &api_config.services,
-            )
-            .with_context(|| {
-                format!(
-                    "starting blackwire-api gRPC server on '{}'",
-                    api_config.listen_addr
-                )
-            })?;
-            info!(addr = %api_config.listen_addr, authenticated = api_config.token.is_some(), "blackwire-api gRPC server started");
-            tasks.push(handle);
-        }
-
         if let Some(metrics_addr) = &config.metrics_addr {
             let handle = blackwire_app::metrics::start_metrics_server(metrics_addr)
                 .with_context(|| format!("starting metrics server on '{metrics_addr}'"))?;

@@ -27,14 +27,12 @@ blackwire-config    = { path = "../blackwire-config" }
 blackwire-store     = { path = "../blackwire-store" }
 blackwire-core      = { path = "../blackwire-core" }
 blackwire-app       = { path = "../blackwire-app" }
-blackwire-api       = { path = "../blackwire-api" }
 blackwire-protocol  = { path = "../blackwire-protocol" }
 blackwire-connmgr   = { path = "../blackwire-connmgr" }
 blackwire-transport = { path = "../blackwire-transport" }
 
 tokio.workspace              = true
 clap.workspace               = true
-async-trait.workspace        = true
 tracing.workspace            = true
 tracing-subscriber.workspace = true
 anyhow.workspace             = true

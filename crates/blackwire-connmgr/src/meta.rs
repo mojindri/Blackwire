@@ -153,7 +153,7 @@ pub enum CloseReason {
     Completed,
     /// Closed due to an I/O or protocol error.
     Error,
-    /// Closed by explicit connection ID via the management API.
+    /// Closed by explicit connection ID via local runtime control.
     ClosedById,
     /// Closed by the authenticated user.
     ClosedByUser,

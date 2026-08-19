@@ -92,9 +92,6 @@ The workspace root `Cargo.toml` declares these crates:
 - `blackwire-client`
   The separate local/TUN client entrypoint and device-lifecycle owner.
 
-- `blackwire-api`
-  gRPC management/stats surface (Handler + Stats services) used by runtime control-plane operations.
-
 - `tests`
   Integration tests and interop tests.
 

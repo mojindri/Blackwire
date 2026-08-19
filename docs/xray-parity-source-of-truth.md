@@ -27,7 +27,6 @@ Use the **primary** reference first; validate with the **secondary** when both a
 | SOCKS5 / HTTP CONNECT | RFC + Xray inbound behavior | sing-box inbound tests in lab |
 | SS2022 | Xray / outline spec as used by Xray | sing-box `shadowsocks` implementation |
 | gRPC Gun transport | Xray `transport/internet/grpc` | sing-box gRPC transport |
-| Management gRPC (Stats/Handler) | Xray `.proto` services | Only if panel parity is required |
 
 When Xray and sing-box **disagree**, do not pick blackwire’s preference:
 

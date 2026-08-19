@@ -441,7 +441,6 @@ mod tests {
                 stream_settings: None,
             }],
             stats: None,
-            api: None,
             metrics_addr: None,
         }
     }

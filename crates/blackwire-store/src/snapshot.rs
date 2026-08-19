@@ -2,7 +2,7 @@ use std::net::IpAddr;
 
 use crate::sqlx;
 use blackwire_config::schema::{
-    AdaptiveBalancerConfig, ApiConfig, BalancerConfig, BalancerProfileConfig, BudgetConfig, Config,
+    AdaptiveBalancerConfig, BalancerConfig, BalancerProfileConfig, BudgetConfig, Config,
     CongestionSettings, DatagramConfig, DatagramOverrides, DatagramSize, DnsConfig,
     DownloadSettings, EndpointCount, EndpointSettings, EndpointUser, FastConfig, FastLinuxConfig,
     FastRelayConfig, FecConfig, FecOverrides, FirstPacketBoostConfig, GrpcConfig,
@@ -31,17 +31,15 @@ impl Database {
 
     pub async fn load_config(&self, revision: i64) -> StoreResult<StoredConfig> {
         let global = sqlx::query(
-            "SELECT profile, metrics_enabled, metrics_address, api_enabled, api_listen_address, api_token_value, stats_enabled, log_level, log_structured, log_file FROM global_config WHERE revision_id = ?",
+            "SELECT profile, metrics_enabled, metrics_address, stats_enabled, log_level, log_structured, log_file FROM global_config WHERE revision_id = ?",
         )
         .bind(revision)
         .fetch_one(self.pool())
         .await?;
         let profile: String = global.try_get("profile")?;
-        let api_enabled: bool = global.try_get("api_enabled")?;
-        let api_address: Option<String> = global.try_get("api_listen_address")?;
         let metrics_enabled: bool = global.try_get("metrics_enabled")?;
         let performance = load_performance(self.pool(), revision).await?;
-        StoredConfig {
+        Ok(StoredConfig {
             revision,
             config: Config {
                 profile: parse_profile(&profile)?,
@@ -66,20 +64,13 @@ impl Database {
                 stats: global
                     .try_get::<Option<bool>, _>("stats_enabled")?
                     .map(|enabled| StatsConfig { enabled }),
-                api: api_enabled.then(|| ApiConfig {
-                    listen: api_address.unwrap_or_else(|| "127.0.0.1:62789".into()),
-                    token: bytes_string(&global, "api_token_value").ok().flatten(),
-                    services: Vec::new(),
-                }),
                 metrics_addr: if metrics_enabled {
                     global.try_get("metrics_address")?
                 } else {
                     None
                 },
             },
-        }
-        .with_api_services(self.pool())
-        .await
+        })
     }
 }
 
@@ -164,16 +155,6 @@ async fn load_performance(pool: &MySqlPool, revision: i64) -> StoreResult<Perfor
         vision,
         first_packet_boost,
     })
-}
-
-impl StoredConfig {
-    async fn with_api_services(mut self, pool: &MySqlPool) -> StoreResult<Self> {
-        if let Some(api) = self.config.api.as_mut() {
-            api.services = sqlx::query_scalar("SELECT service_name FROM global_api_services WHERE revision_id=? ORDER BY position")
-                .bind(self.revision).fetch_all(pool).await?;
-        }
-        Ok(self)
-    }
 }
 
 async fn global_transport_row(

@@ -32,7 +32,6 @@ COPY crates/blackwire-transport/Cargo.toml crates/blackwire-transport/
 COPY crates/blackwire-protocol/Cargo.toml crates/blackwire-protocol/
 COPY crates/blackwire-app/Cargo.toml    crates/blackwire-app/
 COPY crates/blackwire-tls/Cargo.toml    crates/blackwire-tls/
-COPY crates/blackwire-api/Cargo.toml    crates/blackwire-api/
 COPY crates/blackwire-connmgr/Cargo.toml crates/blackwire-connmgr/
 COPY crates/blackwire-store/Cargo.toml crates/blackwire-store/
 COPY black-ui/server/Cargo.toml     black-ui/server/
@@ -42,7 +41,7 @@ COPY benches/benches/               benches/benches/
 
 # Create stub lib/main.rs files so cargo can resolve dependencies.
 # These will be replaced by the full source copy below.
-RUN for d in blackwire-common blackwire-config blackwire-app blackwire-transport blackwire-protocol blackwire-core blackwire-tls blackwire-api blackwire-connmgr blackwire-store; do \
+RUN for d in blackwire-common blackwire-config blackwire-app blackwire-transport blackwire-protocol blackwire-core blackwire-tls blackwire-connmgr blackwire-store; do \
         mkdir -p crates/$d/src && echo "// stub" > crates/$d/src/lib.rs; \
     done && \
     mkdir -p crates/blackwire-cli/src && echo "fn main(){}" > crates/blackwire-cli/src/main.rs && \

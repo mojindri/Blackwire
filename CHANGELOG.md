@@ -10,6 +10,10 @@ This project is pre-1.0. The support contract is owned by
 
 ### Removed
 
+- Removed the experimental Xray-compatible management gRPC listener, HandlerService,
+  StatsService, protobuf surface, configuration, persistence, and Black UI controls.
+  Internal traffic counters, dashboard persistence, runtime heartbeat, Black UI HTTP
+  endpoints, local connection commands, and Prometheus metrics remain supported.
 - Removed the legacy generic V2Ray QUIC transport for VLESS, VMess, and Trojan,
   including runtime wiring, Black UI controls, subscription capability claims,
   external-client labs, and e2e coverage. Hysteria2 and TUIC retain their

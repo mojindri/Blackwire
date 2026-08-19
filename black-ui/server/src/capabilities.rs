@@ -139,7 +139,6 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "supported",
                 "metrics/health HTTP listener",
             ),
-            item("api", "Runtime API", "supported", "Revision status and traffic operations"),
             item(
                 "profile",
                 "Runtime profile",
@@ -158,8 +157,8 @@ pub fn blackwire_capabilities() -> CapabilityMap {
             item(
                 "stats",
                 "Traffic stats",
-                "experimental",
-                "Depends on Blackwire StatsService runtime",
+                "supported",
+                "Internal counters persisted for the dashboard and quotas",
             ),
             item(
                 "systemd",
@@ -188,6 +187,20 @@ fn item(
 #[cfg(test)]
 mod tests {
     use super::blackwire_capabilities;
+
+    #[test]
+    fn dashboard_stats_remain_without_management_api_capability() {
+        let capabilities = blackwire_capabilities();
+        assert!(!capabilities.config.iter().any(|item| item.key == "api"));
+
+        let stats = capabilities
+            .runtime
+            .iter()
+            .find(|item| item.key == "stats")
+            .expect("dashboard traffic statistics should remain available");
+        assert_eq!(stats.status, "supported");
+        assert!(stats.notes.contains("dashboard"));
+    }
 
     #[test]
     fn tuic_v5_is_reported_as_supported() {

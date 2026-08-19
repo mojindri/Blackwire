@@ -1,8 +1,8 @@
 use std::net::IpAddr;
 
 use blackwire_config::schema::{
-    ApiConfig, Config, DatagramConfig, EndpointSettings, FecConfig, FecMode, InboundConfig,
-    LimitsConfig, LogConfig, OutboundConfig, ProfileMode, Protocol, QuicConfig,
+    Config, DatagramConfig, EndpointSettings, FecConfig, FecMode, InboundConfig, LimitsConfig,
+    LogConfig, OutboundConfig, ProfileMode, Protocol, QuicConfig,
 };
 use blackwire_core::{inbound_listener_changes, requires_instance_handover};
 
@@ -42,7 +42,6 @@ fn minimal_config(port: u16) -> Config {
             stream_settings: None,
         }],
         stats: None,
-        api: None,
         metrics_addr: None,
     }
 }
@@ -231,17 +230,9 @@ fn handover_is_used_for_datagram_fec_changes() {
 }
 
 #[test]
-fn handover_is_used_for_process_service_changes() {
+fn handover_is_used_for_metrics_service_changes() {
     let old = minimal_config(1080);
     let mut new = old.clone();
     new.metrics_addr = Some("127.0.0.1:19090".into());
     assert!(requires_instance_handover(&old, &new));
-
-    let mut api = old.clone();
-    api.api = Some(ApiConfig {
-        listen: "127.0.0.1:62789".into(),
-        token: Some("secret".into()),
-        services: vec!["StatsService".into()],
-    });
-    assert!(requires_instance_handover(&old, &api));
 }

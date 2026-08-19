@@ -41,12 +41,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
-use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use tracing::{error, info, warn};
 use validator::Validate;
 
-use blackwire_api::management::InboundManagement;
 use blackwire_config::schema::{
     explain_cost, validate_fast_profile, Config, ProfileMode, ProfileViolation,
 };
@@ -59,83 +57,40 @@ struct RunningInstance {
 }
 
 struct RuntimeServices {
-    api_config: Option<blackwire_api::server::ApiServerConfig>,
-    api_task: Option<tokio::task::JoinHandle<()>>,
     metrics_addr: Option<String>,
     metrics_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl RuntimeServices {
-    fn start(
-        config: &Config,
-        management: blackwire_api::management::ManagementHandle,
-    ) -> Result<Self> {
-        let api_config = config
-            .api
-            .as_ref()
-            .and_then(blackwire_api::server::api_server_config);
-        let api_task = start_runtime_api(api_config.as_ref(), management)?;
+    fn start(config: &Config) -> Result<Self> {
         let metrics_addr = config.metrics_addr.clone();
         let metrics_task = start_runtime_metrics(metrics_addr.as_deref())?;
         Ok(Self {
-            api_config,
-            api_task,
             metrics_addr,
             metrics_task,
         })
     }
 
-    async fn apply(
-        &mut self,
-        config: &Config,
-        management: blackwire_api::management::ManagementHandle,
-    ) -> Result<()> {
-        let next_api = config
-            .api
-            .as_ref()
-            .and_then(blackwire_api::server::api_server_config);
+    async fn apply(&mut self, config: &Config) -> Result<()> {
         let next_metrics = config.metrics_addr.clone();
-        if next_api == self.api_config && next_metrics == self.metrics_addr {
+        if next_metrics == self.metrics_addr {
             return Ok(());
         }
 
-        let previous_api = self.api_config.clone();
         let previous_metrics = self.metrics_addr.clone();
-        if let Some(task) = self.api_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
         if let Some(task) = self.metrics_task.take() {
             task.abort();
             let _ = task.await;
         }
 
-        let replacement = (|| {
-            let api_task = start_runtime_api(next_api.as_ref(), Arc::clone(&management))?;
-            let metrics_task = match start_runtime_metrics(next_metrics.as_deref()) {
-                Ok(task) => task,
-                Err(error) => {
-                    if let Some(task) = api_task {
-                        task.abort();
-                    }
-                    return Err(error);
-                }
-            };
-            Ok((api_task, metrics_task))
-        })();
-
-        match replacement {
-            Ok((api_task, metrics_task)) => {
-                self.api_config = next_api;
-                self.api_task = api_task;
+        match start_runtime_metrics(next_metrics.as_deref()) {
+            Ok(metrics_task) => {
                 self.metrics_addr = next_metrics;
                 self.metrics_task = metrics_task;
                 Ok(())
             }
             Err(error) => {
-                self.api_task = start_runtime_api(previous_api.as_ref(), Arc::clone(&management))?;
                 self.metrics_task = start_runtime_metrics(previous_metrics.as_deref())?;
-                self.api_config = previous_api;
                 self.metrics_addr = previous_metrics;
                 Err(error)
             }
@@ -143,36 +98,9 @@ impl RuntimeServices {
     }
 }
 
-fn start_runtime_api(
-    config: Option<&blackwire_api::server::ApiServerConfig>,
-    management: blackwire_api::management::ManagementHandle,
-) -> Result<Option<tokio::task::JoinHandle<()>>> {
-    let Some(config) = config else {
-        return Ok(None);
-    };
-    let task = blackwire_api::server::start_api_server(
-        &config.listen_addr,
-        management,
-        config.token.clone(),
-        &config.services,
-    )
-    .with_context(|| {
-        format!(
-            "starting blackwire-api gRPC server on '{}'",
-            config.listen_addr
-        )
-    })?;
-    Ok(Some(task))
-}
-
 fn start_runtime_metrics(addr: Option<&str>) -> Result<Option<tokio::task::JoinHandle<()>>> {
     addr.map(blackwire_app::metrics::start_metrics_server)
         .transpose()
-}
-
-#[derive(Clone)]
-struct RuntimeControl {
-    instance: Arc<tokio::sync::Mutex<Option<RunningInstance>>>,
 }
 
 // ── Top-level CLI struct ──────────────────────────────────────────────────────
@@ -622,13 +550,7 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
         .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
     database.heartbeat(&runtime_id, initial_revision).await?;
 
-    let management: blackwire_api::management::ManagementHandle = Arc::new(RuntimeControl {
-        instance: Arc::clone(&instance),
-    });
-    let services = Arc::new(tokio::sync::Mutex::new(RuntimeServices::start(
-        &config,
-        Arc::clone(&management),
-    )?));
+    let services = Arc::new(tokio::sync::Mutex::new(RuntimeServices::start(&config)?));
 
     // Reconcile desired revisions. Hot-swappable state uses atomic reload;
     // listener changes prepare a replacement instance before old accept loops
@@ -639,7 +561,6 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
         let database = database.clone();
         let runtime_id = runtime_id.clone();
         let live_services = Arc::clone(&services);
-        let management = Arc::clone(&management);
         tokio::spawn(async move {
             let mut observed_revision = initial_revision;
             let mut counter_tick = 0u8;
@@ -721,12 +642,7 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                             continue;
                         }
                     };
-                    if let Err(error) = live_services
-                        .lock()
-                        .await
-                        .apply(&effective, Arc::clone(&management))
-                        .await
-                    {
+                    if let Err(error) = live_services.lock().await.apply(&effective).await {
                         let _ = database
                             .record_activation_failure(stored.revision, &error.to_string())
                             .await;
@@ -908,86 +824,6 @@ async fn shutdown_signal(instance: Arc<tokio::sync::Mutex<Option<RunningInstance
     guard.take();
 }
 
-impl RuntimeControl {
-    async fn with_reload<T>(
-        &self,
-        f: impl FnOnce(&blackwire_core::ReloadState) -> T,
-    ) -> Result<T, String> {
-        let guard = self.instance.lock().await;
-        let running = guard
-            .as_ref()
-            .ok_or_else(|| "no running instance is available".to_string())?;
-        Ok(f(&running.instance.reload))
-    }
-}
-
-#[async_trait]
-impl InboundManagement for RuntimeControl {
-    async fn list_inbound_tags(&self) -> Vec<String> {
-        self.with_reload(|r| r.inbound_tags.read().map(|t| t.clone()).unwrap_or_default())
-            .await
-            .unwrap_or_default()
-    }
-
-    async fn list_outbound_tags(&self) -> Vec<String> {
-        self.with_reload(|r| {
-            r.outbound_tags
-                .read()
-                .map(|t| t.clone())
-                .unwrap_or_default()
-        })
-        .await
-        .unwrap_or_default()
-    }
-
-    async fn vless_user_count(&self, inbound_tag: &str) -> Option<i64> {
-        self.with_reload(|r| {
-            r.vless_registries
-                .get(inbound_tag)
-                .map(|registry| registry.len() as i64)
-        })
-        .await
-        .ok()
-        .flatten()
-    }
-
-    async fn list_vless_users(
-        &self,
-        inbound_tag: &str,
-        email: &str,
-    ) -> Result<Vec<blackwire_api::management::VlessUserRecord>, String> {
-        self.with_reload(|r| {
-            r.vless_registries
-                .get(inbound_tag)
-                .map(|registry| {
-                    registry
-                        .list_users(email)
-                        .into_iter()
-                        .map(|u| blackwire_api::management::VlessUserRecord {
-                            email: u.email.to_string(),
-                            uuid: uuid::Uuid::from_bytes(u.uuid).to_string(),
-                            flow: u.flow.clone(),
-                            level: 0,
-                        })
-                        .collect()
-                })
-                .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))
-        })
-        .await?
-    }
-
-    async fn list_connections(&self) -> Vec<blackwire_connmgr::ConnectionSnapshot> {
-        blackwire_connmgr::global_manager().list()
-    }
-
-    async fn close_connections(
-        &self,
-        selector: blackwire_connmgr::CloseSelector,
-    ) -> Result<usize, String> {
-        Ok(blackwire_connmgr::global_manager().close(selector).matched)
-    }
-}
-
 async fn cmd_db(command: DbCommand) -> Result<()> {
     let database = Database::connect_from_env()
         .await
@@ -1146,7 +982,6 @@ async fn import_bootstrap_fixture(
         vision: config.vision,
         first_packet_boost: config.first_packet_boost,
         metrics_addr: config.metrics_addr.clone(),
-        api: config.api.clone(),
         stats: config.stats.clone(),
         limits: config.limits.clone(),
         quic: config.quic.clone(),
@@ -1882,14 +1717,13 @@ fn effective_config(
     Arc::new(cfg)
 }
 
-/// The server CLI owns the gRPC API and never starts client-only TUN capture.
+/// The server CLI owns Prometheus and never starts client-only TUN capture.
 /// Strip both before handing config to core.
 fn instance_runtime_config(base: &Arc<Config>) -> Arc<Config> {
-    if base.api.is_none() && base.metrics_addr.is_none() && base.tun.is_none() {
+    if base.metrics_addr.is_none() && base.tun.is_none() {
         return Arc::clone(base);
     }
     let mut cfg = base.as_ref().clone();
-    cfg.api = None;
     cfg.metrics_addr = None;
     cfg.tun = None;
     Arc::new(cfg)

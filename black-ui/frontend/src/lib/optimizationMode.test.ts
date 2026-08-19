@@ -10,7 +10,6 @@ function settings(overrides: Partial<CoreSettings> = {}): CoreSettings {
     vision: null,
     firstPacketBoost: null,
     metricsAddr: null,
-    api: null,
     stats: null,
     limits: {
       maxConnections: null,

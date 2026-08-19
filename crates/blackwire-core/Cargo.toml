@@ -16,7 +16,6 @@ blackwire-app             = { path = "../blackwire-app" }
 blackwire-connmgr         = { path = "../blackwire-connmgr" }
 blackwire-transport       = { path = "../blackwire-transport" }
 blackwire-protocol        = { path = "../blackwire-protocol" }
-blackwire-api             = { path = "../blackwire-api" }
 
 dashmap.workspace       = true
 parking_lot.workspace   = true

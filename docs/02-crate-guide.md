@@ -364,28 +364,6 @@ This is the separate local proxy and full-device client executable.
 - `crates/blackwire-client/src/lib.rs`
 - `docs/client-app.md`
 
-## `blackwire-api`
-
-### Purpose
-
-gRPC management/stats API crate.
-
-### Current Status
-
-Handler and Stats services are wired. Handler configuration mutation RPCs are
-rejected; MySQL revisions are the only configuration write path.
-
-### Why It Matters
-
-It provides runtime control-plane operations:
-
-- runtime inspection and connection operations
-- stats exposure
-
-### Read First
-
-- `crates/blackwire-api/src/lib.rs`
-
 ## `tests`
 
 ### Purpose
@@ -480,9 +458,6 @@ Use this ownership map:
 
 - `blackwire-cli`
   executable
-
-- `blackwire-api`
-  future management surface
 
 - `tests`
   behavior proof
