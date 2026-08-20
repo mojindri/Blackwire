@@ -996,8 +996,6 @@ mod tests {
             vision: None,
             first_packet_boost: None,
             quic: None,
-            datagram: None,
-            fec: None,
             log: LogConfig::default(),
             dns: None,
             routing: None,

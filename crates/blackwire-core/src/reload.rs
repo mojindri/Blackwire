@@ -344,8 +344,6 @@ pub fn requires_instance_handover(old: &Config, new: &Config) -> bool {
         || serialized_value_changed(&old.log, &new.log)
         || old.stats != new.stats
         || old.quic != new.quic
-        || old.datagram != new.datagram
-        || old.fec != new.fec
     {
         return true;
     }

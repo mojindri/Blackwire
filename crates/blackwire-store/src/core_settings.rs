@@ -1,6 +1,6 @@
 use blackwire_config::schema::{
-    DatagramConfig, FastConfig, FecConfig, FirstPacketBoostConfig, LimitsConfig, ProfileMode,
-    QuicConfig, StatsConfig, VisionConfig,
+    FastConfig, FirstPacketBoostConfig, LimitsConfig, ProfileMode, QuicConfig, StatsConfig,
+    VisionConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,8 +18,6 @@ pub struct CoreSettings {
     pub stats: Option<StatsConfig>,
     pub limits: LimitsConfig,
     pub quic: Option<QuicConfig>,
-    pub datagram: Option<DatagramConfig>,
-    pub fec: Option<FecConfig>,
 }
 
 impl Database {
@@ -35,8 +33,6 @@ impl Database {
             stats: config.stats,
             limits: config.limits,
             quic: config.quic,
-            datagram: config.datagram,
-            fec: config.fec,
         })
     }
 
@@ -90,36 +86,13 @@ impl Database {
             .bind(revision).execute(&mut *tx).await?;
 
         let quic = input.quic.as_ref();
-        let datagram = input.datagram.as_ref();
-        let fec = input.fec.as_ref();
-        sqlx::query("UPDATE global_transport_settings SET quic_configured=?,quic_reuse_port=?,quic_endpoints=?,quic_recv_buffer_bytes=?,quic_send_buffer_bytes=?,quic_max_datagram_size=?,datagram_configured=?,datagram_enabled=?,udp_over_datagram=?,datagram_policy=?,datagram_max_queue_delay_ms=?,fast_dns_retry=?,fast_dns_retry_delay_ms=?,fec_configured=?,fec_mode=?,fec_max_overhead_percent=?,fec_avoid_bulk_tcp=?,fec_disable_for_sequential_dns=?,fec_min_concurrency=?,fec_max_generation_packets=?,fec_max_generation_delay_ms=?,fec_recovery_deadline_ms=?,fec_dedup_window_packets=? WHERE revision_id=?")
+        sqlx::query("UPDATE global_transport_settings SET quic_configured=?,quic_reuse_port=?,quic_endpoints=?,quic_recv_buffer_bytes=?,quic_send_buffer_bytes=?,quic_max_datagram_size=? WHERE revision_id=?")
             .bind(quic.is_some()).bind(quic.map(|v| v.reuse_port).unwrap_or(false))
             .bind(quic.map(|v| scalar_text(&v.endpoints)).transpose()?.unwrap_or_else(|| "1".into()))
             .bind(quic.map(|v| v.recv_buffer_bytes as u64).unwrap_or(8 * 1024 * 1024))
             .bind(quic.map(|v| v.send_buffer_bytes as u64).unwrap_or(8 * 1024 * 1024))
             .bind(quic.map(|v| scalar_text(&v.max_datagram_size)).transpose()?.unwrap_or_else(|| "auto".into()))
-            .bind(datagram.is_some()).bind(datagram.map(|v| v.enabled).unwrap_or(true)).bind(datagram.map(|v| v.udp_over_datagram).unwrap_or(true))
-            .bind(datagram.map(|v| scalar_text(&v.policy)).transpose()?.unwrap_or_else(|| "standard".into()))
-            .bind(datagram.map(|v| v.max_queue_delay_ms).unwrap_or(25)).bind(datagram.map(|v| v.fast_dns_retry).unwrap_or(false)).bind(datagram.map(|v| v.fast_dns_retry_delay_ms).unwrap_or(20))
-            .bind(fec.is_some()).bind(fec.map(|v| scalar_text(&v.mode)).transpose()?.unwrap_or_else(|| "off".into())).bind(fec.map(|v| v.max_overhead_percent).unwrap_or(20))
-            .bind(fec.map(|v| v.avoid_bulk_tcp).unwrap_or(true)).bind(fec.map(|v| v.disable_for_sequential_dns).unwrap_or(true)).bind(fec.map(|v| v.min_concurrency_for_block_fec as u64).unwrap_or(4))
-            .bind(fec.map(|v| v.max_generation_packets).unwrap_or(4)).bind(fec.map(|v| v.max_generation_delay_ms).unwrap_or(20)).bind(fec.map(|v| v.recovery_deadline_ms).unwrap_or(100)).bind(fec.map(|v| v.dedup_window_packets as u64).unwrap_or(1024))
             .bind(revision).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM global_fec_protect_classes WHERE revision_id=?")
-            .bind(revision)
-            .execute(&mut *tx)
-            .await?;
-        if let Some(fec) = fec {
-            for (position, packet_class) in fec
-                .protect_classes
-                .iter()
-                .filter(|value| !value.trim().is_empty())
-                .enumerate()
-            {
-                sqlx::query("INSERT INTO global_fec_protect_classes (revision_id,position,packet_class) VALUES (?,?,?)")
-                    .bind(revision).bind(position as u32).bind(packet_class.trim()).execute(&mut *tx).await?;
-            }
-        }
 
         Database::publish_revision(&mut tx, revision, class).await?;
         tx.commit().await?;

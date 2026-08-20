@@ -18,8 +18,6 @@ function settings(overrides: Partial<CoreSettings> = {}): CoreSettings {
       maxIdleSeconds: null
     },
     quic: null,
-    datagram: null,
-    fec: null,
     ...overrides
   };
 }

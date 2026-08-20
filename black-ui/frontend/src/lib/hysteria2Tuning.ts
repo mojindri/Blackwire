@@ -5,9 +5,7 @@ export const HYSTERIA2_DEFAULTS = {
   pacingGain: "1.25",
   endpointShards: "1",
   quicEndpoints: "1",
-  quicBufferBytes: "8388608",
-  datagramPolicy: "standard",
-  fecMode: "off"
+  quicBufferBytes: "8388608"
 } as const;
 
 export interface Hysteria2TuningState {
@@ -21,11 +19,6 @@ export interface Hysteria2TuningState {
   hysteria2QuicEndpoints: string;
   hysteria2QuicRecvBufferBytes: string;
   hysteria2QuicSendBufferBytes: string;
-  hysteria2DatagramEnabled: boolean;
-  hysteria2DatagramUdpOverDatagram: boolean;
-  hysteria2DatagramPolicy: string;
-  hysteria2FecMode: string;
-  hysteria2FecMaxOverheadPercent: string;
 }
 
 export const HYSTERIA2_SIMPLE_CONGESTION_MODES = new Set(["standard", "brutal-compatible", "badnet-low-latency"]);
@@ -49,12 +42,7 @@ export function hasCustomHysteria2TransportTuning(
     state.hysteria2QuicReusePort ||
     state.hysteria2QuicEndpoints !== HYSTERIA2_DEFAULTS.quicEndpoints ||
     state.hysteria2QuicRecvBufferBytes !== HYSTERIA2_DEFAULTS.quicBufferBytes ||
-    state.hysteria2QuicSendBufferBytes !== HYSTERIA2_DEFAULTS.quicBufferBytes ||
-    state.hysteria2DatagramEnabled ||
-    !state.hysteria2DatagramUdpOverDatagram ||
-    state.hysteria2DatagramPolicy !== HYSTERIA2_DEFAULTS.datagramPolicy ||
-    state.hysteria2FecMode !== HYSTERIA2_DEFAULTS.fecMode ||
-    state.hysteria2FecMaxOverheadPercent.trim() !== ""
+    state.hysteria2QuicSendBufferBytes !== HYSTERIA2_DEFAULTS.quicBufferBytes
   );
 }
 
@@ -68,12 +56,7 @@ export function defaultHysteria2TransportTuning() {
     hysteria2QuicReusePort: false,
     hysteria2QuicEndpoints: HYSTERIA2_DEFAULTS.quicEndpoints,
     hysteria2QuicRecvBufferBytes: HYSTERIA2_DEFAULTS.quicBufferBytes,
-    hysteria2QuicSendBufferBytes: HYSTERIA2_DEFAULTS.quicBufferBytes,
-    hysteria2DatagramEnabled: false,
-    hysteria2DatagramUdpOverDatagram: true,
-    hysteria2DatagramPolicy: HYSTERIA2_DEFAULTS.datagramPolicy,
-    hysteria2FecMode: HYSTERIA2_DEFAULTS.fecMode,
-    hysteria2FecMaxOverheadPercent: ""
+    hysteria2QuicSendBufferBytes: HYSTERIA2_DEFAULTS.quicBufferBytes
   } satisfies Partial<Hysteria2TuningState>;
 }
 

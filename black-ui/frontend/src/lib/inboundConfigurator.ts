@@ -32,11 +32,6 @@ export interface InboundEditorState {
   hysteria2QuicEndpoints: string;
   hysteria2QuicRecvBufferBytes: string;
   hysteria2QuicSendBufferBytes: string;
-  hysteria2DatagramEnabled: boolean;
-  hysteria2DatagramUdpOverDatagram: boolean;
-  hysteria2DatagramPolicy: string;
-  hysteria2FecMode: string;
-  hysteria2FecMaxOverheadPercent: string;
   wsPath: string;
   wsHost: string;
   grpcServiceName: string;
@@ -95,8 +90,6 @@ const DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS = HYSTERIA2_DEFAULTS.maxQueueDelayMs;
 const DEFAULT_HYSTERIA2_PACING_GAIN = HYSTERIA2_DEFAULTS.pacingGain;
 const DEFAULT_HYSTERIA2_QUIC_ENDPOINTS = HYSTERIA2_DEFAULTS.quicEndpoints;
 const DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES = HYSTERIA2_DEFAULTS.quicBufferBytes;
-const DEFAULT_HYSTERIA2_DATAGRAM_POLICY = HYSTERIA2_DEFAULTS.datagramPolicy;
-const DEFAULT_HYSTERIA2_FEC_MODE = HYSTERIA2_DEFAULTS.fecMode;
 
 export function createInboundEditorState(inbound?: Inbound | null): InboundEditorState {
   const settings = createSliceState(inbound?.settings);
@@ -128,16 +121,11 @@ export function createInboundEditorState(inbound?: Inbound | null): InboundEdito
     hysteria2MaxQueueDelayMs: numberString(objectValue(settings.value.congestion)?.maxQueueDelayMs) || DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS,
     hysteria2PacingGain: numberString(objectValue(settings.value.congestion)?.pacingGain) || DEFAULT_HYSTERIA2_PACING_GAIN,
     hysteria2LossCompensation: boolValue(objectValue(settings.value.congestion)?.lossCompensation) ?? true,
-    hysteria2TransportOverrides: !!objectValue(settings.value.quic) || !!objectValue(settings.value.datagram) || !!objectValue(settings.value.fec),
+    hysteria2TransportOverrides: !!objectValue(settings.value.quic),
     hysteria2QuicReusePort: boolValue(objectValue(settings.value.quic)?.reusePort) ?? false,
     hysteria2QuicEndpoints: stringOrNumberString(objectValue(settings.value.quic)?.endpoints) || DEFAULT_HYSTERIA2_QUIC_ENDPOINTS,
     hysteria2QuicRecvBufferBytes: numberString(objectValue(settings.value.quic)?.recvBufferBytes) || DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES,
     hysteria2QuicSendBufferBytes: numberString(objectValue(settings.value.quic)?.sendBufferBytes) || DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES,
-    hysteria2DatagramEnabled: boolValue(objectValue(settings.value.datagram)?.enabled) ?? false,
-    hysteria2DatagramUdpOverDatagram: boolValue(objectValue(settings.value.datagram)?.udpOverDatagram) ?? true,
-    hysteria2DatagramPolicy: stringValue(objectValue(settings.value.datagram)?.policy) ?? DEFAULT_HYSTERIA2_DATAGRAM_POLICY,
-    hysteria2FecMode: stringValue(objectValue(settings.value.fec)?.mode) ?? DEFAULT_HYSTERIA2_FEC_MODE,
-    hysteria2FecMaxOverheadPercent: numberString(objectValue(settings.value.fec)?.maxOverheadPercent),
     wsPath: stringValue(objectValue(streamSettings.value.wsSettings)?.path) ?? "",
     wsHost: stringValue(objectValue(objectValue(streamSettings.value.wsSettings)?.headers)?.Host) ?? "",
     grpcServiceName: stringValue(objectValue(streamSettings.value.grpcSettings)?.serviceName) ?? "",
@@ -217,16 +205,11 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
       applyNestedStringOrNumberField(settings, "quic", "endpoints", state.hysteria2QuicEndpoints, DEFAULT_HYSTERIA2_QUIC_ENDPOINTS, true);
       applyNestedNumberField(settings, "quic", "recvBufferBytes", state.hysteria2QuicRecvBufferBytes, DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES, true);
       applyNestedNumberField(settings, "quic", "sendBufferBytes", state.hysteria2QuicSendBufferBytes, DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES, true);
-      applyNestedBoolField(settings, "datagram", "enabled", state.hysteria2DatagramEnabled, false, true);
-      applyNestedBoolField(settings, "datagram", "udpOverDatagram", state.hysteria2DatagramUdpOverDatagram, true, true);
-      applyNestedStringField(settings, "datagram", "policy", state.hysteria2DatagramPolicy, DEFAULT_HYSTERIA2_DATAGRAM_POLICY, true);
-      applyNestedStringField(settings, "fec", "mode", state.hysteria2FecMode, DEFAULT_HYSTERIA2_FEC_MODE, true);
-      applyNestedNumberField(settings, "fec", "maxOverheadPercent", state.hysteria2FecMaxOverheadPercent);
     } else {
       delete settings.quic;
-      delete settings.datagram;
-      delete settings.fec;
     }
+    delete settings.datagram;
+    delete settings.fec;
   } else {
     delete settings.auth;
     delete settings.congestion;
@@ -589,11 +572,6 @@ function syncStructuredFields(state: InboundEditorState): InboundEditorState {
     hysteria2QuicEndpoints: next.hysteria2QuicEndpoints,
     hysteria2QuicRecvBufferBytes: next.hysteria2QuicRecvBufferBytes,
     hysteria2QuicSendBufferBytes: next.hysteria2QuicSendBufferBytes,
-    hysteria2DatagramEnabled: next.hysteria2DatagramEnabled,
-    hysteria2DatagramUdpOverDatagram: next.hysteria2DatagramUdpOverDatagram,
-    hysteria2DatagramPolicy: next.hysteria2DatagramPolicy,
-    hysteria2FecMode: next.hysteria2FecMode,
-    hysteria2FecMaxOverheadPercent: next.hysteria2FecMaxOverheadPercent,
     wsPath: next.wsPath,
     wsHost: next.wsHost,
     grpcServiceName: next.grpcServiceName,

@@ -258,13 +258,8 @@ impl Instance {
                 }
                 Protocol::Vless => build_vless_outbound(out_cfg)
                     .with_context(|| format!("building VLESS outbound '{}'", out_cfg.tag))?,
-                Protocol::Hysteria2 => build_hysteria2_outbound(
-                    out_cfg,
-                    config.quic.as_ref(),
-                    config.datagram.as_ref(),
-                    config.fec.as_ref(),
-                )
-                .with_context(|| format!("building Hysteria2 outbound '{}'", out_cfg.tag))?,
+                Protocol::Hysteria2 => build_hysteria2_outbound(out_cfg, config.quic.as_ref())
+                    .with_context(|| format!("building Hysteria2 outbound '{}'", out_cfg.tag))?,
                 Protocol::Tuic => build_tuic_outbound(out_cfg, config.quic.as_ref())
                     .with_context(|| format!("building TUIC outbound '{}'", out_cfg.tag))?,
                 Protocol::Trojan => build_trojan_outbound(out_cfg)
@@ -414,8 +409,6 @@ impl Instance {
                     in_cfg,
                     &reload.hysteria2_auth_stores,
                     config.quic.as_ref(),
-                    config.datagram.as_ref(),
-                    config.fec.as_ref(),
                     config.limits.max_connections_per_inbound,
                     global_connection_limiter.as_ref().map(Arc::clone),
                     Some(Arc::clone(&user_connection_limiter)),

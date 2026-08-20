@@ -984,8 +984,6 @@ async fn import_bootstrap_fixture(
         stats: config.stats.clone(),
         limits: config.limits.clone(),
         quic: config.quic.clone(),
-        datagram: config.datagram.clone(),
-        fec: config.fec.clone(),
     };
     revision = database
         .save_core_settings("blackwire-db-import", revision, core)

@@ -10,12 +10,7 @@ const defaults = {
   hysteria2QuicReusePort: false,
   hysteria2QuicEndpoints: HYSTERIA2_DEFAULTS.quicEndpoints,
   hysteria2QuicRecvBufferBytes: HYSTERIA2_DEFAULTS.quicBufferBytes,
-  hysteria2QuicSendBufferBytes: HYSTERIA2_DEFAULTS.quicBufferBytes,
-  hysteria2DatagramEnabled: false,
-  hysteria2DatagramUdpOverDatagram: true,
-  hysteria2DatagramPolicy: HYSTERIA2_DEFAULTS.datagramPolicy,
-  hysteria2FecMode: HYSTERIA2_DEFAULTS.fecMode,
-  hysteria2FecMaxOverheadPercent: ""
+  hysteria2QuicSendBufferBytes: HYSTERIA2_DEFAULTS.quicBufferBytes
 };
 
 describe("Hysteria2 custom tuning detection", () => {
@@ -34,11 +29,8 @@ describe("Hysteria2 custom tuning detection", () => {
   it("separates congestion choices from endpoint transport overrides", () => {
     expect(hasCustomHysteria2Congestion({ ...defaults, hysteria2CongestionMode: "nova-cc" })).toBe(true);
     expect(hasCustomHysteria2TransportTuning({ ...defaults, hysteria2CongestionMode: "nova-cc" })).toBe(false);
-    expect(hasCustomHysteria2TransportTuning({ ...defaults, hysteria2DatagramEnabled: true })).toBe(true);
     expect(defaultHysteria2TransportTuning()).toMatchObject({
-      hysteria2QuicRecvBufferBytes: "8388608",
-      hysteria2DatagramEnabled: false,
-      hysteria2FecMode: "off"
+      hysteria2QuicRecvBufferBytes: "8388608"
     });
     expect(defaultHysteria2CongestionTuning("brutal-compatible")).toMatchObject({
       hysteria2CongestionMode: "brutal-compatible",

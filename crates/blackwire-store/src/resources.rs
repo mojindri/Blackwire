@@ -784,11 +784,7 @@ async fn write_endpoint_tuning(
     id: i64,
     settings: &EndpointSettings,
 ) -> StoreResult<()> {
-    if settings.congestion.is_none()
-        && settings.quic.is_none()
-        && settings.datagram.is_none()
-        && settings.fec.is_none()
-    {
+    if settings.congestion.is_none() && settings.quic.is_none() {
         sqlx::query(
             "DELETE FROM endpoint_tuning WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?",
         )
@@ -801,15 +797,13 @@ async fn write_endpoint_tuning(
     }
     let congestion = settings.congestion.as_ref();
     let quic = settings.quic.as_ref();
-    let datagram = settings.datagram.as_ref();
-    let fec = settings.fec.as_ref();
     let endpoints = quic
         .and_then(|value| value.endpoints.as_ref())
         .map(|value| match value {
             blackwire_config::schema::EndpointCount::Fixed(count) => count.to_string(),
             blackwire_config::schema::EndpointCount::Named(name) => name.clone(),
         });
-    sqlx::query("INSERT INTO endpoint_tuning (revision_id,endpoint_kind,endpoint_id,congestion_mode,min_ack_rate,max_queue_delay_ms,pacing_gain,loss_compensation,quic_reuse_port,quic_endpoints,quic_recv_buffer_bytes,quic_send_buffer_bytes,datagram_enabled,udp_over_datagram,datagram_policy,fec_mode,fec_max_overhead_percent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE congestion_mode=VALUES(congestion_mode),min_ack_rate=VALUES(min_ack_rate),max_queue_delay_ms=VALUES(max_queue_delay_ms),pacing_gain=VALUES(pacing_gain),loss_compensation=VALUES(loss_compensation),quic_reuse_port=VALUES(quic_reuse_port),quic_endpoints=VALUES(quic_endpoints),quic_recv_buffer_bytes=VALUES(quic_recv_buffer_bytes),quic_send_buffer_bytes=VALUES(quic_send_buffer_bytes),datagram_enabled=VALUES(datagram_enabled),udp_over_datagram=VALUES(udp_over_datagram),datagram_policy=VALUES(datagram_policy),fec_mode=VALUES(fec_mode),fec_max_overhead_percent=VALUES(fec_max_overhead_percent)")
+    sqlx::query("INSERT INTO endpoint_tuning (revision_id,endpoint_kind,endpoint_id,congestion_mode,min_ack_rate,max_queue_delay_ms,pacing_gain,loss_compensation,quic_reuse_port,quic_endpoints,quic_recv_buffer_bytes,quic_send_buffer_bytes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE congestion_mode=VALUES(congestion_mode),min_ack_rate=VALUES(min_ack_rate),max_queue_delay_ms=VALUES(max_queue_delay_ms),pacing_gain=VALUES(pacing_gain),loss_compensation=VALUES(loss_compensation),quic_reuse_port=VALUES(quic_reuse_port),quic_endpoints=VALUES(quic_endpoints),quic_recv_buffer_bytes=VALUES(quic_recv_buffer_bytes),quic_send_buffer_bytes=VALUES(quic_send_buffer_bytes)")
         .bind(revision).bind(kind).bind(id)
         .bind(congestion.map(|value| value.mode.as_str()))
         .bind(congestion.and_then(|value| value.min_ack_rate))
@@ -819,11 +813,6 @@ async fn write_endpoint_tuning(
         .bind(quic.and_then(|value| value.reuse_port)).bind(endpoints)
         .bind(quic.and_then(|value| value.recv_buffer_bytes).map(|value| value as u64))
         .bind(quic.and_then(|value| value.send_buffer_bytes).map(|value| value as u64))
-        .bind(datagram.and_then(|value| value.enabled))
-        .bind(datagram.and_then(|value| value.udp_over_datagram))
-        .bind(datagram.and_then(|value| value.policy.as_deref()))
-        .bind(fec.and_then(|value| value.mode.as_deref()))
-        .bind(fec.and_then(|value| value.max_overhead_percent))
         .execute(&mut **tx).await?;
     Ok(())
 }

@@ -13,10 +13,7 @@ use dashmap::DashMap;
 
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::user_limits::UserConnectionLimiter;
-use blackwire_config::schema::{
-    DatagramConfig, DatagramPolicy as ConfigDatagramPolicy, EndpointSettings, FecConfig,
-    FecMode as ConfigFecMode, InboundConfig, OutboundConfig, QuicConfig,
-};
+use blackwire_config::schema::{EndpointSettings, InboundConfig, OutboundConfig, QuicConfig};
 use blackwire_transport::{
     CongestionConfig, CongestionMode, Hysteria2AuthStore, Hysteria2ClientConfig,
     Hysteria2OutboundHandler, Hysteria2Server, Hysteria2ServerConfig, QuicSocketConfig,
@@ -38,8 +35,6 @@ pub(crate) fn start_hysteria2_inbound(
     cfg: &InboundConfig,
     auth_stores: &Arc<DashMap<String, Arc<Hysteria2AuthStore>>>,
     quic: Option<&QuicConfig>,
-    datagram: Option<&DatagramConfig>,
-    fec: Option<&FecConfig>,
     default_max_connections: Option<usize>,
     shared_limiter: Option<Arc<Semaphore>>,
     user_limiter: Option<Arc<UserConnectionLimiter>>,
@@ -49,8 +44,6 @@ pub(crate) fn start_hysteria2_inbound(
         cfg,
         auth_stores,
         quic,
-        datagram,
-        fec,
         default_max_connections,
         shared_limiter,
         user_limiter,
@@ -71,10 +64,8 @@ pub(crate) fn start_hysteria2_inbound(
 pub(crate) fn build_hysteria2_outbound(
     cfg: &OutboundConfig,
     quic: Option<&QuicConfig>,
-    datagram: Option<&DatagramConfig>,
-    fec: Option<&FecConfig>,
 ) -> Result<Arc<dyn blackwire_app::features::OutboundHandler>> {
-    let client_config = parse_client_config(cfg, quic, datagram, fec)?;
+    let client_config = parse_client_config(cfg, quic)?;
     Ok(Hysteria2OutboundHandler::new(
         client_config,
         cfg.tag.clone(),
@@ -89,8 +80,6 @@ fn parse_server_config(
     cfg: &InboundConfig,
     auth_stores: &Arc<DashMap<String, Arc<Hysteria2AuthStore>>>,
     quic: Option<&QuicConfig>,
-    datagram: Option<&DatagramConfig>,
-    fec: Option<&FecConfig>,
     default_max_connections: Option<usize>,
     shared_limiter: Option<Arc<Semaphore>>,
     user_limiter: Option<Arc<UserConnectionLimiter>>,
@@ -141,9 +130,9 @@ fn parse_server_config(
         .and_then(|l| l.max_connections)
         .or(default_max_connections);
     let socket = parse_socket_config(s, quic);
-    let datagram_enabled = datagram_enabled(s, datagram);
-    let fec = parse_fec_policy(s, fec);
-    let datagram_policy = parse_datagram_policy(s, datagram);
+    let datagram_enabled = true;
+    let fec = blackwire_transport::FecPolicy::default();
+    let datagram_policy = blackwire_transport::DatagramPolicy::default();
 
     Ok(Hysteria2ServerConfig {
         tag: cfg.tag.clone(),
@@ -178,8 +167,6 @@ pub(crate) fn hysteria2_user_label(settings: &EndpointSettings, password: &str) 
 fn parse_client_config(
     cfg: &OutboundConfig,
     quic: Option<&QuicConfig>,
-    datagram: Option<&DatagramConfig>,
-    fec: Option<&FecConfig>,
 ) -> Result<Hysteria2ClientConfig> {
     let s = &cfg.settings;
 
@@ -199,9 +186,9 @@ fn parse_client_config(
     let down_mbps = congestion.down_mbps;
     let endpoint_shards = s.endpoint_shards.map(|v| v.clamp(1, 64)).unwrap_or(1);
     let socket = parse_socket_config(s, quic);
-    let datagram_enabled = datagram_enabled(s, datagram);
-    let fec = parse_fec_policy(s, fec);
-    let datagram_policy = parse_datagram_policy(s, datagram);
+    let datagram_enabled = true;
+    let fec = blackwire_transport::FecPolicy::default();
+    let datagram_policy = blackwire_transport::DatagramPolicy::default();
 
     // Use the server address host as SNI if not explicitly configured.
     let server_name = s
@@ -321,134 +308,6 @@ fn parse_socket_config(settings: &EndpointSettings, quic: Option<&QuicConfig>) -
     socket
 }
 
-fn datagram_enabled(settings: &EndpointSettings, datagram: Option<&DatagramConfig>) -> bool {
-    let mut enabled = datagram
-        .map(|cfg| cfg.enabled && cfg.udp_over_datagram)
-        .unwrap_or(false);
-    if let Some(overrides) = settings.datagram.as_ref() {
-        if let Some(value) = overrides.enabled {
-            enabled = value;
-        }
-        if let Some(value) = overrides.udp_over_datagram {
-            enabled &= value;
-        }
-    }
-    enabled
-}
-
-fn parse_fec_policy(
-    settings: &EndpointSettings,
-    fec: Option<&FecConfig>,
-) -> blackwire_transport::FecPolicy {
-    let mut cfg = fec.cloned().unwrap_or_default();
-    if let Some(overrides) = settings.fec.as_ref() {
-        if let Some(mode) = overrides.mode.as_deref() {
-            cfg.mode = parse_config_fec_mode(mode);
-        }
-        if let Some(max) = overrides.max_overhead_percent {
-            cfg.max_overhead_percent = max;
-        }
-        if let Some(avoid) = overrides.avoid_bulk_tcp {
-            cfg.avoid_bulk_tcp = avoid;
-        }
-        if let Some(disable) = overrides.disable_for_sequential_dns {
-            cfg.disable_for_sequential_dns = disable;
-        }
-        if let Some(min) = overrides.min_concurrency_for_block_fec {
-            cfg.min_concurrency_for_block_fec = min;
-        }
-        if let Some(max) = overrides.max_generation_packets {
-            cfg.max_generation_packets = max;
-        }
-        if let Some(delay) = overrides.max_generation_delay_ms {
-            cfg.max_generation_delay_ms = delay;
-        }
-        if let Some(deadline) = overrides.recovery_deadline_ms {
-            cfg.recovery_deadline_ms = deadline;
-        }
-        if let Some(window) = overrides.dedup_window_packets {
-            cfg.dedup_window_packets = window;
-        }
-    }
-    blackwire_transport::FecPolicy {
-        mode: map_fec_mode(cfg.effective_mode()),
-        max_overhead_percent: cfg.max_overhead_percent,
-        group_size: cfg.max_generation_packets.max(2),
-        disable_for_sequential_dns: cfg.disable_for_sequential_dns,
-        min_concurrency_for_block_fec: cfg.min_concurrency_for_block_fec,
-        max_generation_delay: std::time::Duration::from_millis(cfg.max_generation_delay_ms),
-        recovery_deadline: std::time::Duration::from_millis(cfg.recovery_deadline_ms),
-        dedup_window_packets: cfg.dedup_window_packets,
-    }
-}
-
-fn parse_datagram_policy(
-    settings: &EndpointSettings,
-    datagram: Option<&DatagramConfig>,
-) -> blackwire_transport::DatagramPolicy {
-    let cfg = datagram.cloned().unwrap_or_default();
-    let mut policy = map_datagram_policy(cfg.policy);
-    let mut max_queue_delay_ms = cfg.max_queue_delay_ms;
-    let mut fast_dns_retry = cfg.fast_dns_retry;
-    let mut fast_dns_retry_delay_ms = cfg.fast_dns_retry_delay_ms;
-
-    if let Some(overrides) = settings.datagram.as_ref() {
-        if let Some(value) = overrides.policy.as_deref() {
-            policy = parse_config_datagram_policy(value);
-        }
-        if let Some(value) = overrides.max_queue_delay_ms {
-            max_queue_delay_ms = value;
-        }
-        if let Some(value) = overrides.fast_dns_retry {
-            fast_dns_retry = value;
-        }
-        if let Some(value) = overrides.fast_dns_retry_delay_ms {
-            fast_dns_retry_delay_ms = value;
-        }
-    }
-
-    blackwire_transport::DatagramPolicy {
-        mode: policy,
-        max_queue_delay_ms: max_queue_delay_ms.max(1),
-        fast_dns_retry,
-        fast_dns_retry_delay_ms,
-    }
-}
-
-fn parse_config_datagram_policy(value: &str) -> blackwire_transport::DatagramPriorityMode {
-    match value {
-        "h2-plus" | "h2plus" | "h2_plus" => blackwire_transport::DatagramPriorityMode::H2Plus,
-        _ => blackwire_transport::DatagramPriorityMode::Standard,
-    }
-}
-
-fn map_datagram_policy(policy: ConfigDatagramPolicy) -> blackwire_transport::DatagramPriorityMode {
-    match policy {
-        ConfigDatagramPolicy::Standard => blackwire_transport::DatagramPriorityMode::Standard,
-        ConfigDatagramPolicy::H2Plus => blackwire_transport::DatagramPriorityMode::H2Plus,
-    }
-}
-
-fn parse_config_fec_mode(value: &str) -> ConfigFecMode {
-    match value {
-        "xor1-of-n" | "xor1OfN" | "xor" => ConfigFecMode::Xor1OfN,
-        "reed-solomon" | "reedSolomon" => ConfigFecMode::ReedSolomon,
-        "raptor-like" | "raptorLike" => ConfigFecMode::RaptorLike,
-        "auto" => ConfigFecMode::Auto,
-        _ => ConfigFecMode::Off,
-    }
-}
-
-fn map_fec_mode(mode: ConfigFecMode) -> blackwire_transport::FecMode {
-    match mode {
-        ConfigFecMode::Off => blackwire_transport::FecMode::Off,
-        ConfigFecMode::Xor1OfN => blackwire_transport::FecMode::Xor1OfN,
-        ConfigFecMode::ReedSolomon => blackwire_transport::FecMode::ReedSolomon,
-        ConfigFecMode::RaptorLike => blackwire_transport::FecMode::RaptorLike,
-        ConfigFecMode::Auto => blackwire_transport::FecMode::Auto,
-    }
-}
-
 fn parse_congestion_config(settings: &EndpointSettings) -> Result<CongestionConfig> {
     let congestion = settings.congestion.as_ref();
     let mode = congestion
@@ -509,11 +368,11 @@ fn require_hysteria2_auth<'a>(settings: &'a EndpointSettings, tag: &str) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use blackwire_config::schema::{DatagramConfig, EndpointSettings};
+    use blackwire_config::schema::{EndpointSettings, OutboundConfig};
     use serde_json::json;
 
     use super::{
-        automatic_quic_socket_config, datagram_enabled, hysteria2_user_label,
+        automatic_quic_socket_config, hysteria2_user_label, parse_client_config,
         parse_congestion_config, require_hysteria2_auth, socket_config_from_quic,
     };
 
@@ -615,27 +474,24 @@ mod tests {
     }
 
     #[test]
-    fn datagram_defaults_to_disabled_without_explicit_policy() {
-        assert!(!datagram_enabled(&EndpointSettings::default(), None));
-    }
+    fn hysteria2_uses_native_datagrams_without_unnegotiated_fec() {
+        let outbound: OutboundConfig = serde_json::from_value(json!({
+            "tag": "hy2",
+            "protocol": "hysteria2",
+            "settings": {
+                "server": "127.0.0.1:443",
+                "auth": "secret"
+            }
+        }))
+        .unwrap();
 
-    #[test]
-    fn datagram_can_be_enabled_explicitly_per_inbound() {
-        assert!(datagram_enabled(
-            &settings(json!({ "datagram": { "enabled": true, "udpOverDatagram": true } })),
-            None
-        ));
-    }
-
-    #[test]
-    fn datagram_respects_top_level_policy_when_present() {
-        let cfg = DatagramConfig {
-            enabled: true,
-            udp_over_datagram: true,
-            ..DatagramConfig::default()
-        };
-
-        assert!(datagram_enabled(&EndpointSettings::default(), Some(&cfg)));
+        let config = parse_client_config(&outbound, None).unwrap();
+        assert!(config.datagram_enabled);
+        assert_eq!(config.fec.mode, blackwire_transport::FecMode::Off);
+        assert_eq!(
+            config.datagram_policy.mode,
+            blackwire_transport::DatagramPriorityMode::Standard
+        );
     }
 
     #[test]

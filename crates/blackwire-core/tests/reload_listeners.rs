@@ -1,8 +1,8 @@
 use std::net::IpAddr;
 
 use blackwire_config::schema::{
-    Config, DatagramConfig, EndpointSettings, FecConfig, FecMode, InboundConfig, LimitsConfig,
-    LogConfig, OutboundConfig, ProfileMode, Protocol, QuicConfig,
+    Config, EndpointSettings, InboundConfig, LimitsConfig, LogConfig, OutboundConfig, ProfileMode,
+    Protocol, QuicConfig,
 };
 use blackwire_core::{inbound_listener_changes, requires_instance_handover};
 
@@ -17,8 +17,6 @@ fn minimal_config(port: u16) -> Config {
         vision: None,
         first_packet_boost: None,
         quic: None,
-        datagram: None,
-        fec: None,
         log: LogConfig::default(),
         dns: None,
         routing: None,
@@ -210,19 +208,6 @@ fn handover_is_used_for_quic_socket_tuning_changes() {
     new.quic = Some(QuicConfig {
         reuse_port: true,
         ..QuicConfig::default()
-    });
-
-    assert!(requires_instance_handover(&old, &new));
-}
-
-#[test]
-fn handover_is_used_for_datagram_fec_changes() {
-    let old = minimal_config(1080);
-    let mut new = minimal_config(1080);
-    new.datagram = Some(DatagramConfig::default());
-    new.fec = Some(FecConfig {
-        mode: FecMode::Xor1OfN,
-        ..FecConfig::default()
     });
 
     assert!(requires_instance_handover(&old, &new));

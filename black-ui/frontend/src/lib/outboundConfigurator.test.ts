@@ -253,8 +253,6 @@ describe("outboundConfigurator", () => {
     expect(defaultState.hysteria2CongestionMode).toBe("standard");
     expect(defaultState.hysteria2MinAckRate).toBe("0.8");
     expect(defaultState.hysteria2QuicEndpoints).toBe("1");
-    expect(defaultState.hysteria2DatagramPolicy).toBe("standard");
-    expect(defaultState.hysteria2FecMode).toBe("off");
 
     const outbound: Outbound = {
       id: 2,
@@ -310,11 +308,6 @@ describe("outboundConfigurator", () => {
       hysteria2QuicEndpoints: "cpu",
       hysteria2QuicRecvBufferBytes: "33554432",
       hysteria2QuicSendBufferBytes: "16777216",
-      hysteria2DatagramEnabled: true,
-      hysteria2DatagramUdpOverDatagram: false,
-      hysteria2DatagramPolicy: "standard",
-      hysteria2FecMode: "xor1-of-n",
-      hysteria2FecMaxOverheadPercent: "15",
       tlsServerName: "new.example.com",
       address: "127.0.0.9",
       port: "9000"
@@ -341,15 +334,8 @@ describe("outboundConfigurator", () => {
       sendBufferBytes: 16777216
     });
     expect(settings.quic.reusePort).toBe(false);
-    expect(settings.datagram).toMatchObject({
-      enabled: true,
-      udpOverDatagram: false
-    });
-    expect(settings.datagram.policy).toBe("standard");
-    expect(settings.fec).toMatchObject({
-      mode: "xor1-of-n",
-      maxOverheadPercent: 15
-    });
+    expect(settings.datagram).toBeUndefined();
+    expect(settings.fec).toBeUndefined();
     expect(settings.customSetting).toBe("keep-me");
     expect(settings.address).toBeUndefined();
     expect(settings.port).toBeUndefined();
@@ -428,12 +414,8 @@ describe("outboundConfigurator", () => {
       recvBufferBytes: 8388608,
       sendBufferBytes: 8388608
     });
-    expect(settings.datagram).toEqual({
-      enabled: false,
-      udpOverDatagram: true,
-      policy: "standard"
-    });
-    expect(settings.fec).toEqual({ mode: "off" });
+    expect(settings.datagram).toBeUndefined();
+    expect(settings.fec).toBeUndefined();
     expect(state.hysteria2TransportOverrides).toBe(true);
   });
 

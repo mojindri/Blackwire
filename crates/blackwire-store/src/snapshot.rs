@@ -3,14 +3,13 @@ use std::net::IpAddr;
 use crate::sqlx;
 use blackwire_config::schema::{
     AdaptiveBalancerConfig, BalancerConfig, BalancerProfileConfig, Config, CongestionSettings,
-    DatagramConfig, DatagramOverrides, DatagramSize, DnsConfig, DownloadSettings, EndpointCount,
-    EndpointSettings, EndpointUser, FastConfig, FastLinuxConfig, FastRelayConfig, FecConfig,
-    FecOverrides, FirstPacketBoostConfig, GrpcConfig, HealthCheckConfig, InboundConfig,
-    InboundLimitsConfig, LimitsConfig, LogConfig, NetworkType, OutboundConfig, PaddingBounds,
-    PaddingBytes, ProfileMode, Protocol, QuicConfig, QuicSocketOverrides, RealityConfig,
-    RealityFallbackLimitConfig, RoutingConfig, RoutingRule, SecurityType, ShadowTlsConfig,
-    SniffingConfig, SplitHttpConfig, StatsConfig, StreamSettingsConfig, TlsConfig, VisionConfig,
-    WsConfig, XmuxConfig,
+    DatagramSize, DnsConfig, DownloadSettings, EndpointCount, EndpointSettings, EndpointUser,
+    FastConfig, FastLinuxConfig, FastRelayConfig, FirstPacketBoostConfig, GrpcConfig,
+    HealthCheckConfig, InboundConfig, InboundLimitsConfig, LimitsConfig, LogConfig, NetworkType,
+    OutboundConfig, PaddingBounds, PaddingBytes, ProfileMode, Protocol, QuicConfig,
+    QuicSocketOverrides, RealityConfig, RealityFallbackLimitConfig, RoutingConfig, RoutingRule,
+    SecurityType, ShadowTlsConfig, SniffingConfig, SplitHttpConfig, StatsConfig,
+    StreamSettingsConfig, TlsConfig, VisionConfig, WsConfig, XmuxConfig,
 };
 use sqlx::{MySqlPool, Row};
 
@@ -47,8 +46,6 @@ impl Database {
                 vision: performance.vision,
                 first_packet_boost: performance.first_packet_boost,
                 quic: load_quic(self.pool(), revision).await?,
-                datagram: load_datagram(self.pool(), revision).await?,
-                fec: load_fec(self.pool(), revision).await?,
                 log: LogConfig {
                     level: global.try_get("log_level")?,
                     json: global.try_get("log_structured")?,
@@ -165,50 +162,6 @@ async fn load_quic(pool: &MySqlPool, revision: i64) -> StoreResult<Option<QuicCo
         max_datagram_size: parse_number_or_string::<DatagramSize>(
             &row.try_get::<String, _>("quic_max_datagram_size")?,
         )?,
-    }))
-}
-
-async fn load_datagram(pool: &MySqlPool, revision: i64) -> StoreResult<Option<DatagramConfig>> {
-    let row = global_transport_row(pool, revision).await?;
-    if !row.try_get::<bool, _>("datagram_configured")? {
-        return Ok(None);
-    }
-    Ok(Some(DatagramConfig {
-        enabled: row.try_get("datagram_enabled")?,
-        udp_over_datagram: row.try_get("udp_over_datagram")?,
-        policy: parse_string_enum(&row.try_get::<String, _>("datagram_policy")?)?,
-        max_queue_delay_ms: row.try_get("datagram_max_queue_delay_ms")?,
-        fast_dns_retry: row.try_get("fast_dns_retry")?,
-        fast_dns_retry_delay_ms: row.try_get("fast_dns_retry_delay_ms")?,
-    }))
-}
-
-async fn load_fec(pool: &MySqlPool, revision: i64) -> StoreResult<Option<FecConfig>> {
-    let row = global_transport_row(pool, revision).await?;
-    if !row.try_get::<bool, _>("fec_configured")? {
-        return Ok(None);
-    }
-    let protect_classes = sqlx::query_scalar(
-        "SELECT packet_class FROM global_fec_protect_classes WHERE revision_id=? ORDER BY position",
-    )
-    .bind(revision)
-    .fetch_all(pool)
-    .await?;
-    Ok(Some(FecConfig {
-        mode: parse_string_enum(&row.try_get::<String, _>("fec_mode")?)?,
-        max_overhead_percent: row.try_get("fec_max_overhead_percent")?,
-        protect_classes,
-        avoid_bulk_tcp: row.try_get("fec_avoid_bulk_tcp")?,
-        disable_for_sequential_dns: row.try_get("fec_disable_for_sequential_dns")?,
-        min_concurrency_for_block_fec: usize::try_from(
-            row.try_get::<u64, _>("fec_min_concurrency")?,
-        )
-        .map_err(decode_error)?,
-        max_generation_packets: row.try_get("fec_max_generation_packets")?,
-        max_generation_delay_ms: row.try_get("fec_max_generation_delay_ms")?,
-        recovery_deadline_ms: row.try_get("fec_recovery_deadline_ms")?,
-        dedup_window_packets: usize::try_from(row.try_get::<u64, _>("fec_dedup_window_packets")?)
-            .map_err(decode_error)?,
     }))
 }
 
@@ -503,7 +456,7 @@ async fn load_endpoint_tuning(
     id: i64,
     settings: &mut EndpointSettings,
 ) -> StoreResult<()> {
-    let Some(row) = sqlx::query("SELECT congestion_mode,min_ack_rate,max_queue_delay_ms,pacing_gain,loss_compensation,quic_reuse_port,quic_endpoints,quic_recv_buffer_bytes,quic_send_buffer_bytes,datagram_enabled,udp_over_datagram,datagram_policy,fec_mode,fec_max_overhead_percent FROM endpoint_tuning WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
+    let Some(row) = sqlx::query("SELECT congestion_mode,min_ack_rate,max_queue_delay_ms,pacing_gain,loss_compensation,quic_reuse_port,quic_endpoints,quic_recv_buffer_bytes,quic_send_buffer_bytes FROM endpoint_tuning WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
         .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? else { return Ok(()); };
 
     let congestion_mode: Option<String> = row.try_get("congestion_mode")?;
@@ -548,27 +501,6 @@ async fn load_endpoint_tuning(
         });
     }
 
-    let datagram_enabled: Option<bool> = row.try_get("datagram_enabled")?;
-    let udp_over_datagram: Option<bool> = row.try_get("udp_over_datagram")?;
-    let datagram_policy: Option<String> = row.try_get("datagram_policy")?;
-    if datagram_enabled.is_some() || udp_over_datagram.is_some() || datagram_policy.is_some() {
-        settings.datagram = Some(DatagramOverrides {
-            enabled: datagram_enabled,
-            udp_over_datagram,
-            policy: datagram_policy,
-            ..Default::default()
-        });
-    }
-
-    let fec_mode: Option<String> = row.try_get("fec_mode")?;
-    let max_overhead_percent: Option<u8> = row.try_get("fec_max_overhead_percent")?;
-    if fec_mode.is_some() || max_overhead_percent.is_some() {
-        settings.fec = Some(FecOverrides {
-            mode: fec_mode,
-            max_overhead_percent,
-            ..Default::default()
-        });
-    }
     Ok(())
 }
 

@@ -388,7 +388,7 @@ export function OutboundDrawer({
                   ...(!enabled ? defaultHysteria2TransportTuning() : {})
                 });
               }} label="Override Hysteria2 transport defaults" />
-              <p className="field-hint">Off inherits Blackwire's global QUIC, datagram, and FEC behavior.</p>
+              <p className="field-hint">Off uses Blackwire's automatic QUIC socket sizing.</p>
             </> : null}
             {hysteria2TransportOverrides ? <Hysteria2TuningFields direction="outbound" value={state} onChange={updateStructured} /> : null}
           </section>

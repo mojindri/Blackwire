@@ -147,8 +147,6 @@ describe("inboundConfigurator", () => {
     expect(defaultState.hysteria2CongestionMode).toBe("standard");
     expect(defaultState.hysteria2MinAckRate).toBe("0.8");
     expect(defaultState.hysteria2QuicEndpoints).toBe("1");
-    expect(defaultState.hysteria2DatagramPolicy).toBe("standard");
-    expect(defaultState.hysteria2FecMode).toBe("off");
 
     const state = syncAfterStructuredChange({
       ...createInboundEditorState(),
@@ -163,12 +161,7 @@ describe("inboundConfigurator", () => {
       hysteria2QuicReusePort: true,
       hysteria2QuicEndpoints: "cpu",
       hysteria2QuicRecvBufferBytes: "16777216",
-      hysteria2QuicSendBufferBytes: "16777216",
-      hysteria2DatagramEnabled: true,
-      hysteria2DatagramUdpOverDatagram: false,
-      hysteria2DatagramPolicy: "h2-plus",
-      hysteria2FecMode: "auto",
-      hysteria2FecMaxOverheadPercent: "20"
+      hysteria2QuicSendBufferBytes: "16777216"
     });
     const settings = parseObject(buildInboundInput(state).settings);
 
@@ -186,15 +179,8 @@ describe("inboundConfigurator", () => {
       recvBufferBytes: 16777216,
       sendBufferBytes: 16777216
     });
-    expect(settings.datagram).toMatchObject({
-      enabled: true,
-      udpOverDatagram: false,
-      policy: "h2-plus"
-    });
-    expect(settings.fec).toMatchObject({
-      mode: "auto",
-      maxOverheadPercent: 20
-    });
+    expect(settings.datagram).toBeUndefined();
+    expect(settings.fec).toBeUndefined();
   });
 
   it("serializes simple hysteria2 performance modes like the save button output", () => {
@@ -277,12 +263,8 @@ describe("inboundConfigurator", () => {
       recvBufferBytes: 8388608,
       sendBufferBytes: 8388608
     });
-    expect(settings.datagram).toEqual({
-      enabled: false,
-      udpOverDatagram: true,
-      policy: "standard"
-    });
-    expect(settings.fec).toEqual({ mode: "off" });
+    expect(settings.datagram).toBeUndefined();
+    expect(settings.fec).toBeUndefined();
     expect(state.hysteria2TransportOverrides).toBe(true);
   });
 
