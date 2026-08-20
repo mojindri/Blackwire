@@ -9,6 +9,7 @@ authors.workspace = true
 [features]
 default  = []
 fuzzing  = []
+experimental-fec = ["dep:reed-solomon-erasure", "blackwire-app/experimental-fec"]
 # Enables privileged integration tests that require root / CAP_NET_ADMIN and
 # a Linux host.  Run with:
 #   sudo -E cargo test -p blackwire-transport --features priv-test -- --include-ignored
@@ -58,7 +59,7 @@ hmac.workspace              = true
 rand.workspace              = true
 rand_core.workspace         = true
 uuid.workspace              = true
-reed-solomon-erasure.workspace = true
+reed-solomon-erasure = { workspace = true, optional = true }
 hex.workspace               = true
 base64.workspace            = true
 subtle.workspace            = true

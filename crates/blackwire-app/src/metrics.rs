@@ -519,26 +519,31 @@ fn describe_metrics() {
         metrics::Unit::Count,
         "Classified QUIC path loss fingerprints"
     );
+    #[cfg(feature = "experimental-fec")]
     metrics::describe_counter!(
         "blackwire_fec_mode_total",
         metrics::Unit::Count,
         "Selected FEC modes for protected datagram groups"
     );
+    #[cfg(feature = "experimental-fec")]
     metrics::describe_counter!(
         "blackwire_fec_recovered_packets_total",
         metrics::Unit::Count,
         "Datagram packets recovered by FEC"
     );
+    #[cfg(feature = "experimental-fec")]
     metrics::describe_counter!(
         "blackwire_fec_overhead_bytes_total",
         metrics::Unit::Bytes,
         "FEC parity overhead bytes sent"
     );
+    #[cfg(feature = "experimental-fec")]
     metrics::describe_counter!(
         "blackwire_fec_stale_drops_total",
         metrics::Unit::Count,
         "Stale FEC decode groups dropped before recovery"
     );
+    #[cfg(feature = "experimental-fec")]
     metrics::describe_counter!(
         "blackwire_fec_duplicate_safe_skip_total",
         metrics::Unit::Count,

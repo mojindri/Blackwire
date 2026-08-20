@@ -28,9 +28,11 @@
 //! ```
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+#[cfg(feature = "experimental-fec")]
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+#[cfg(feature = "experimental-fec")]
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
@@ -260,16 +262,27 @@ fn encode_legacy_udp_datagram(dg: &UdpDatagram) -> Bytes {
     buf.freeze()
 }
 
+#[cfg(feature = "experimental-fec")]
 const FEC_MARKER_DOMAIN: &str = "__blackwire_fec_v1__";
+#[cfg(feature = "experimental-fec")]
 const FEC_MARKER_V4: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
+#[cfg(feature = "experimental-fec")]
 const FEC_MARKER_PORT: u16 = 0;
+#[cfg(feature = "experimental-fec")]
 const FEC_MAGIC: &[u8; 6] = b"BWFEC1";
+#[cfg(feature = "experimental-fec")]
 const FEC_FLAG_COMPACT_PAYLOAD: u8 = 0x80;
+#[cfg(feature = "experimental-fec")]
 const FEC_FLAG_FIXED_LENGTHS: u8 = 0x40;
+#[cfg(feature = "experimental-fec")]
 const FEC_GROUP_SIZE: u8 = 4;
+#[cfg(feature = "experimental-fec")]
 const FEC_GROUP_TTL: Duration = Duration::from_millis(750);
+#[cfg(feature = "experimental-fec")]
 const FEC_RECOVERY_DEADLINE: Duration = Duration::from_millis(100);
+#[cfg(feature = "experimental-fec")]
 const FEC_SEEN_LIMIT: usize = 4096;
+#[cfg(feature = "experimental-fec")]
 const FEC_GENERATION_DELAY: Duration = Duration::from_millis(20);
 
 /// Logical lane used when scheduling a Hysteria2 datagram for transmission.
@@ -384,6 +397,7 @@ fn is_dns_like(dest: &Destination) -> bool {
     }
 }
 
+#[cfg(feature = "experimental-fec")]
 fn destination_encoded_len(dest: &Destination) -> Option<usize> {
     match dest {
         Destination::V4(_, _) => Some(1 + 4 + 2),
@@ -394,6 +408,7 @@ fn destination_encoded_len(dest: &Destination) -> Option<usize> {
     }
 }
 
+#[cfg(feature = "experimental-fec")]
 fn encode_destination(dest: &Destination, buf: &mut BytesMut) -> bool {
     match dest {
         Destination::V4(ip, port) => {
@@ -422,6 +437,7 @@ fn encode_destination(dest: &Destination, buf: &mut BytesMut) -> bool {
     }
 }
 
+#[cfg(feature = "experimental-fec")]
 fn decode_destination(data: &mut &[u8]) -> Option<Destination> {
     if data.is_empty() {
         return None;
@@ -460,6 +476,11 @@ fn decode_destination(data: &mut &[u8]) -> Option<Destination> {
         _ => None,
     }
 }
+
+#[cfg(feature = "experimental-fec")]
+#[rustfmt::skip]
+mod experimental_fec {
+use super::*;
 
 /// Forward-error-correction algorithm to apply to outbound UDP datagrams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -557,13 +578,13 @@ impl FecPolicy {
         ) && self.max_overhead_percent >= 20
     }
 
-    fn effective_group_size(self) -> u8 {
+    pub(super) fn effective_group_size(self) -> u8 {
         let overhead = self.max_overhead_percent.max(1) as usize;
         let min_for_cap = 100usize.div_ceil(overhead).max(2);
         self.group_size.max(min_for_cap.min(u8::MAX as usize) as u8)
     }
 
-    fn effective_group_size_for(
+    pub(super) fn effective_group_size_for(
         self,
         payload_len: usize,
         encoded_len: usize,
@@ -708,7 +729,7 @@ impl FecEncoder {
 #[derive(Debug)]
 pub struct FecDecoder {
     policy: FecPolicy,
-    groups: HashMap<(u32, u16), FecDecodeGroup>,
+    pub(super) groups: HashMap<(u32, u16), FecDecodeGroup>,
     seen: HashSet<(u32, u16)>,
     seen_order: VecDeque<(u32, u16)>,
     recovered_packets: u64,
@@ -716,8 +737,8 @@ pub struct FecDecoder {
 }
 
 #[derive(Debug)]
-struct FecDecodeGroup {
-    created: Instant,
+pub(super) struct FecDecodeGroup {
+    pub(super) created: Instant,
     slots: Vec<Option<Bytes>>,
     parity: Option<FecParity>,
 }
@@ -774,9 +795,9 @@ impl FecDecoder {
         if !self.policy.enabled() || dg.frag_num != 1 {
             return Vec::new();
         }
-        let group_size = self
-            .policy
-            .effective_group_size_for(dg.data.len(), raw.len(), &dg.dest);
+        let group_size =
+            self.policy
+                .effective_group_size_for(dg.data.len(), raw.len(), &dg.dest);
         let base = dg.packet_id - (dg.packet_id % group_size as u16);
         let idx = (dg.packet_id - base) as usize;
         let recovered_raw = {
@@ -791,7 +812,9 @@ impl FecDecoder {
             if idx < group.slots.len() {
                 group.slots[idx] = Some(raw);
             }
-            if group.parity.is_some() && group.created.elapsed() <= self.policy.recovery_deadline {
+            if group.parity.is_some()
+                && group.created.elapsed() <= self.policy.recovery_deadline
+            {
                 recover_one_missing(group)
             } else {
                 None
@@ -1028,8 +1051,7 @@ fn build_reed_solomon_parity(
 fn decode_xor_parity(dg: &UdpDatagram) -> Option<FecParity> {
     let compact_marker =
         matches!(dg.dest, Destination::V4(ip, FEC_MARKER_PORT) if ip == FEC_MARKER_V4);
-    let legacy_marker =
-        matches!(&dg.dest, Destination::Domain(name, FEC_MARKER_PORT) if name == FEC_MARKER_DOMAIN);
+    let legacy_marker = matches!(&dg.dest, Destination::Domain(name, FEC_MARKER_PORT) if name == FEC_MARKER_DOMAIN);
     if !compact_marker && !legacy_marker {
         return None;
     }
@@ -1041,7 +1063,8 @@ fn decode_xor_parity(dg: &UdpDatagram) -> Option<FecParity> {
     let mode_flags = data.get_u8();
     let compact = mode_flags & FEC_FLAG_COMPACT_PAYLOAD != 0;
     let fixed_lengths = mode_flags & FEC_FLAG_FIXED_LENGTHS != 0;
-    let mode = mode_from_byte(mode_flags & !(FEC_FLAG_COMPACT_PAYLOAD | FEC_FLAG_FIXED_LENGTHS))?;
+    let mode =
+        mode_from_byte(mode_flags & !(FEC_FLAG_COMPACT_PAYLOAD | FEC_FLAG_FIXED_LENGTHS))?;
     let base_packet_id = data.get_u16();
     let group_size = data.get_u8();
     let max_len = data.get_u16() as usize;
@@ -1173,6 +1196,62 @@ fn mode_from_byte(mode: u8) -> Option<FecMode> {
         _ => None,
     }
 }
+}
+
+#[cfg(feature = "experimental-fec")]
+pub use experimental_fec::{FecDecoder, FecEncoder, FecMode, FecPolicy, FecSnapshot};
+
+#[cfg(not(feature = "experimental-fec"))]
+mod production_fec_disabled {
+    use super::{decode_udp_datagram, Bytes, UdpDatagram};
+
+    /// The production build supports only the interoperable no-FEC mode.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FecMode {
+        Off,
+    }
+
+    /// Compile-time guard that keeps proprietary FEC disabled in production.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct FecPolicy {
+        pub mode: FecMode,
+    }
+
+    impl Default for FecPolicy {
+        fn default() -> Self {
+            Self { mode: FecMode::Off }
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct FecEncoder;
+
+    impl FecEncoder {
+        pub fn new(_policy: FecPolicy) -> Self {
+            Self
+        }
+
+        pub fn protect(&mut self, _original: &UdpDatagram, _encoded: &Bytes) -> Option<Bytes> {
+            None
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct FecDecoder;
+
+    impl FecDecoder {
+        pub fn new(_policy: FecPolicy) -> Self {
+            Self
+        }
+
+        pub fn decode(&mut self, raw: Bytes) -> Vec<UdpDatagram> {
+            decode_udp_datagram(&raw).into_iter().collect()
+        }
+    }
+}
+
+#[cfg(not(feature = "experimental-fec"))]
+pub use production_fec_disabled::{FecDecoder, FecEncoder, FecMode, FecPolicy};
 
 /// Record one classified datagram packet for transport metrics.
 pub fn record_datagram_packet(class: &'static str, direction: &'static str) {
@@ -1189,22 +1268,27 @@ pub fn record_datagram_fallback(reason: &'static str) {
     metrics::counter!("blackwire_datagram_fallback_total", "reason" => reason).increment(1);
 }
 
+#[cfg(feature = "experimental-fec")]
 fn record_fec_mode(mode: FecMode) {
     metrics::counter!("blackwire_fec_mode_total", "mode" => mode.as_label()).increment(1);
 }
 
+#[cfg(feature = "experimental-fec")]
 fn record_fec_recovered() {
     metrics::counter!("blackwire_fec_recovered_packets_total").increment(1);
 }
 
+#[cfg(feature = "experimental-fec")]
 fn record_fec_overhead(bytes: usize) {
     metrics::counter!("blackwire_fec_overhead_bytes_total").increment(bytes as u64);
 }
 
+#[cfg(feature = "experimental-fec")]
 fn record_fec_stale_drop() {
     metrics::counter!("blackwire_fec_stale_drops_total").increment(1);
 }
 
+#[cfg(feature = "experimental-fec")]
 fn record_fec_duplicate_safe_skip(reason: &'static str) {
     metrics::counter!("blackwire_fec_duplicate_safe_skip_total", "reason" => reason).increment(1);
 }
@@ -1266,6 +1350,7 @@ mod tests {
         assert_eq!(dg, decoded);
     }
 
+    #[cfg(feature = "experimental-fec")]
     #[test]
     fn compact_destination_rejects_oversized_domain() {
         let mut buf = BytesMut::new();
@@ -1279,6 +1364,22 @@ mod tests {
         assert!(decode_udp_datagram(&[0u8; 4]).is_err());
     }
 
+    #[cfg(not(feature = "experimental-fec"))]
+    #[test]
+    fn production_fec_is_compile_time_disabled() {
+        let dg = make_dg(Destination::V4("127.0.0.1".parse().unwrap(), 53));
+        let encoded = encode_udp_datagram(&dg);
+        let policy = FecPolicy::default();
+        assert_eq!(policy.mode, FecMode::Off);
+
+        let mut encoder = FecEncoder::new(policy);
+        assert!(encoder.protect(&dg, &encoded).is_none());
+
+        let mut decoder = FecDecoder::new(policy);
+        assert_eq!(decoder.decode(encoded), vec![dg]);
+    }
+
+    #[cfg(feature = "experimental-fec")]
     #[test]
     fn xor_fec_recovers_one_missing_datagram() {
         let policy = FecPolicy {
@@ -1316,6 +1417,7 @@ mod tests {
         assert_eq!(recovered[0].data.as_ref(), b"payload-2");
     }
 
+    #[cfg(feature = "experimental-fec")]
     #[test]
     fn reed_solomon_fec_recovers_one_missing_datagram() {
         let policy = FecPolicy {
@@ -1353,6 +1455,7 @@ mod tests {
         assert_eq!(recovered[0].data.as_ref(), b"rs-payload-1");
     }
 
+    #[cfg(feature = "experimental-fec")]
     #[test]
     fn auto_fec_is_conservative_without_loss_classifier() {
         let policy = FecPolicy {
@@ -1387,6 +1490,7 @@ mod tests {
         assert_eq!(packet_class_for(&bulk, 1200), PacketClass::Bulk);
     }
 
+    #[cfg(feature = "experimental-fec")]
     #[test]
     fn fec_drops_recovery_after_interactive_deadline() {
         let policy = FecPolicy {
@@ -1427,6 +1531,7 @@ mod tests {
         assert!(recovered.is_empty());
     }
 
+    #[cfg(feature = "experimental-fec")]
     #[test]
     fn fec_skips_sequential_dns_until_concurrency_threshold() {
         let policy = FecPolicy {
@@ -1452,6 +1557,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "experimental-fec")]
     #[test]
     fn fec_late_original_after_recovery_is_deduped() {
         let policy = FecPolicy {
@@ -1490,6 +1596,7 @@ mod tests {
         assert!(late_original.is_empty());
     }
 
+    #[cfg(feature = "experimental-fec")]
     #[test]
     fn fec_group_size_accounts_for_tiny_packet_wire_overhead() {
         let policy = FecPolicy {

@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+experimental-fec = []
+
 [dependencies]
 blackwire-common          = { path = "../blackwire-common" }
 blackwire-config          = { path = "../blackwire-config" }

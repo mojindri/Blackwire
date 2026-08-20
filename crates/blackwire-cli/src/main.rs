@@ -38,7 +38,9 @@ static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "latency-lab")]
+use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
@@ -149,9 +151,11 @@ enum Command {
     ExplainCost(ExplainCostArgs),
 
     /// Run a native Hysteria2 UDP datagram benchmark.
+    #[cfg(feature = "latency-lab")]
     Hy2UdpBench(Hy2UdpBenchArgs),
 
     /// Run a mixed Hysteria2 UDP benchmark with DNS, interactive, and bulk flows.
+    #[cfg(feature = "latency-lab")]
     Hy2UdpMixBench(Hy2UdpMixBenchArgs),
 
     /// Print the build version and quit.
@@ -218,6 +222,7 @@ struct ExplainCostArgs {
 }
 
 /// Arguments for the `hy2-udp-bench` subcommand.
+#[cfg(feature = "latency-lab")]
 #[derive(clap::Args)]
 struct Hy2UdpBenchArgs {
     /// Hysteria2 server UDP socket, e.g. `server-host:10310`.
@@ -306,6 +311,7 @@ struct Hy2UdpBenchArgs {
 }
 
 /// Arguments for the `hy2-udp-mix-bench` subcommand.
+#[cfg(feature = "latency-lab")]
 #[derive(clap::Args)]
 struct Hy2UdpMixBenchArgs {
     #[command(flatten)]
@@ -455,6 +461,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        #[cfg(feature = "latency-lab")]
         Command::Hy2UdpBench(args) => {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -472,6 +479,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        #[cfg(feature = "latency-lab")]
         Command::Hy2UdpMixBench(args) => {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -1202,6 +1210,7 @@ async fn cmd_explain_cost(args: ExplainCostArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "latency-lab")]
 async fn cmd_hy2_udp_bench(args: Hy2UdpBenchArgs) -> Result<()> {
     let datagram_mode = parse_datagram_priority_mode(&args.datagram_policy)?;
     let fec_mode = parse_fec_mode(&args.fec_mode)?;
@@ -1262,6 +1271,7 @@ async fn cmd_hy2_udp_bench(args: Hy2UdpBenchArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "latency-lab")]
 async fn cmd_hy2_udp_mix_bench(args: Hy2UdpMixBenchArgs) -> Result<()> {
     let datagram_mode = parse_datagram_priority_mode(&args.common.datagram_policy)?;
     let fec_mode = parse_fec_mode(&args.common.fec_mode)?;
@@ -1321,6 +1331,7 @@ async fn cmd_hy2_udp_mix_bench(args: Hy2UdpMixBenchArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "latency-lab")]
 fn hy2_udp_bench_config(
     args: &Hy2UdpBenchArgs,
     congestion_mode: blackwire_transport::CongestionMode,
@@ -1363,6 +1374,7 @@ fn hy2_udp_bench_config(
     }
 }
 
+#[cfg(feature = "latency-lab")]
 #[derive(Default)]
 struct UdpBenchStats {
     latencies_us: Vec<u64>,
@@ -1373,6 +1385,7 @@ struct UdpBenchStats {
     duration_secs: f64,
 }
 
+#[cfg(feature = "latency-lab")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum BenchClass {
     Dns,
@@ -1380,6 +1393,7 @@ enum BenchClass {
     Bulk,
 }
 
+#[cfg(feature = "latency-lab")]
 #[derive(Default)]
 struct UdpMixedBenchStats {
     dns: UdpBenchStats,
@@ -1387,6 +1401,7 @@ struct UdpMixedBenchStats {
     bulk: UdpBenchStats,
 }
 
+#[cfg(feature = "latency-lab")]
 impl UdpMixedBenchStats {
     fn by_class_mut(&mut self, class: BenchClass) -> &mut UdpBenchStats {
         match class {
@@ -1397,11 +1412,13 @@ impl UdpMixedBenchStats {
     }
 }
 
+#[cfg(feature = "latency-lab")]
 struct InFlightProbe {
     class: BenchClass,
     sent_at: Instant,
 }
 
+#[cfg(feature = "latency-lab")]
 async fn run_udp_mixed_probe_set(
     session: &blackwire_transport::Hysteria2UdpSession,
     args: &Hy2UdpMixBenchArgs,
@@ -1553,6 +1570,7 @@ async fn run_udp_mixed_probe_set(
     Ok(stats)
 }
 
+#[cfg(feature = "latency-lab")]
 impl UdpBenchStats {
     fn ok(&self) -> usize {
         self.latencies_us.len()
@@ -1563,6 +1581,7 @@ impl UdpBenchStats {
     }
 }
 
+#[cfg(feature = "latency-lab")]
 async fn run_udp_probe_set(
     session: &blackwire_transport::Hysteria2UdpSession,
     dest: blackwire_transport::UdpDestination,
@@ -1643,6 +1662,7 @@ async fn run_udp_probe_set(
     Ok(stats)
 }
 
+#[cfg(feature = "latency-lab")]
 fn parse_hy2_udp_destination(host: &str, port: u16) -> blackwire_transport::UdpDestination {
     if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
         return blackwire_transport::UdpDestination::V4(ip, port);
@@ -1653,6 +1673,7 @@ fn parse_hy2_udp_destination(host: &str, port: u16) -> blackwire_transport::UdpD
     blackwire_transport::UdpDestination::Domain(host.to_string(), port)
 }
 
+#[cfg(feature = "latency-lab")]
 fn parse_datagram_priority_mode(value: &str) -> Result<blackwire_transport::DatagramPriorityMode> {
     match value {
         "standard" => Ok(blackwire_transport::DatagramPriorityMode::Standard),
@@ -1661,6 +1682,7 @@ fn parse_datagram_priority_mode(value: &str) -> Result<blackwire_transport::Data
     }
 }
 
+#[cfg(feature = "latency-lab")]
 fn parse_fec_mode(value: &str) -> Result<blackwire_transport::FecMode> {
     match value {
         "off" => Ok(blackwire_transport::FecMode::Off),
@@ -1672,6 +1694,7 @@ fn parse_fec_mode(value: &str) -> Result<blackwire_transport::FecMode> {
     }
 }
 
+#[cfg(feature = "latency-lab")]
 fn bench_payload(seq: u64, payload_bytes: usize) -> Vec<u8> {
     let len = payload_bytes.max(8);
     let mut payload = vec![0u8; len];
@@ -1682,11 +1705,13 @@ fn bench_payload(seq: u64, payload_bytes: usize) -> Vec<u8> {
     payload
 }
 
+#[cfg(feature = "latency-lab")]
 fn bench_payload_seq(payload: &[u8]) -> Option<u64> {
     let seq_bytes: [u8; 8] = payload.get(..8)?.try_into().ok()?;
     Some(u64::from_be_bytes(seq_bytes))
 }
 
+#[cfg(feature = "latency-lab")]
 fn percentile_ms(sorted_us: &[u64], percentile: f64) -> f64 {
     if sorted_us.is_empty() {
         return 0.0;
