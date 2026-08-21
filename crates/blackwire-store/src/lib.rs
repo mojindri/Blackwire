@@ -22,6 +22,7 @@ mod snapshot;
 // Depend on the MySQL driver crates directly. The public `sqlx` facade records
 // every optional database backend in Cargo.lock even when only MySQL is built.
 mod sqlx {
+    pub(crate) use sqlx_core::executor::Executor;
     pub(crate) use sqlx_core::error::Error;
     pub(crate) use sqlx_core::pool;
     pub(crate) use sqlx_core::query::query;

@@ -424,7 +424,7 @@ async fn execute_migration_script(
         .map(str::trim)
         .filter(|statement| !statement.is_empty())
     {
-        sqlx::raw_sql(statement).execute(&mut **conn).await?;
+        sqlx::Executor::execute(&mut **conn, statement).await?;
     }
     Ok(())
 }
