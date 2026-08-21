@@ -6,7 +6,7 @@ This project is pre-1.0. The support contract is owned by
 [docs/release.md](docs/release.md), and detailed feature evidence is owned by
 [docs/feature-matrix.md](docs/feature-matrix.md).
 
-## Unreleased
+## 0.2.6 - 2026-08-21
 
 ### Removed
 
@@ -25,6 +25,11 @@ This project is pre-1.0. The support contract is owned by
   silently converted to another transport.
 
 ### Changed
+
+- Hysteria2 now uses native Standard QUIC datagrams automatically in production.
+  Proprietary FEC and the Hysteria2 latency benchmarks are compiled only into
+  the explicit development-only `latency-lab` build; production builds cannot
+  enable FEC without future peer capability negotiation.
 
 - Moved TUN device capture, protected egress, and FakeIP configuration out of
   the server runtime and Black UI into the dedicated `blackwire-client`
