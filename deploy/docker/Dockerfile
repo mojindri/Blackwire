@@ -24,6 +24,7 @@ WORKDIR /build
 # download step. If only source files change (not Cargo.toml/Cargo.lock),
 # the dependency layer is reused from Docker cache, speeding up rebuilds.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates/blackwire-client/Cargo.toml crates/blackwire-client/
 COPY crates/blackwire-cli/Cargo.toml    crates/blackwire-cli/
 COPY crates/blackwire-core/Cargo.toml   crates/blackwire-core/
 COPY crates/blackwire-common/Cargo.toml crates/blackwire-common/
@@ -41,10 +42,11 @@ COPY benches/benches/               benches/benches/
 
 # Create stub lib/main.rs files so cargo can resolve dependencies.
 # These will be replaced by the full source copy below.
-RUN for d in blackwire-common blackwire-config blackwire-app blackwire-transport blackwire-protocol blackwire-core blackwire-tls blackwire-connmgr blackwire-store; do \
+RUN for d in blackwire-client blackwire-common blackwire-config blackwire-app blackwire-transport blackwire-protocol blackwire-core blackwire-tls blackwire-connmgr blackwire-store; do \
         mkdir -p crates/$d/src && echo "// stub" > crates/$d/src/lib.rs; \
     done && \
     mkdir -p crates/blackwire-cli/src && echo "fn main(){}" > crates/blackwire-cli/src/main.rs && \
+    mkdir -p crates/blackwire-client/src && echo "fn main(){}" > crates/blackwire-client/src/main.rs && \
     mkdir -p black-ui/server/src && echo "fn main(){}" > black-ui/server/src/main.rs
 
 # Download and compile all dependencies (cached if Cargo.toml unchanged).

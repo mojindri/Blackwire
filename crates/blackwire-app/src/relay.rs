@@ -1079,9 +1079,14 @@ mod tests {
         let (mut client_b, server_b) = tcp_pair().await;
 
         let relay = tokio::spawn(async move {
-            relay_bidirectional(
+            relay_bidirectional_with_policies_and_recorder(
                 Box::new(PrependedStream::new(server_a, b"pre-a-".to_vec())),
                 Box::new(PrependedStream::new(server_b, b"pre-b-".to_vec())),
+                FastSplicePolicy::default(),
+                FastRelayConfig::default(),
+                FastLinuxConfig::default(),
+                VisionConfig::default(),
+                None,
             )
             .await
             .unwrap()
