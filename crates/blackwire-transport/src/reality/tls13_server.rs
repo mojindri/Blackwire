@@ -291,15 +291,17 @@ fn pick_cipher_suite(
     if let Some(preferred) = cover_preference {
         let preferred = preferred.to_u16();
         if list
-            .chunks_exact(2)
-            .any(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]) == preferred)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .any(|chunk| u16::from_be_bytes(*chunk) == preferred)
         {
             return CipherSuite::from_u16(preferred);
         }
     }
     for prefer in [0x1301u16, 0x1302] {
-        for chunk in list.chunks_exact(2) {
-            if u16::from_be_bytes([chunk[0], chunk[1]]) == prefer {
+        for chunk in list.as_chunks::<2>().0 {
+            if u16::from_be_bytes(*chunk) == prefer {
                 return CipherSuite::from_u16(prefer);
             }
         }
