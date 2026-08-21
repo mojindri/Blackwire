@@ -12,7 +12,7 @@ SSH_PORT ?= 22
 SSH_KEY ?=
 SSH_EXTRA_OPTS ?=
 
-.PHONY: help build build-amd64 build-linux-bin docker-up stable ship finalize interop-docker interop-server-docker interop-client-reality interop-server-vps \
+.PHONY: help build build-amd64 build-linux-bin docker-matrix-env docker-up stable ship finalize interop-docker interop-server-docker interop-client-reality interop-server-vps \
 	xray advanced-features-smoke health-failover negative-auth restart-smoke stress report-summary realistic-all docker-full docker-down \
 	vm-pack vps-configs external-clients-docker external-clients-vps external-clients-report \
 	vps-server-setup vps-client-setup vps-preflight vps-test vps-tun vps-netem ci ci-full clean \
@@ -56,7 +56,22 @@ stable: ## Run the stable Rust integration matrix
 	cd $(ROOT) && cargo test -p integration-tests 2>&1 | tee labs/realistic/$(REPORTS)/stable-matrix.log
 
 # External-client matrix: sequential only (one client at a time; see external-clients/README.md).
-interop-server-docker: build ## Server-compat: Xray/sing-box clients -> our server (Docker)
+docker-matrix-env: build ## Create a local-only REALITY key pair for the Docker client matrix
+	@if [ ! -f configs/matrix.env ]; then cp configs/matrix.env.example configs/matrix.env; fi
+	@if rg -q '^REALITY_(PRIVATE|PUBLIC)_KEY=REPLACE_WITH_' configs/matrix.env; then \
+		keys="$$(docker run --rm --entrypoint /usr/local/bin/blackwire blackwire:latest x25519)"; \
+		private="$$(printf '%s\n' "$$keys" | sed -n 's/^Private key (server config): //p')"; \
+		public="$$(printf '%s\n' "$$keys" | sed -n 's/^Public key  (client config): //p')"; \
+		test -n "$$private" && test -n "$$public"; \
+		tmp="$$(mktemp configs/matrix.env.XXXXXX)"; \
+		awk -v private="$$private" -v public="$$public" \
+			'/^REALITY_PRIVATE_KEY=REPLACE_WITH_/ { print "REALITY_PRIVATE_KEY=" private; next } \
+			 /^REALITY_PUBLIC_KEY=REPLACE_WITH_/ { print "REALITY_PUBLIC_KEY=" public; next } { print }' \
+			configs/matrix.env > "$$tmp" && mv "$$tmp" configs/matrix.env; \
+		echo "Generated an ephemeral REALITY key pair for the Docker matrix"; \
+	fi
+
+interop-server-docker: docker-matrix-env ## Server-compat: Xray/sing-box clients -> our server (Docker)
 	@mkdir -p $(REPORTS)/external-clients
 	@bash external-clients/scripts/run-docker-matrix.sh $(REPORTS)/external-clients configs/matrix.env
 	@bash external-clients/scripts/report.sh

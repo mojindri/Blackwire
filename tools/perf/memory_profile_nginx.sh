@@ -174,13 +174,41 @@ wait "$SAMPLER_PID" || true
 SAMPLER_PID=""
 
 rps="$(awk '/Requests\/sec:/ {print $2}' "$HEY_LOG" | tail -n1)"
-p95_s="$(awk '{ pct=$1; gsub(/%/, "", pct); if (pct == "95" && $2 == "in") print $3 }' "$HEY_LOG" | tail -n1)"
-p99_s="$(awk '{ pct=$1; gsub(/%/, "", pct); if (pct == "99" && $2 == "in") print $3 }' "$HEY_LOG" | tail -n1)"
+read -r p95_s p99_s < <(python3 - "$HEY_LOG" <<'PY'
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+
+def seconds(percentile):
+    patterns = (
+        rf"^\s*{percentile}(?:\.0+)?%+\s+in\s+([0-9.eE+-]+)\s*(us|µs|ms|s|sec|secs|second|seconds)\b",
+        rf"^\s*{percentile}(?:th)?\s+percentile\s*[:=]\s*([0-9.eE+-]+)\s*(us|µs|ms|s|sec|secs|second|seconds)\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.MULTILINE | re.IGNORECASE)
+        if match:
+            value = float(match.group(1))
+            unit = match.group(2).lower()
+            return value * {"us": 1e-6, "µs": 1e-6, "ms": 1e-3}.get(unit, 1.0)
+    return None
+
+p95 = seconds(95)
+p99 = seconds(99)
+if p95 is not None and p99 is not None:
+    print(p95, p99)
+PY
+)
 ok_200="$(awk '/\[200\]/ {print $2}' "$HEY_LOG" | tail -n1)"
 ok_200="${ok_200:-0}"
 rps="${rps:-0}"
-p95_ms="$(awk -v s="$p95_s" 'BEGIN { if (s == "") print "null"; else printf "%.3f", s * 1000.0 }')"
-p99_ms="$(awk -v s="$p99_s" 'BEGIN { if (s == "") print "null"; else printf "%.3f", s * 1000.0 }')"
+if [ -z "${p95_s:-}" ] || [ -z "${p99_s:-}" ]; then
+  echo "ERROR: unable to parse p95/p99 latency from hey output" >&2
+  cat "$HEY_LOG" >&2
+  exit 1
+fi
+p95_ms="$(awk -v s="$p95_s" 'BEGIN { printf "%.3f", s * 1000.0 }')"
+p99_ms="$(awk -v s="$p99_s" 'BEGIN { printf "%.3f", s * 1000.0 }')"
 
 read -r peak_rss peak_vms peak_threads peak_fd <<EOF
 $(awk '
