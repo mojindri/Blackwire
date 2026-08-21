@@ -1208,12 +1208,14 @@ mod production_fec_disabled {
     /// The production build supports only the interoperable no-FEC mode.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum FecMode {
+        /// No forward-error correction is applied.
         Off,
     }
 
     /// Compile-time guard that keeps proprietary FEC disabled in production.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct FecPolicy {
+        /// Forward-error-correction mode used by this policy.
         pub mode: FecMode,
     }
 
@@ -1223,27 +1225,33 @@ mod production_fec_disabled {
         }
     }
 
+    /// No-op encoder implementation used when FEC is not enabled in production.
     #[derive(Debug, Default)]
     pub struct FecEncoder;
 
     impl FecEncoder {
+        /// Creates a new disabled encoder from the provided FEC policy.
         pub fn new(_policy: FecPolicy) -> Self {
             Self
         }
 
+        /// Returns `None` because protected packets are not emitted when FEC is disabled.
         pub fn protect(&mut self, _original: &UdpDatagram, _encoded: &Bytes) -> Option<Bytes> {
             None
         }
     }
 
+    /// No-op decoder implementation used when FEC is not enabled in production.
     #[derive(Debug, Default)]
     pub struct FecDecoder;
 
     impl FecDecoder {
+        /// Creates a new disabled decoder from the provided FEC policy.
         pub fn new(_policy: FecPolicy) -> Self {
             Self
         }
 
+        /// Decodes a packet stream by returning the datagram payloads directly.
         pub fn decode(&mut self, raw: Bytes) -> Vec<UdpDatagram> {
             decode_udp_datagram(&raw).into_iter().collect()
         }
