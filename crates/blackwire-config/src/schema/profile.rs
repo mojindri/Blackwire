@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::{Config, NetworkType, Protocol, SecurityType};
 
 /// Operating profile for the proxy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum ProfileMode {
     /// Broad compatibility mode: all protocols, transports, and features enabled.
@@ -13,21 +13,10 @@ pub enum ProfileMode {
     /// Latency-first production path: narrow protocol/transport matrix, strict
     /// defaults, and active rejection of features that add per-connection overhead.
     Fast,
-    /// Latency budget profile. This is less restrictive than `fast` and is
-    /// evaluated by the cost-budget/explain-cost layer.
-    Latency,
-    /// Throughput budget profile for bulk-transfer oriented deployments.
-    Throughput,
-    /// Bad-network profile for lossy/high-RTT links.
-    Badnet,
-    /// Mobile profile for roaming/radio-pause sensitive links.
-    Mobile,
-    /// Stealth profile for compatibility/camouflage-heavy paths.
-    Stealth,
 }
 
 /// First-packet acceleration knobs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FirstPacketBoostConfig {
     /// Master switch for first-packet acceleration.
@@ -36,18 +25,9 @@ pub struct FirstPacketBoostConfig {
     /// Pre-resolve DNS where route strategy can use IP rules.
     #[serde(default = "FirstPacketBoostConfig::default_enabled")]
     pub dns: bool,
-    /// Treat TLS ClientHello forwarding as an eligible first-packet boost.
-    #[serde(default = "FirstPacketBoostConfig::default_enabled")]
-    pub tls_client_hello: bool,
     /// Forward first data bytes as early payload where protocol handlers support it.
     #[serde(default = "FirstPacketBoostConfig::default_enabled")]
     pub send_early_payload: bool,
-    /// Duplicate first control packet on bad-network paths when supported.
-    #[serde(default)]
-    pub duplicate_control_on_badnet: bool,
-    /// Packet scheduling priority for first-packet work.
-    #[serde(default)]
-    pub priority: FirstPacketPriority,
 }
 
 impl FirstPacketBoostConfig {
@@ -61,25 +41,9 @@ impl Default for FirstPacketBoostConfig {
         Self {
             enabled: false,
             dns: true,
-            tls_client_hello: true,
             send_early_payload: true,
-            duplicate_control_on_badnet: false,
-            priority: FirstPacketPriority::High,
         }
     }
-}
-
-/// Scheduling priority assigned to first-packet work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FirstPacketPriority {
-    /// Standard OS scheduling priority.
-    Normal,
-    #[default]
-    /// Elevated scheduling priority (default).
-    High,
-    /// Highest scheduling priority; use for latency-critical deployments.
-    Critical,
 }
 
 impl std::fmt::Display for ProfileMode {
@@ -87,11 +51,6 @@ impl std::fmt::Display for ProfileMode {
         match self {
             ProfileMode::Compat => f.write_str("compat"),
             ProfileMode::Fast => f.write_str("fast"),
-            ProfileMode::Latency => f.write_str("latency"),
-            ProfileMode::Throughput => f.write_str("throughput"),
-            ProfileMode::Badnet => f.write_str("badnet"),
-            ProfileMode::Mobile => f.write_str("mobile"),
-            ProfileMode::Stealth => f.write_str("stealth"),
         }
     }
 }
@@ -103,79 +62,15 @@ impl std::str::FromStr for ProfileMode {
         match s {
             "compat" => Ok(ProfileMode::Compat),
             "fast" => Ok(ProfileMode::Fast),
-            "latency" => Ok(ProfileMode::Latency),
-            "throughput" => Ok(ProfileMode::Throughput),
-            "badnet" => Ok(ProfileMode::Badnet),
-            "mobile" => Ok(ProfileMode::Mobile),
-            "stealth" => Ok(ProfileMode::Stealth),
             other => Err(format!(
-                "unknown profile '{other}'; expected compat, fast, latency, throughput, badnet, mobile, or stealth"
+                "unknown profile '{other}'; expected compat or fast"
             )),
         }
     }
 }
 
-/// Performance budget constraints used by `blackwire explain-cost`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BudgetConfig {
-    #[serde(default = "BudgetConfig::default_max_protocol_layers")]
-    /// Maximum number of hot-path protocol layers before a violation is raised.
-    pub max_protocol_layers: usize,
-    #[serde(default)]
-    /// Whether protocol sniffing is permitted within budget.
-    pub allow_sniffing: bool,
-    #[serde(default)]
-    /// Whether fake-IP DNS is permitted within budget.
-    pub allow_fake_ip: bool,
-    #[serde(default = "BudgetConfig::default_max_route_rules")]
-    /// Maximum number of routing rules before a violation is raised.
-    pub max_route_rules: usize,
-    #[serde(default = "BudgetConfig::default_max_handshake_ms")]
-    /// Maximum acceptable TLS/QUIC handshake time in milliseconds.
-    pub max_handshake_ms: u64,
-    #[serde(default = "BudgetConfig::default_true")]
-    /// Prefer zero-copy / splice paths when available.
-    pub prefer_direct_copy: bool,
-    #[serde(default = "BudgetConfig::default_true")]
-    /// Prefer QUIC datagram lane for UDP flows when available.
-    pub prefer_datagram_for_udp: bool,
-}
-
-impl BudgetConfig {
-    fn default_max_protocol_layers() -> usize {
-        3
-    }
-
-    fn default_max_route_rules() -> usize {
-        50
-    }
-
-    fn default_max_handshake_ms() -> u64 {
-        300
-    }
-
-    fn default_true() -> bool {
-        true
-    }
-}
-
-impl Default for BudgetConfig {
-    fn default() -> Self {
-        Self {
-            max_protocol_layers: Self::default_max_protocol_layers(),
-            allow_sniffing: false,
-            allow_fake_ip: false,
-            max_route_rules: Self::default_max_route_rules(),
-            max_handshake_ms: Self::default_max_handshake_ms(),
-            prefer_direct_copy: true,
-            prefer_datagram_for_udp: true,
-        }
-    }
-}
-
 /// Extra settings that only apply when `profile = "fast"`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FastConfig {
     /// Reject `security = none` when `true` (default). Set `false` only in lab /
@@ -236,7 +131,7 @@ impl Default for FastConfig {
 }
 
 /// Linux-only relay extensions for bulk TCP paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FastLinuxConfig {
     /// Optional MSG_ZEROCOPY use for raw TCP userspace bulk writes.
@@ -256,11 +151,6 @@ pub struct FastLinuxConfig {
     /// specific host.
     #[serde(default = "FastLinuxConfig::default_io_uring")]
     pub io_uring: FastExperimentalBackendPolicy,
-
-    /// AF_XDP backend preference. This is intentionally experimental and is not
-    /// selected automatically for normal proxy streams.
-    #[serde(default)]
-    pub af_xdp: FastExperimentalBackendPolicy,
 }
 
 impl FastLinuxConfig {
@@ -279,13 +169,12 @@ impl Default for FastLinuxConfig {
             zerocopy: FastZerocopyPolicy::default(),
             zerocopy_min_bytes: Self::default_zerocopy_min_bytes(),
             io_uring: Self::default_io_uring(),
-            af_xdp: FastExperimentalBackendPolicy::default(),
         }
     }
 }
 
 /// MSG_ZEROCOPY policy for raw TCP userspace writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastZerocopyPolicy {
     /// Do not use MSG_ZEROCOPY.
@@ -298,7 +187,7 @@ pub enum FastZerocopyPolicy {
 }
 
 /// Selector for Linux experimental backends that need privileged/kernel support.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastExperimentalBackendPolicy {
     /// Do not select this backend.
@@ -311,7 +200,7 @@ pub enum FastExperimentalBackendPolicy {
 }
 
 /// Relay engine and buffer policy for Fast Profile userspace copy paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FastRelayConfig {
     /// Userspace relay implementation. `legacy` preserves the current pooled
@@ -345,8 +234,8 @@ impl FastRelayConfig {
 impl Default for FastRelayConfig {
     fn default() -> Self {
         Self {
-            engine: FastRelayEngine::default(),
-            flush: FastRelayFlushPolicy::default(),
+            engine: FastRelayEngine::V2,
+            flush: FastRelayFlushPolicy::Adaptive,
             initial_buffer: Self::default_initial_buffer(),
             max_buffer: Self::default_max_buffer(),
         }
@@ -354,18 +243,18 @@ impl Default for FastRelayConfig {
 }
 
 /// Userspace relay engine selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastRelayEngine {
     /// Existing pooled relay implementation.
-    #[default]
     Legacy,
     /// Relay Engine v2: one-task duplex relay with growable ring buffers.
+    #[default]
     V2,
 }
 
 /// Flush policy for Relay Engine v2.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastRelayFlushPolicy {
     /// Flush after each write, matching legacy semantics.
@@ -379,7 +268,7 @@ pub enum FastRelayFlushPolicy {
 }
 
 /// TCP connection pool strategy for the Fast Profile outbound.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastPoolPolicy {
     /// Ramp pool size based on destination hotness (default).
@@ -394,7 +283,7 @@ pub enum FastPoolPolicy {
 }
 
 /// Splice relay strategy for the Fast Profile dispatcher.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum FastSplicePolicy {
     /// Use splice only after `ADAPTIVE_SPLICE_MIN_BYTES` have been relayed (default).
@@ -486,8 +375,6 @@ pub struct ProtocolCost {
 pub struct CostReport {
     /// Active performance profile.
     pub profile: ProfileMode,
-    /// Budget constraints applied during analysis.
-    pub budget: BudgetConfig,
     /// Number of hot-path protocol layers in the config.
     pub layer_count: usize,
     /// Names of the hot-path protocol layers.
@@ -609,7 +496,6 @@ fn network_name(n: &NetworkType) -> &'static str {
         NetworkType::HttpUpgrade => "httpupgrade",
         NetworkType::Grpc => "grpc",
         NetworkType::Quic => "quic",
-        NetworkType::Kcp => "kcp",
         NetworkType::SplitHttp => "splithttp",
     }
 }
@@ -791,7 +677,7 @@ fn apply_transport_cost(
             *supports_direct_copy = false;
             *supports_splice = false;
         }
-        NetworkType::Quic | NetworkType::Kcp => {
+        NetworkType::Quic => {
             *cpu = bump_cost(*cpu, CostClass::Medium);
             *latency = bump_cost(*latency, CostClass::Medium);
             *copy_mode = CopyMode::Packet;
@@ -819,38 +705,6 @@ fn apply_transport_cost(
 
 /// Compute a [`CostReport`] summarising the protocol cost and profile compliance of `config`.
 pub fn explain_cost(config: &Config) -> CostReport {
-    let budget = config.budget.unwrap_or_else(|| match config.profile {
-        ProfileMode::Latency | ProfileMode::Fast => BudgetConfig {
-            max_protocol_layers: 3,
-            allow_sniffing: false,
-            allow_fake_ip: false,
-            max_route_rules: 50,
-            max_handshake_ms: 300,
-            prefer_direct_copy: true,
-            prefer_datagram_for_udp: true,
-        },
-        ProfileMode::Throughput => BudgetConfig {
-            max_protocol_layers: 4,
-            max_route_rules: 200,
-            ..BudgetConfig::default()
-        },
-        ProfileMode::Badnet | ProfileMode::Mobile => BudgetConfig {
-            max_protocol_layers: 4,
-            max_handshake_ms: 700,
-            prefer_datagram_for_udp: true,
-            ..BudgetConfig::default()
-        },
-        ProfileMode::Compat | ProfileMode::Stealth => BudgetConfig {
-            max_protocol_layers: 8,
-            allow_sniffing: true,
-            allow_fake_ip: true,
-            max_route_rules: 1000,
-            max_handshake_ms: 1500,
-            prefer_direct_copy: false,
-            prefer_datagram_for_udp: false,
-        },
-    });
-
     let mut layers = Vec::new();
     add_unique(&mut layers, "TCP accept");
 
@@ -936,52 +790,37 @@ pub fn explain_cost(config: &Config) -> CostReport {
     let mut findings = Vec::new();
     let mut suggestions = Vec::new();
 
-    if layers.len() > budget.max_protocol_layers {
+    if config.profile == ProfileMode::Fast && layers.len() > 3 {
         findings.push(ProfileViolation::Warning(format!(
-            "hot path has {} layers; budget allows {}",
-            layers.len(),
-            budget.max_protocol_layers
+            "hot path has {} layers; Fast profile works best with 3 or fewer",
+            layers.len()
         )));
-        suggestions.push("remove one wrapper layer or move to a less strict profile".into());
+        suggestions.push("remove one wrapper layer or use compatibility mode".into());
     }
 
-    if !budget.allow_sniffing
+    if config.profile == ProfileMode::Fast
         && config
             .inbounds
             .iter()
             .any(|i| i.sniffing.as_ref().is_some_and(|s| s.enabled))
     {
         findings.push(ProfileViolation::Warning(
-            "sniffing is enabled but this profile budget disallows it".into(),
+            "sniffing adds work to the Fast profile hot path".into(),
         ));
-        suggestions.push("disable inbound sniffing or use compat/stealth profile".into());
-    }
-
-    if !budget.allow_fake_ip
-        && config
-            .dns
-            .as_ref()
-            .and_then(|d| d.fake_ip.as_ref())
-            .is_some_and(|f| f.enabled)
-    {
-        findings.push(ProfileViolation::Warning(
-            "FakeIP is enabled but this profile budget disallows it".into(),
-        ));
-        suggestions.push("disable dns.fakeIp for latency profiles".into());
+        suggestions.push("disable inbound sniffing or use compatibility mode".into());
     }
 
     if let Some(routing) = &config.routing {
-        if routing.rules.len() > budget.max_route_rules {
+        if config.profile == ProfileMode::Fast && routing.rules.len() > 50 {
             findings.push(ProfileViolation::Warning(format!(
-                "routing has {} rules; budget allows {}",
-                routing.rules.len(),
-                budget.max_route_rules
+                "routing has {} rules; large rule sets add Fast profile latency",
+                routing.rules.len()
             )));
-            suggestions.push("compile/prune routing rules or raise budget.maxRouteRules".into());
+            suggestions.push("compile or prune routing rules".into());
         }
     }
 
-    if budget.prefer_direct_copy && !cost.supports_direct_copy {
+    if config.profile == ProfileMode::Fast && !cost.supports_direct_copy {
         findings.push(ProfileViolation::Warning(
             "direct copy is preferred but this path cannot lower to direct copy".into(),
         ));
@@ -990,14 +829,13 @@ pub fn explain_cost(config: &Config) -> CostReport {
         );
     }
 
-    if budget.prefer_direct_copy && !cost.supports_splice {
+    if config.profile == ProfileMode::Fast && !cost.supports_splice {
         suggestions
             .push("use relay.engine=v2 for wrapped streams where splice is unavailable".into());
     }
 
     CostReport {
         profile: config.profile,
-        budget,
         layer_count: layers.len(),
         layers,
         cost,
@@ -1155,12 +993,9 @@ mod tests {
         Config {
             profile: ProfileMode::Fast,
             fast: None,
-            budget: None,
             vision: None,
             first_packet_boost: None,
             quic: None,
-            datagram: None,
-            fec: None,
             log: LogConfig::default(),
             dns: None,
             routing: None,
@@ -1186,13 +1021,12 @@ mod tests {
                 stream_settings: None,
             }],
             stats: None,
-            api: None,
             metrics_addr: None,
         }
     }
 
     #[test]
-    fn first_packet_boost_config_parses_camel_case() {
+    fn first_packet_boost_ignores_retired_legacy_fields() {
         let cfg: Config = serde_json::from_value(serde_json::json!({
             "firstPacketBoost": {
                 "enabled": true,
@@ -1218,10 +1052,7 @@ mod tests {
         let boost = cfg.first_packet_boost.unwrap();
         assert!(boost.enabled);
         assert!(!boost.dns);
-        assert!(boost.tls_client_hello);
         assert!(boost.send_early_payload);
-        assert!(boost.duplicate_control_on_badnet);
-        assert_eq!(boost.priority, FirstPacketPriority::Critical);
     }
 
     #[test]
@@ -1413,22 +1244,13 @@ mod tests {
         let decoded: FastConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(decoded.relay.engine, FastRelayEngine::V2);
         assert_eq!(decoded.relay.flush, FastRelayFlushPolicy::Adaptive);
-    }
 
-    #[test]
-    fn budget_profiles_deserialise_from_json() {
-        for (raw, expected) in [
-            ("latency", ProfileMode::Latency),
-            ("throughput", ProfileMode::Throughput),
-            ("badnet", ProfileMode::Badnet),
-            ("mobile", ProfileMode::Mobile),
-            ("stealth", ProfileMode::Stealth),
-        ] {
-            let json = format!(r#"{{"profile": "{raw}"}}"#);
-            let m: serde_json::Value = serde_json::from_str(&json).unwrap();
-            let mode: ProfileMode = serde_json::from_value(m["profile"].clone()).unwrap();
-            assert_eq!(mode, expected);
-        }
+        let relay: FastRelayConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(relay.engine, FastRelayEngine::V2);
+        assert_eq!(relay.flush, FastRelayFlushPolicy::Adaptive);
+
+        let legacy: FastRelayConfig = serde_json::from_str(r#"{"engine":"legacy"}"#).unwrap();
+        assert_eq!(legacy.engine, FastRelayEngine::Legacy);
     }
 
     #[test]
@@ -1440,8 +1262,7 @@ mod tests {
     #[test]
     fn explain_cost_flags_expensive_latency_path() {
         let mut cfg = fast_vless_config();
-        cfg.profile = ProfileMode::Latency;
-        cfg.budget = Some(BudgetConfig::default());
+        cfg.profile = ProfileMode::Fast;
         cfg.inbounds[0].sniffing = Some(SniffingConfig {
             enabled: true,
             dest_override: vec!["tls".into()],
@@ -1457,10 +1278,10 @@ mod tests {
 
         let report = explain_cost(&cfg);
         let rendered = report.render_text();
-        assert_eq!(report.profile, ProfileMode::Latency);
+        assert_eq!(report.profile, ProfileMode::Fast);
         assert_eq!(report.cost.cpu, CostClass::High);
         assert!(!report.cost.supports_direct_copy);
-        assert!(rendered.contains("sniffing is enabled"));
+        assert!(rendered.contains("sniffing adds work"));
         assert!(rendered.contains("direct copy is preferred"));
         assert!(rendered.contains("relay.engine=v2"));
     }
@@ -1468,11 +1289,7 @@ mod tests {
     #[test]
     fn explain_cost_accepts_simple_direct_path() {
         let mut cfg = fast_vless_config();
-        cfg.profile = ProfileMode::Latency;
-        cfg.budget = Some(BudgetConfig {
-            max_protocol_layers: 8,
-            ..BudgetConfig::default()
-        });
+        cfg.profile = ProfileMode::Compat;
         cfg.inbounds[0].stream_settings = Some(StreamSettingsConfig {
             security: SecurityType::None,
             ..Default::default()

@@ -1,10 +1,10 @@
 use std::net::IpAddr;
 
 use blackwire_config::schema::{
-    Config, DatagramConfig, EndpointSettings, FecConfig, FecMode, InboundConfig, LimitsConfig,
-    LogConfig, OutboundConfig, ProfileMode, Protocol, QuicConfig,
+    Config, EndpointSettings, InboundConfig, LimitsConfig, LogConfig, OutboundConfig, ProfileMode,
+    Protocol, QuicConfig,
 };
-use blackwire_core::{inbound_listener_changes, requires_instance_restart};
+use blackwire_core::{inbound_listener_changes, requires_instance_handover};
 
 fn endpoint_settings(value: serde_json::Value) -> EndpointSettings {
     serde_json::from_value(value).expect("test endpoint settings should be valid")
@@ -14,12 +14,9 @@ fn minimal_config(port: u16) -> Config {
     Config {
         profile: ProfileMode::default(),
         fast: None,
-        budget: None,
         vision: None,
         first_packet_boost: None,
         quic: None,
-        datagram: None,
-        fec: None,
         log: LogConfig::default(),
         dns: None,
         routing: None,
@@ -42,7 +39,6 @@ fn minimal_config(port: u16) -> Config {
             stream_settings: None,
         }],
         stats: None,
-        api: None,
         metrics_addr: None,
     }
 }
@@ -85,7 +81,7 @@ fn inbound_listener_changes_reports_removed_listener() {
 }
 
 #[test]
-fn requires_instance_restart_ignores_vless_client_list_changes() {
+fn handover_not_needed_for_vless_client_list_changes() {
     let mut old = minimal_config(1080);
     old.inbounds[0].protocol = Protocol::Vless;
     old.inbounds[0].settings = endpoint_settings(serde_json::json!({
@@ -100,11 +96,11 @@ fn requires_instance_restart_ignores_vless_client_list_changes() {
         ]
     }));
 
-    assert!(!requires_instance_restart(&old, &new));
+    assert!(!requires_instance_handover(&old, &new));
 }
 
 #[test]
-fn requires_instance_restart_ignores_non_vless_client_bandwidth_only_changes() {
+fn handover_not_needed_for_non_vless_client_bandwidth_only_changes() {
     let mut old = minimal_config(1080);
     old.inbounds[0].protocol = Protocol::Trojan;
     old.inbounds[0].settings = endpoint_settings(serde_json::json!({
@@ -116,11 +112,11 @@ fn requires_instance_restart_ignores_non_vless_client_bandwidth_only_changes() {
         "clients": [{"password":"secret","email":"alice@example.local","upMbps":40,"downMbps":80}]
     }));
 
-    assert!(!requires_instance_restart(&old, &new));
+    assert!(!requires_instance_handover(&old, &new));
 }
 
 #[test]
-fn requires_instance_restart_for_non_reloadable_setting_changes() {
+fn handover_is_used_for_structural_setting_changes() {
     let mut old = minimal_config(1080);
     old.inbounds[0].protocol = Protocol::Trojan;
     old.inbounds[0].settings = endpoint_settings(serde_json::json!({
@@ -134,11 +130,11 @@ fn requires_instance_restart_for_non_reloadable_setting_changes() {
         "network": "ws"
     }));
 
-    assert!(requires_instance_restart(&old, &new));
+    assert!(requires_instance_handover(&old, &new));
 }
 
 #[test]
-fn requires_instance_restart_ignores_vmess_client_auth_changes() {
+fn handover_not_needed_for_vmess_client_auth_changes() {
     let mut old = minimal_config(1080);
     old.inbounds[0].protocol = Protocol::Vmess;
     old.inbounds[0].settings = endpoint_settings(serde_json::json!({
@@ -150,11 +146,11 @@ fn requires_instance_restart_ignores_vmess_client_auth_changes() {
         "clients": [{"id":"00000000-0000-4000-8000-000000000002","email":"bob@example.local"}]
     }));
 
-    assert!(!requires_instance_restart(&old, &new));
+    assert!(!requires_instance_handover(&old, &new));
 }
 
 #[test]
-fn requires_instance_restart_ignores_tuic_user_auth_changes() {
+fn handover_not_needed_for_tuic_user_auth_changes() {
     let mut old = minimal_config(1080);
     old.inbounds[0].protocol = Protocol::Tuic;
     old.inbounds[0].settings = endpoint_settings(serde_json::json!({
@@ -166,11 +162,11 @@ fn requires_instance_restart_ignores_tuic_user_auth_changes() {
         "users": [{"uuid":"00000000-0000-4000-8000-000000000002","password":"changed"}]
     }));
 
-    assert!(!requires_instance_restart(&old, &new));
+    assert!(!requires_instance_handover(&old, &new));
 }
 
 #[test]
-fn requires_instance_restart_for_outbound_changes() {
+fn handover_is_used_for_outbound_changes() {
     let old = minimal_config(1080);
     let mut new = minimal_config(1080);
     new.outbounds.push(OutboundConfig {
@@ -180,33 +176,33 @@ fn requires_instance_restart_for_outbound_changes() {
         stream_settings: None,
     });
 
-    assert!(requires_instance_restart(&old, &new));
+    assert!(requires_instance_handover(&old, &new));
 }
 
 #[test]
-fn requires_instance_restart_ignores_per_user_limit_changes() {
+fn handover_not_needed_for_per_user_limit_changes() {
     let mut old = minimal_config(1080);
     old.limits.max_connections_per_user = Some(16);
 
     let mut new = old.clone();
     new.limits.max_connections_per_user = Some(32);
 
-    assert!(!requires_instance_restart(&old, &new));
+    assert!(!requires_instance_handover(&old, &new));
 }
 
 #[test]
-fn requires_instance_restart_for_non_reloadable_global_limit_changes() {
+fn handover_is_used_for_global_limit_changes() {
     let mut old = minimal_config(1080);
     old.limits.max_connections = Some(128);
 
     let mut new = old.clone();
     new.limits.max_connections = Some(256);
 
-    assert!(requires_instance_restart(&old, &new));
+    assert!(requires_instance_handover(&old, &new));
 }
 
 #[test]
-fn requires_instance_restart_for_quic_socket_tuning_changes() {
+fn handover_is_used_for_quic_socket_tuning_changes() {
     let old = minimal_config(1080);
     let mut new = minimal_config(1080);
     new.quic = Some(QuicConfig {
@@ -214,18 +210,13 @@ fn requires_instance_restart_for_quic_socket_tuning_changes() {
         ..QuicConfig::default()
     });
 
-    assert!(requires_instance_restart(&old, &new));
+    assert!(requires_instance_handover(&old, &new));
 }
 
 #[test]
-fn requires_instance_restart_for_datagram_fec_changes() {
+fn handover_is_used_for_metrics_service_changes() {
     let old = minimal_config(1080);
-    let mut new = minimal_config(1080);
-    new.datagram = Some(DatagramConfig::default());
-    new.fec = Some(FecConfig {
-        mode: FecMode::Xor1OfN,
-        ..FecConfig::default()
-    });
-
-    assert!(requires_instance_restart(&old, &new));
+    let mut new = old.clone();
+    new.metrics_addr = Some("127.0.0.1:19090".into());
+    assert!(requires_instance_handover(&old, &new));
 }

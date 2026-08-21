@@ -34,5 +34,5 @@ pub use data_plane::{
     UserTable,
 };
 pub use instance::Instance;
-/// Hot-reload handles: swap routing rules and reloadable inbound auth state without restarting listeners.
-pub use reload::{inbound_listener_changes, requires_instance_restart, ReloadState};
+/// Hot-reload handles for atomic state swaps and prepared instance handover.
+pub use reload::{inbound_listener_changes, requires_instance_handover, ReloadState};

@@ -81,18 +81,6 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "security=shadowtls, not a protocol",
             ),
             item(
-                "kcp",
-                "mKCP",
-                "deprecated",
-                "Legacy/internal transport; external-client interop is not supported",
-            ),
-            item(
-                "quic",
-                "QUIC",
-                "supported",
-                "V2Ray QUIC transport; sing-box interop covered, Xray 26+ legacy-client row is skipped",
-            ),
-            item(
                 "httpupgrade",
                 "HTTPUpgrade",
                 "supported",
@@ -151,7 +139,6 @@ pub fn blackwire_capabilities() -> CapabilityMap {
                 "supported",
                 "metrics/health HTTP listener",
             ),
-            item("api", "Runtime API", "supported", "Revision status and traffic operations"),
             item(
                 "profile",
                 "Runtime profile",
@@ -170,8 +157,8 @@ pub fn blackwire_capabilities() -> CapabilityMap {
             item(
                 "stats",
                 "Traffic stats",
-                "experimental",
-                "Depends on Blackwire StatsService runtime",
+                "supported",
+                "Internal counters persisted for the dashboard and quotas",
             ),
             item(
                 "systemd",
@@ -202,6 +189,20 @@ mod tests {
     use super::blackwire_capabilities;
 
     #[test]
+    fn dashboard_stats_remain_without_management_api_capability() {
+        let capabilities = blackwire_capabilities();
+        assert!(!capabilities.config.iter().any(|item| item.key == "api"));
+
+        let stats = capabilities
+            .runtime
+            .iter()
+            .find(|item| item.key == "stats")
+            .expect("dashboard traffic statistics should remain available");
+        assert_eq!(stats.status, "supported");
+        assert!(stats.notes.contains("dashboard"));
+    }
+
+    #[test]
     fn tuic_v5_is_reported_as_supported() {
         let capabilities = blackwire_capabilities();
         let tuic = capabilities
@@ -213,20 +214,6 @@ mod tests {
         assert_eq!(tuic.status, "supported");
         assert!(tuic.notes.contains("native UDP relay"));
         assert!(tuic.notes.contains("network path"));
-    }
-
-    #[test]
-    fn quic_transport_is_supported_with_documented_client_limits() {
-        let capabilities = blackwire_capabilities();
-        let quic = capabilities
-            .transports
-            .iter()
-            .find(|item| item.key == "quic")
-            .expect("QUIC transport should remain visible to Black UI");
-
-        assert_eq!(quic.status, "supported");
-        assert!(quic.notes.contains("sing-box"));
-        assert!(quic.notes.contains("Xray 26+"));
     }
 
     #[test]
@@ -255,18 +242,5 @@ mod tests {
         assert_eq!(vmess.status, "supported");
         assert!(vmess.notes.contains("AEAD body security"));
         assert!(vmess.notes.contains("body security=none"));
-    }
-
-    #[test]
-    fn mkcp_is_reported_as_deprecated() {
-        let capabilities = blackwire_capabilities();
-        let mkcp = capabilities
-            .transports
-            .iter()
-            .find(|item| item.key == "kcp")
-            .expect("mKCP capability should remain visible for legacy configs");
-
-        assert_eq!(mkcp.status, "deprecated");
-        assert!(mkcp.notes.contains("Legacy/internal"));
     }
 }

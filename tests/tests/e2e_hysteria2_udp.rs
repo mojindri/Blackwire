@@ -165,6 +165,7 @@ async fn hysteria2_udp_relay_roundtrip() {
     let _ = std::fs::remove_file(&key_path);
 }
 
+#[cfg(feature = "experimental-fec")]
 #[tokio::test]
 async fn hysteria2_udp_relay_roundtrip_with_xor_fec_enabled() {
     let _ = tracing_subscriber::fmt()

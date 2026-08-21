@@ -1,10 +1,11 @@
 import type { Inbound, InboundInput } from "./types";
+import { HYSTERIA2_DEFAULTS } from "./hysteria2Tuning";
 import { buildSplitHttp, readSplitHttp, type SplitHttpEditorState } from "./splitHttpConfigurator";
 
-export type JsonObject = Record<string, unknown>;
+type JsonObject = Record<string, unknown>;
 export type SliceKey = "settings" | "streamSettings" | "sniffing" | "limits";
 
-export interface SliceState {
+interface SliceState {
   text: string;
   value: JsonObject;
   error: string;
@@ -26,15 +27,11 @@ export interface InboundEditorState {
   hysteria2MaxQueueDelayMs: string;
   hysteria2PacingGain: string;
   hysteria2LossCompensation: boolean;
+  hysteria2TransportOverrides: boolean;
   hysteria2QuicReusePort: boolean;
   hysteria2QuicEndpoints: string;
   hysteria2QuicRecvBufferBytes: string;
   hysteria2QuicSendBufferBytes: string;
-  hysteria2DatagramEnabled: boolean;
-  hysteria2DatagramUdpOverDatagram: boolean;
-  hysteria2DatagramPolicy: string;
-  hysteria2FecMode: string;
-  hysteria2FecMaxOverheadPercent: string;
   wsPath: string;
   wsHost: string;
   grpcServiceName: string;
@@ -42,14 +39,6 @@ export interface InboundEditorState {
   httpupgradeHost: string;
   splitHttp: SplitHttpEditorState;
   splitHttpPath: string;
-  kcpHeader: string;
-  kcpMtu: string;
-  kcpTti: string;
-  kcpUplinkCapacity: string;
-  kcpDownlinkCapacity: string;
-  kcpCongestion: boolean;
-  kcpReadBufferSize: string;
-  kcpWriteBufferSize: string;
   tlsServerName: string;
   tlsAlpn: string;
   tlsCertificateFile: string;
@@ -95,14 +84,12 @@ export interface InboundCompatibilityNotice {
 const DEFAULT_PROTOCOL = "vless";
 const DEFAULT_NETWORK = "tcp";
 const DEFAULT_SECURITY = "none";
-const DEFAULT_HYSTERIA2_CONGESTION_MODE = "standard";
-const DEFAULT_HYSTERIA2_MIN_ACK_RATE = "0.8";
-const DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS = "80";
-const DEFAULT_HYSTERIA2_PACING_GAIN = "1.25";
-const DEFAULT_HYSTERIA2_QUIC_ENDPOINTS = "1";
-const DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES = "8388608";
-const DEFAULT_HYSTERIA2_DATAGRAM_POLICY = "standard";
-const DEFAULT_HYSTERIA2_FEC_MODE = "off";
+const DEFAULT_HYSTERIA2_CONGESTION_MODE = HYSTERIA2_DEFAULTS.congestionMode;
+const DEFAULT_HYSTERIA2_MIN_ACK_RATE = HYSTERIA2_DEFAULTS.minAckRate;
+const DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS = HYSTERIA2_DEFAULTS.maxQueueDelayMs;
+const DEFAULT_HYSTERIA2_PACING_GAIN = HYSTERIA2_DEFAULTS.pacingGain;
+const DEFAULT_HYSTERIA2_QUIC_ENDPOINTS = HYSTERIA2_DEFAULTS.quicEndpoints;
+const DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES = HYSTERIA2_DEFAULTS.quicBufferBytes;
 
 export function createInboundEditorState(inbound?: Inbound | null): InboundEditorState {
   const settings = createSliceState(inbound?.settings);
@@ -134,15 +121,11 @@ export function createInboundEditorState(inbound?: Inbound | null): InboundEdito
     hysteria2MaxQueueDelayMs: numberString(objectValue(settings.value.congestion)?.maxQueueDelayMs) || DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS,
     hysteria2PacingGain: numberString(objectValue(settings.value.congestion)?.pacingGain) || DEFAULT_HYSTERIA2_PACING_GAIN,
     hysteria2LossCompensation: boolValue(objectValue(settings.value.congestion)?.lossCompensation) ?? true,
+    hysteria2TransportOverrides: !!objectValue(settings.value.quic),
     hysteria2QuicReusePort: boolValue(objectValue(settings.value.quic)?.reusePort) ?? false,
     hysteria2QuicEndpoints: stringOrNumberString(objectValue(settings.value.quic)?.endpoints) || DEFAULT_HYSTERIA2_QUIC_ENDPOINTS,
     hysteria2QuicRecvBufferBytes: numberString(objectValue(settings.value.quic)?.recvBufferBytes) || DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES,
     hysteria2QuicSendBufferBytes: numberString(objectValue(settings.value.quic)?.sendBufferBytes) || DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES,
-    hysteria2DatagramEnabled: boolValue(objectValue(settings.value.datagram)?.enabled) ?? false,
-    hysteria2DatagramUdpOverDatagram: boolValue(objectValue(settings.value.datagram)?.udpOverDatagram) ?? true,
-    hysteria2DatagramPolicy: stringValue(objectValue(settings.value.datagram)?.policy) ?? DEFAULT_HYSTERIA2_DATAGRAM_POLICY,
-    hysteria2FecMode: stringValue(objectValue(settings.value.fec)?.mode) ?? DEFAULT_HYSTERIA2_FEC_MODE,
-    hysteria2FecMaxOverheadPercent: numberString(objectValue(settings.value.fec)?.maxOverheadPercent),
     wsPath: stringValue(objectValue(streamSettings.value.wsSettings)?.path) ?? "",
     wsHost: stringValue(objectValue(objectValue(streamSettings.value.wsSettings)?.headers)?.Host) ?? "",
     grpcServiceName: stringValue(objectValue(streamSettings.value.grpcSettings)?.serviceName) ?? "",
@@ -150,14 +133,6 @@ export function createInboundEditorState(inbound?: Inbound | null): InboundEdito
     httpupgradeHost: stringValue(objectValue(streamSettings.value.httpupgradeSettings)?.host) ?? "",
     splitHttp: readSplitHttp(streamSettings.value.splithttpSettings),
     splitHttpPath: stringValue(objectValue(streamSettings.value.splithttpSettings)?.path) ?? "",
-    kcpHeader: stringValue(objectValue(streamSettings.value.kcpSettings)?.header) ?? "",
-    kcpMtu: numberString(objectValue(streamSettings.value.kcpSettings)?.mtu),
-    kcpTti: numberString(objectValue(streamSettings.value.kcpSettings)?.tti),
-    kcpUplinkCapacity: numberString(objectValue(streamSettings.value.kcpSettings)?.uplink_capacity),
-    kcpDownlinkCapacity: numberString(objectValue(streamSettings.value.kcpSettings)?.downlink_capacity),
-    kcpCongestion: boolValue(objectValue(streamSettings.value.kcpSettings)?.congestion) ?? false,
-    kcpReadBufferSize: numberString(objectValue(streamSettings.value.kcpSettings)?.read_buffer_size),
-    kcpWriteBufferSize: numberString(objectValue(streamSettings.value.kcpSettings)?.write_buffer_size),
     tlsServerName: stringValue(objectValue(streamSettings.value.tlsSettings)?.serverName) ?? "",
     tlsAlpn: arrayOfStrings(objectValue(streamSettings.value.tlsSettings)?.alpn).join(", "),
     tlsCertificateFile: stringValue(objectValue(streamSettings.value.tlsSettings)?.certificateFile) ?? "",
@@ -225,15 +200,16 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
     applyNestedNumberField(settings, "congestion", "maxQueueDelayMs", state.hysteria2MaxQueueDelayMs, DEFAULT_HYSTERIA2_MAX_QUEUE_DELAY_MS);
     applyNestedNumberField(settings, "congestion", "pacingGain", state.hysteria2PacingGain, DEFAULT_HYSTERIA2_PACING_GAIN);
     applyNestedBoolField(settings, "congestion", "lossCompensation", state.hysteria2LossCompensation, true);
-    applyNestedBoolField(settings, "quic", "reusePort", state.hysteria2QuicReusePort, false);
-    applyNestedStringOrNumberField(settings, "quic", "endpoints", state.hysteria2QuicEndpoints, DEFAULT_HYSTERIA2_QUIC_ENDPOINTS);
-    applyNestedNumberField(settings, "quic", "recvBufferBytes", state.hysteria2QuicRecvBufferBytes, DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES);
-    applyNestedNumberField(settings, "quic", "sendBufferBytes", state.hysteria2QuicSendBufferBytes, DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES);
-    applyNestedBoolField(settings, "datagram", "enabled", state.hysteria2DatagramEnabled, false);
-    applyNestedBoolField(settings, "datagram", "udpOverDatagram", state.hysteria2DatagramUdpOverDatagram, true);
-    applyNestedStringField(settings, "datagram", "policy", state.hysteria2DatagramPolicy, DEFAULT_HYSTERIA2_DATAGRAM_POLICY);
-    applyNestedStringField(settings, "fec", "mode", state.hysteria2FecMode, DEFAULT_HYSTERIA2_FEC_MODE);
-    applyNestedNumberField(settings, "fec", "maxOverheadPercent", state.hysteria2FecMaxOverheadPercent);
+    if (state.hysteria2TransportOverrides) {
+      applyNestedBoolField(settings, "quic", "reusePort", state.hysteria2QuicReusePort, false, true);
+      applyNestedStringOrNumberField(settings, "quic", "endpoints", state.hysteria2QuicEndpoints, DEFAULT_HYSTERIA2_QUIC_ENDPOINTS, true);
+      applyNestedNumberField(settings, "quic", "recvBufferBytes", state.hysteria2QuicRecvBufferBytes, DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES, true);
+      applyNestedNumberField(settings, "quic", "sendBufferBytes", state.hysteria2QuicSendBufferBytes, DEFAULT_HYSTERIA2_QUIC_BUFFER_BYTES, true);
+    } else {
+      delete settings.quic;
+    }
+    delete settings.datagram;
+    delete settings.fec;
   } else {
     delete settings.auth;
     delete settings.congestion;
@@ -288,25 +264,6 @@ export function buildInboundInput(state: InboundEditorState): InboundInput {
     streamSettings.splithttpSettings = splitHttp;
   } else {
     delete streamSettings.splithttpSettings;
-  }
-
-  if (state.network === "kcp") {
-    const kcpSettings = cloneObject(objectValue(streamSettings.kcpSettings));
-    applyStringField(kcpSettings, "header", state.kcpHeader);
-    applyNumberField(kcpSettings, "mtu", state.kcpMtu);
-    applyNumberField(kcpSettings, "tti", state.kcpTti);
-    applyNumberField(kcpSettings, "uplink_capacity", state.kcpUplinkCapacity);
-    applyNumberField(kcpSettings, "downlink_capacity", state.kcpDownlinkCapacity);
-    if (state.kcpCongestion) {
-      kcpSettings.congestion = true;
-    } else {
-      delete kcpSettings.congestion;
-    }
-    applyNumberField(kcpSettings, "read_buffer_size", state.kcpReadBufferSize);
-    applyNumberField(kcpSettings, "write_buffer_size", state.kcpWriteBufferSize);
-    streamSettings.kcpSettings = pruneEmpty(kcpSettings);
-  } else {
-    delete streamSettings.kcpSettings;
   }
 
   if (state.security === "tls") {
@@ -481,11 +438,10 @@ export function inboundCompatibilityNotice(
         "TUIC v5 is supported for QUIC TCP proxying and native UDP relay. Throughput and UDP behavior still depend on the client, firewall, NAT, and network path."
     };
   }
-  if (network === "quic") {
-    const prefix = protocol === "vmess" ? "VMess over QUIC" : "QUIC transport";
+  if (network === "quic" && protocol !== "hysteria2" && protocol !== "tuic") {
     return {
       tone: "warning",
-      message: `${prefix} remains available, but external-client support varies and UDP route issues can break global/TUN traffic. Prefer TCP, WebSocket, gRPC, or SplitHTTP for the main profile.`
+      message: "Generic V2Ray QUIC transport was removed. Choose TCP, WebSocket, gRPC, HTTPUpgrade, or SplitHTTP before saving."
     };
   }
   if (protocol === "hysteria2") {
@@ -522,6 +478,9 @@ export function validateInboundState(state: InboundEditorState): InboundValidati
   }
   if (!Number.isInteger(state.port) || state.port < 1 || state.port > 65535) {
     issues.push({ field: "port", message: "Port must be between 1 and 65535." });
+  }
+  if (state.network === "quic" && state.protocol !== "hysteria2" && state.protocol !== "tuic") {
+    issues.push({ field: "network", message: "Generic V2Ray QUIC was removed. Choose a supported stream transport." });
   }
   if (state.security === "tls") {
     if (!state.tlsServerName.trim()) {
@@ -608,15 +567,11 @@ function syncStructuredFields(state: InboundEditorState): InboundEditorState {
     hysteria2MaxQueueDelayMs: next.hysteria2MaxQueueDelayMs,
     hysteria2PacingGain: next.hysteria2PacingGain,
     hysteria2LossCompensation: next.hysteria2LossCompensation,
+    hysteria2TransportOverrides: next.hysteria2TransportOverrides,
     hysteria2QuicReusePort: next.hysteria2QuicReusePort,
     hysteria2QuicEndpoints: next.hysteria2QuicEndpoints,
     hysteria2QuicRecvBufferBytes: next.hysteria2QuicRecvBufferBytes,
     hysteria2QuicSendBufferBytes: next.hysteria2QuicSendBufferBytes,
-    hysteria2DatagramEnabled: next.hysteria2DatagramEnabled,
-    hysteria2DatagramUdpOverDatagram: next.hysteria2DatagramUdpOverDatagram,
-    hysteria2DatagramPolicy: next.hysteria2DatagramPolicy,
-    hysteria2FecMode: next.hysteria2FecMode,
-    hysteria2FecMaxOverheadPercent: next.hysteria2FecMaxOverheadPercent,
     wsPath: next.wsPath,
     wsHost: next.wsHost,
     grpcServiceName: next.grpcServiceName,
@@ -624,14 +579,6 @@ function syncStructuredFields(state: InboundEditorState): InboundEditorState {
     httpupgradeHost: next.httpupgradeHost,
     splitHttp: next.splitHttp,
     splitHttpPath: next.splitHttpPath,
-    kcpHeader: next.kcpHeader,
-    kcpMtu: next.kcpMtu,
-    kcpTti: next.kcpTti,
-    kcpUplinkCapacity: next.kcpUplinkCapacity,
-    kcpDownlinkCapacity: next.kcpDownlinkCapacity,
-    kcpCongestion: next.kcpCongestion,
-    kcpReadBufferSize: next.kcpReadBufferSize,
-    kcpWriteBufferSize: next.kcpWriteBufferSize,
     tlsServerName: next.tlsServerName,
     tlsAlpn: next.tlsAlpn,
     tlsCertificateFile: next.tlsCertificateFile,
@@ -738,8 +685,7 @@ function removeTransientNetworkKeys(streamSettings: JsonObject): JsonObject {
     "wsSettings",
     "grpcSettings",
     "httpupgradeSettings",
-    "splithttpSettings",
-    "kcpSettings"
+    "splithttpSettings"
   ]) {
     if (!objectValue(next[key])) delete next[key];
   }
@@ -813,24 +759,24 @@ function applyNumberField(target: JsonObject, key: string, value: string) {
   else delete target[key];
 }
 
-function applyNestedStringField(target: JsonObject, objectKey: string, key: string, value: string, defaultValue = "") {
+function applyNestedStringField(target: JsonObject, objectKey: string, key: string, value: string, defaultValue = "", preserveDefault = false) {
   const child = cloneObject(objectValue(target[objectKey]));
-  if (value.trim() === defaultValue) delete child[key];
+  if (!preserveDefault && value.trim() === defaultValue) delete child[key];
   else applyStringField(child, key, value);
   setNestedObject(target, objectKey, child);
 }
 
-function applyNestedNumberField(target: JsonObject, objectKey: string, key: string, value: string, defaultValue = "") {
+function applyNestedNumberField(target: JsonObject, objectKey: string, key: string, value: string, defaultValue = "", preserveDefault = false) {
   const child = cloneObject(objectValue(target[objectKey]));
-  if (value.trim() === defaultValue) delete child[key];
+  if (!preserveDefault && value.trim() === defaultValue) delete child[key];
   else applyNumberField(child, key, value);
   setNestedObject(target, objectKey, child);
 }
 
-function applyNestedStringOrNumberField(target: JsonObject, objectKey: string, key: string, value: string, defaultValue = "") {
+function applyNestedStringOrNumberField(target: JsonObject, objectKey: string, key: string, value: string, defaultValue = "", preserveDefault = false) {
   const child = cloneObject(objectValue(target[objectKey]));
   const trimmed = value.trim();
-  if (!trimmed || trimmed === defaultValue) {
+  if (!trimmed || (!preserveDefault && trimmed === defaultValue)) {
     delete child[key];
   } else if (/^\d+$/.test(trimmed)) {
     child[key] = Number(trimmed);
@@ -840,9 +786,9 @@ function applyNestedStringOrNumberField(target: JsonObject, objectKey: string, k
   setNestedObject(target, objectKey, child);
 }
 
-function applyNestedBoolField(target: JsonObject, objectKey: string, key: string, value: boolean, defaultValue: boolean) {
+function applyNestedBoolField(target: JsonObject, objectKey: string, key: string, value: boolean, defaultValue: boolean, preserveDefault = false) {
   const child = cloneObject(objectValue(target[objectKey]));
-  if (value === defaultValue) {
+  if (!preserveDefault && value === defaultValue) {
     delete child[key];
   } else {
     child[key] = value;

@@ -18,9 +18,15 @@ The scripts are intentionally fail-soft. Missing competitor binaries produce str
 ```bash
 export BLACKWIRE_SERVER_DATABASE_URL='mysql://.../blackwire_competitive_server'
 export BLACKWIRE_CLIENT_DATABASE_URL='mysql://.../blackwire_competitive_client'
+make build-latency-lab
 make competitive-smoke
 make competitive-report
 ```
+
+The normal `make build` binary intentionally excludes the latency benchmark
+commands and proprietary FEC experiment. Only `make build-latency-lab` enables
+them; production Hysteria2 always uses native Standard QUIC datagrams with FEC
+disabled.
 
 The two databases must be disposable and distinct. The runner migrates them and
 replaces their relational configuration from each Blackwire lab fixture. Xray

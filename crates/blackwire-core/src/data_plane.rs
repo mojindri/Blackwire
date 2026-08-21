@@ -413,12 +413,9 @@ mod tests {
         Config {
             profile: ProfileMode::Fast,
             fast: None,
-            budget: None,
             vision: None,
             first_packet_boost: None,
             quic: None,
-            datagram: None,
-            fec: None,
             log: Default::default(),
             dns: None,
             routing: None,
@@ -441,7 +438,6 @@ mod tests {
                 stream_settings: None,
             }],
             stats: None,
-            api: None,
             metrics_addr: None,
         }
     }

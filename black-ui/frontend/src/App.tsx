@@ -21,7 +21,7 @@ const emptyData: AppData = {
   capabilities: null,
   service: null,
   revisions: [],
-  routingDns: { domainStrategy: "AsIs", geoipFile: null, geositeFile: null, dnsServers: [], fakeIpEnabled: false, fakeIpPool: "198.18.0.0/15", rules: [], balancers: [] },
+  routingDns: { domainStrategy: "AsIs", geoipFile: null, geositeFile: null, dnsServers: [], rules: [], balancers: [] },
   coreSettings: null
 };
 
@@ -160,11 +160,9 @@ export default function App() {
       createOutbound: (input: OutboundInput) => run(() => api.createOutbound(input), "Outbound saved", "Creating outbound..."),
       updateOutbound: (id: number, input: OutboundInput) => run(() => api.updateOutbound(id, input), "Outbound saved", "Saving outbound..."),
       deleteOutbound: (id: number) => run(() => api.deleteOutbound(id), "Outbound deleted", "Deleting outbound..."),
-      restartBlackwire: () => run(api.serviceRestartBlackwire, "Blackwire restarted", "Restarting Blackwire..."),
       startBlackwire: () => run(api.serviceStartBlackwire, "Blackwire started", "Starting Blackwire..."),
       stopBlackwire: () => run(api.serviceStopBlackwire, "Blackwire stopped", "Stopping Blackwire..."),
       rollback: (revision: number) => run(() => api.rollback(revision), "Rollback revision created", "Creating rollback revision..."),
-      activateMaintenance: (revision: number) => run(() => api.activateMaintenance(revision), "Maintenance activation confirmed", "Confirming maintenance..."),
       saveSettings: (settings: Settings) => run(() => api.updateSettings(settings), "Settings saved", "Saving settings..."),
       saveCoreSettings: (settings: CoreSettings) => run(() => api.updateCoreSettings(settings), "Core settings saved", "Saving core settings..."),
       saveRoutingDns: (value: typeof data.routingDns) => run(() => api.updateRoutingDns(value), "Routing and DNS saved", "Saving routing and DNS..."),
@@ -225,7 +223,7 @@ export default function App() {
       {page === "sections" ? (
         <SectionsPage value={data.routingDns} outbounds={data.outbounds} busy={busy || databaseReadOnly} onSave={actions.saveRoutingDns} />
       ) : null}
-      {page === "service" ? <ServicePage status={data.status} service={data.service} revisions={data.revisions} busy={busy || databaseReadOnly} onStart={actions.startBlackwire} onStop={actions.stopBlackwire} onRestart={actions.restartBlackwire} onRollback={actions.rollback} onActivateMaintenance={actions.activateMaintenance} /> : null}
+      {page === "service" ? <ServicePage status={data.status} service={data.service} revisions={data.revisions} busy={busy || databaseReadOnly} onStart={actions.startBlackwire} onStop={actions.stopBlackwire} onRollback={actions.rollback} /> : null}
       {page === "settings" ? <SettingsPage settings={data.settings} coreSettings={data.coreSettings} busy={busy || databaseReadOnly} onSave={actions.saveSettings} onSaveCore={actions.saveCoreSettings} /> : null}
     </AppShell>
   );

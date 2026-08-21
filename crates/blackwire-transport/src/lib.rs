@@ -8,8 +8,7 @@
 //!   - **WebSocket** — HTTP upgrade to WebSocket protocol
 //!   - **REALITY** — TLS camouflage using a real destination site
 //!   - **gRPC** — HTTP/2 framing via tonic
-//!   - **QUIC** — UDP-based transport for VLESS/VMess and Hysteria2
-//!   - **mKCP** — KCP ARQ over UDP for lossy links
+//!   - **QUIC** — UDP-based transport for native Hysteria2 and TUIC
 //!   - **TUN** — OS network interface for full-device routing
 //!
 //! Each transport converts its connection type into a `BoxedStream`, which
@@ -22,7 +21,7 @@ mod pem;
 pub mod reality;
 pub mod tcp;
 
-// QUIC and Hysteria2
+// Native QUIC protocols
 pub mod hysteria2;
 /// Packet classification and deficit-round-robin scheduler for TUN inner flows.
 pub mod innerflow;
@@ -47,13 +46,6 @@ pub mod tun;
 // gRPC transport
 pub mod grpc;
 
-// mKCP transport
-/// mKCP transport implementation (KCP over UDP).
-pub mod mkcp;
-
-/// Generic QUIC transport for VLESS / VMess stream protocols.
-pub mod v2rayquic;
-
 // ShadowTLS v3 transport
 pub mod shadowtls;
 
@@ -67,9 +59,6 @@ pub use hysteria2::{
     Hysteria2ServerConfig, Hysteria2UdpSession, UdpDestination,
 };
 pub use innerflow::{InnerFlowKey, InnerFlowPacket, InnerFlowScheduler, PacketClass};
-pub use mkcp::{
-    mkcp_accept_once, mkcp_accept_sessions, mkcp_connect, MkcpClientConfig, MkcpServerConfig,
-};
 pub use quic::{
     build_client_endpoint, build_client_endpoint_with_alpn, build_server_endpoint,
     build_server_endpoint_with_alpn, dev_self_signed, dev_self_signed_for_names,
@@ -104,13 +93,8 @@ pub use tuic::{
 };
 pub use tun::{
     build_tcp_packet, build_tcp_rst, create_tun, current_tun_support, ensure_tun_runtime_supported,
-    AfXdpBackend, AfXdpCapabilities, IpPacket, TransportProtocol, TunAfXdpConfig, TunBatchConfig,
-    TunConfig, TunDevice, TunLinuxBackend, TunLinuxConfig, TunPlatformSupport, TunRuntime,
-    UdpNatTable,
-};
-pub use v2rayquic::{
-    accepted_quic_stream, quic_connect, quic_connect_with_socket_config, quic_server_endpoint,
-    quic_server_endpoint_with_socket_config, QuicStream,
+    IpPacket, TransportProtocol, TunBatchConfig, TunConfig, TunDevice, TunPlatformSupport,
+    TunRuntime, UdpNatTable,
 };
 pub use ws::{ws_accept, ws_connect, WsConnectConfig};
 

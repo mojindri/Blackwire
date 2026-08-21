@@ -89,8 +89,6 @@ pub enum Transport {
     Grpc,
     /// QUIC.
     Quic,
-    /// mKCP (KCP over UDP).
-    Kcp,
     /// SplitHTTP (chunked HTTP upload/download).
     SplitHttp,
     /// Unrecognized or not yet determined transport.
@@ -107,7 +105,6 @@ impl Transport {
             Transport::WebSocket => "websocket",
             Transport::Grpc => "grpc",
             Transport::Quic => "quic",
-            Transport::Kcp => "kcp",
             Transport::SplitHttp => "splithttp",
             Transport::Unknown => "unknown",
         }
@@ -156,7 +153,7 @@ pub enum CloseReason {
     Completed,
     /// Closed due to an I/O or protocol error.
     Error,
-    /// Closed by explicit connection ID via the management API.
+    /// Closed by explicit connection ID via local runtime control.
     ClosedById,
     /// Closed by the authenticated user.
     ClosedByUser,

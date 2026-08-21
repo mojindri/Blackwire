@@ -6,7 +6,38 @@ This project is pre-1.0. The support contract is owned by
 [docs/release.md](docs/release.md), and detailed feature evidence is owned by
 [docs/feature-matrix.md](docs/feature-matrix.md).
 
-## Unreleased
+## 0.2.6 - 2026-08-21
+
+### Removed
+
+- Removed the experimental Xray-compatible management gRPC listener, HandlerService,
+  StatsService, protobuf surface, configuration, persistence, and Black UI controls.
+  Internal traffic counters, dashboard persistence, runtime heartbeat, Black UI HTTP
+  endpoints, local connection commands, and Prometheus metrics remain supported.
+- Removed the legacy generic V2Ray QUIC transport for VLESS, VMess, and Trojan,
+  including runtime wiring, Black UI controls, subscription capability claims,
+  external-client labs, and e2e coverage. Hysteria2 and TUIC retain their
+  native QUIC implementations; legacy `network: "quic"` stream configurations
+  now fail validation.
+- Removed the deprecated mKCP transport from the runtime, configuration schema,
+  Black UI, persistence layer, test labs, and capability reporting. Existing
+  configurations that select `network: "kcp"` are rejected instead of being
+  silently converted to another transport.
+
+### Changed
+
+- Hysteria2 now uses native Standard QUIC datagrams automatically in production.
+  Proprietary FEC and the Hysteria2 latency benchmarks are compiled only into
+  the explicit development-only `latency-lab` build; production builds cannot
+  enable FEC without future peer capability negotiation.
+
+- Moved TUN device capture, protected egress, and FakeIP configuration out of
+  the server runtime and Black UI into the dedicated `blackwire-client`
+  application. Shared protocol and platform implementations remain available;
+  only product ownership and configuration moved. Existing database values are
+  retained in archival tables for manual migration or rollback.
+- Removed the unused TUN-over-datagram toggle and the obsolete FakeIP budget
+  override from the shared schema, server settings API, and database.
 
 ## 0.2.5 - 2026-08-19
 
@@ -98,8 +129,8 @@ This project is pre-1.0. The support contract is owned by
 
 - Runtime configuration files, SQLite persistence, raw server configuration
   editing, and deployable JSON examples were removed.
-- Runtime activation now supports hot swap, listener handover, maintenance
-  confirmation, rollback, and database-outage reconciliation.
+- Runtime activation now supports automatic hot swap, prepared in-process
+  handover, rollback, last-known-good retention, and database-outage reconciliation.
 
 ### Fixed
 
@@ -955,7 +986,7 @@ This project is pre-1.0. The support contract is owned by
 
 - Aggregate Black UI QA command covering the smoke flow, structured inbound matrix, structured outbound matrix, and advanced config panel checks.
 - Competitive and latency benchmark harnesses for relay, Fast Profile, Hysteria2 bad-network behavior, QUIC/datagram/FEC, TUN, and memory/CPU profiling.
-- Connection manager, runtime stats, data-plane planning, AF_XDP scaffolding, and expanded metrics coverage.
+- Connection manager, runtime stats, data-plane planning, and expanded metrics coverage.
 - InnerFlow, QUIC bad-network controls, Hysteria2 datagram/FEC work, and expanded TUN packet/session/runtime paths.
 - Release-facing performance evidence, license policy, third-party reference docs, and Black UI panel QA reports.
 

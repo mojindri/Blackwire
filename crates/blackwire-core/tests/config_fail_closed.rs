@@ -143,17 +143,3 @@ async fn domain_longer_than_255_bytes_must_fail_startup() {
     );
     assert!(Instance::from_config(Arc::new(c)).await.is_err());
 }
-
-#[tokio::test]
-async fn unsupported_transport_options_must_fail_startup() {
-    let c = cfg(
-        json!([]),
-        json!([{
-            "tag":"vless-kcp","protocol":"vless",
-            "settings":{"address":"127.0.0.1","port":443,"users":[{"id":"00000000-0000-4000-8000-000000000001"}]},
-            "streamSettings":{"network":"kcp","kcpSettings":{"header":"not-supported"}}
-        }]),
-        None,
-    );
-    assert!(Instance::from_config(Arc::new(c)).await.is_err());
-}

@@ -10,3 +10,4 @@ authors.workspace = true
 serde.workspace       = true
 serde_json.workspace  = true
 validator.workspace   = true
+ts-rs.workspace       = true

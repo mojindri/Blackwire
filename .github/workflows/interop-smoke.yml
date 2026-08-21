@@ -27,7 +27,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Stable integration tests
         run: timeout 20m cargo test -p integration-tests --locked
-      - name: Advanced feature smoke (ShadowTLS, mKCP)
+      - name: Advanced feature smoke (ShadowTLS/SplitHTTP)
         run: timeout 20m make -C labs/realistic advanced-features-smoke
       - name: Negative auth smoke
         run: timeout 10m make -C labs/realistic negative-auth
@@ -54,11 +54,11 @@ jobs:
           - shard: vless-core
             protocols: vless-reality,vless-tcp,vless-mux,vless-vision,vless-udp
           - shard: vless-transports
-            protocols: vless-ws,vless-httpupgrade,vless-quic,vless-splithttp,vless-splithttp-packet-up,vless-sniff
+            protocols: vless-ws,vless-httpupgrade,vless-splithttp,vless-splithttp-packet-up,vless-sniff
           - shard: vmess-trojan-ss
             protocols: vmess-grpc,trojan-tls,trojan-udp,ss2022,ss2022-udp
           - shard: hysteria-edge
-            protocols: hysteria2,vless-shadowtls,vless-mkcp
+            protocols: hysteria2,vless-shadowtls
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable

@@ -997,6 +997,7 @@ impl Hysteria2UdpSession {
     }
 
     /// Return a point-in-time snapshot of the FEC encoder state for metrics reporting.
+    #[cfg(feature = "experimental-fec")]
     pub fn fec_snapshot(&self) -> udp::FecSnapshot {
         let encoder = self
             .fec_encoder

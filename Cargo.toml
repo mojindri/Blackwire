@@ -16,6 +16,7 @@
 members = [
     "benches",
     "crates/blackwire-cli",
+    "crates/blackwire-client",
     "crates/blackwire-connmgr",
     "crates/blackwire-core",
     "crates/blackwire-common",
@@ -25,14 +26,13 @@ members = [
     "crates/blackwire-protocol",
     "crates/blackwire-app",
     "crates/blackwire-tls",
-    "crates/blackwire-api",
     "black-ui/server",
     "tests",
 ]
 resolver = "2"
 
 [workspace.package]
-version     = "0.2.5"
+version     = "0.2.6"
 edition     = "2021"
 license     = "MIT"
 authors     = ["moji.ndr", "Blackwire contributors"]
@@ -61,12 +61,8 @@ h3-quinn    = "0.0.10"
 # ── WebSocket ──────────────────────────────────────────────────────────────────
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 
-# ── gRPC ───────────────────────────────────────────────────────────────────────
-tonic       = "0.14"
+# ── Protobuf and HTTP/2 ───────────────────────────────────────────────────────
 prost       = "0.14"
-tonic-prost = "0.14"
-tonic-build = "0.14"
-tonic-prost-build = "0.14"
 h2          = "0.4"
 http        = "1"
 
@@ -102,6 +98,7 @@ bytes       = "1.11"
 smallvec    = { version = "1.15", features = ["union"] }
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
+ts-rs       = { version = "=10.1.0", features = ["no-serde-warnings"] }
 
 # ── Async trait helpers ────────────────────────────────────────────────────────
 async-trait   = "0.1"
@@ -147,8 +144,7 @@ socket2     = { version = "0.6", features = ["all"] }
 nix         = { version = "0.31", features = ["socket", "net", "sched", "user"] }
 libc        = "0.2"
 io-uring    = "0.7"
-xdp         = "0.7.3"
-windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
+windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_SystemInformation"] }
 
 # ── Security ───────────────────────────────────────────────────────────────────
 seccompiler = "0.5"

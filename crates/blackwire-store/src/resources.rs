@@ -300,7 +300,7 @@ impl Database {
             .bind(revision).bind(id).bind(&input.tag).bind(&input.listen).bind(input.port).bind(&input.protocol).bind(input.enabled).bind(position)
             .execute(&mut *tx).await?;
         // Update the stream envelope in place. Deleting this row cascades into
-        // TLS, REALITY, WebSocket, gRPC, and mKCP detail tables, so a basic
+        // TLS, REALITY, WebSocket, gRPC, and SplitHTTP detail tables, so a basic
         // panel edit must never replace it destructively.
         sqlx::query("INSERT INTO stream_settings (revision_id,endpoint_kind,endpoint_id,network,security) VALUES (?,'inbound',?,?,?) ON DUPLICATE KEY UPDATE network=VALUES(network),security=VALUES(security)")
             .bind(revision).bind(id).bind(&input.transport).bind(&input.security).execute(&mut *tx).await?;
@@ -311,11 +311,7 @@ impl Database {
             &state,
             revision,
             class,
-            if class == ActivationClass::MaintenanceRequired {
-                "Inbound saved; mKCP activation requires maintenance confirmation"
-            } else {
-                "Inbound saved"
-            },
+            "Inbound saved; applying automatically",
         ))
     }
 
@@ -343,11 +339,7 @@ impl Database {
             &state,
             revision,
             class,
-            if class == ActivationClass::MaintenanceRequired {
-                "Inbound deleted; mKCP shutdown requires maintenance confirmation"
-            } else {
-                "Inbound deleted"
-            },
+            "Inbound deleted; applying automatically",
         ))
     }
 
@@ -359,7 +351,7 @@ impl Database {
     ) -> StoreResult<MutationResult> {
         validate_outbound(&input)?;
         let state = self.state().await?;
-        let class = ActivationClass::HotSwap;
+        let class = ActivationClass::ListenerHandover;
         let (mut tx, revision) = self
             .fork_revision(expected_revision, actor, "Save outbound", class)
             .await?;
@@ -402,7 +394,7 @@ impl Database {
         id: i64,
     ) -> StoreResult<MutationResult> {
         let state = self.state().await?;
-        let class = ActivationClass::HotSwap;
+        let class = ActivationClass::ListenerHandover;
         let (mut tx, revision) = self
             .fork_revision(expected_revision, actor, "Delete outbound", class)
             .await?;
@@ -473,28 +465,11 @@ impl Database {
 
     async fn inbound_activation_class(
         &self,
-        revision: i64,
-        inbound_id: Option<i64>,
-        next_transport: &str,
+        _revision: i64,
+        _inbound_id: Option<i64>,
+        _next_transport: &str,
     ) -> StoreResult<ActivationClass> {
-        if next_transport == "kcp" {
-            return Ok(ActivationClass::MaintenanceRequired);
-        }
-        let Some(inbound_id) = inbound_id else {
-            return Ok(ActivationClass::ListenerHandover);
-        };
-        let current_transport: Option<String> = sqlx::query_scalar(
-            "SELECT COALESCE(s.network,'tcp') FROM inbounds i LEFT JOIN stream_settings s ON s.revision_id=i.revision_id AND s.endpoint_kind='inbound' AND s.endpoint_id=i.inbound_id WHERE i.revision_id=? AND i.inbound_id=?",
-        )
-        .bind(revision)
-        .bind(inbound_id)
-        .fetch_optional(self.pool())
-        .await?;
-        Ok(if current_transport.as_deref() == Some("kcp") {
-            ActivationClass::MaintenanceRequired
-        } else {
-            ActivationClass::ListenerHandover
-        })
+        Ok(ActivationClass::ListenerHandover)
     }
 }
 
@@ -693,21 +668,6 @@ async fn write_stream_details(
         .execute(&mut **tx)
         .await?;
     }
-    if let Some(kcp) = &stream.kcp_settings {
-        sqlx::query("INSERT INTO kcp_settings (revision_id,endpoint_kind,endpoint_id,header_type,mtu,tti_ms,uplink_capacity,downlink_capacity,congestion,read_buffer_size,write_buffer_size) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE header_type=VALUES(header_type),mtu=VALUES(mtu),tti_ms=VALUES(tti_ms),uplink_capacity=VALUES(uplink_capacity),downlink_capacity=VALUES(downlink_capacity),congestion=VALUES(congestion),read_buffer_size=VALUES(read_buffer_size),write_buffer_size=VALUES(write_buffer_size)")
-            .bind(revision).bind(kind).bind(id).bind(&kcp.header).bind(kcp.mtu).bind(kcp.tti)
-            .bind(kcp.uplink_capacity).bind(kcp.downlink_capacity).bind(kcp.congestion)
-            .bind(kcp.read_buffer_size).bind(kcp.write_buffer_size).execute(&mut **tx).await?;
-    } else {
-        sqlx::query(
-            "DELETE FROM kcp_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?",
-        )
-        .bind(revision)
-        .bind(kind)
-        .bind(id)
-        .execute(&mut **tx)
-        .await?;
-    }
     Ok(())
 }
 
@@ -804,7 +764,6 @@ fn network_name(value: &NetworkType) -> &'static str {
         NetworkType::HttpUpgrade => "httpupgrade",
         NetworkType::Grpc => "grpc",
         NetworkType::Quic => "quic",
-        NetworkType::Kcp => "kcp",
         NetworkType::SplitHttp => "splithttp",
     }
 }
@@ -825,11 +784,7 @@ async fn write_endpoint_tuning(
     id: i64,
     settings: &EndpointSettings,
 ) -> StoreResult<()> {
-    if settings.congestion.is_none()
-        && settings.quic.is_none()
-        && settings.datagram.is_none()
-        && settings.fec.is_none()
-    {
+    if settings.congestion.is_none() && settings.quic.is_none() {
         sqlx::query(
             "DELETE FROM endpoint_tuning WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?",
         )
@@ -842,15 +797,13 @@ async fn write_endpoint_tuning(
     }
     let congestion = settings.congestion.as_ref();
     let quic = settings.quic.as_ref();
-    let datagram = settings.datagram.as_ref();
-    let fec = settings.fec.as_ref();
     let endpoints = quic
         .and_then(|value| value.endpoints.as_ref())
         .map(|value| match value {
             blackwire_config::schema::EndpointCount::Fixed(count) => count.to_string(),
             blackwire_config::schema::EndpointCount::Named(name) => name.clone(),
         });
-    sqlx::query("INSERT INTO endpoint_tuning (revision_id,endpoint_kind,endpoint_id,congestion_mode,min_ack_rate,max_queue_delay_ms,pacing_gain,loss_compensation,quic_reuse_port,quic_endpoints,quic_recv_buffer_bytes,quic_send_buffer_bytes,datagram_enabled,udp_over_datagram,datagram_policy,fec_mode,fec_max_overhead_percent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE congestion_mode=VALUES(congestion_mode),min_ack_rate=VALUES(min_ack_rate),max_queue_delay_ms=VALUES(max_queue_delay_ms),pacing_gain=VALUES(pacing_gain),loss_compensation=VALUES(loss_compensation),quic_reuse_port=VALUES(quic_reuse_port),quic_endpoints=VALUES(quic_endpoints),quic_recv_buffer_bytes=VALUES(quic_recv_buffer_bytes),quic_send_buffer_bytes=VALUES(quic_send_buffer_bytes),datagram_enabled=VALUES(datagram_enabled),udp_over_datagram=VALUES(udp_over_datagram),datagram_policy=VALUES(datagram_policy),fec_mode=VALUES(fec_mode),fec_max_overhead_percent=VALUES(fec_max_overhead_percent)")
+    sqlx::query("INSERT INTO endpoint_tuning (revision_id,endpoint_kind,endpoint_id,congestion_mode,min_ack_rate,max_queue_delay_ms,pacing_gain,loss_compensation,quic_reuse_port,quic_endpoints,quic_recv_buffer_bytes,quic_send_buffer_bytes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE congestion_mode=VALUES(congestion_mode),min_ack_rate=VALUES(min_ack_rate),max_queue_delay_ms=VALUES(max_queue_delay_ms),pacing_gain=VALUES(pacing_gain),loss_compensation=VALUES(loss_compensation),quic_reuse_port=VALUES(quic_reuse_port),quic_endpoints=VALUES(quic_endpoints),quic_recv_buffer_bytes=VALUES(quic_recv_buffer_bytes),quic_send_buffer_bytes=VALUES(quic_send_buffer_bytes)")
         .bind(revision).bind(kind).bind(id)
         .bind(congestion.map(|value| value.mode.as_str()))
         .bind(congestion.and_then(|value| value.min_ack_rate))
@@ -860,11 +813,6 @@ async fn write_endpoint_tuning(
         .bind(quic.and_then(|value| value.reuse_port)).bind(endpoints)
         .bind(quic.and_then(|value| value.recv_buffer_bytes).map(|value| value as u64))
         .bind(quic.and_then(|value| value.send_buffer_bytes).map(|value| value as u64))
-        .bind(datagram.and_then(|value| value.enabled))
-        .bind(datagram.and_then(|value| value.udp_over_datagram))
-        .bind(datagram.and_then(|value| value.policy.as_deref()))
-        .bind(fec.and_then(|value| value.mode.as_deref()))
-        .bind(fec.and_then(|value| value.max_overhead_percent))
         .execute(&mut **tx).await?;
     Ok(())
 }
@@ -929,7 +877,7 @@ fn validate_inbound(input: &InboundWrite) -> StoreResult<()> {
             input.protocol
         )));
     }
-    validate_transport_security(&input.transport, &input.security)
+    validate_transport_security(&input.protocol, &input.transport, &input.security)
 }
 
 fn validate_outbound(input: &OutboundWrite) -> StoreResult<()> {
@@ -955,13 +903,13 @@ fn validate_outbound(input: &OutboundWrite) -> StoreResult<()> {
             "non-freedom outbounds require a server address and port".into(),
         ));
     }
-    validate_transport_security(&input.transport, &input.security)
+    validate_transport_security(&input.protocol, &input.transport, &input.security)
 }
 
-fn validate_transport_security(transport: &str, security: &str) -> StoreResult<()> {
+fn validate_transport_security(protocol: &str, transport: &str, security: &str) -> StoreResult<()> {
     if !matches!(
         transport,
-        "tcp" | "ws" | "grpc" | "httpupgrade" | "splithttp" | "quic" | "kcp"
+        "tcp" | "ws" | "grpc" | "httpupgrade" | "splithttp" | "quic"
     ) {
         return Err(StoreError::InvalidConfiguration(format!(
             "unsupported transport '{transport}'"
@@ -971,6 +919,12 @@ fn validate_transport_security(transport: &str, security: &str) -> StoreResult<(
         return Err(StoreError::InvalidConfiguration(format!(
             "unsupported security mode '{security}'"
         )));
+    }
+    if transport == "quic" && !matches!(protocol, "hysteria2" | "tuic") {
+        return Err(StoreError::InvalidConfiguration(
+            "generic V2Ray QUIC transport was removed; use Hysteria2/TUIC or a supported stream transport"
+                .into(),
+        ));
     }
     Ok(())
 }
@@ -985,11 +939,7 @@ fn mutation_result(
         revision,
         parent_revision: state.desired_revision,
         active_revision: state.active_revision,
-        state: if class == ActivationClass::MaintenanceRequired {
-            ActivationState::PendingMaintenance
-        } else {
-            ActivationState::Activating
-        },
+        state: ActivationState::Activating,
         activation_class: class,
         message: message.into(),
     }

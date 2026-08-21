@@ -16,6 +16,9 @@ default = []
 #   build with:  --features mimalloc   (or, non-Windows)  --features jemalloc
 jemalloc = ["dep:tikv-jemallocator"]
 mimalloc = ["dep:mimalloc"]
+# Development-only Hysteria2 UDP latency/FEC benchmark commands. This feature
+# is deliberately excluded from normal production builds.
+latency-lab = ["blackwire-transport/experimental-fec"]
 
 [[bin]]
 name = "blackwire"
@@ -27,14 +30,12 @@ blackwire-config    = { path = "../blackwire-config" }
 blackwire-store     = { path = "../blackwire-store" }
 blackwire-core      = { path = "../blackwire-core" }
 blackwire-app       = { path = "../blackwire-app" }
-blackwire-api       = { path = "../blackwire-api" }
 blackwire-protocol  = { path = "../blackwire-protocol" }
 blackwire-connmgr   = { path = "../blackwire-connmgr" }
 blackwire-transport = { path = "../blackwire-transport" }
 
 tokio.workspace              = true
 clap.workspace               = true
-async-trait.workspace        = true
 tracing.workspace            = true
 tracing-subscriber.workspace = true
 anyhow.workspace             = true

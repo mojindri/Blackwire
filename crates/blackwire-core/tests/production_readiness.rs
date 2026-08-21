@@ -637,37 +637,7 @@ async fn shadowtls_requires_complete_settings() {
 }
 
 #[tokio::test]
-async fn mkcp_rejects_invalid_header_instead_of_plain_tcp_fallback() {
-    let cfg = base_config(
-        json!([]),
-        json!([{
-            "tag": "vless-kcp",
-            "protocol": "vless",
-            "settings": {
-                "address": "127.0.0.1",
-                "port": 443,
-                "users": [{ "id": "00000000-0000-4000-8000-000000000001" }]
-            },
-            "streamSettings": {
-                "network": "kcp",
-                "kcpSettings": {
-                    "header": "bogus"
-                }
-            }
-        }]),
-    );
-
-    assert!(Instance::from_config(Arc::new(cfg)).await.is_err());
-}
-
-/// Regression guard: the TUN runtime is now implemented. `from_config` must
-/// no longer return the old "not production-ready" bail message.
-///
-/// On a non-root host the call will fail at OS-level device creation; on
-/// a privileged Linux host it may succeed and start the runtime. Either
-/// outcome is acceptable — what's NOT acceptable is the old placeholder error.
-#[tokio::test]
-async fn tun_config_is_no_longer_blocked_by_placeholder_guard() {
+async fn core_rejects_client_owned_tun_configuration() {
     let cfg = parse_config(json!({
         "log": { "level": "warning" },
         "tun": {
@@ -681,20 +651,8 @@ async fn tun_config_is_no_longer_blocked_by_placeholder_guard() {
         "routing": { "rules": [] }
     }));
 
-    match Instance::from_config(Arc::new(cfg)).await {
-        Ok(_instance) => {
-            // root on Linux — runtime actually started, that's fine
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            assert!(
-                !msg.contains("privileged device loop and TCP stream reassembly"),
-                "TUN placeholder guard is still active; the runtime should now be \
-                 implemented. Got: {msg}"
-            );
-            // Expected: a real OS-level error (device creation, permissions, …)
-        }
-    }
+    let error = Instance::from_config(Arc::new(cfg)).await.unwrap_err();
+    assert!(error.to_string().contains("client-owned"));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

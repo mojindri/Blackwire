@@ -49,60 +49,6 @@ pub struct TunConfig {
     pub udp_idle_timeout: Duration,
     /// Maximum concurrent packet-level TCP bridge flows.
     pub tcp_max_sessions: usize,
-    /// Linux-only packet backend experiments.
-    pub linux: TunLinuxConfig,
-}
-
-/// Linux-only packet backend settings carried alongside the TUN runtime config.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TunLinuxConfig {
-    /// Packet backend to use for Linux TUN operation.
-    pub backend: TunLinuxBackend,
-    /// AF_XDP configuration, used only when `backend` is `TunLinuxBackend::AfXdp`.
-    pub af_xdp: TunAfXdpConfig,
-}
-
-/// Linux packet backend selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TunLinuxBackend {
-    #[default]
-    /// Standard TUN device via the kernel tun driver.
-    Tun,
-    /// AF_XDP socket for high-performance zero-copy packet I/O.
-    AfXdp,
-}
-
-/// AF_XDP backend options for Linux experiments.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TunAfXdpConfig {
-    /// Network interface to attach the AF_XDP socket to, or `None` to use the TUN interface.
-    pub interface: Option<String>,
-    /// Hardware queue index to bind the AF_XDP socket to.
-    pub queue_id: u32,
-    /// Number of descriptors in each AF_XDP ring (RX/TX/fill/completion).
-    pub ring_entries: u32,
-    /// Total number of frames in the UMEM region.
-    pub frame_count: u32,
-    /// Size in bytes of each frame in the UMEM region.
-    pub frame_size: u32,
-    /// Force copy mode even when zero-copy is available.
-    pub force_copy: bool,
-    /// Force zero-copy mode; fails if the driver does not support it.
-    pub force_zerocopy: bool,
-}
-
-impl Default for TunAfXdpConfig {
-    fn default() -> Self {
-        Self {
-            interface: None,
-            queue_id: 0,
-            ring_entries: 1024,
-            frame_count: 4096,
-            frame_size: 2048,
-            force_copy: true,
-            force_zerocopy: false,
-        }
-    }
 }
 
 impl Default for TunConfig {
@@ -127,7 +73,6 @@ impl Default for TunConfig {
             udp_max_sessions: 4096,
             udp_idle_timeout: Duration::from_secs(60),
             tcp_max_sessions: 4096,
-            linux: TunLinuxConfig::default(),
         }
     }
 }

@@ -34,12 +34,10 @@ use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
-use tracing::{error, info, warn};
+use tracing::info;
 
 use blackwire_app::dispatcher::{DefaultDispatcher, Dispatcher};
 use blackwire_app::features::{ConnectionHandler, InboundHandler, OutboundHandler};
@@ -48,28 +46,17 @@ use blackwire_app::router::LiveRouter;
 use blackwire_app::set_user_bandwidth_policies;
 use blackwire_app::user_limits::UserConnectionLimiter;
 use blackwire_app::{Balancer, ADAPTIVE_SPLICE_LONG_STREAM_AFTER, ADAPTIVE_SPLICE_MIN_BYTES};
-use blackwire_common::{
-    clear_outbound_bypass_mark, clear_outbound_interface_index, set_outbound_bypass_mark,
-    set_outbound_interface_name,
-};
 use blackwire_config::schema::{
     Config, EndpointSettings, FastPoolPolicy, PoolSettings, ProfileMode, Protocol,
 };
 use blackwire_protocol::freedom::{FreedomIpStrategy, FreedomOutbound, PoolConfig};
 use blackwire_protocol::socks::Socks5Inbound;
-use blackwire_transport::mkcp_accept_sessions;
-use blackwire_transport::{
-    create_tun, ensure_tun_runtime_supported, TunBatchConfig, TunConfig, TunRuntime,
-};
 use tokio::net::UdpSocket as TokioUdpSocket;
 
 use crate::data_plane::{compile_data_plane, DataPlaneStore};
 use crate::http::build_http_inbound;
-use crate::hysteria2::{
-    build_hysteria2_outbound, socket_config_from_quic, start_hysteria2_inbound,
-};
+use crate::hysteria2::{build_hysteria2_outbound, start_hysteria2_inbound};
 use crate::net::listen_socket_addr;
-use crate::outbound_transport::uses_quic;
 use crate::tuic::{build_tuic_outbound, start_tuic_inbound};
 mod helpers;
 
@@ -87,31 +74,10 @@ use crate::ss2022::{build_ss2022_inbound, build_ss2022_outbound};
 use crate::trojan::{build_trojan_inbound, build_trojan_outbound};
 use crate::vmess::{build_vmess_inbound, build_vmess_outbound};
 use helpers::{
-    build_dns_module, build_mkcp_server_config, build_vless_inbound, build_vless_outbound,
-    handshake_timeout_for, initial_health_states, reject_unfinished_transport_settings,
-    select_balancer_outbounds, InboundConnectionHandler,
+    build_dns_module, build_vless_inbound, build_vless_outbound, handshake_timeout_for,
+    initial_health_states, reject_unfinished_transport_settings, select_balancer_outbounds,
+    InboundConnectionHandler,
 };
-
-fn try_acquire_global_permit(
-    limiter: Option<&Arc<Semaphore>>,
-    addr: SocketAddr,
-    transport: &'static str,
-) -> Option<Option<OwnedSemaphorePermit>> {
-    let Some(limiter) = limiter else {
-        return Some(None);
-    };
-    match Arc::clone(limiter).try_acquire_owned() {
-        Ok(permit) => Some(Some(permit)),
-        Err(_) => {
-            warn!(
-                addr = %addr,
-                transport,
-                "global connection limit reached; dropping inbound connection"
-            );
-            None
-        }
-    }
-}
 
 fn apply_pool_overrides(mut cfg: PoolConfig, source: &PoolSettings) -> PoolConfig {
     if let Some(v) = source.max_per_dest {
@@ -207,13 +173,6 @@ use crate::ws_tls::{
 pub struct Instance {
     /// Background task handles. Kept alive as long as `Instance` is alive.
     tasks: Vec<JoinHandle<()>>,
-    /// If a TUN runtime is active, sending `true` here triggers graceful
-    /// shutdown (which runs `cleanup_routes` before the task exits).
-    shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
-    /// Process-wide outbound bypass mark configured for this TUN instance.
-    outbound_bypass_mark: Option<u32>,
-    /// Process-wide outbound interface configured for this TUN instance.
-    outbound_interface: Option<String>,
     /// Hot-reload state shared with the config watcher.
     pub reload: ReloadState,
     /// Immutable hot-path data-plane snapshot.
@@ -244,81 +203,12 @@ impl Instance {
     ///   - A listen address is invalid
     ///   - A required config field is missing or malformed
     pub async fn from_config(config: Arc<Config>) -> Result<Self> {
+        anyhow::ensure!(
+            config.tun.is_none(),
+            "TUN configuration is client-owned; start it through blackwire-client"
+        );
         let mut tasks = Vec::with_capacity(config.inbounds.len().saturating_add(4));
-        let mut shutdown_tx: Option<tokio::sync::watch::Sender<bool>> = None;
-        let mut outbound_bypass_mark = None;
-        let mut outbound_interface = None;
         let data_plane = compile_data_plane(config.as_ref());
-
-        // ── Optional: TUN transparent-proxy runtime ──────────────────────────
-        if let Some(tun_cfg) = &config.tun {
-            ensure_tun_runtime_supported()?;
-            outbound_bypass_mark = Some(tun_cfg.bypass_mark);
-            let tun_outbound_interface = tun_cfg.outbound_interface.clone();
-            outbound_interface = tun_outbound_interface.clone();
-
-            let tc = TunConfig {
-                name: tun_cfg.name.clone(),
-                address: tun_cfg
-                    .address
-                    .parse()
-                    .with_context(|| format!("invalid TUN address '{}'", tun_cfg.address))?,
-                netmask: tun_cfg
-                    .netmask
-                    .parse()
-                    .with_context(|| format!("invalid TUN netmask '{}'", tun_cfg.netmask))?,
-                mtu: tun_cfg.mtu,
-                bypass_mark: tun_cfg.bypass_mark,
-                outbound_interface: tun_outbound_interface,
-                redirect_port: tun_cfg.redirect_port,
-                dns_port: tun_cfg.dns_port,
-                wintun_file: tun_cfg.wintun_file.clone(),
-                batch: TunBatchConfig {
-                    enabled: tun_cfg.batch.enabled,
-                    max_packets: tun_cfg.batch.max_packets,
-                    max_delay: Duration::from_micros(tun_cfg.batch.max_delay_us),
-                    latency_flush_bytes: tun_cfg.batch.latency_flush_bytes,
-                },
-                udp_max_sessions: tun_cfg.sessions.udp_max,
-                udp_idle_timeout: Duration::from_secs(tun_cfg.sessions.udp_idle_timeout_sec),
-                tcp_max_sessions: tun_cfg.sessions.tcp_max,
-                linux: tun_cfg
-                    .linux
-                    .as_ref()
-                    .map(|linux| blackwire_transport::TunLinuxConfig {
-                        backend: match linux.backend {
-                            blackwire_config::schema::TunLinuxBackend::Tun => {
-                                blackwire_transport::TunLinuxBackend::Tun
-                            }
-                            blackwire_config::schema::TunLinuxBackend::Afxdp => {
-                                blackwire_transport::TunLinuxBackend::AfXdp
-                            }
-                        },
-                        af_xdp: blackwire_transport::TunAfXdpConfig {
-                            interface: linux.af_xdp.interface.clone(),
-                            queue_id: linux.af_xdp.queue_id,
-                            ring_entries: linux.af_xdp.ring_entries,
-                            frame_count: linux.af_xdp.frame_count,
-                            frame_size: linux.af_xdp.frame_size,
-                            force_copy: linux.af_xdp.force_copy,
-                            force_zerocopy: linux.af_xdp.force_zerocopy,
-                        },
-                    })
-                    .unwrap_or_default(),
-            };
-            let device =
-                create_tun(&tc).context("TUN device creation failed (are we running as root?)")?;
-            let (tx, rx) = tokio::sync::watch::channel(false);
-            shutdown_tx = Some(tx);
-            let runtime = TunRuntime::new(tc);
-            let tun_task = tokio::spawn(async move {
-                if let Err(e) = runtime.run(device, rx).await {
-                    error!(error = %e, "TUN runtime exited with error");
-                }
-            });
-            tasks.push(tun_task);
-            info!("TUN runtime started");
-        }
 
         // ── Step 1: DNS module (shared by dispatcher + freedom outbounds) ─────
         let dns = build_dns_module(config.dns.as_ref()).await?;
@@ -368,13 +258,8 @@ impl Instance {
                 }
                 Protocol::Vless => build_vless_outbound(out_cfg)
                     .with_context(|| format!("building VLESS outbound '{}'", out_cfg.tag))?,
-                Protocol::Hysteria2 => build_hysteria2_outbound(
-                    out_cfg,
-                    config.quic.as_ref(),
-                    config.datagram.as_ref(),
-                    config.fec.as_ref(),
-                )
-                .with_context(|| format!("building Hysteria2 outbound '{}'", out_cfg.tag))?,
+                Protocol::Hysteria2 => build_hysteria2_outbound(out_cfg, config.quic.as_ref())
+                    .with_context(|| format!("building Hysteria2 outbound '{}'", out_cfg.tag))?,
                 Protocol::Tuic => build_tuic_outbound(out_cfg, config.quic.as_ref())
                     .with_context(|| format!("building TUIC outbound '{}'", out_cfg.tag))?,
                 Protocol::Trojan => build_trojan_outbound(out_cfg)
@@ -445,12 +330,6 @@ impl Instance {
         let router = LiveRouter::new(rules, default_tag, geoip, geosite, domain_strategy.clone());
         let sniffing_shared = Arc::new(ArcSwap::from_pointee(build_sniffing_map(&config.inbounds)));
         // Shared with the config watcher: router swap + inbound auth refresh on reload.
-        let inbound_tags: Arc<std::sync::RwLock<Vec<String>>> = Arc::new(std::sync::RwLock::new(
-            config.inbounds.iter().map(|i| i.tag.clone()).collect(),
-        ));
-        let outbound_tags: Arc<std::sync::RwLock<Vec<String>>> = Arc::new(std::sync::RwLock::new(
-            config.outbounds.iter().map(|o| o.tag.clone()).collect(),
-        ));
         let user_connection_limiter = Arc::new(UserConnectionLimiter::new(
             config.limits.max_connections_per_user.unwrap_or(usize::MAX),
         ));
@@ -463,8 +342,6 @@ impl Instance {
             Arc::new(DashMap::new()),
             Arc::new(DashMap::new()),
             Arc::clone(&sniffing_shared),
-            Arc::clone(&inbound_tags),
-            Arc::clone(&outbound_tags),
             Arc::clone(&user_connection_limiter),
         );
         let vless_registries = Arc::clone(&reload.vless_registries);
@@ -532,8 +409,6 @@ impl Instance {
                     in_cfg,
                     &reload.hysteria2_auth_stores,
                     config.quic.as_ref(),
-                    config.datagram.as_ref(),
-                    config.fec.as_ref(),
                     config.limits.max_connections_per_inbound,
                     global_connection_limiter.as_ref().map(Arc::clone),
                     Some(Arc::clone(&user_connection_limiter)),
@@ -638,176 +513,6 @@ impl Instance {
 
             let dispatcher_for_handler = Arc::clone(&dispatcher) as Arc<dyn Dispatcher>;
 
-            if helpers::uses_kcp(&in_cfg.stream_settings) {
-                let conn_handler = Arc::new(InboundConnectionHandler {
-                    inbound: Arc::clone(&handler),
-                    dispatcher: dispatcher_for_handler,
-                });
-                let cfg = build_mkcp_server_config(addr, &in_cfg.stream_settings)
-                    .with_context(|| format!("building mKCP inbound '{}'", in_cfg.tag))?;
-                let mkcp_sem = in_cfg
-                    .limits
-                    .as_ref()
-                    .and_then(|l| l.max_connections)
-                    .or(config.limits.max_connections_per_inbound)
-                    .map(|n| Arc::new(Semaphore::new(n)));
-                let mkcp_global_limiter = global_connection_limiter.as_ref().map(Arc::clone);
-
-                let task = tokio::spawn(async move {
-                    match mkcp_accept_sessions(&cfg).await {
-                        Ok(mut sessions) => {
-                            while let Some((stream, peer)) = sessions.recv().await {
-                                let conn_handler = Arc::clone(&conn_handler);
-                                let Some(global_permit) = try_acquire_global_permit(
-                                    mkcp_global_limiter.as_ref(),
-                                    addr,
-                                    "mkcp",
-                                ) else {
-                                    continue;
-                                };
-                                if let Some(sem) = &mkcp_sem {
-                                    match Arc::clone(sem).try_acquire_owned() {
-                                        Ok(permit) => {
-                                            tokio::spawn(async move {
-                                                let _permits = (global_permit, Some(permit));
-                                                if let Err(e) = conn_handler
-                                                    .handle_connection(Box::new(stream), peer)
-                                                    .await
-                                                {
-                                                    error!(addr = %addr, error = %e, "mKCP inbound session failed");
-                                                }
-                                            });
-                                        }
-                                        Err(_) => {
-                                            warn!(addr = %addr, "mKCP connection limit reached; dropping session");
-                                        }
-                                    }
-                                } else {
-                                    tokio::spawn(async move {
-                                        let _permits =
-                                            (global_permit, None::<OwnedSemaphorePermit>);
-                                        if let Err(e) = conn_handler
-                                            .handle_connection(Box::new(stream), peer)
-                                            .await
-                                        {
-                                            error!(addr = %addr, error = %e, "mKCP inbound session failed");
-                                        }
-                                    });
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!(addr = %addr, error = %e, "mKCP inbound listener failed");
-                        }
-                    }
-                });
-                tasks.push(task);
-                continue;
-            }
-
-            if uses_quic(&in_cfg.stream_settings) {
-                let tls_cfg = in_cfg
-                    .stream_settings
-                    .as_ref()
-                    .and_then(|s| s.tls_settings.as_ref())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "inbound '{}' uses network=quic but has no tlsSettings",
-                            in_cfg.tag
-                        )
-                    })?;
-                if tls_cfg.certificate_file.is_empty() || tls_cfg.key_file.is_empty() {
-                    anyhow::bail!(
-                        "inbound '{}' uses network=quic and requires certificateFile/keyFile",
-                        in_cfg.tag
-                    );
-                }
-
-                let cert_pem =
-                    std::fs::read_to_string(&tls_cfg.certificate_file).with_context(|| {
-                        format!("cannot read QUIC cert file '{}'", tls_cfg.certificate_file)
-                    })?;
-                let key_pem = std::fs::read_to_string(&tls_cfg.key_file)
-                    .with_context(|| format!("cannot read QUIC key file '{}'", tls_cfg.key_file))?;
-                let endpoint = blackwire_transport::quic_server_endpoint_with_socket_config(
-                    addr,
-                    &cert_pem,
-                    &key_pem,
-                    socket_config_from_quic(config.quic.as_ref()),
-                )
-                .with_context(|| format!("binding QUIC inbound '{}'", in_cfg.tag))?;
-                let conn_handler = Arc::new(InboundConnectionHandler {
-                    inbound: Arc::clone(&handler),
-                    dispatcher: dispatcher_for_handler,
-                });
-
-                let quic_sem = in_cfg
-                    .limits
-                    .as_ref()
-                    .and_then(|l| l.max_connections)
-                    .or(config.limits.max_connections_per_inbound)
-                    .map(|n| Arc::new(Semaphore::new(n)));
-                let quic_global_limiter = global_connection_limiter.as_ref().map(Arc::clone);
-
-                let task = tokio::spawn(async move {
-                    while let Some(connecting) = endpoint.accept().await {
-                        let conn_handler = Arc::clone(&conn_handler);
-                        let Some(global_permit) =
-                            try_acquire_global_permit(quic_global_limiter.as_ref(), addr, "quic")
-                        else {
-                            continue;
-                        };
-                        let local_permit = if let Some(sem) = &quic_sem {
-                            match Arc::clone(sem).try_acquire_owned() {
-                                Ok(p) => Some(p),
-                                Err(_) => {
-                                    warn!(addr = %addr, "QUIC connection limit reached; dropping connection");
-                                    continue;
-                                }
-                            }
-                        } else {
-                            None
-                        };
-                        tokio::spawn(async move {
-                            let _permits = (global_permit, local_permit);
-                            let connection = match connecting.await {
-                                Ok(connection) => connection,
-                                Err(e) => {
-                                    error!(addr = %addr, error = %e, "QUIC connection handshake failed");
-                                    return;
-                                }
-                            };
-                            let peer = connection.remote_address();
-                            loop {
-                                match connection.accept_bi().await {
-                                    Ok((send, recv)) => {
-                                        let conn_handler = Arc::clone(&conn_handler);
-                                        let stream = blackwire_transport::accepted_quic_stream(
-                                            connection.clone(),
-                                            recv,
-                                            send,
-                                        );
-                                        tokio::spawn(async move {
-                                            if let Err(e) =
-                                                conn_handler.handle_connection(stream, peer).await
-                                            {
-                                                error!(addr = %addr, error = %e, "QUIC inbound stream failed");
-                                            }
-                                        });
-                                    }
-                                    Err(e) => {
-                                        let _ = e;
-                                        break;
-                                    }
-                                }
-                            }
-                        });
-                    }
-                });
-                tasks.push(task);
-                continue;
-            }
-
             // Choose the connection handler stack based on stream settings.
             let conn_handler: Arc<dyn ConnectionHandler> = if uses_reality(&in_cfg.stream_settings)
             {
@@ -893,28 +598,6 @@ impl Instance {
         }
 
         // ── Optional: start metrics/health HTTP server ───────────────────────
-        if let Some(api_config) = config
-            .api
-            .as_ref()
-            .and_then(blackwire_api::server::api_server_config)
-        {
-            let management: blackwire_api::management::ManagementHandle = Arc::new(reload.clone());
-            let handle = blackwire_api::server::start_api_server(
-                &api_config.listen_addr,
-                management,
-                api_config.token.clone(),
-                &api_config.services,
-            )
-            .with_context(|| {
-                format!(
-                    "starting blackwire-api gRPC server on '{}'",
-                    api_config.listen_addr
-                )
-            })?;
-            info!(addr = %api_config.listen_addr, authenticated = api_config.token.is_some(), "blackwire-api gRPC server started");
-            tasks.push(handle);
-        }
-
         if let Some(metrics_addr) = &config.metrics_addr {
             let handle = blackwire_app::metrics::start_metrics_server(metrics_addr)
                 .with_context(|| format!("starting metrics server on '{metrics_addr}'"))?;
@@ -922,19 +605,8 @@ impl Instance {
             tasks.push(handle);
         }
 
-        if let Some(mark) = outbound_bypass_mark {
-            set_outbound_bypass_mark(mark);
-        }
-        if let Some(interface) = &outbound_interface {
-            set_outbound_interface_name(interface)
-                .with_context(|| format!("invalid TUN outbound interface '{interface}'"))?;
-        }
-
         Ok(Self {
             tasks,
-            shutdown_tx,
-            outbound_bypass_mark,
-            outbound_interface,
             reload,
             data_plane: DataPlaneStore::new(data_plane),
         })
@@ -958,32 +630,8 @@ impl Instance {
     }
 }
 
-impl Instance {
-    /// Signal graceful shutdown to the TUN runtime (if active).
-    ///
-    /// The runtime will run `cleanup_routes` before its task exits. Call this
-    /// before `wait()` or before dropping the instance so route cleanup has a
-    /// chance to complete.
-    pub fn shutdown(&self) {
-        if let Some(tx) = &self.shutdown_tx {
-            let _ = tx.send(true);
-        }
-    }
-}
-
 impl Drop for Instance {
     fn drop(&mut self) {
-        // Signal graceful shutdown first so the TUN runtime can clean up
-        // iptables rules before we abort the task.
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(true);
-        }
-        if self.outbound_bypass_mark.take().is_some() {
-            clear_outbound_bypass_mark();
-        }
-        if self.outbound_interface.take().is_some() {
-            clear_outbound_interface_index();
-        }
         for task in &self.tasks {
             task.abort();
         }

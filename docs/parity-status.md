@@ -39,21 +39,18 @@ See [roadmap.md](roadmap.md). Summary:
 | External-client Docker matrix | `run-docker-matrix.sh` — configured rows from `labs/realistic/external-clients/scenarios.env` (incl. `vless-splithttp-packet-up` Xray PASS; sing-box SKIP) |
 | REALITY + Hysteria2 | `vless-reality` and `hysteria2` rows: Xray+sing-box **PASS** |
 | VLESS UDP command `0x02`, sniffing, DNS DoH/DoT | Lab rows per feature matrix |
-| HTTPUpgrade, QUIC, SplitHTTP **stream-one** (HTTP/2) | Transports + e2e + `vless-splithttp` Xray+sing-box **PASS** |
+| HTTPUpgrade, native Hysteria2/TUIC QUIC, SplitHTTP **stream-one** (HTTP/2) | Transports + e2e + `vless-splithttp` Xray+sing-box **PASS** |
 | ShadowTLS v3 server path | blackwire e2e **PASS**; matrix client rows intentionally SKIP (upstream client-model limits) |
 | Vision and hot-reload | `vision.rs`, `reload.rs` |
 | Routing `IPIfNonMatch` / `IPOnDemand` | `router.rs`, `dispatcher.rs` |
 | Trojan TCP, VMess, SS2022 TCP/UDP, REALITY, WS, gRPC | Matrix rows + e2e |
-| Handler gRPC | API listener user add/remove plus structural native-endpoint rebuild operations |
 
 ## External-client matrix SKIPs (not “unsupported in blackwire”)
 
 | Lab row | blackwire server | Xray client | sing-box client | Why SKIP |
 |---------|------------------|-------------|-----------------|----------|
-| `vless-quic` | Yes | SKIP | PASS | Xray 26+ removed legacy QUIC transport |
 | `tuic` | Yes | SKIP | configured | sing-box supports TUIC outbound; Xray has no TUIC client row in this lab; Blackwire treats TUIC v5 as supported with QUIC/UDP network-path caveats |
 | `vless-shadowtls` | Yes | SKIP | SKIP | Xray 26+ / sing-box model mismatch — server e2e |
-| `vless-mkcp` | Legacy/internal only | SKIP | SKIP | Deprecated release-surface path; sing-box has no mKCP and current Xray FinalMask-era clients are not a supported target |
 | `vless-splithttp-packet-up` | Yes | PASS | SKIP | Upstream [sing-box](https://github.com/SagerNet/sing-box) has no xHTTP `packet-up`; Xray proves row |
 
 `vless-splithttp` uses **stream-one** only (both clients). `vless-splithttp-packet-up` is a separate row: **Xray PASS** is the matrix gate; stock sing-box is **SKIP** by design (same pattern as `vless-mux`).

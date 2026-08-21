@@ -1,14 +1,15 @@
 {
   "name": "black-ui-frontend",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "type": "module",
   "scripts": {
+    "generate:types": "cargo run --manifest-path ../../Cargo.toml -q -p blackwire-store --example export_frontend_types",
     "dev": "vite --host 127.0.0.1 --port 18180",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "test:unit": "vitest run",
-    "qa": "npm run build && npm run test:unit",
+    "qa": "npm run generate:types && npm run build && npm run test:unit",
     "qa:flow": "node scripts/qa-flow.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 18181"
   },

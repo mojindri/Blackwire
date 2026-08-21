@@ -1671,77 +1671,144 @@ tr.row-selected {
   background: var(--soft-line);
 }
 
-.api-services {
-  display: grid;
-  gap: 12px;
-  padding-top: 4px;
-}
-
-.api-services-head,
-.api-service-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-}
-
-.api-services-head h3 {
-  margin: 0 0 3px;
-  font-size: 15px;
-}
-
-.api-services-head p,
-.api-services-empty {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.api-services-head > span {
-  flex: none;
-  color: var(--teal-dark);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.api-service-list {
-  border-top: 1px solid var(--soft-line);
-}
-
-.api-service-row {
-  min-height: 64px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--soft-line);
-}
-
-.api-service-row > div:first-child {
-  display: grid;
-  gap: 3px;
-}
-
-.api-service-row strong {
-  font-size: 13px;
-}
-
-.api-service-row small {
-  color: var(--muted);
-  line-height: 1.4;
-}
-
-.api-service-row .switch {
-  flex: none;
-}
-
-.api-services-empty {
-  color: #9a5c12;
-}
-
 .settings-subsection {
   display: grid;
   gap: 16px;
   padding: 20px;
   border-radius: 10px;
   background: #f8fafb;
+}
+
+.optimization-editor {
+  display: grid;
+  gap: 18px;
+}
+
+.optimization-mode-list {
+  display: grid;
+  border-top: 1px solid var(--line);
+}
+
+.optimization-mode {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  width: 100%;
+  padding: 17px 2px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: color 140ms ease, padding-left 140ms ease;
+}
+
+.optimization-mode:hover {
+  padding-left: 6px;
+  color: var(--teal-dark);
+}
+
+.optimization-mode:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
+}
+
+.optimization-mode > span:last-child {
+  display: grid;
+  gap: 4px;
+}
+
+.optimization-mode strong {
+  font-size: 14px;
+}
+
+.optimization-mode small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.optimization-mode-indicator {
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border: 2px solid #a9b7bb;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 3px #fff;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.optimization-mode-active {
+  color: var(--teal-dark);
+}
+
+.optimization-mode-active .optimization-mode-indicator {
+  border-color: var(--teal);
+  background: var(--teal);
+}
+
+.optimization-status {
+  display: grid;
+  grid-template-columns: minmax(150px, auto) minmax(0, 1fr);
+  gap: 18px;
+  align-items: baseline;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--soft-line);
+}
+
+.optimization-status span {
+  color: var(--teal-dark);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.optimization-status p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.optimization-expert {
+  border-bottom: 1px solid var(--line);
+}
+
+.optimization-expert > summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 4px 0 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.optimization-expert > summary::-webkit-details-marker {
+  display: none;
+}
+
+.optimization-expert > summary span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.optimization-expert > summary small {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.optimization-expert > summary:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 4px;
+}
+
+.optimization-expert-body {
+  display: grid;
+  gap: 16px;
+  padding: 4px 0 20px;
+  animation: settings-reveal 160ms ease-out;
 }
 
 .settings-core-save {
@@ -2171,7 +2238,10 @@ tr.row-selected {
   .settings-impact { grid-column: 2; margin-top: 4px; justify-self: start; }
   .settings-chevron { grid-column: 3; grid-row: 1; margin-top: 10px; }
   .settings-guidance { grid-template-columns: 1fr; gap: 14px; }
-  .settings-core-save { bottom: 10px; align-items: stretch; flex-direction: column; }
+  .optimization-status { grid-template-columns: 1fr; gap: 4px; }
+  .optimization-expert > summary { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .optimization-expert > summary small { text-align: left; }
+  .settings-core-save { position: static; align-items: stretch; flex-direction: column; }
 
   .routing-member-row {
     grid-template-columns: 1fr auto;

@@ -55,7 +55,7 @@ P1:
 
 - DNS bootstrap hardening for DoH/DoT.
 - DNS-over-proxy option for client-side modes.
-- DNS/FakeIP presets in Black UI.
+- DNS/FakeIP presets in a future graphical client shell.
 - No-leakage checklist for server, local proxy, and TUN modes.
 - Tests for DNS route, blocked route, and log-redaction behavior.
 
@@ -93,7 +93,7 @@ Done/matrix-proven highlights:
 - SS2022 UDP
 - Trojan/VLESS UDP outbound
 - Health-check outbound failover
-- QUIC server with documented Xray SKIP / sing-box PASS
+- Native Hysteria2 and TUIC QUIC servers
 - XTLS Vision
 - Hot-reload routing/users
 - Handler gRPC structural operations

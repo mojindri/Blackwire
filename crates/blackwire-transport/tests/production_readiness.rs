@@ -20,7 +20,7 @@ use std::{
     time::Duration,
 };
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -32,8 +32,6 @@ use blackwire_transport::{
     decode_grpc_frame, encode_grpc_frame, ws_accept, ws_connect, GrpcStream, WsConnectConfig,
 };
 
-use blackwire_transport::mkcp::header::HeaderType;
-use blackwire_transport::mkcp::segment::{Segment, CMD_ACK, CMD_PUSH, OVERHEAD};
 use blackwire_transport::reality::parse_client_hello;
 use blackwire_transport::tcp::{TcpConfig, TcpServerTransport};
 use blackwire_transport::tun::{
@@ -631,91 +629,6 @@ fn reality_parser_rejects_fixed_malformed_client_hello_fixtures() {
     };
 
     assert!(parse_client_hello(&no_key_share).is_err());
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// mKCP deterministic header / segment tests
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn mkcp_headers_strip_back_to_original_payload() {
-    let payload = b"mkcp payload";
-
-    for header in [
-        HeaderType::None,
-        HeaderType::Srtp,
-        HeaderType::Utp,
-        HeaderType::WechatVideo,
-        HeaderType::Dtls,
-        HeaderType::Wireguard,
-    ] {
-        let encoded = header.encode(payload);
-
-        assert_eq!(encoded.len(), header.size() + payload.len());
-
-        let stripped = header
-            .strip(&encoded)
-            .expect("encoded packet should always strip");
-
-        assert_eq!(stripped, payload);
-
-        if header.size() > 0 {
-            assert!(
-                header.strip(&encoded[..header.size() - 1]).is_none(),
-                "short packet should not strip for {header:?}"
-            );
-        }
-    }
-}
-
-#[test]
-fn mkcp_segment_roundtrip_exact_fields() {
-    let mut seg = Segment::new(0x11223344, CMD_PUSH);
-    seg.frg = 3;
-    seg.wnd = 4096;
-    seg.ts = 0xaabbccdd;
-    seg.sn = 77;
-    seg.una = 66;
-    seg.data = Bytes::from_static(b"segment payload");
-
-    let mut encoded = BytesMut::new();
-    seg.encode(&mut encoded);
-
-    assert_eq!(encoded.len(), OVERHEAD + seg.data.len());
-
-    let mut slice = encoded.as_ref();
-    let decoded = Segment::decode(&mut slice).expect("segment should decode");
-
-    assert!(slice.is_empty());
-    assert_eq!(decoded.conv, seg.conv);
-    assert_eq!(decoded.cmd, seg.cmd);
-    assert_eq!(decoded.frg, seg.frg);
-    assert_eq!(decoded.wnd, seg.wnd);
-    assert_eq!(decoded.ts, seg.ts);
-    assert_eq!(decoded.sn, seg.sn);
-    assert_eq!(decoded.una, seg.una);
-    assert_eq!(decoded.data, seg.data);
-}
-
-#[test]
-fn mkcp_segment_decode_rejects_incomplete_data_without_consuming_payload() {
-    let mut seg = Segment::new(7, CMD_ACK);
-    seg.data = Bytes::from_static(b"abcdef");
-
-    let mut encoded = BytesMut::new();
-    seg.encode(&mut encoded);
-
-    let truncated = encoded[..encoded.len() - 2].to_vec();
-    let original_len = truncated.len();
-
-    let mut slice = truncated.as_slice();
-    let out = Segment::decode(&mut slice);
-
-    assert!(out.is_none());
-    // The current decoder consumes the fixed header before discovering the
-    // payload is truncated. If you want stricter parser semantics, change the
-    // decoder and then strengthen this assertion to `slice.len() == original_len`.
-    assert!(slice.len() <= original_len);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

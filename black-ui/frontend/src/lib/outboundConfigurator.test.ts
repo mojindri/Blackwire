@@ -170,6 +170,19 @@ describe("outboundConfigurator", () => {
     expect(issues.map((issue) => issue.field)).toEqual(["address", "port"]);
   });
 
+  it("rejects the removed generic V2Ray QUIC transport", () => {
+    const issues = validateOutboundState({
+      ...createOutboundEditorState(),
+      protocol: "trojan",
+      address: "203.0.113.10",
+      port: "443",
+      password: "secret",
+      network: "quic"
+    });
+
+    expect(issues.some((issue) => issue.field === "network")).toBe(true);
+  });
+
   it("serializes freedom IP strategy and IPv6 literal guard", () => {
     const built = buildOutboundInput(
       syncOutboundAfterStructuredChange({
@@ -240,8 +253,6 @@ describe("outboundConfigurator", () => {
     expect(defaultState.hysteria2CongestionMode).toBe("standard");
     expect(defaultState.hysteria2MinAckRate).toBe("0.8");
     expect(defaultState.hysteria2QuicEndpoints).toBe("1");
-    expect(defaultState.hysteria2DatagramPolicy).toBe("standard");
-    expect(defaultState.hysteria2FecMode).toBe("off");
 
     const outbound: Outbound = {
       id: 2,
@@ -297,11 +308,6 @@ describe("outboundConfigurator", () => {
       hysteria2QuicEndpoints: "cpu",
       hysteria2QuicRecvBufferBytes: "33554432",
       hysteria2QuicSendBufferBytes: "16777216",
-      hysteria2DatagramEnabled: true,
-      hysteria2DatagramUdpOverDatagram: false,
-      hysteria2DatagramPolicy: "standard",
-      hysteria2FecMode: "xor1-of-n",
-      hysteria2FecMaxOverheadPercent: "15",
       tlsServerName: "new.example.com",
       address: "127.0.0.9",
       port: "9000"
@@ -327,16 +333,9 @@ describe("outboundConfigurator", () => {
       recvBufferBytes: 33554432,
       sendBufferBytes: 16777216
     });
-    expect(settings.quic.reusePort).toBeUndefined();
-    expect(settings.datagram).toMatchObject({
-      enabled: true,
-      udpOverDatagram: false
-    });
-    expect(settings.datagram.policy).toBeUndefined();
-    expect(settings.fec).toMatchObject({
-      mode: "xor1-of-n",
-      maxOverheadPercent: 15
-    });
+    expect(settings.quic.reusePort).toBe(false);
+    expect(settings.datagram).toBeUndefined();
+    expect(settings.fec).toBeUndefined();
     expect(settings.customSetting).toBe("keep-me");
     expect(settings.address).toBeUndefined();
     expect(settings.port).toBeUndefined();
@@ -398,57 +397,26 @@ describe("outboundConfigurator", () => {
     });
   });
 
-  it("serializes KCP tuning and preserves QUIC network selection", () => {
-    const kcpBuilt = buildOutboundInput(
-      syncOutboundAfterStructuredChange({
-        ...createOutboundEditorState(),
-        protocol: "vless",
-        address: "127.0.0.1",
-        port: "443",
-        userId: "459dc0c8-d891-4768-9234-faf11fd26b5d",
-        network: "kcp",
-        kcpHeader: "srtp",
-        kcpMtu: "1350",
-        kcpTti: "20",
-        kcpUplinkCapacity: "5",
-        kcpDownlinkCapacity: "20",
-        kcpCongestion: true,
-        kcpReadBufferSize: "2",
-        kcpWriteBufferSize: "2"
-      })
-    );
-    const quicBuilt = buildOutboundInput(
-      syncOutboundAfterStructuredChange({
-        ...createOutboundEditorState(),
-        protocol: "vless",
-        address: "127.0.0.1",
-        port: "443",
-        userId: "459dc0c8-d891-4768-9234-faf11fd26b5d",
-        network: "quic",
-        security: "tls",
-        tlsServerName: "quic.example.com"
-      })
-    );
+  it("persists explicit default-looking hysteria2 outbound overrides", () => {
+    const state = syncOutboundAfterStructuredChange({
+      ...createOutboundEditorState(),
+      protocol: "hysteria2",
+      server: "203.0.113.10:443",
+      hysteria2Auth: "shared-secret",
+      hysteria2TransportOverrides: true
+    });
+    const settings = parseObject(buildOutboundInput(state).settings);
 
-    expect(parseObject(kcpBuilt.streamSettings)).toMatchObject({
-      network: "kcp",
-      security: "none",
-      kcpSettings: {
-        header: "srtp",
-        mtu: 1350,
-        tti: 20,
-        uplink_capacity: 5,
-        downlink_capacity: 20,
-        congestion: true,
-        read_buffer_size: 2,
-        write_buffer_size: 2
-      }
+    expect(settings.endpointShards).toBe(1);
+    expect(settings.quic).toEqual({
+      reusePort: false,
+      endpoints: 1,
+      recvBufferBytes: 8388608,
+      sendBufferBytes: 8388608
     });
-    expect(parseObject(quicBuilt.streamSettings)).toMatchObject({
-      network: "quic",
-      security: "tls",
-      tlsSettings: { serverName: "quic.example.com" }
-    });
+    expect(settings.datagram).toBeUndefined();
+    expect(settings.fec).toBeUndefined();
+    expect(state.hysteria2TransportOverrides).toBe(true);
   });
 
   it("covers the structured outbound transport and security matrix", () => {
@@ -465,9 +433,7 @@ describe("outboundConfigurator", () => {
       { network: "ws", settings: { wsSettings: { path: "/ws", headers: { Host: "ws.example.com" } } }, extras: { wsPath: "/ws", wsHost: "ws.example.com" } },
       { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
       { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
-      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
-      { network: "kcp", settings: { kcpSettings: { header: "srtp", mtu: 1350 } }, extras: { kcpHeader: "srtp", kcpMtu: "1350" } },
-      { network: "quic", settings: {}, extras: {} }
+      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } }
     ] as const;
 
     const securities = [

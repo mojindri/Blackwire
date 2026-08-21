@@ -1,4 +1,5 @@
 import type { Inbound, ManagedUser, UserInput } from "./types";
+import { fromInputDateTime, toInputDateTime } from "./format";
 
 export type UserProtocol = "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria2" | "tuic" | "unknown";
 
@@ -237,18 +238,4 @@ function gigabytesStringToBytes(value: string): number | null {
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-function toInputDateTime(value: string | null): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const offset = date.getTimezoneOffset() * 60000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
-}
-
-function fromInputDateTime(value: string): string | null {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }

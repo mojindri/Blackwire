@@ -44,8 +44,6 @@ pub enum NetworkType {
     Grpc,
     /// QUIC-based transport.
     Quic,
-    /// KCP ARQ over UDP.
-    Kcp,
     /// SplitHTTP (XHTTP).
     #[serde(rename = "splithttp", alias = "xhttp")]
     SplitHttp,

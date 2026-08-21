@@ -117,7 +117,7 @@ That first-flight dual offer is what made the `d1` TLS 1.3 handshake pass.
 Pull requests run `.github/workflows/interop-smoke.yml`:
 
 - `cargo test -p integration-tests --locked` (parity unit tests, production readiness)
-- `make -C labs/realistic advanced-features-smoke` (ShadowTLS + mKCP)
+- `make -C labs/realistic advanced-features-smoke` (ShadowTLS + SplitHTTP)
 
 Scheduled / `workflow_dispatch` runs also execute `make -C labs/realistic interop-server-docker`
 (external Xray/sing-box clients against a blackwire server). On failure, interop logs are

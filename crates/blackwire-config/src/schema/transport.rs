@@ -5,7 +5,7 @@ use super::{NetworkType, SecurityType};
 /// Transport layer settings: how to wrap or protect the connection.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StreamSettingsConfig {
-    /// Transport to use: "tcp", "ws", "grpc", "quic", "kcp", or "splithttp".
+    /// Transport to use: "tcp", "ws", "grpc", "quic", or "splithttp".
     #[serde(default)]
     pub network: NetworkType,
 
@@ -69,14 +69,6 @@ pub struct StreamSettingsConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub shadow_tls_settings: Option<ShadowTlsConfig>,
-
-    /// mKCP-specific settings.
-    #[serde(
-        default,
-        rename = "kcpSettings",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub kcp_settings: Option<KcpConfig>,
 }
 
 /// TLS configuration used when `security = "tls"`.
@@ -555,72 +547,4 @@ pub struct ShadowTlsConfig {
 
 fn default_shadowtls_version() -> u8 {
     3
-}
-
-/// Xray accepts mKCP `header` as either a string (`"none"`) or `{"type":"none"}`.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-enum KcpHeaderField {
-    Plain(String),
-    Typed {
-        #[serde(rename = "type")]
-        typ: String,
-    },
-}
-
-fn deserialize_kcp_header<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    match KcpHeaderField::deserialize(deserializer)? {
-        KcpHeaderField::Plain(s) => Ok(s),
-        KcpHeaderField::Typed { typ } => Ok(typ),
-    }
-}
-
-/// mKCP transport settings (UDP-based reliable stream).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct KcpConfig {
-    /// Packet obfuscation header type (`"none"`, `"srtp"`, `"wechat-video"`, etc.).
-    #[serde(
-        default = "default_kcp_header",
-        deserialize_with = "deserialize_kcp_header"
-    )]
-    pub header: String,
-    /// Maximum transmission unit for KCP segments.
-    #[serde(default = "default_kcp_mtu")]
-    pub mtu: u16,
-    /// Transmission time interval in milliseconds (how often KCP flushes).
-    #[serde(default = "default_kcp_tti")]
-    pub tti: u64,
-    /// Declared uplink capacity in MB/s (used for window sizing).
-    #[serde(default = "default_kcp_capacity")]
-    pub uplink_capacity: u32,
-    /// Declared downlink capacity in MB/s (used for window sizing).
-    #[serde(default = "default_kcp_capacity")]
-    pub downlink_capacity: u32,
-    /// Enable KCP congestion control (usually `false` for proxy workloads).
-    #[serde(default)]
-    pub congestion: bool,
-    /// KCP receive window size in packets.
-    #[serde(default = "default_kcp_buf")]
-    pub read_buffer_size: u32,
-    /// KCP send window size in packets.
-    #[serde(default = "default_kcp_buf")]
-    pub write_buffer_size: u32,
-}
-fn default_kcp_header() -> String {
-    "none".into()
-}
-fn default_kcp_mtu() -> u16 {
-    1350
-}
-fn default_kcp_tti() -> u64 {
-    50
-}
-fn default_kcp_capacity() -> u32 {
-    5
-}
-fn default_kcp_buf() -> u32 {
-    2
 }

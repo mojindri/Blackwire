@@ -49,13 +49,13 @@ No claim of full Xray/sing-box feature parity is made. See the Unsupported rows 
 
 | Area                                            | Status           | Notes                                                                                                                                                                                                                                                         |
 | ----------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Xray / sing-box **wire interop** (as server)    | **Supported**    | Realistic Docker external-client matrix is green with PASS/SKIP-only outcomes (zero FAIL), including `vless-reality`, `hysteria2`, `vless-quic` (sing-box PASS, Xray SKIP), and documented SKIP rows (`vless-shadowtls`, `vless-mkcp`) — see [parity-status.md](parity-status.md) |
+| Xray / sing-box **wire interop** (as server)    | **Supported**    | Realistic Docker external-client matrix is green with PASS/SKIP-only outcomes (zero FAIL), including `vless-reality`, `hysteria2`, and documented ShadowTLS SKIP rows — see [parity-status.md](parity-status.md) |
 | Typed relational configuration                  | **Supported**    | MySQL revisions are reconstructed into `blackwire-config` types and validated fail-closed                                                                                                                                                                      |
 | V2Ray JSON config import                        | **Unsupported**  | Not a goal                                                                                                                                                                                                                                                    |
 | Xray JSON config import                         | **Unsupported**  | Interop is wire-level only; configuration must be entered through typed relational workflows                                                                                                                                                                  |
 | **Server mode** (listen for clients)            | **Supported**    | Primary product: `blackwire run`                                                                                                                                                                                                                              |
 | **Local proxy mode** (SOCKS/HTTP in → outbound) | **Supported**    | Same `Instance` stack; covered by e2e (`e2e_socks5_vless`, `e2e_http_connect`, etc.)                                                                                                                                                                          |
-| Standalone **client app** (TUN/system proxy UI) | **Unsupported**  | No dedicated mobile/desktop shell or system proxy UI; TUN is a runtime traffic-capture path                                                                                                                                                                   |
+| Standalone **client app** (TUN/local proxy)     | **Supported**    | `blackwire-client --config <file>` owns device capture and protected egress; a graphical desktop/mobile shell remains future work                                                                                                                              |
 
 
 ---
@@ -105,10 +105,9 @@ TCP accept in `instance/mod.rs`. Hysteria2 uses its own QUIC listener.
 | gRPC (Gun-style)                       | **Supported**    | `transport/grpc.rs`; e2e `e2e_http_vmess_grpc.rs`; `grpc_stream_reset` in `e2e_hostility.rs` PASS (END_STREAM propagates to downstream) |
 | REALITY                                | **Supported**    | `transport/reality/`, `blackwire-core/reality.rs`; bounded multi-record ClientHello reassembly; pre-classification cover mirroring; cached cover-informed TLS 1.3 record shaping; optional fallback upload/download pacing; hex/base64url/standard-Base64 key compatibility; e2e + direct-cover differential tests; pinned Xray, sing-box, and independent Hiddify TCP/TLS-record fragmentation matrix rows |
 | ShadowTLS v3                           | **Supported**    | Server: `transport/shadowtls/` + e2e. Matrix: both clients **SKIP** (Xray 26+ outbound model; sing-box inbound model) — server support is proven in blackwire e2e and SKIP is an upstream client-model limit |
-| mKCP                                   | **Deprecated**   | Legacy/internal path only. Existing configs remain loadable and internal e2e coverage is retained, but Black UI no longer offers mKCP for new inbounds/outbounds. External-client interop is not a release target: sing-box has no mKCP and current Xray FinalMask-era clients did not pass live VPS probes. |
-| QUIC (`network: quic` for VLESS/VMess/Trojan) | **Supported**    | Server: `v2rayquic.rs` + e2e. Matrix: **sing-box PASS**, Xray **SKIP** (Xray 26+ removed legacy QUIC client transport). QUIC TLS advertises `h3`; generated links default QUIC ALPN to `h3`. VMess inbound supports Mux.Cool and XUDP after authentication so Hiddify/sing-box VMess QUIC imports with XUDP packet encoding can relay TCP mux substreams and UDP packets. |
+| Generic V2Ray QUIC (`network: quic`) | **Unsupported** | Removed for VLESS/VMess/Trojan. Config validation fails closed and directs users to Hysteria2, TUIC, or a supported stream transport. Native QUIC support remains in Hysteria2 and TUIC. |
 | Hysteria2 (QUIC + HTTP/3 auth)         | **Supported**    | `hysteria2/` — TCP stream proxy is supported by default; UDP datagram relay is opt-in pending stateful association soak evidence; fail-fast auth/stream timeouts and per-connection UDP worker caps wired in transport path |
-| TUN transparent proxy                  | **Supported (Linux/macOS/Windows)** | Linux TUN runtime via `transport/tun/` when `config.tun` is set; route setup/cleanup and UDP NAT covered by privileged `tun_priv.rs`; Linux outbound sockets use `SO_MARK`; macOS utun runtime installs split default routes plus a PF anchor for TCP/DNS redirection and uses `tun.outboundInterface`/`tun.outbound_interface` for protected proxy egress; Windows Wintun device creation, split-route setup, packet-level TCP bridging to the local SOCKS listener, and protected outbound interface binding compile through the native `tun` crate backend, requires `tun.outboundInterface`/`tun.outbound_interface` for protected egress, and can use `tun.wintunFile`/`tun.wintun_file` to point at a bundled `wintun.dll`; shared packet/NAT/session APIs and the runtime packet loop compile cross-platform; `current_tun_support()`/`ensure_tun_runtime_supported()` make full-device runtime support explicit |
+| TUN transparent proxy                  | **Supported (client; Linux/macOS/Windows)** | `blackwire-client` owns device creation, routes, protected egress, and graceful cleanup. The shared `transport/tun/` implementation retains Linux `SO_MARK`, macOS utun/PF, Windows Wintun and packet-level TCP bridging, UDP NAT, batching, and session limits. The server runtime and Black UI no longer own TUN configuration. |
 | HTTPUpgrade                            | **Supported**    | Inbound/outbound + lab row `vless-httpupgrade` (Docker external-client matrix)                                                                                                                                                                                                                                                                                             |
 | SplitHTTP / xHTTP                      | **Supported**    | **stream-one** (ALPN h2): matrix `vless-splithttp` Xray+sing-box **PASS** and in-process `vmess_splithttp_echo` **PASS**. **packet-up** (seq reorder, H2 `GET /split/<uuid>` + `POST /split/<uuid>/<seq>`): matrix `vless-splithttp-packet-up` **Xray PASS**; sing-box **SKIP** (upstream has no packet-up); in-process e2e `vless_splithttp_packet_up_h2_echo` **PASS**. Extra xHTTP fields parse for native config parity (`xmux`, `downloadSettings`, placement/chunk hints), H2 packet-up multiplex sessions are accepted, stream-up GET-with-`seq` is accepted, and configured x-padding emits the requested header. |
 
@@ -122,11 +121,9 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 
 | Row                         | Server in blackwire | Client proof in matrix                              |
 | --------------------------- | ------------------- | --------------------------------------------------- |
-| `vless-quic`                | Yes                 | sing-box only (Xray 26+ removed legacy QUIC client) |
 | `vless-splithttp`           | Yes                 | Xray+sing-box **PASS** (HTTP/2 stream-one)          |
 | `vless-splithttp-packet-up` | Yes                 | PASS                                                |
 | `vless-shadowtls`           | Yes                 | client rows intentionally SKIP; server support proven by e2e |
-| `vless-mkcp`                | Legacy/internal only | client rows intentionally SKIP; not a release interop target |
 
 
 ---
@@ -139,7 +136,7 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 | System resolver (empty `servers`)     | **Supported** | `dns/resolver.rs` — hickory system config                                                                                                  |
 | Custom upstream (plain IP, UDP 53)    | **Supported** | Parsed into hickory `NameServerConfig`                                                                                                     |
 | DoH / DoT upstream URLs               | **Supported** | `https://` / `tls://` parsed in `dns/resolver.rs` (hickory)                                                                                |
-| FakeIP pool + restore on dispatch     | **Supported** | `dns/fakeip.rs`, dispatcher; startup rejects invalid pool (`production_readiness`)                                                         |
+| FakeIP pool + restore on dispatch     | **Supported (client)** | `dns/fakeip.rs` and dispatcher remain shared; configuration is owned by the `blackwire-client` file rather than the server database or Black UI |
 | DNS response cache                    | **Supported** | `dns/cache.rs`                                                                                                                             |
 | `domain_strategy` (routing)           | **Supported** | Xray `AsIs` / `IPIfNonMatch` / `IPOnDemand` in `dispatcher` + `router` (see [routing docs](https://xtls.github.io/en/config/routing.html)) |
 | Sniffing HTTP + TLS (`destOverride`, `routeOnly`, `metadataOnly`) | **Supported** | `blackwire-app/sniff.rs`; HTTP Host + TLS SNI detection; lab row `vless-sniff` green in Docker matrix |
@@ -182,12 +179,11 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 | Hot-reload **routing rules**               | **Supported**    | `blackwire-core/reload.rs` — `LiveRouter::swap`                                                                                                                                                                   |
 | Hot-reload **VLESS user UUIDs**            | **Supported**    | Per-inbound registry refresh                                                                                                                                                                                      |
 | Hot-reload **GeoIP/geosite data**          | **Supported**    | Reloaded with router rebuild                                                                                                                                                                                      |
-| Hot-reload listeners / new tags / TLS keys | **Supported**    | `requires_instance_restart` detects structural changes; CLI rebuilds the running `Instance` and rolls back to the prior config if rebuild fails (rebuild path, not in-place listener swap) |
-| Per-inbound / global `max_connections`     | **Supported**    | TCP (`transport/tcp.rs`), QUIC, Hysteria2, and legacy mKCP accept loops all honour the 3-level hierarchy (`limits.maxConnections` per-inbound → per-inbound-class → global) |
+| Live-reload listeners / new tags / TLS keys | **Supported**    | Structural changes use a prepared in-process `Instance` handover; the active instance remains in service if preparation fails |
+| Per-inbound / global `max_connections`     | **Supported**    | TCP (`transport/tcp.rs`), QUIC, and Hysteria2 accept loops honour the 3-level hierarchy (`limits.maxConnections` per-inbound → per-inbound-class → global) |
 | Prometheus HTTP (`metricsAddr`)            | **Supported**    | `metrics.rs` — `/metrics`, `/healthz`, `/readyz`, `/version`                                                                                                                                                      |
 | Per-connection Prometheus counters         | **Supported**    | `record_connection_`* called from `dispatcher` after each relay                                                                                                                                                   |
-| Stats API (gRPC)                           | **Experimental** | `blackwire-api` StatsService + `runtime_stats`; starts when `api` listen set                                                                                                                                      |
-| Handler API (gRPC)                         | **Read-only**    | Runtime inspection and connection operations remain; configuration mutations are rejected because MySQL revisions are the only write path                                                                         |
+| Dashboard traffic statistics              | **Supported**    | Internal `runtime_stats` counters are persisted to MySQL and served through Black UI's authenticated HTTP API                                                                                                      |
 
 
 ---
@@ -205,7 +201,7 @@ Full table: [parity-status.md](parity-status.md). Summary: **SKIP** = no client 
 | `make audit` / `cargo-audit`                      | **Supported**    | Weekly **Security / Dependency audit** schedule + manual                            |
 | `make deny` / `cargo-deny`                        | **Supported**    | `deny.toml` license/advisory policy                                                 |
 | Adversarial integration tests                     | **Supported**    | `tests/tests/adversarial_*.rs` — fragmentation, cancellation, backpressure, etc.    |
-| Leak / resource tests                             | **Supported**    | `resource_smoke.rs` covers bad-auth bursts, FakeIP/DNS pressure, stream churn, mKCP churn, and connection-limit overflow in normal CI; heavier ignored suites remain optional stress tests |
+| Leak / resource tests                             | **Supported**    | `resource_smoke.rs` covers bad-auth bursts, FakeIP/DNS pressure, stream churn, and connection-limit overflow in normal CI; heavier ignored suites remain optional stress tests |
 | External-client Docker lab                        | **Supported**    | `labs/realistic/` — scenario rows from `external-clients/scenarios.env`; `run-docker-matrix.sh` |
 | External-client VPS lab                           | **Supported**    | Same `scenarios.env` as Docker; `run-vps-matrix.sh` (one server start per protocol) |
 | ClientHello fingerprint summary helper            | **Supported**    | `tools/tls_clienthello_summary.py` emits SNI, ALPN, cipher suites, supported groups, extension order, and JA3-style summary from captured ClientHello bytes |
@@ -253,7 +249,6 @@ pre-1.0 project into a stable production application.
 
 - Relational configuration — no V2Ray/Xray server-config import or paste path.
 - VMess legacy non-AEAD / alterId — not implemented.
-- Handler API (gRPC) — configuration mutation RPCs are rejected; writes use MySQL revisions.
 - Structural config changes (listeners/outbounds/TLS material) trigger CLI-driven instance handover; not in-place listener mutation.
 
 ---
@@ -264,7 +259,7 @@ pre-1.0 project into a stable production application.
 | Gate                | Command                                          | What it proves                                                                        |
 | ------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------- |
 | Stable integration  | `make -C labs/realistic stable`                  | In-process protocol matrix                                                            |
-| Advanced smoke      | `make -C labs/realistic advanced-features-smoke` | ShadowTLS, legacy mKCP internal e2e, QUIC/SplitHTTP e2e, health guards + failover runtime |
+| Advanced smoke      | `make -C labs/realistic advanced-features-smoke` | ShadowTLS/SplitHTTP e2e, health guards + failover runtime |
 | Health failover lab | `make -C labs/realistic health-failover`         | In-process failover e2e + optional Docker probe/echo services                         |
 | External clients    | `make -C labs/realistic interop-server-docker`   | Xray/sing-box → blackwire using the configured `external-clients/scenarios.env` rows |
 | Full finalize       | `make -C labs/realistic finalize`                | All of the above                                                                      |

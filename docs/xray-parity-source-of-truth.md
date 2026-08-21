@@ -20,14 +20,13 @@ Use the **primary** reference first; validate with the **secondary** when both a
 |------|-------------------|------------------------|
 | VLESS, VMess AEAD, Trojan, Freedom | [XTLS/Xray-core](https://github.com/XTLS/Xray-core) `proxy/*`, `transport/internet/*` | sing-box `protocol/*`, `transport/*` |
 | REALITY (TLS camouflage) | [XTLS/REALITY](https://github.com/XTLS/REALITY) + Xray `transport/internet/reality` | sing-box `common/tls/reality_*` — see [reality-interop.md](reality-interop.md) |
-| ShadowTLS, mKCP, Hysteria2 | Xray where implemented; else sing-box | Whichever ships the transport clients use |
+| ShadowTLS, Hysteria2 | Xray where implemented; else sing-box | Whichever ships the transport clients use |
 | SplitHTTP / xHTTP stream-one | [SagerNet/sing-box](https://github.com/SagerNet/sing-box) (leading client configs) | Xray `transport/internet/splithttp` |
 | SplitHTTP / xHTTP **packet-up** | Xray `transport/internet/splithttp` packet-up mode (matrix gate) | Optional reference: [hiddify/hiddify-sing-box](https://github.com/hiddify/hiddify-sing-box) `transport/v2rayxhttp` (upstream sing-box has no packet-up) |
 | Sniffing, routing, DNS, FakeIP | Xray `app/dispatcher`, `app/dns`, routing rules (`domainStrategy`: AsIs / IPIfNonMatch / IPOnDemand) | sing-box route/DNS when behavior differs—document delta |
 | SOCKS5 / HTTP CONNECT | RFC + Xray inbound behavior | sing-box inbound tests in lab |
 | SS2022 | Xray / outline spec as used by Xray | sing-box `shadowsocks` implementation |
 | gRPC Gun transport | Xray `transport/internet/grpc` | sing-box gRPC transport |
-| Management gRPC (Stats/Handler) | Xray `.proto` services | Only if panel parity is required |
 
 When Xray and sing-box **disagree**, do not pick blackwire’s preference:
 
@@ -42,7 +41,7 @@ A **SKIP** in `reports/external-clients/summary.txt` means the lab did not run t
 | Typical pattern | Meaning |
 |-----------------|--------|
 | Server e2e PASS + matrix client SKIP | blackwire implements the transport; latest Xray/sing-box clients cannot be configured the way the row expects (or we skip by policy). |
-| sing-box PASS + Xray SKIP | Row is proven for interop; document Xray upstream limitation (e.g. QUIC on Xray 26+). |
+| sing-box PASS + Xray SKIP | Row is proven for interop; document the relevant upstream limitation. |
 | Both clients SKIP, negatives PASS | Server config loads; auth rejection works; no positive client proof in matrix. |
 
 See the SKIP table in [parity-status.md](parity-status.md).
@@ -71,7 +70,7 @@ On **FAIL**, use [external-client-failure-triage.md](external-client-failure-tri
 | blackwire crate | Upstream to read |
 |-----------------|------------------|
 | `blackwire-protocol` | Xray `proxy/vless`, `vmess`, `trojan`, `socks`, `http`, `shadowsocks_2022` |
-| `blackwire-transport` | Xray `transport/internet/{tcp,tls,websocket,grpc,httpupgrade,splithttp,quic,reality,kcp}`; sing-box for xHTTP stream-one; hiddify-sing-box `transport/v2rayxhttp` for packet-up |
+| `blackwire-transport` | Xray `transport/internet/{tcp,tls,websocket,grpc,httpupgrade,splithttp,quic,reality}`; sing-box for xHTTP stream-one; hiddify-sing-box `transport/v2rayxhttp` for packet-up |
 | `blackwire-tls` | uTLS/Chrome profiles as used by REALITY clients; Xray TLS settings |
 | `blackwire-app` | Xray `app/router`, `app/dispatcher`, `app/dns` |
 | `blackwire-config` | Shape inspired by Xray/sing-box JSON; **semantic** truth is still upstream behavior, not our schema |

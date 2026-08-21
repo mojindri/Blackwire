@@ -58,7 +58,7 @@
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
@@ -102,10 +102,16 @@ pub fn start_metrics_server(addr: &str) -> anyhow::Result<JoinHandle<()>> {
         .map_err(|e| anyhow::anyhow!("invalid metrics addr '{addr}': {e}"))?;
 
     // Install the Prometheus recorder.
-    let builder = metrics_exporter_prometheus::PrometheusBuilder::new();
-    let handle = builder
-        .install_recorder()
-        .map_err(|e| anyhow::anyhow!("failed to install Prometheus recorder: {e}"))?;
+    static HANDLE: OnceLock<metrics_exporter_prometheus::PrometheusHandle> = OnceLock::new();
+    let handle = if let Some(handle) = HANDLE.get() {
+        handle.clone()
+    } else {
+        let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+            .install_recorder()
+            .map_err(|e| anyhow::anyhow!("failed to install Prometheus recorder: {e}"))?;
+        let _ = HANDLE.set(handle.clone());
+        handle
+    };
     METRICS_ENABLED.store(true, Ordering::Relaxed);
 
     // Describe metrics so Prometheus scrape shows help text.
@@ -513,26 +519,31 @@ fn describe_metrics() {
         metrics::Unit::Count,
         "Classified QUIC path loss fingerprints"
     );
+    #[cfg(feature = "experimental-fec")]
     metrics::describe_counter!(
         "blackwire_fec_mode_total",
         metrics::Unit::Count,
         "Selected FEC modes for protected datagram groups"
     );
+    #[cfg(feature = "experimental-fec")]
     metrics::describe_counter!(
         "blackwire_fec_recovered_packets_total",
         metrics::Unit::Count,
         "Datagram packets recovered by FEC"
     );
+    #[cfg(feature = "experimental-fec")]
     metrics::describe_counter!(
         "blackwire_fec_overhead_bytes_total",
         metrics::Unit::Bytes,
         "FEC parity overhead bytes sent"
     );
+    #[cfg(feature = "experimental-fec")]
     metrics::describe_counter!(
         "blackwire_fec_stale_drops_total",
         metrics::Unit::Count,
         "Stale FEC decode groups dropped before recovery"
     );
+    #[cfg(feature = "experimental-fec")]
     metrics::describe_counter!(
         "blackwire_fec_duplicate_safe_skip_total",
         metrics::Unit::Count,

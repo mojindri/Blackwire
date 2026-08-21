@@ -17,9 +17,9 @@ use crate::{
     error::{ApiResult, AppError},
     models::{
         ApplyResult, BulkUserInput, CurrentAdmin, GeneratedUuid, Inbound, InboundInput, LoginInput,
-        LoginResponse, MaintenanceResult, ManagedUser, Outbound, OutboundInput,
-        RealityClientValues, RealityGeneratedValues, ServiceStatus, Settings, SetupInput, Status,
-        TlsSelfSignedInput, TlsSelfSignedResult, TlsServerValues, TrafficSnapshot, UserInput,
+        LoginResponse, ManagedUser, Outbound, OutboundInput, RealityClientValues,
+        RealityGeneratedValues, ServiceStatus, Settings, SetupInput, Status, TlsSelfSignedInput,
+        TlsSelfSignedResult, TlsServerValues, TrafficSnapshot, UserInput,
     },
     mysql_auth as auth,
     mysql_state::AppState,
@@ -126,7 +126,6 @@ pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
         schema_version: blackwire_store::EXPECTED_SCHEMA_VERSION,
         desired_revision: config.desired_revision,
         active_revision: config.active_revision,
-        pending_maintenance_revision: config.pending_maintenance_revision,
         activation_state: config.activation_state,
         last_activation_error: config.last_error,
         runtime_reachable,
@@ -921,39 +920,12 @@ pub async fn rollback_revision(
     ))
 }
 
-pub async fn activate_maintenance(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(input): Json<RevisionInput>,
-) -> ApiResult<MaintenanceResult> {
-    auth::require(&headers, &state).await?;
-    state
-        .store
-        .confirm_maintenance(input.revision)
-        .await
-        .map_err(store_error)?;
-    Ok(Json(MaintenanceResult {
-        revision: input.revision,
-        message: "Maintenance activation confirmed".into(),
-    }))
-}
-
 pub async fn service_status(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<ServiceStatus> {
     auth::require(&headers, &state).await?;
     Ok(Json(service::blackwire_status()))
-}
-
-pub async fn service_restart_blackwire(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<ServiceStatus> {
-    auth::require(&headers, &state).await?;
-    Ok(Json(
-        service::restart_blackwire().map_err(AppError::internal)?,
-    ))
 }
 
 pub async fn service_start_blackwire(

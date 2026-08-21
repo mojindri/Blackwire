@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use serde::{Deserialize, Serialize};
 use validator::{Validate, ValidationError, ValidationErrors};
 
-use super::{Protocol, SecurityType, SniffingConfig, StreamSettingsConfig};
+use super::{NetworkType, Protocol, SecurityType, SniffingConfig, StreamSettingsConfig};
 
 fn reject_shadowtls_protocol(protocol: &Protocol) -> Result<(), ValidationError> {
     if *protocol == Protocol::ShadowTls {
@@ -11,6 +11,23 @@ fn reject_shadowtls_protocol(protocol: &Protocol) -> Result<(), ValidationError>
         error.message = Some(
             "protocol 'shadowtls' is not a standalone proxy protocol; \
              use 'security: shadowtls' in streamSettings on a VLESS, Trojan, or VMess endpoint"
+                .into(),
+        );
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn reject_generic_quic_transport(
+    protocol: &Protocol,
+    stream: &StreamSettingsConfig,
+) -> Result<(), ValidationError> {
+    if stream.network == NetworkType::Quic
+        && !matches!(protocol, Protocol::Hysteria2 | Protocol::Tuic)
+    {
+        let mut error = ValidationError::new("unsupported_transport");
+        error.message = Some(
+            "generic V2Ray QUIC transport was removed; use Hysteria2/TUIC or a supported stream transport"
                 .into(),
         );
         return Err(error);
@@ -70,6 +87,9 @@ impl Validate for InboundConfig {
         }
 
         if let Some(stream) = &self.stream_settings {
+            if let Err(error) = reject_generic_quic_transport(&self.protocol, stream) {
+                errors.add("streamSettings.network", error);
+            }
             if stream.security == SecurityType::Reality {
                 match stream.reality_settings.as_ref() {
                     Some(reality) if reality.dest.trim().is_empty() => {
@@ -145,6 +165,12 @@ impl Validate for OutboundConfig {
             let mut error = ValidationError::new("range");
             error.message = Some("outbound settings.port must be between 1 and 65535".into());
             errors.add("settings.port", error);
+        }
+
+        if let Some(stream) = &self.stream_settings {
+            if let Err(error) = reject_generic_quic_transport(&self.protocol, stream) {
+                errors.add("streamSettings.network", error);
+            }
         }
 
         if errors.is_empty() {
@@ -224,10 +250,6 @@ pub struct EndpointSettings {
     pub congestion: Option<CongestionSettings>,
     /// Per-endpoint QUIC socket overrides.
     pub quic: Option<QuicSocketOverrides>,
-    /// Per-endpoint datagram overrides.
-    pub datagram: Option<DatagramOverrides>,
-    /// Per-endpoint forward-error-correction overrides.
-    pub fec: Option<FecOverrides>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -334,7 +356,7 @@ pub struct QuicSocketOverrides {
     pub send_buffer_bytes: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
 #[serde(untagged)]
 /// Endpoint shard count expressed directly or as a named policy.
 pub enum EndpointCount {
@@ -357,48 +379,6 @@ impl EndpointCount {
         }
         .clamp(1, 64)
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-/// Per-endpoint datagram transport overrides.
-pub struct DatagramOverrides {
-    /// Enables datagram transport.
-    pub enabled: Option<bool>,
-    /// Enables UDP tunnelling over the datagram transport.
-    pub udp_over_datagram: Option<bool>,
-    /// Datagram scheduling policy name.
-    pub policy: Option<String>,
-    /// Maximum queue delay in milliseconds.
-    pub max_queue_delay_ms: Option<u64>,
-    /// Enables accelerated DNS retry handling.
-    pub fast_dns_retry: Option<bool>,
-    /// Delay before an accelerated DNS retry, in milliseconds.
-    pub fast_dns_retry_delay_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-/// Per-endpoint forward-error-correction overrides.
-pub struct FecOverrides {
-    /// FEC mode name.
-    pub mode: Option<String>,
-    /// Maximum parity overhead as a percentage.
-    pub max_overhead_percent: Option<u8>,
-    /// Disables FEC for bulk TCP-like traffic when enabled.
-    pub avoid_bulk_tcp: Option<bool>,
-    /// Disables FEC for sequential DNS exchanges when enabled.
-    pub disable_for_sequential_dns: Option<bool>,
-    /// Minimum concurrency required for block FEC.
-    pub min_concurrency_for_block_fec: Option<usize>,
-    /// Maximum packets in one FEC generation.
-    pub max_generation_packets: Option<u8>,
-    /// Maximum time to assemble a generation, in milliseconds.
-    pub max_generation_delay_ms: Option<u64>,
-    /// Recovery deadline in milliseconds.
-    pub recovery_deadline_ms: Option<u64>,
-    /// Number of packets retained for duplicate detection.
-    pub dedup_window_packets: Option<usize>,
 }
 
 /// Per-inbound runtime safety limits.

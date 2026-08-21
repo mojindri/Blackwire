@@ -38,19 +38,19 @@ static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "latency-lab")]
+use std::time::Instant;
 
 use anyhow::{Context as _, Result};
-use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use tracing::{error, info, warn};
 use validator::Validate;
 
-use blackwire_api::management::InboundManagement;
 use blackwire_config::schema::{
     explain_cost, validate_fast_profile, Config, ProfileMode, ProfileViolation,
 };
-use blackwire_core::{requires_instance_restart, Instance};
+use blackwire_core::{requires_instance_handover, Instance};
 use blackwire_store::Database;
 
 struct RunningInstance {
@@ -58,9 +58,51 @@ struct RunningInstance {
     instance: Instance,
 }
 
-#[derive(Clone)]
-struct RuntimeControl {
-    instance: Arc<tokio::sync::Mutex<Option<RunningInstance>>>,
+struct RuntimeServices {
+    metrics_addr: Option<String>,
+    metrics_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl RuntimeServices {
+    fn start(config: &Config) -> Result<Self> {
+        let metrics_addr = config.metrics_addr.clone();
+        let metrics_task = start_runtime_metrics(metrics_addr.as_deref())?;
+        Ok(Self {
+            metrics_addr,
+            metrics_task,
+        })
+    }
+
+    async fn apply(&mut self, config: &Config) -> Result<()> {
+        let next_metrics = config.metrics_addr.clone();
+        if next_metrics == self.metrics_addr {
+            return Ok(());
+        }
+
+        let previous_metrics = self.metrics_addr.clone();
+        if let Some(task) = self.metrics_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+
+        match start_runtime_metrics(next_metrics.as_deref()) {
+            Ok(metrics_task) => {
+                self.metrics_addr = next_metrics;
+                self.metrics_task = metrics_task;
+                Ok(())
+            }
+            Err(error) => {
+                self.metrics_task = start_runtime_metrics(previous_metrics.as_deref())?;
+                self.metrics_addr = previous_metrics;
+                Err(error)
+            }
+        }
+    }
+}
+
+fn start_runtime_metrics(addr: Option<&str>) -> Result<Option<tokio::task::JoinHandle<()>>> {
+    addr.map(blackwire_app::metrics::start_metrics_server)
+        .transpose()
 }
 
 // ── Top-level CLI struct ──────────────────────────────────────────────────────
@@ -109,9 +151,11 @@ enum Command {
     ExplainCost(ExplainCostArgs),
 
     /// Run a native Hysteria2 UDP datagram benchmark.
+    #[cfg(feature = "latency-lab")]
     Hy2UdpBench(Hy2UdpBenchArgs),
 
     /// Run a mixed Hysteria2 UDP benchmark with DNS, interactive, and bulk flows.
+    #[cfg(feature = "latency-lab")]
     Hy2UdpMixBench(Hy2UdpMixBenchArgs),
 
     /// Print the build version and quit.
@@ -162,13 +206,8 @@ enum DbCommand {
         #[arg(long)]
         replace: bool,
     },
-    /// Create a maintenance revision restoring a historical snapshot.
+    /// Create a new desired revision restoring a historical snapshot.
     Rollback {
-        #[arg(value_name = "REVISION")]
-        revision: i64,
-    },
-    /// Confirm activation of the current pending-maintenance revision.
-    ActivateMaintenance {
         #[arg(value_name = "REVISION")]
         revision: i64,
     },
@@ -183,6 +222,7 @@ struct ExplainCostArgs {
 }
 
 /// Arguments for the `hy2-udp-bench` subcommand.
+#[cfg(feature = "latency-lab")]
 #[derive(clap::Args)]
 struct Hy2UdpBenchArgs {
     /// Hysteria2 server UDP socket, e.g. `server-host:10310`.
@@ -271,6 +311,7 @@ struct Hy2UdpBenchArgs {
 }
 
 /// Arguments for the `hy2-udp-mix-bench` subcommand.
+#[cfg(feature = "latency-lab")]
 #[derive(clap::Args)]
 struct Hy2UdpMixBenchArgs {
     #[command(flatten)]
@@ -420,6 +461,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        #[cfg(feature = "latency-lab")]
         Command::Hy2UdpBench(args) => {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -437,6 +479,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        #[cfg(feature = "latency-lab")]
         Command::Hy2UdpMixBench(args) => {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -499,13 +542,9 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
     // `Instance::from_config()` reads the current config snapshot, builds
     // all inbound/outbound handlers, and starts all TCP listener tasks.
     let config = effective_config(initial_config, profile_override);
-    let api_config = config
-        .api
-        .as_ref()
-        .and_then(blackwire_api::server::api_server_config);
     let runtime_config = instance_runtime_config(&config);
     let instance = Arc::new(tokio::sync::Mutex::new(Some(RunningInstance {
-        config: Arc::clone(&runtime_config),
+        config: Arc::clone(&config),
         instance: Instance::from_config(runtime_config)
             .await
             .context("building proxy instance from config")?,
@@ -519,24 +558,7 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
         .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
     database.heartbeat(&runtime_id, initial_revision).await?;
 
-    if let Some(api_config) = api_config {
-        let management: blackwire_api::management::ManagementHandle = Arc::new(RuntimeControl {
-            instance: Arc::clone(&instance),
-        });
-        blackwire_api::server::start_api_server(
-            &api_config.listen_addr,
-            management,
-            api_config.token.clone(),
-            &api_config.services,
-        )
-        .with_context(|| {
-            format!(
-                "starting blackwire-api gRPC server on '{}'",
-                api_config.listen_addr
-            )
-        })?;
-        info!(addr = %api_config.listen_addr, authenticated = api_config.token.is_some(), "blackwire-api gRPC server started");
-    }
+    let services = Arc::new(tokio::sync::Mutex::new(RuntimeServices::start(&config)?));
 
     // Reconcile desired revisions. Hot-swappable state uses atomic reload;
     // listener changes prepare a replacement instance before old accept loops
@@ -546,6 +568,7 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
         let live_instance = Arc::clone(&instance);
         let database = database.clone();
         let runtime_id = runtime_id.clone();
+        let live_services = Arc::clone(&services);
         tokio::spawn(async move {
             let mut observed_revision = initial_revision;
             let mut counter_tick = 0u8;
@@ -570,9 +593,7 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                         warn!(%error, "failed to persist runtime traffic counters");
                     }
                 }
-                if state.desired_revision == observed_revision
-                    || state.pending_maintenance_revision == Some(state.desired_revision)
-                {
+                if state.desired_revision == observed_revision {
                     continue;
                 }
                 let stored = match database.load_config(state.desired_revision).await {
@@ -604,50 +625,47 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                 let effective = effective_config(Arc::new(stored.config), profile_override);
                 let new_config = instance_runtime_config(&effective);
 
-                let should_restart = {
+                let needs_handover = {
                     let guard = live_instance.lock().await;
                     let Some(running) = guard.as_ref() else {
                         break;
                     };
-                    requires_instance_restart(&running.config, &new_config)
+                    requires_instance_handover(&running.config, &effective)
                 };
 
-                if should_restart {
-                    let replacement = match Instance::from_config(Arc::clone(&new_config)).await {
+                if needs_handover {
+                    let replacement = match prepare_instance_handover(
+                        &live_instance,
+                        Arc::clone(&new_config),
+                    )
+                    .await
+                    {
                         Ok(instance) => instance,
                         Err(error) => {
-                            let is_maintenance = database
-                                .activation_class(stored.revision)
-                                .await
-                                .is_ok_and(|class| {
-                                    class == blackwire_store::ActivationClass::MaintenanceRequired
-                                });
-                            if is_maintenance {
-                                let _ = database
-                                    .restore_active_after_maintenance_failure(
-                                        stored.revision,
-                                        &error.to_string(),
-                                    )
-                                    .await;
-                            } else {
-                                let _ = database
-                                    .record_activation_failure(stored.revision, &error.to_string())
-                                    .await;
-                            }
+                            let _ = database
+                                .record_activation_failure(stored.revision, &error.to_string())
+                                .await;
                             observed_revision = stored.revision;
                             error!(revision = stored.revision, %error, "listener replacement preparation failed; active instance retained");
                             continue;
                         }
                     };
+                    if let Err(error) = live_services.lock().await.apply(&effective).await {
+                        let _ = database
+                            .record_activation_failure(stored.revision, &error.to_string())
+                            .await;
+                        observed_revision = stored.revision;
+                        error!(revision = stored.revision, %error, "runtime service handover failed; active instance retained");
+                        continue;
+                    }
                     let old = {
                         let mut guard = live_instance.lock().await;
                         guard.replace(RunningInstance {
-                            config: Arc::clone(&new_config),
+                            config: Arc::clone(&effective),
                             instance: replacement,
                         })
                     };
                     if let Some(old) = old {
-                        old.instance.shutdown();
                         drop(old);
                     }
                 } else {
@@ -668,7 +686,7 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
                     }
                     let mut guard = live_instance.lock().await;
                     if let Some(running) = guard.as_mut() {
-                        running.config = new_config;
+                        running.config = effective;
                     }
                 }
                 if let Err(error) = database.mark_active(stored.revision).await {
@@ -689,6 +707,50 @@ async fn run_proxy(args: RunArgs) -> Result<()> {
     shutdown_signal(instance).await;
 
     Ok(())
+}
+
+async fn prepare_instance_handover(
+    live_instance: &Arc<tokio::sync::Mutex<Option<RunningInstance>>>,
+    new_config: Arc<Config>,
+) -> Result<Instance> {
+    match Instance::from_config(Arc::clone(&new_config)).await {
+        Ok(instance) => return Ok(instance),
+        Err(error) if !is_exclusive_bind_conflict(&error) => return Err(error),
+        Err(error) => {
+            warn!(%error, "prepared handover hit an exclusive OS resource; retrying in-process after releasing the old listener");
+        }
+    }
+
+    let previous = live_instance
+        .lock()
+        .await
+        .take()
+        .context("active instance disappeared during exclusive handover")?;
+    let previous_config = Arc::clone(&previous.config);
+    drop(previous);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    match Instance::from_config(new_config).await {
+        Ok(instance) => Ok(instance),
+        Err(error) => {
+            let restored = Instance::from_config(instance_runtime_config(&previous_config))
+                .await
+                .context("new instance and last-known-good restoration both failed")?;
+            live_instance.lock().await.replace(RunningInstance {
+                config: previous_config,
+                instance: restored,
+            });
+            Err(error)
+        }
+    }
+}
+
+fn is_exclusive_bind_conflict(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}").to_ascii_lowercase();
+    message.contains("address already in use")
+        || message.contains("device or resource busy")
+        || message.contains("resource busy")
+        || message.contains("already attached")
 }
 
 type RuntimeCounterSnapshot = Vec<(String, u64, u64)>;
@@ -767,89 +829,7 @@ async fn shutdown_signal(instance: Arc<tokio::sync::Mutex<Option<RunningInstance
     }
 
     let mut guard = instance.lock().await;
-    if let Some(running) = guard.take() {
-        running.instance.shutdown();
-    }
-}
-
-impl RuntimeControl {
-    async fn with_reload<T>(
-        &self,
-        f: impl FnOnce(&blackwire_core::ReloadState) -> T,
-    ) -> Result<T, String> {
-        let guard = self.instance.lock().await;
-        let running = guard
-            .as_ref()
-            .ok_or_else(|| "no running instance is available".to_string())?;
-        Ok(f(&running.instance.reload))
-    }
-}
-
-#[async_trait]
-impl InboundManagement for RuntimeControl {
-    async fn list_inbound_tags(&self) -> Vec<String> {
-        self.with_reload(|r| r.inbound_tags.read().map(|t| t.clone()).unwrap_or_default())
-            .await
-            .unwrap_or_default()
-    }
-
-    async fn list_outbound_tags(&self) -> Vec<String> {
-        self.with_reload(|r| {
-            r.outbound_tags
-                .read()
-                .map(|t| t.clone())
-                .unwrap_or_default()
-        })
-        .await
-        .unwrap_or_default()
-    }
-
-    async fn vless_user_count(&self, inbound_tag: &str) -> Option<i64> {
-        self.with_reload(|r| {
-            r.vless_registries
-                .get(inbound_tag)
-                .map(|registry| registry.len() as i64)
-        })
-        .await
-        .ok()
-        .flatten()
-    }
-
-    async fn list_vless_users(
-        &self,
-        inbound_tag: &str,
-        email: &str,
-    ) -> Result<Vec<blackwire_api::management::VlessUserRecord>, String> {
-        self.with_reload(|r| {
-            r.vless_registries
-                .get(inbound_tag)
-                .map(|registry| {
-                    registry
-                        .list_users(email)
-                        .into_iter()
-                        .map(|u| blackwire_api::management::VlessUserRecord {
-                            email: u.email.to_string(),
-                            uuid: uuid::Uuid::from_bytes(u.uuid).to_string(),
-                            flow: u.flow.clone(),
-                            level: 0,
-                        })
-                        .collect()
-                })
-                .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))
-        })
-        .await?
-    }
-
-    async fn list_connections(&self) -> Vec<blackwire_connmgr::ConnectionSnapshot> {
-        blackwire_connmgr::global_manager().list()
-    }
-
-    async fn close_connections(
-        &self,
-        selector: blackwire_connmgr::CloseSelector,
-    ) -> Result<usize, String> {
-        Ok(blackwire_connmgr::global_manager().close(selector).matched)
-    }
+    guard.take();
 }
 
 async fn cmd_db(command: DbCommand) -> Result<()> {
@@ -956,11 +936,6 @@ async fn cmd_db(command: DbCommand) -> Result<()> {
             let result = database.rollback(revision, "blackwire-cli").await?;
             println!("{}", result.message);
         }
-        DbCommand::ActivateMaintenance { revision } => {
-            database.verify_schema().await?;
-            database.confirm_maintenance(revision).await?;
-            println!("revision {revision} released for maintenance activation");
-        }
     }
     Ok(())
 }
@@ -1011,18 +986,12 @@ async fn import_bootstrap_fixture(
     let core = CoreSettings {
         profile: config.profile,
         fast: config.fast.clone(),
-        budget: config.budget,
         vision: config.vision,
         first_packet_boost: config.first_packet_boost,
-        log: config.log.clone(),
         metrics_addr: config.metrics_addr.clone(),
-        api: config.api.clone(),
         stats: config.stats.clone(),
         limits: config.limits.clone(),
         quic: config.quic.clone(),
-        datagram: config.datagram.clone(),
-        fec: config.fec.clone(),
-        tun: config.tun.clone(),
     };
     revision = database
         .save_core_settings("blackwire-db-import", revision, core)
@@ -1045,8 +1014,6 @@ async fn import_bootstrap_fixture(
                 geoip_file: routing.geoip_file.clone(),
                 geosite_file: routing.geosite_file.clone(),
                 dns_servers: routing.dns_servers.clone(),
-                fake_ip_enabled: routing.fake_ip_enabled,
-                fake_ip_pool: routing.fake_ip_pool.clone(),
                 rules: vec![],
                 balancers: vec![],
             },
@@ -1200,10 +1167,6 @@ async fn import_bootstrap_fixture(
 
     if let Some(dns) = &config.dns {
         routing.dns_servers.clone_from(&dns.servers);
-        if let Some(fake_ip) = &dns.fake_ip {
-            routing.fake_ip_enabled = fake_ip.enabled;
-            routing.fake_ip_pool.clone_from(&fake_ip.pool);
-        }
     }
     revision = database
         .save_routing_dns(
@@ -1214,8 +1177,6 @@ async fn import_bootstrap_fixture(
                 geoip_file: routing.geoip_file,
                 geosite_file: routing.geosite_file,
                 dns_servers: routing.dns_servers,
-                fake_ip_enabled: routing.fake_ip_enabled,
-                fake_ip_pool: routing.fake_ip_pool,
                 rules: vec![],
                 balancers: vec![],
             },
@@ -1249,6 +1210,7 @@ async fn cmd_explain_cost(args: ExplainCostArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "latency-lab")]
 async fn cmd_hy2_udp_bench(args: Hy2UdpBenchArgs) -> Result<()> {
     let datagram_mode = parse_datagram_priority_mode(&args.datagram_policy)?;
     let fec_mode = parse_fec_mode(&args.fec_mode)?;
@@ -1309,6 +1271,7 @@ async fn cmd_hy2_udp_bench(args: Hy2UdpBenchArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "latency-lab")]
 async fn cmd_hy2_udp_mix_bench(args: Hy2UdpMixBenchArgs) -> Result<()> {
     let datagram_mode = parse_datagram_priority_mode(&args.common.datagram_policy)?;
     let fec_mode = parse_fec_mode(&args.common.fec_mode)?;
@@ -1368,6 +1331,7 @@ async fn cmd_hy2_udp_mix_bench(args: Hy2UdpMixBenchArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "latency-lab")]
 fn hy2_udp_bench_config(
     args: &Hy2UdpBenchArgs,
     congestion_mode: blackwire_transport::CongestionMode,
@@ -1410,6 +1374,7 @@ fn hy2_udp_bench_config(
     }
 }
 
+#[cfg(feature = "latency-lab")]
 #[derive(Default)]
 struct UdpBenchStats {
     latencies_us: Vec<u64>,
@@ -1420,6 +1385,7 @@ struct UdpBenchStats {
     duration_secs: f64,
 }
 
+#[cfg(feature = "latency-lab")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum BenchClass {
     Dns,
@@ -1427,6 +1393,7 @@ enum BenchClass {
     Bulk,
 }
 
+#[cfg(feature = "latency-lab")]
 #[derive(Default)]
 struct UdpMixedBenchStats {
     dns: UdpBenchStats,
@@ -1434,6 +1401,7 @@ struct UdpMixedBenchStats {
     bulk: UdpBenchStats,
 }
 
+#[cfg(feature = "latency-lab")]
 impl UdpMixedBenchStats {
     fn by_class_mut(&mut self, class: BenchClass) -> &mut UdpBenchStats {
         match class {
@@ -1444,11 +1412,13 @@ impl UdpMixedBenchStats {
     }
 }
 
+#[cfg(feature = "latency-lab")]
 struct InFlightProbe {
     class: BenchClass,
     sent_at: Instant,
 }
 
+#[cfg(feature = "latency-lab")]
 async fn run_udp_mixed_probe_set(
     session: &blackwire_transport::Hysteria2UdpSession,
     args: &Hy2UdpMixBenchArgs,
@@ -1600,6 +1570,7 @@ async fn run_udp_mixed_probe_set(
     Ok(stats)
 }
 
+#[cfg(feature = "latency-lab")]
 impl UdpBenchStats {
     fn ok(&self) -> usize {
         self.latencies_us.len()
@@ -1610,6 +1581,7 @@ impl UdpBenchStats {
     }
 }
 
+#[cfg(feature = "latency-lab")]
 async fn run_udp_probe_set(
     session: &blackwire_transport::Hysteria2UdpSession,
     dest: blackwire_transport::UdpDestination,
@@ -1690,6 +1662,7 @@ async fn run_udp_probe_set(
     Ok(stats)
 }
 
+#[cfg(feature = "latency-lab")]
 fn parse_hy2_udp_destination(host: &str, port: u16) -> blackwire_transport::UdpDestination {
     if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
         return blackwire_transport::UdpDestination::V4(ip, port);
@@ -1700,6 +1673,7 @@ fn parse_hy2_udp_destination(host: &str, port: u16) -> blackwire_transport::UdpD
     blackwire_transport::UdpDestination::Domain(host.to_string(), port)
 }
 
+#[cfg(feature = "latency-lab")]
 fn parse_datagram_priority_mode(value: &str) -> Result<blackwire_transport::DatagramPriorityMode> {
     match value {
         "standard" => Ok(blackwire_transport::DatagramPriorityMode::Standard),
@@ -1708,6 +1682,7 @@ fn parse_datagram_priority_mode(value: &str) -> Result<blackwire_transport::Data
     }
 }
 
+#[cfg(feature = "latency-lab")]
 fn parse_fec_mode(value: &str) -> Result<blackwire_transport::FecMode> {
     match value {
         "off" => Ok(blackwire_transport::FecMode::Off),
@@ -1719,6 +1694,7 @@ fn parse_fec_mode(value: &str) -> Result<blackwire_transport::FecMode> {
     }
 }
 
+#[cfg(feature = "latency-lab")]
 fn bench_payload(seq: u64, payload_bytes: usize) -> Vec<u8> {
     let len = payload_bytes.max(8);
     let mut payload = vec![0u8; len];
@@ -1729,11 +1705,13 @@ fn bench_payload(seq: u64, payload_bytes: usize) -> Vec<u8> {
     payload
 }
 
+#[cfg(feature = "latency-lab")]
 fn bench_payload_seq(payload: &[u8]) -> Option<u64> {
     let seq_bytes: [u8; 8] = payload.get(..8)?.try_into().ok()?;
     Some(u64::from_be_bytes(seq_bytes))
 }
 
+#[cfg(feature = "latency-lab")]
 fn percentile_ms(sorted_us: &[u64], percentile: f64) -> f64 {
     if sorted_us.is_empty() {
         return 0.0;
@@ -1761,15 +1739,15 @@ fn effective_config(
     Arc::new(cfg)
 }
 
-/// The CLI owns the gRPC API server so HandlerService can rebuild the live
-/// `Instance`. Strip `api` before handing config to core to avoid a second API
-/// server being started by direct `Instance::from_config` compatibility code.
+/// The server CLI owns Prometheus and never starts client-only TUN capture.
+/// Strip both before handing config to core.
 fn instance_runtime_config(base: &Arc<Config>) -> Arc<Config> {
-    if base.api.is_none() {
+    if base.metrics_addr.is_none() && base.tun.is_none() {
         return Arc::clone(base);
     }
     let mut cfg = base.as_ref().clone();
-    cfg.api = None;
+    cfg.metrics_addr = None;
+    cfg.tun = None;
     Arc::new(cfg)
 }
 

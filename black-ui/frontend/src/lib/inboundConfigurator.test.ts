@@ -147,8 +147,6 @@ describe("inboundConfigurator", () => {
     expect(defaultState.hysteria2CongestionMode).toBe("standard");
     expect(defaultState.hysteria2MinAckRate).toBe("0.8");
     expect(defaultState.hysteria2QuicEndpoints).toBe("1");
-    expect(defaultState.hysteria2DatagramPolicy).toBe("standard");
-    expect(defaultState.hysteria2FecMode).toBe("off");
 
     const state = syncAfterStructuredChange({
       ...createInboundEditorState(),
@@ -159,15 +157,11 @@ describe("inboundConfigurator", () => {
       hysteria2MaxQueueDelayMs: "120",
       hysteria2PacingGain: "1.4",
       hysteria2LossCompensation: false,
+      hysteria2TransportOverrides: true,
       hysteria2QuicReusePort: true,
       hysteria2QuicEndpoints: "cpu",
       hysteria2QuicRecvBufferBytes: "16777216",
-      hysteria2QuicSendBufferBytes: "16777216",
-      hysteria2DatagramEnabled: true,
-      hysteria2DatagramUdpOverDatagram: false,
-      hysteria2DatagramPolicy: "h2-plus",
-      hysteria2FecMode: "auto",
-      hysteria2FecMaxOverheadPercent: "20"
+      hysteria2QuicSendBufferBytes: "16777216"
     });
     const settings = parseObject(buildInboundInput(state).settings);
 
@@ -185,15 +179,8 @@ describe("inboundConfigurator", () => {
       recvBufferBytes: 16777216,
       sendBufferBytes: 16777216
     });
-    expect(settings.datagram).toMatchObject({
-      enabled: true,
-      udpOverDatagram: false,
-      policy: "h2-plus"
-    });
-    expect(settings.fec).toMatchObject({
-      mode: "auto",
-      maxOverheadPercent: 20
-    });
+    expect(settings.datagram).toBeUndefined();
+    expect(settings.fec).toBeUndefined();
   });
 
   it("serializes simple hysteria2 performance modes like the save button output", () => {
@@ -259,6 +246,26 @@ describe("inboundConfigurator", () => {
     expect(settings.quic).toBeUndefined();
     expect(settings.datagram).toBeUndefined();
     expect(settings.fec).toBeUndefined();
+  });
+
+  it("persists explicit default-looking hysteria2 endpoint overrides", () => {
+    const state = syncAfterStructuredChange({
+      ...createInboundEditorState(),
+      protocol: "hysteria2",
+      hysteria2Auth: "shared-secret",
+      hysteria2TransportOverrides: true
+    });
+    const settings = parseObject(buildInboundInput(state).settings);
+
+    expect(settings.quic).toEqual({
+      reusePort: false,
+      endpoints: 1,
+      recvBufferBytes: 8388608,
+      sendBufferBytes: 8388608
+    });
+    expect(settings.datagram).toBeUndefined();
+    expect(settings.fec).toBeUndefined();
+    expect(state.hysteria2TransportOverrides).toBe(true);
   });
 
   it("warns hysteria2 users about client TUN and FakeIP instability", () => {
@@ -381,7 +388,7 @@ describe("inboundConfigurator", () => {
   it("surfaces non-blocking compatibility notices for client-sensitive inbounds", () => {
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "tuic" })?.tone).toBe("info");
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "tuic" })?.message).toContain("TUIC v5 is supported");
-    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "vmess", network: "quic" })?.message).toContain("VMess over QUIC");
+    expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "vmess", network: "quic" })?.message).toContain("was removed");
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), protocol: "hysteria2" })?.tone).toBe("info");
     expect(inboundCompatibilityNotice({ ...createInboundEditorState(), network: "ws", security: "reality" })?.message).toContain(
       "REALITY is best on TCP-compatible transport paths"
@@ -528,60 +535,13 @@ describe("inboundConfigurator", () => {
     });
   });
 
-  it("serializes KCP tuning and preserves QUIC as a direct network selection", () => {
-    const kcpBuilt = buildInboundInput(
-      syncAfterStructuredChange({
-        ...createInboundEditorState(),
-        network: "kcp",
-        kcpHeader: "srtp",
-        kcpMtu: "1350",
-        kcpTti: "20",
-        kcpUplinkCapacity: "5",
-        kcpDownlinkCapacity: "20",
-        kcpCongestion: true,
-        kcpReadBufferSize: "2",
-        kcpWriteBufferSize: "2"
-      })
-    );
-    const quicBuilt = buildInboundInput(
-      syncAfterStructuredChange({
-        ...createInboundEditorState(),
-        network: "quic",
-        security: "tls",
-        tlsServerName: "quic.example.com"
-      })
-    );
-
-    expect(parseObject(kcpBuilt.streamSettings)).toMatchObject({
-      network: "kcp",
-      security: "none",
-      kcpSettings: {
-        header: "srtp",
-        mtu: 1350,
-        tti: 20,
-        uplink_capacity: 5,
-        downlink_capacity: 20,
-        congestion: true,
-        read_buffer_size: 2,
-        write_buffer_size: 2
-      }
-    });
-    expect(parseObject(quicBuilt.streamSettings)).toMatchObject({
-      network: "quic",
-      security: "tls",
-      tlsSettings: { serverName: "quic.example.com" }
-    });
-  });
-
   it("covers the structured inbound transport and security matrix", () => {
     const networks = [
       { network: "tcp", settings: {}, extras: {} },
       { network: "ws", settings: { wsSettings: { path: "/ws", headers: { Host: "ws.example.com" } } }, extras: { wsPath: "/ws", wsHost: "ws.example.com" } },
       { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
       { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
-      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
-      { network: "kcp", settings: { kcpSettings: { header: "srtp", mtu: 1350 } }, extras: { kcpHeader: "srtp", kcpMtu: "1350" } },
-      { network: "quic", settings: {}, extras: {} }
+      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } }
     ] as const;
 
     const securities = [
@@ -649,9 +609,7 @@ describe("inboundConfigurator", () => {
       { network: "ws", settings: { wsSettings: { path: "/ws", headers: { Host: "ws.example.com" } } }, extras: { wsPath: "/ws", wsHost: "ws.example.com" } },
       { network: "grpc", settings: { grpcSettings: { serviceName: "GunService" } }, extras: { grpcServiceName: "GunService" } },
       { network: "httpupgrade", settings: { httpupgradeSettings: { path: "/upgrade", host: "edge.example.com" } }, extras: { httpupgradePath: "/upgrade", httpupgradeHost: "edge.example.com" } },
-      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } },
-      { network: "kcp", settings: { kcpSettings: { header: "srtp", mtu: 1350 } }, extras: { kcpHeader: "srtp", kcpMtu: "1350" } },
-      { network: "quic", settings: {}, extras: {} }
+      { network: "splithttp", settings: { splithttpSettings: { path: "/packet" } }, extras: { splitHttpPath: "/packet" } }
     ] as const;
     const securities = [
       { security: "none", patch: {}, settings: {} },
@@ -765,6 +723,16 @@ describe("inboundConfigurator", () => {
         listen: "127.0.0.1"
       }).some((issue) => issue.field === "listen")
     ).toBe(false);
+  });
+
+  it("rejects the removed generic V2Ray QUIC transport", () => {
+    const issues = validateInboundState({
+      ...createInboundEditorState(),
+      protocol: "vless",
+      network: "quic"
+    });
+
+    expect(issues.some((issue) => issue.field === "network")).toBe(true);
   });
 
   it("serializes sniffing and limits while clearing them when no longer needed", () => {

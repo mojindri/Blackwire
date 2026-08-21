@@ -51,7 +51,6 @@ Examples:
 - gRPC
 - QUIC
 - REALITY
-- mKCP
 - TUN
 - ShadowTLS
 
@@ -358,24 +357,6 @@ REALITY sits on the border between:
 - Xray interoperability
 
 That is why there are dedicated interop docs and tests.
-
-## mKCP
-
-### What It Is
-
-KCP-style transport over UDP with its own framing/reliability behavior.
-
-### Mental Model
-
-Legacy/internal transport path. Prefer QUIC, Hysteria2, TUIC, or TCP-based
-transports for new deployments.
-
-### Repo Status
-
-The runtime has a UDP listener with per-peer KCP sessions, idle cleanup, and
-local VLESS-over-mKCP e2e coverage for old configs. mKCP is deprecated for the
-release surface: Black UI no longer offers it for new inbounds/outbounds, and
-external-client interop is not a release target.
 
 ## TUN
 

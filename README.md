@@ -21,13 +21,14 @@ Black UI.
 - A MySQL-only control plane with separate runtime, UI, and migrator accounts.
 - A typed Black UI for users, inbounds, outbounds, routing & DNS, runtime, and
   settings—without a raw server-configuration editor.
-- Immutable configuration revisions, validation, rollback, controlled
-  maintenance activation, and safe in-memory operation during a temporary
-  database outage.
+- Immutable configuration revisions, validation, automatic live reload,
+  rollback, and safe in-memory operation during a temporary database outage.
 - Supported proxy protocols and transports documented with evidence in the
   [Feature Matrix](docs/feature-matrix.md).
 - Hiddify-compatible client subscription content derived from your database
   configuration.
+- A separate `blackwire-client` executable for local SOCKS and full-device TUN
+  operation without giving the server process route or device ownership.
 - Native systemd and Docker Compose deployment paths, plus CI, Rust tests, UI
   QA, and external-client interoperability checks.
 
@@ -53,9 +54,9 @@ Download the current release installer, then provide the runtime credential
 file explicitly:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/mojindri/Blackwire/v0.2.5/scripts/install.sh
+curl -fsSLO https://raw.githubusercontent.com/mojindri/Blackwire/v0.2.6/scripts/install.sh
 chmod +x install.sh
-VERSION=v0.2.5 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url ./install.sh
+VERSION=v0.2.6 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url ./install.sh
 ```
 
 To have the installer apply migrations, opt in with a separate migrator
@@ -65,7 +66,7 @@ credential. To install Black UI, provide a separate UI credential as well:
 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url \
 MIGRATOR_DATABASE_URL_FILE=/secure/migrator-database-url \
 UI_DATABASE_URL_FILE=/secure/ui-database-url \
-RUN_DB_MIGRATIONS=1 INSTALL_BLACK_UI=1 VERSION=v0.2.5 ./install.sh
+RUN_DB_MIGRATIONS=1 INSTALL_BLACK_UI=1 VERSION=v0.2.6 ./install.sh
 ```
 
 Black UI is private on `127.0.0.1:18080` by default. To expose it on the
@@ -123,6 +124,13 @@ private or put it behind your own hardened HTTPS reverse proxy and access
 control. In Users, choose **Copy subscription** to copy database-derived
 client subscription content suitable for Hiddify.
 
+## Local Device Client
+
+TUN, protected egress, and FakeIP configuration belong to the separate client
+application, not Black UI or the server database. See the
+[client application guide](docs/client-app.md) and the typed
+[direct-mode example](examples/client-direct.json).
+
 ## Common Operations
 
 ```sh
@@ -131,16 +139,15 @@ blackwire db validate
 blackwire db status
 blackwire db history --limit 20
 blackwire db rollback REVISION
-blackwire db activate-maintenance REVISION
 blackwire explain-cost
-sudo systemctl restart blackwire
 sudo journalctl -u blackwire -f
 ```
 
 Each UI or CLI edit creates an immutable revision. Blackwire polls MySQL,
-validates it, then hot-swaps it, hands over a supported listener, or leaves it
-pending until you confirm maintenance activation. It keeps serving the active
-in-memory revision through a temporary database outage.
+validates it, then applies it automatically with an atomic state swap or a
+prepared in-process instance handover. It keeps serving the active in-memory
+revision through a temporary database outage, and retains the last working
+revision if validation or preparation fails.
 
 ## Configuration
 

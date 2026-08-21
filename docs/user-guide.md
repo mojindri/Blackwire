@@ -26,9 +26,9 @@ but never migrate your database at startup.
 Download the release installer and provide your runtime credential file:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/mojindri/Blackwire/v0.2.5/scripts/install.sh
+curl -fsSLO https://raw.githubusercontent.com/mojindri/Blackwire/v0.2.6/scripts/install.sh
 chmod +x install.sh
-VERSION=v0.2.5 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url ./install.sh
+VERSION=v0.2.6 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url ./install.sh
 ```
 
 To explicitly migrate the schema during installation, provide the migrator
@@ -38,7 +38,7 @@ credential. To install Black UI, provide its separate credential too:
 RUNTIME_DATABASE_URL_FILE=/secure/runtime-database-url \
 MIGRATOR_DATABASE_URL_FILE=/secure/migrator-database-url \
 UI_DATABASE_URL_FILE=/secure/ui-database-url \
-RUN_DB_MIGRATIONS=1 INSTALL_BLACK_UI=1 VERSION=v0.2.5 ./install.sh
+RUN_DB_MIGRATIONS=1 INSTALL_BLACK_UI=1 VERSION=v0.2.6 ./install.sh
 ```
 
 The installer copies service credentials into protected locations under
@@ -105,8 +105,8 @@ Hiddify. It is intentionally not a server configuration export or import.
 
 Use [Configuration For Dummies](08-config-for-dummies.md) to build your first
 inbound, outbound, and routing rule. Blackwire validates every revision and
-will either apply it, hand over a supported listener, or hold it for confirmed
-maintenance activation.
+applies it automatically through an atomic reload or prepared in-process
+handover.
 
 During a temporary MySQL outage, the runtime continues serving its active
 in-memory revision. Edits and new activations wait for MySQL to return.
@@ -118,7 +118,6 @@ blackwire db validate
 blackwire db status
 blackwire db history --limit 20
 blackwire db rollback REVISION
-blackwire db activate-maintenance REVISION
 sudo systemctl status blackwire --no-pager
 sudo journalctl -u blackwire -n 100 --no-pager
 ```

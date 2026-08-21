@@ -121,6 +121,14 @@ install_credential() {
     local source="$1" destination="$2"
     [ -n "$source" ] || die "missing required protected database URL file"
     [ -f "$source" ] || die "database URL file does not exist: $source"
+    # An in-place upgrade commonly passes the already-installed credential as
+    # its source. GNU install rejects copying a file onto itself, although the
+    # intended result (safe ownership and permissions) is well-defined.
+    if [ -e "$destination" ] && [ "$source" -ef "$destination" ]; then
+        sudo_cmd chown "$SERVICE_USER:$SERVICE_GROUP" "$destination"
+        sudo_cmd chmod 0600 "$destination"
+        return
+    fi
     sudo_cmd install -m 0600 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$source" "$destination"
 }
 
@@ -238,7 +246,11 @@ main() {
     prepare_accounts_and_dirs
 
     local work asset binary
-    work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+    work="$(mktemp -d)"
+    # Expand the path while it is still in scope. On an error, bash unwinds
+    # `main` before running EXIT traps, so a trap referring to its local would
+    # otherwise hide the original failure under `set -u`.
+    trap "rm -rf -- $(printf '%q' "$work")" EXIT
     asset="$(detect_asset)"; download_verified_asset "$asset" "$work"
     binary="$(find "$work" -type f -name blackwire -perm -111 | head -n 1)"
     [ -n "$binary" ] || die "blackwire binary not found in release asset"
@@ -257,8 +269,14 @@ main() {
     install_ui
     sudo_cmd systemctl daemon-reload >/dev/null 2>&1 || true
     if [ "$START_SERVICE" = 1 ]; then
-        sudo_cmd systemctl enable --now blackwire
-        [ "$INSTALL_BLACK_UI" != 1 ] || sudo_cmd systemctl enable --now black-ui
+        # `enable --now` does not replace an already-running process. Restart
+        # so an upgrade begins using the binary just installed.
+        sudo_cmd systemctl enable blackwire
+        sudo_cmd systemctl restart blackwire
+        if [ "$INSTALL_BLACK_UI" = 1 ]; then
+            sudo_cmd systemctl enable black-ui
+            sudo_cmd systemctl restart black-ui
+        fi
     fi
     log "installed MySQL-only Blackwire; configure it with Black UI or named db seed presets"
     # `work` is local to main, while EXIT runs after main returns.  Clean it

@@ -153,8 +153,8 @@ fn parse_client_hello(input: &[u8]) -> Result<ParsedClientHello, String> {
     }
 
     let mut cipher_suites = Vec::new();
-    for chunk in record_body[hp..hp + cipher_suites_len].chunks_exact(2) {
-        cipher_suites.push(u16::from_be_bytes([chunk[0], chunk[1]]));
+    for chunk in record_body[hp..hp + cipher_suites_len].as_chunks::<2>().0 {
+        cipher_suites.push(u16::from_be_bytes(*chunk));
     }
     hp += cipher_suites_len;
 
@@ -245,8 +245,8 @@ fn extract_supported_groups(parsed: &ParsedClientHello) -> Result<Vec<u16>, Stri
     }
 
     let mut groups = Vec::new();
-    for chunk in ext.data[2..].chunks_exact(2) {
-        groups.push(u16::from_be_bytes([chunk[0], chunk[1]]));
+    for chunk in ext.data[2..].as_chunks::<2>().0 {
+        groups.push(u16::from_be_bytes(*chunk));
     }
 
     Ok(groups)
@@ -288,8 +288,8 @@ fn extract_supported_versions(parsed: &ParsedClientHello) -> Result<Vec<u16>, St
     }
 
     let mut versions = Vec::new();
-    for chunk in ext.data[1..].chunks_exact(2) {
-        versions.push(u16::from_be_bytes([chunk[0], chunk[1]]));
+    for chunk in ext.data[1..].as_chunks::<2>().0 {
+        versions.push(u16::from_be_bytes(*chunk));
     }
 
     Ok(versions)

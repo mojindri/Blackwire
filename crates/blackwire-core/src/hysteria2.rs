@@ -13,10 +13,7 @@ use dashmap::DashMap;
 
 use blackwire_app::dispatcher::Dispatcher;
 use blackwire_app::user_limits::UserConnectionLimiter;
-use blackwire_config::schema::{
-    DatagramConfig, DatagramPolicy as ConfigDatagramPolicy, EndpointSettings, FecConfig,
-    FecMode as ConfigFecMode, InboundConfig, OutboundConfig, QuicConfig,
-};
+use blackwire_config::schema::{EndpointSettings, InboundConfig, OutboundConfig, QuicConfig};
 use blackwire_transport::{
     CongestionConfig, CongestionMode, Hysteria2AuthStore, Hysteria2ClientConfig,
     Hysteria2OutboundHandler, Hysteria2Server, Hysteria2ServerConfig, QuicSocketConfig,
@@ -38,8 +35,6 @@ pub(crate) fn start_hysteria2_inbound(
     cfg: &InboundConfig,
     auth_stores: &Arc<DashMap<String, Arc<Hysteria2AuthStore>>>,
     quic: Option<&QuicConfig>,
-    datagram: Option<&DatagramConfig>,
-    fec: Option<&FecConfig>,
     default_max_connections: Option<usize>,
     shared_limiter: Option<Arc<Semaphore>>,
     user_limiter: Option<Arc<UserConnectionLimiter>>,
@@ -49,8 +44,6 @@ pub(crate) fn start_hysteria2_inbound(
         cfg,
         auth_stores,
         quic,
-        datagram,
-        fec,
         default_max_connections,
         shared_limiter,
         user_limiter,
@@ -71,10 +64,8 @@ pub(crate) fn start_hysteria2_inbound(
 pub(crate) fn build_hysteria2_outbound(
     cfg: &OutboundConfig,
     quic: Option<&QuicConfig>,
-    datagram: Option<&DatagramConfig>,
-    fec: Option<&FecConfig>,
 ) -> Result<Arc<dyn blackwire_app::features::OutboundHandler>> {
-    let client_config = parse_client_config(cfg, quic, datagram, fec)?;
+    let client_config = parse_client_config(cfg, quic)?;
     Ok(Hysteria2OutboundHandler::new(
         client_config,
         cfg.tag.clone(),
@@ -89,8 +80,6 @@ fn parse_server_config(
     cfg: &InboundConfig,
     auth_stores: &Arc<DashMap<String, Arc<Hysteria2AuthStore>>>,
     quic: Option<&QuicConfig>,
-    datagram: Option<&DatagramConfig>,
-    fec: Option<&FecConfig>,
     default_max_connections: Option<usize>,
     shared_limiter: Option<Arc<Semaphore>>,
     user_limiter: Option<Arc<UserConnectionLimiter>>,
@@ -141,9 +130,9 @@ fn parse_server_config(
         .and_then(|l| l.max_connections)
         .or(default_max_connections);
     let socket = parse_socket_config(s, quic);
-    let datagram_enabled = datagram_enabled(s, datagram);
-    let fec = parse_fec_policy(s, fec);
-    let datagram_policy = parse_datagram_policy(s, datagram);
+    let datagram_enabled = true;
+    let fec = blackwire_transport::FecPolicy::default();
+    let datagram_policy = blackwire_transport::DatagramPolicy::default();
 
     Ok(Hysteria2ServerConfig {
         tag: cfg.tag.clone(),
@@ -178,8 +167,6 @@ pub(crate) fn hysteria2_user_label(settings: &EndpointSettings, password: &str) 
 fn parse_client_config(
     cfg: &OutboundConfig,
     quic: Option<&QuicConfig>,
-    datagram: Option<&DatagramConfig>,
-    fec: Option<&FecConfig>,
 ) -> Result<Hysteria2ClientConfig> {
     let s = &cfg.settings;
 
@@ -199,9 +186,9 @@ fn parse_client_config(
     let down_mbps = congestion.down_mbps;
     let endpoint_shards = s.endpoint_shards.map(|v| v.clamp(1, 64)).unwrap_or(1);
     let socket = parse_socket_config(s, quic);
-    let datagram_enabled = datagram_enabled(s, datagram);
-    let fec = parse_fec_policy(s, fec);
-    let datagram_policy = parse_datagram_policy(s, datagram);
+    let datagram_enabled = true;
+    let fec = blackwire_transport::FecPolicy::default();
+    let datagram_policy = blackwire_transport::DatagramPolicy::default();
 
     // Use the server address host as SNI if not explicitly configured.
     let server_name = s
@@ -226,13 +213,79 @@ fn parse_client_config(
 }
 
 pub(crate) fn socket_config_from_quic(quic: Option<&QuicConfig>) -> QuicSocketConfig {
-    let quic = quic.cloned().unwrap_or_default();
+    let Some(quic) = quic else {
+        return automatic_quic_socket_config(detected_cpu_count(), detected_memory_bytes());
+    };
     QuicSocketConfig {
         reuse_port: quic.reuse_port,
         endpoint_count: quic.endpoint_count(),
         recv_buffer_bytes: quic.recv_buffer_bytes,
         send_buffer_bytes: quic.send_buffer_bytes,
     }
+}
+
+/// Conservative automatic QUIC sizing used only when no explicit global QUIC
+/// override exists. Caps keep per-process socket memory predictable even on
+/// large hosts; endpoint-specific settings still take precedence afterward.
+fn automatic_quic_socket_config(cpu_count: usize, memory_bytes: Option<u64>) -> QuicSocketConfig {
+    const MIB: usize = 1024 * 1024;
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    let memory = memory_bytes.unwrap_or(2 * GIB);
+    let buffer_bytes = match memory {
+        bytes if bytes < GIB => MIB,
+        bytes if bytes < 4 * GIB => 2 * MIB,
+        bytes if bytes < 16 * GIB => 4 * MIB,
+        _ => 8 * MIB,
+    };
+    let memory_limited_shards = match memory {
+        bytes if bytes < GIB => 1,
+        bytes if bytes < 4 * GIB => 2,
+        _ => 4,
+    };
+    let cpu_limited_shards = match cpu_count.max(1) {
+        1..=2 => 1,
+        3..=8 => 2,
+        _ => 4,
+    };
+    #[cfg(unix)]
+    let endpoint_count = cpu_limited_shards.min(memory_limited_shards);
+    #[cfg(not(unix))]
+    let endpoint_count = 1;
+
+    QuicSocketConfig {
+        reuse_port: endpoint_count > 1,
+        endpoint_count,
+        recv_buffer_bytes: buffer_bytes,
+        send_buffer_bytes: buffer_bytes,
+    }
+}
+
+fn detected_cpu_count() -> usize {
+    std::thread::available_parallelism().map_or(1, usize::from)
+}
+
+#[cfg(unix)]
+fn detected_memory_bytes() -> Option<u64> {
+    let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    (pages > 0 && page_size > 0).then(|| (pages as u64).saturating_mul(page_size as u64))
+}
+
+#[cfg(windows)]
+fn detected_memory_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    (unsafe { GlobalMemoryStatusEx(&mut status) } != 0).then_some(status.ullTotalPhys)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn detected_memory_bytes() -> Option<u64> {
+    None
 }
 
 fn parse_socket_config(settings: &EndpointSettings, quic: Option<&QuicConfig>) -> QuicSocketConfig {
@@ -253,134 +306,6 @@ fn parse_socket_config(settings: &EndpointSettings, quic: Option<&QuicConfig>) -
         socket.send_buffer_bytes = bytes;
     }
     socket
-}
-
-fn datagram_enabled(settings: &EndpointSettings, datagram: Option<&DatagramConfig>) -> bool {
-    let mut enabled = datagram
-        .map(|cfg| cfg.enabled && cfg.udp_over_datagram)
-        .unwrap_or(false);
-    if let Some(overrides) = settings.datagram.as_ref() {
-        if let Some(value) = overrides.enabled {
-            enabled = value;
-        }
-        if let Some(value) = overrides.udp_over_datagram {
-            enabled &= value;
-        }
-    }
-    enabled
-}
-
-fn parse_fec_policy(
-    settings: &EndpointSettings,
-    fec: Option<&FecConfig>,
-) -> blackwire_transport::FecPolicy {
-    let mut cfg = fec.cloned().unwrap_or_default();
-    if let Some(overrides) = settings.fec.as_ref() {
-        if let Some(mode) = overrides.mode.as_deref() {
-            cfg.mode = parse_config_fec_mode(mode);
-        }
-        if let Some(max) = overrides.max_overhead_percent {
-            cfg.max_overhead_percent = max;
-        }
-        if let Some(avoid) = overrides.avoid_bulk_tcp {
-            cfg.avoid_bulk_tcp = avoid;
-        }
-        if let Some(disable) = overrides.disable_for_sequential_dns {
-            cfg.disable_for_sequential_dns = disable;
-        }
-        if let Some(min) = overrides.min_concurrency_for_block_fec {
-            cfg.min_concurrency_for_block_fec = min;
-        }
-        if let Some(max) = overrides.max_generation_packets {
-            cfg.max_generation_packets = max;
-        }
-        if let Some(delay) = overrides.max_generation_delay_ms {
-            cfg.max_generation_delay_ms = delay;
-        }
-        if let Some(deadline) = overrides.recovery_deadline_ms {
-            cfg.recovery_deadline_ms = deadline;
-        }
-        if let Some(window) = overrides.dedup_window_packets {
-            cfg.dedup_window_packets = window;
-        }
-    }
-    blackwire_transport::FecPolicy {
-        mode: map_fec_mode(cfg.effective_mode()),
-        max_overhead_percent: cfg.max_overhead_percent,
-        group_size: cfg.max_generation_packets.max(2),
-        disable_for_sequential_dns: cfg.disable_for_sequential_dns,
-        min_concurrency_for_block_fec: cfg.min_concurrency_for_block_fec,
-        max_generation_delay: std::time::Duration::from_millis(cfg.max_generation_delay_ms),
-        recovery_deadline: std::time::Duration::from_millis(cfg.recovery_deadline_ms),
-        dedup_window_packets: cfg.dedup_window_packets,
-    }
-}
-
-fn parse_datagram_policy(
-    settings: &EndpointSettings,
-    datagram: Option<&DatagramConfig>,
-) -> blackwire_transport::DatagramPolicy {
-    let cfg = datagram.cloned().unwrap_or_default();
-    let mut policy = map_datagram_policy(cfg.policy);
-    let mut max_queue_delay_ms = cfg.max_queue_delay_ms;
-    let mut fast_dns_retry = cfg.fast_dns_retry;
-    let mut fast_dns_retry_delay_ms = cfg.fast_dns_retry_delay_ms;
-
-    if let Some(overrides) = settings.datagram.as_ref() {
-        if let Some(value) = overrides.policy.as_deref() {
-            policy = parse_config_datagram_policy(value);
-        }
-        if let Some(value) = overrides.max_queue_delay_ms {
-            max_queue_delay_ms = value;
-        }
-        if let Some(value) = overrides.fast_dns_retry {
-            fast_dns_retry = value;
-        }
-        if let Some(value) = overrides.fast_dns_retry_delay_ms {
-            fast_dns_retry_delay_ms = value;
-        }
-    }
-
-    blackwire_transport::DatagramPolicy {
-        mode: policy,
-        max_queue_delay_ms: max_queue_delay_ms.max(1),
-        fast_dns_retry,
-        fast_dns_retry_delay_ms,
-    }
-}
-
-fn parse_config_datagram_policy(value: &str) -> blackwire_transport::DatagramPriorityMode {
-    match value {
-        "h2-plus" | "h2plus" | "h2_plus" => blackwire_transport::DatagramPriorityMode::H2Plus,
-        _ => blackwire_transport::DatagramPriorityMode::Standard,
-    }
-}
-
-fn map_datagram_policy(policy: ConfigDatagramPolicy) -> blackwire_transport::DatagramPriorityMode {
-    match policy {
-        ConfigDatagramPolicy::Standard => blackwire_transport::DatagramPriorityMode::Standard,
-        ConfigDatagramPolicy::H2Plus => blackwire_transport::DatagramPriorityMode::H2Plus,
-    }
-}
-
-fn parse_config_fec_mode(value: &str) -> ConfigFecMode {
-    match value {
-        "xor1-of-n" | "xor1OfN" | "xor" => ConfigFecMode::Xor1OfN,
-        "reed-solomon" | "reedSolomon" => ConfigFecMode::ReedSolomon,
-        "raptor-like" | "raptorLike" => ConfigFecMode::RaptorLike,
-        "auto" => ConfigFecMode::Auto,
-        _ => ConfigFecMode::Off,
-    }
-}
-
-fn map_fec_mode(mode: ConfigFecMode) -> blackwire_transport::FecMode {
-    match mode {
-        ConfigFecMode::Off => blackwire_transport::FecMode::Off,
-        ConfigFecMode::Xor1OfN => blackwire_transport::FecMode::Xor1OfN,
-        ConfigFecMode::ReedSolomon => blackwire_transport::FecMode::ReedSolomon,
-        ConfigFecMode::RaptorLike => blackwire_transport::FecMode::RaptorLike,
-        ConfigFecMode::Auto => blackwire_transport::FecMode::Auto,
-    }
 }
 
 fn parse_congestion_config(settings: &EndpointSettings) -> Result<CongestionConfig> {
@@ -443,11 +368,12 @@ fn require_hysteria2_auth<'a>(settings: &'a EndpointSettings, tag: &str) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use blackwire_config::schema::{DatagramConfig, EndpointSettings};
+    use blackwire_config::schema::{EndpointSettings, OutboundConfig};
     use serde_json::json;
 
     use super::{
-        datagram_enabled, hysteria2_user_label, parse_congestion_config, require_hysteria2_auth,
+        automatic_quic_socket_config, hysteria2_user_label, parse_client_config,
+        parse_congestion_config, require_hysteria2_auth, socket_config_from_quic,
     };
 
     fn settings(value: serde_json::Value) -> EndpointSettings {
@@ -548,26 +474,53 @@ mod tests {
     }
 
     #[test]
-    fn datagram_defaults_to_disabled_without_explicit_policy() {
-        assert!(!datagram_enabled(&EndpointSettings::default(), None));
+    fn hysteria2_uses_native_datagrams_without_unnegotiated_fec() {
+        let outbound: OutboundConfig = serde_json::from_value(json!({
+            "tag": "hy2",
+            "protocol": "hysteria2",
+            "settings": {
+                "server": "127.0.0.1:443",
+                "auth": "secret"
+            }
+        }))
+        .unwrap();
+
+        let config = parse_client_config(&outbound, None).unwrap();
+        assert!(config.datagram_enabled);
+        assert_eq!(config.fec.mode, blackwire_transport::FecMode::Off);
+        assert_eq!(
+            config.datagram_policy.mode,
+            blackwire_transport::DatagramPriorityMode::Standard
+        );
     }
 
     #[test]
-    fn datagram_can_be_enabled_explicitly_per_inbound() {
-        assert!(datagram_enabled(
-            &settings(json!({ "datagram": { "enabled": true, "udpOverDatagram": true } })),
-            None
-        ));
+    fn automatic_quic_tuning_is_bounded_by_cpu_and_memory() {
+        let tiny = automatic_quic_socket_config(32, Some(512 * 1024 * 1024));
+        assert_eq!(tiny.endpoint_count, 1);
+        assert_eq!(tiny.recv_buffer_bytes, 1024 * 1024);
+
+        let large = automatic_quic_socket_config(32, Some(32 * 1024 * 1024 * 1024));
+        #[cfg(unix)]
+        assert_eq!(large.endpoint_count, 4);
+        #[cfg(not(unix))]
+        assert_eq!(large.endpoint_count, 1);
+        assert_eq!(large.recv_buffer_bytes, 8 * 1024 * 1024);
+        assert_eq!(large.send_buffer_bytes, 8 * 1024 * 1024);
     }
 
     #[test]
-    fn datagram_respects_top_level_policy_when_present() {
-        let cfg = DatagramConfig {
-            enabled: true,
-            udp_over_datagram: true,
-            ..DatagramConfig::default()
+    fn explicit_quic_settings_override_automatic_tuning() {
+        let explicit = blackwire_config::schema::QuicConfig {
+            reuse_port: false,
+            endpoints: blackwire_config::schema::EndpointCount::Fixed(3),
+            recv_buffer_bytes: 3 * 1024 * 1024,
+            send_buffer_bytes: 5 * 1024 * 1024,
+            max_datagram_size: blackwire_config::schema::DatagramSize::Named("auto".into()),
         };
-
-        assert!(datagram_enabled(&EndpointSettings::default(), Some(&cfg)));
+        let socket = socket_config_from_quic(Some(&explicit));
+        assert_eq!(socket.endpoint_count, 3);
+        assert_eq!(socket.recv_buffer_bytes, 3 * 1024 * 1024);
+        assert_eq!(socket.send_buffer_bytes, 5 * 1024 * 1024);
     }
 }

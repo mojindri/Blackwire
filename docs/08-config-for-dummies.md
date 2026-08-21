@@ -33,8 +33,8 @@ an inbound. In Black UI, create the following:
 | Outbounds | Direct path | protocol `freedom` |
 | Routing | Default rule | choose the direct outbound |
 
-Save the revision, then look at Runtime. Blackwire tells you whether it can
-activate immediately or needs confirmed maintenance activation.
+Save the revision, then look at Runtime. Blackwire validates and applies it
+automatically without restarting the process.
 
 For a disposable local starting point, you can also create a relational preset:
 
@@ -135,9 +135,9 @@ rules.
 ## How Changes Become Active
 
 Every completed UI or CLI edit creates a new revision. Blackwire validates the
-desired revision and either activates it immediately, hands over a supported
-listener, or holds it for confirmed maintenance activation. During a temporary
-MySQL outage, it keeps serving the active in-memory revision.
+desired revision and applies it automatically with an atomic state swap or a
+prepared in-process handover. During a temporary MySQL outage, it keeps serving
+the active in-memory revision.
 
 Useful recovery commands:
 
@@ -146,7 +146,6 @@ blackwire db validate
 blackwire db status
 blackwire db history --limit 20
 blackwire db rollback REVISION
-blackwire db activate-maintenance REVISION
 ```
 
 Revision history is configuration rollback, not a database backup. Protect

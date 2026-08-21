@@ -54,6 +54,21 @@ jobs:
     name: Native latency smoke
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: blackwire-latency
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pblackwire-latency"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      BLACKWIRE_CLIENT_DATABASE_URL: mysql://root:blackwire-latency@127.0.0.1:3306/blackwire_latency_client
+      BLACKWIRE_SERVER_DATABASE_URL: mysql://root:blackwire-latency@127.0.0.1:3306/blackwire_latency_server
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -61,6 +76,15 @@ jobs:
         with:
           go-version: stable
       - uses: Swatinem/rust-cache@v2
+
+      - name: Create disposable latency databases
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client
+          mysql -h 127.0.0.1 -uroot -pblackwire-latency -e '
+            CREATE DATABASE blackwire_latency_client;
+            CREATE DATABASE blackwire_latency_server;
+          '
 
       - name: Install hey
         run: go install github.com/rakyll/hey@latest

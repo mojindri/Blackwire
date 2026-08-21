@@ -10,6 +10,7 @@ authors.workspace = true
 default = []
 heavy-tests = []
 loom-tests = ["dep:loom"]
+experimental-fec = ["blackwire-transport/experimental-fec"]
 
 [dependencies]
 loom = { version = "0.7", optional = true }

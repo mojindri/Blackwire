@@ -81,7 +81,7 @@ The workspace root `Cargo.toml` declares these crates:
   Proxy protocols such as SOCKS5, VLESS, VMess, Trojan, and SS-2022.
 
 - `blackwire-transport`
-  TCP, TLS, WebSocket, gRPC, QUIC, REALITY, mKCP, TUN, ShadowTLS.
+  TCP, TLS, WebSocket, gRPC, QUIC, REALITY, TUN, ShadowTLS.
 
 - `blackwire-tls`
   Raw TLS ClientHello builder used by REALITY client camouflage.
@@ -89,8 +89,8 @@ The workspace root `Cargo.toml` declares these crates:
 - `blackwire-cli`
   The `blackwire` binary entrypoint.
 
-- `blackwire-api`
-  gRPC management/stats surface (Handler + Stats services) used by runtime control-plane operations.
+- `blackwire-client`
+  The separate local/TUN client entrypoint and device-lifecycle owner.
 
 - `tests`
   Integration tests and interop tests.
@@ -98,6 +98,9 @@ The workspace root `Cargo.toml` declares these crates:
 ## How Startup Works
 
 The startup path begins in `crates/blackwire-cli/src/main.rs`.
+
+Device-client startup begins in `crates/blackwire-client/src/main.rs`; see
+[client-app.md](client-app.md).
 
 The normal `run` command does this:
 
@@ -331,7 +334,6 @@ If you want to understand the code in a practical order, use this path:
 If you are brand new to the repo, do not start with:
 
 - QUIC internals
-- mKCP
 - TUN
 - REALITY TLS transcript details
 - hot reload edge cases
@@ -385,3 +387,6 @@ Use this simplified map:
 
 - `blackwire-cli`
   the executable
+
+- `blackwire-client`
+  the local proxy and full-device client executable

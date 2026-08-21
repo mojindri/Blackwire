@@ -16,7 +16,7 @@ environments, and what each gate proves.
 | 2. Integration tests | End-to-end protocol matrix | ~30s | Rust toolchain |
 | 3. Production readiness | Config validation, guard checks | ~10s | Rust toolchain |
 | 4. Docker baseline | Stable matrix + interop-docker (server + client legs) | ~5 min | Docker |
-| 5. Advanced features smoke | ShadowTLS, mKCP, health, geo/FakeIP guards | ~30s | Rust toolchain |
+| 5. Advanced features smoke | ShadowTLS/SplitHTTP, health, geo/FakeIP guards | ~30s | Rust toolchain |
 | 6. Stress loop | Flakiness detection on high-signal tests | ~2 min | Rust toolchain |
 | 7. Interop d0 self-consistency | REALITY token + TLS self-consistency (Rust only) | ~5s | Rust toolchain |
 | 8. Interop server-compat | Xray/sing-box clients → our server | ~5 min | Docker |
@@ -62,10 +62,10 @@ Important:
 
 The external-client lab (Docker and VPS) is the first gate for GUI/app compatibility.
 The automated scenario set is defined by `labs/realistic/external-clients/scenarios.env`
-(currently 20 scenario rows).
+(currently 19 scenario rows).
 Each row runs up to 4 cases: Xray positive + negative and sing-box positive + negative.
 Client columns set to `-` are expected **SKIP** when upstream clients lack that
-transport or mode (QUIC on Xray 26+, ShadowTLS, mKCP, etc.) — see
+transport or mode (ShadowTLS, etc.) — see
 [parity-status.md](parity-status.md).
 The `vless-splithttp-packet-up` row uses **Xray** as the matrix gate. Stock **sing-box** is
 **SKIP** (`scenarios.env` sing-box column `-`) because upstream sing-box has no xHTTP
@@ -114,7 +114,6 @@ Protocols covered:
 - Shadowsocks 2022
 - Hysteria2 over QUIC
 - ShadowTLS v3 (local fake TLS backend)
-- mKCP single-session and concurrent-session
 
 ---
 
@@ -167,7 +166,7 @@ make -C labs/realistic docker-down
 
 ## Tier 5 — Advanced features smoke
 
-Local smoke tests for ShadowTLS v3, mKCP, health/failover config guards, failover
+Local smoke tests for ShadowTLS v3, SplitHTTP, health/failover config guards, failover
 runtime e2e, and DNS/geo/FakeIP startup guards.
 
 ```sh
@@ -353,7 +352,7 @@ SSH_SERVER=1.2.3.4 make -C labs/realistic vps-server-setup
 This will:
 - Install Caddy and obtain a TLS cert for `TEST_DOMAIN`.
 - Create the `blackwire` system user and directory layout.
-- Generate server configs from templates into `/etc/blackwire/generated/` (base matrix plus advanced rows: QUIC, SplitHTTP, ShadowTLS, mKCP, sniffing).
+- Generate server configs from templates into `/etc/blackwire/generated/` (base matrix plus advanced rows: QUIC, SplitHTTP, ShadowTLS, sniffing).
 - Sync the Caddy cert to `/etc/blackwire/certs/`.
 - Start a simple HTTP target on port 18080 for the matrix tests.
 - Open the required UFW firewall ports.
@@ -374,12 +373,10 @@ Port layout after setup:
 | 4433/udp | QUIC | Hysteria2 |
 | 9443/udp | QUIC | TUIC v5 |
 | 8446/tcp | TLS | VLESS HTTPUpgrade |
-| 8447/udp | QUIC | VLESS QUIC |
 | 8448/tcp | TLS | VLESS SplitHTTP |
 | 10081/tcp | TCP | VLESS UDP control channel |
 | 10082/tcp | TCP | VLESS Vision |
 | 8450/tcp | TLS | VLESS ShadowTLS |
-| 8451/udp | mKCP | VLESS mKCP |
 | 8452/tcp | TCP | VLESS with sniffing |
 
 ### Step 4 — Run the external-client matrix
@@ -515,7 +512,7 @@ SSH_SERVER=1.2.3.4 SSH_CLIENT=5.6.7.8 SSH_KEY=~/.ssh/id_ed25519 \
 |------|----------------------|
 | 1–3 | Code is internally consistent and config validation works |
 | 4 | Stable matrix + full Docker interop (server + client legs) |
-| 5 | Advanced features (ShadowTLS, mKCP, health, DNS/routing) pass smoke tests |
+| 5 | Advanced features (ShadowTLS/SplitHTTP, health, DNS/routing) pass smoke tests |
 | 6 | No timing-sensitive flakiness in the data plane |
 | 7 | REALITY implementation is self-consistent (d0) |
 | 8 | Xray/sing-box clients can use our server (configured scenarios) |

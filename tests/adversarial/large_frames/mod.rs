@@ -108,25 +108,3 @@ fn hysteria2_udp_official_format_roundtrips_long_domain_without_truncation() {
         _ => panic!("expected domain destination"),
     }
 }
-
-#[test]
-fn mkcp_segment_decode_rejects_truncated_large_payload_packet() {
-    let mut packet = vec![];
-    // conv + cmd + frg + wnd + ts + sn + una
-    packet.extend_from_slice(&1u32.to_le_bytes());
-    packet.push(blackwire_transport::mkcp::segment::CMD_PUSH);
-    packet.push(0);
-    packet.extend_from_slice(&0u16.to_le_bytes());
-    packet.extend_from_slice(&0u32.to_le_bytes());
-    packet.extend_from_slice(&1u32.to_le_bytes());
-    packet.extend_from_slice(&0u32.to_le_bytes());
-    // claimed payload length (huge) with no actual payload bytes
-    packet.extend_from_slice(&(64u32 * 1024).to_le_bytes());
-
-    let mut slice = packet.as_slice();
-    let seg = blackwire_transport::mkcp::segment::Segment::decode(&mut slice);
-    assert!(
-        seg.is_none(),
-        "truncated large mKCP payload must fail decode cleanly"
-    );
-}

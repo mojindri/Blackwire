@@ -75,7 +75,6 @@ Examples already in the repo:
 - gRPC
 - QUIC
 - REALITY
-- mKCP
 - TUN
 
 ### A New Transport Usually Belongs In

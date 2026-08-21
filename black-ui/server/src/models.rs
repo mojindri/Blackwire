@@ -119,7 +119,6 @@ pub struct Status {
     pub schema_version: i64,
     pub desired_revision: i64,
     pub active_revision: Option<i64>,
-    pub pending_maintenance_revision: Option<i64>,
     pub activation_state: ActivationState,
     pub last_activation_error: Option<String>,
     pub runtime_reachable: bool,
@@ -292,12 +291,6 @@ pub struct CurrentAdmin {
 #[derive(Debug, Serialize)]
 pub struct GeneratedUuid {
     pub uuid: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MaintenanceResult {
-    pub revision: i64,
-    pub message: String,
 }
 
 #[derive(Debug, Serialize)]

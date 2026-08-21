@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[package.metadata.cargo-udeps.ignore]
+normal = ["windows-sys"]
+
 [dependencies]
 blackwire-common          = { path = "../blackwire-common" }
 blackwire-config          = { path = "../blackwire-config" }
@@ -13,7 +16,6 @@ blackwire-app             = { path = "../blackwire-app" }
 blackwire-connmgr         = { path = "../blackwire-connmgr" }
 blackwire-transport       = { path = "../blackwire-transport" }
 blackwire-protocol        = { path = "../blackwire-protocol" }
-blackwire-api             = { path = "../blackwire-api" }
 
 dashmap.workspace       = true
 parking_lot.workspace   = true
@@ -26,7 +28,10 @@ tracing.workspace     = true
 anyhow.workspace      = true
 uuid.workspace        = true
 serde_json.workspace  = true
+serde.workspace       = true
 hex.workspace         = true
 base64.workspace      = true
 metrics.workspace     = true
 rand.workspace        = true
+libc.workspace        = true
+windows-sys.workspace = true

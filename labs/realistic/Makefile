@@ -12,7 +12,7 @@ SSH_PORT ?= 22
 SSH_KEY ?=
 SSH_EXTRA_OPTS ?=
 
-.PHONY: help build build-amd64 build-linux-bin docker-up stable ship finalize interop-docker interop-server-docker interop-client-reality interop-server-vps \
+.PHONY: help build build-amd64 build-linux-bin docker-matrix-env docker-up stable ship finalize interop-docker interop-server-docker interop-client-reality interop-server-vps \
 	xray advanced-features-smoke health-failover negative-auth restart-smoke stress report-summary realistic-all docker-full docker-down \
 	vm-pack vps-configs external-clients-docker external-clients-vps external-clients-report \
 	vps-server-setup vps-client-setup vps-preflight vps-test vps-tun vps-netem ci ci-full clean \
@@ -56,7 +56,22 @@ stable: ## Run the stable Rust integration matrix
 	cd $(ROOT) && cargo test -p integration-tests 2>&1 | tee labs/realistic/$(REPORTS)/stable-matrix.log
 
 # External-client matrix: sequential only (one client at a time; see external-clients/README.md).
-interop-server-docker: build ## Server-compat: Xray/sing-box clients -> our server (Docker)
+docker-matrix-env: build ## Create a local-only REALITY key pair for the Docker client matrix
+	@if [ ! -f configs/matrix.env ]; then cp configs/matrix.env.example configs/matrix.env; fi
+	@if rg -q '^REALITY_(PRIVATE|PUBLIC)_KEY=REPLACE_WITH_' configs/matrix.env; then \
+		keys="$$(docker run --rm --entrypoint /usr/local/bin/blackwire blackwire:latest x25519)"; \
+		private="$$(printf '%s\n' "$$keys" | sed -n 's/^Private key (server config): //p')"; \
+		public="$$(printf '%s\n' "$$keys" | sed -n 's/^Public key  (client config): //p')"; \
+		test -n "$$private" && test -n "$$public"; \
+		tmp="$$(mktemp configs/matrix.env.XXXXXX)"; \
+		awk -v private="$$private" -v public="$$public" \
+			'/^REALITY_PRIVATE_KEY=REPLACE_WITH_/ { print "REALITY_PRIVATE_KEY=" private; next } \
+			 /^REALITY_PUBLIC_KEY=REPLACE_WITH_/ { print "REALITY_PUBLIC_KEY=" public; next } { print }' \
+			configs/matrix.env > "$$tmp" && mv "$$tmp" configs/matrix.env; \
+		echo "Generated an ephemeral REALITY key pair for the Docker matrix"; \
+	fi
+
+interop-server-docker: docker-matrix-env ## Server-compat: Xray/sing-box clients -> our server (Docker)
 	@mkdir -p $(REPORTS)/external-clients
 	@bash external-clients/scripts/run-docker-matrix.sh $(REPORTS)/external-clients configs/matrix.env
 	@bash external-clients/scripts/report.sh
@@ -76,7 +91,7 @@ xray: ## Deprecated: use make interop-client-reality
 	@echo "Deprecated alias: use make interop-client-reality"
 	$(MAKE) interop-client-reality
 
-advanced-features-smoke: ## Smoke tests: ShadowTLS, mKCP, QUIC/SplitHTTP VLESS, health/failover, DNS/geo routing guards
+advanced-features-smoke: ## Smoke tests: ShadowTLS/SplitHTTP VLESS, health/failover, DNS/geo routing guards
 	@set -euo pipefail; \
 	log="$(CURDIR)/$(REPORTS)/advanced-features-smoke.log"; \
 	mkdir -p "$(CURDIR)/$(REPORTS)"; \
@@ -87,10 +102,8 @@ advanced-features-smoke: ## Smoke tests: ShadowTLS, mKCP, QUIC/SplitHTTP VLESS, 
 	  shift; \
 	  cargo test --locked "$$@" 2>&1 | tee -a "$$log"; \
 	}; \
-	run "VLESS QUIC" -p integration-tests --test e2e_vless_quic vless_quic_echo; \
 	run "VLESS SplitHTTP" -p integration-tests --test e2e_vless_splithttp vless_splithttp_echo; \
 	run "ShadowTLS v3" -p integration-tests --test e2e_vless_shadowtls vless_over_shadowtls_v3_transfers_data; \
-	run "mKCP" -p integration-tests --test e2e_vless_mkcp vless_over_mkcp; \
 	run "health / failover guards" -p blackwire-core --test production_readiness balancer_rejects_missing_selector_outbound; \
 	run "health / failover guards" -p blackwire-core --test production_readiness balancer_rejects_unsupported_health_check_scheme; \
 	run "health / failover guards" -p blackwire-core --test production_readiness routing_rule_can_target_registered_balancer; \
@@ -135,7 +148,6 @@ stress: ## Repeat high-signal data-plane tests to catch flaky behavior
 	cd $(ROOT) && bash -lc 'set -euo pipefail; \
 		for i in 1 2 3 4 5; do \
 			echo "=== stress iteration $$i ==="; \
-			cargo test -p integration-tests vless_over_mkcp_transfers_data; \
 			cargo test -p integration-tests vless_over_shadowtls_v3_transfers_data; \
 			cargo test -p integration-tests e2e_socks5_to_vless_to_freedom_transfers_data; \
 		done' 2>&1 | tee labs/realistic/$(REPORTS)/stress.log
@@ -155,7 +167,7 @@ report-summary: ## Build a compact summary from report logs
 
 realistic-all: docker-full advanced-features-smoke negative-auth restart-smoke stress report-summary ## Full local baseline + advanced-feature smoke tests
 
-docker-full: docker-up stable advanced-features-smoke interop-docker ## Stable matrix + ShadowTLS/mKCP smoke + Docker interop
+docker-full: docker-up stable advanced-features-smoke interop-docker ## Stable matrix + advanced transport smoke + Docker interop
 
 docker-down: ## Stop lab and interop containers
 	-docker compose -f docker-compose.yml down -v

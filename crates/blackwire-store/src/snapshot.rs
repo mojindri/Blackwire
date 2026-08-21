@@ -2,16 +2,14 @@ use std::net::IpAddr;
 
 use crate::sqlx;
 use blackwire_config::schema::{
-    AdaptiveBalancerConfig, ApiConfig, BalancerConfig, BalancerProfileConfig, BudgetConfig, Config,
-    CongestionSettings, DatagramConfig, DatagramOverrides, DatagramSize, DnsConfig,
-    DownloadSettings, EndpointCount, EndpointSettings, EndpointUser, FakeIpConfig, FastConfig,
-    FastLinuxConfig, FastRelayConfig, FecConfig, FecOverrides, FirstPacketBoostConfig, GrpcConfig,
-    HealthCheckConfig, InboundConfig, InboundLimitsConfig, KcpConfig, LimitsConfig, LogConfig,
-    NetworkType, OutboundConfig, PaddingBounds, PaddingBytes, ProfileMode, Protocol, QuicConfig,
+    AdaptiveBalancerConfig, BalancerConfig, BalancerProfileConfig, Config, CongestionSettings,
+    DatagramSize, DnsConfig, DownloadSettings, EndpointCount, EndpointSettings, EndpointUser,
+    FastConfig, FastLinuxConfig, FastRelayConfig, FirstPacketBoostConfig, GrpcConfig,
+    HealthCheckConfig, InboundConfig, InboundLimitsConfig, LimitsConfig, LogConfig, NetworkType,
+    OutboundConfig, PaddingBounds, PaddingBytes, ProfileMode, Protocol, QuicConfig,
     QuicSocketOverrides, RealityConfig, RealityFallbackLimitConfig, RoutingConfig, RoutingRule,
     SecurityType, ShadowTlsConfig, SniffingConfig, SplitHttpConfig, StatsConfig,
-    StreamSettingsConfig, TlsConfig, TunAfXdpConfig, TunBatchConfig, TunConfig, TunLinuxConfig,
-    TunSessionConfig, VisionConfig, WsConfig, XmuxConfig,
+    StreamSettingsConfig, TlsConfig, VisionConfig, WsConfig, XmuxConfig,
 };
 use sqlx::{MySqlPool, Row};
 
@@ -32,27 +30,22 @@ impl Database {
 
     pub async fn load_config(&self, revision: i64) -> StoreResult<StoredConfig> {
         let global = sqlx::query(
-            "SELECT profile, metrics_enabled, metrics_address, api_enabled, api_listen_address, api_token_value, stats_enabled, log_level, log_structured, log_file FROM global_config WHERE revision_id = ?",
+            "SELECT profile, metrics_enabled, metrics_address, stats_enabled, log_level, log_structured, log_file FROM global_config WHERE revision_id = ?",
         )
         .bind(revision)
         .fetch_one(self.pool())
         .await?;
         let profile: String = global.try_get("profile")?;
-        let api_enabled: bool = global.try_get("api_enabled")?;
-        let api_address: Option<String> = global.try_get("api_listen_address")?;
         let metrics_enabled: bool = global.try_get("metrics_enabled")?;
         let performance = load_performance(self.pool(), revision).await?;
-        StoredConfig {
+        Ok(StoredConfig {
             revision,
             config: Config {
                 profile: parse_profile(&profile)?,
                 fast: performance.fast,
-                budget: performance.budget,
                 vision: performance.vision,
                 first_packet_boost: performance.first_packet_boost,
                 quic: load_quic(self.pool(), revision).await?,
-                datagram: load_datagram(self.pool(), revision).await?,
-                fec: load_fec(self.pool(), revision).await?,
                 log: LogConfig {
                     level: global.try_get("log_level")?,
                     json: global.try_get("log_structured")?,
@@ -60,33 +53,25 @@ impl Database {
                 },
                 dns: load_dns(self.pool(), revision).await?,
                 routing: load_routing(self.pool(), revision).await?,
-                tun: load_tun(self.pool(), revision).await?,
+                tun: None,
                 limits: load_limits(self.pool(), revision).await?,
                 inbounds: load_inbounds(self.pool(), revision).await?,
                 outbounds: load_outbounds(self.pool(), revision).await?,
                 stats: global
                     .try_get::<Option<bool>, _>("stats_enabled")?
                     .map(|enabled| StatsConfig { enabled }),
-                api: api_enabled.then(|| ApiConfig {
-                    listen: api_address.unwrap_or_else(|| "127.0.0.1:62789".into()),
-                    token: bytes_string(&global, "api_token_value").ok().flatten(),
-                    services: Vec::new(),
-                }),
                 metrics_addr: if metrics_enabled {
                     global.try_get("metrics_address")?
                 } else {
                     None
                 },
             },
-        }
-        .with_api_services(self.pool())
-        .await
+        })
     }
 }
 
 struct PerformanceSettings {
     fast: Option<FastConfig>,
-    budget: Option<BudgetConfig>,
     vision: Option<VisionConfig>,
     first_packet_boost: Option<FirstPacketBoostConfig>,
 }
@@ -120,26 +105,7 @@ async fn load_performance(pool: &MySqlPool, revision: i64) -> StoreResult<Perfor
                     )
                     .map_err(decode_error)?,
                     io_uring: parse_string_enum(&row.try_get::<String, _>("fast_linux_io_uring")?)?,
-                    af_xdp: parse_string_enum(&row.try_get::<String, _>("fast_linux_af_xdp")?)?,
                 },
-            })
-        })
-        .transpose()?;
-    let budget = row
-        .try_get::<bool, _>("budget_configured")?
-        .then(|| {
-            Ok::<_, StoreError>(BudgetConfig {
-                max_protocol_layers: usize::try_from(
-                    row.try_get::<u64, _>("budget_max_protocol_layers")?,
-                )
-                .map_err(decode_error)?,
-                allow_sniffing: row.try_get("budget_allow_sniffing")?,
-                allow_fake_ip: row.try_get("budget_allow_fake_ip")?,
-                max_route_rules: usize::try_from(row.try_get::<u64, _>("budget_max_route_rules")?)
-                    .map_err(decode_error)?,
-                max_handshake_ms: row.try_get("budget_max_handshake_ms")?,
-                prefer_direct_copy: row.try_get("budget_prefer_direct_copy")?,
-                prefer_datagram_for_udp: row.try_get("budget_prefer_datagram_for_udp")?,
             })
         })
         .transpose()?;
@@ -159,32 +125,15 @@ async fn load_performance(pool: &MySqlPool, revision: i64) -> StoreResult<Perfor
             Ok::<_, StoreError>(FirstPacketBoostConfig {
                 enabled: row.try_get("first_packet_boost_enabled")?,
                 dns: row.try_get("first_packet_boost_dns")?,
-                tls_client_hello: row.try_get("first_packet_boost_tls_client_hello")?,
                 send_early_payload: row.try_get("first_packet_boost_send_early_payload")?,
-                duplicate_control_on_badnet: row
-                    .try_get("first_packet_boost_duplicate_control_on_badnet")?,
-                priority: parse_string_enum(
-                    &row.try_get::<String, _>("first_packet_boost_priority")?,
-                )?,
             })
         })
         .transpose()?;
     Ok(PerformanceSettings {
         fast,
-        budget,
         vision,
         first_packet_boost,
     })
-}
-
-impl StoredConfig {
-    async fn with_api_services(mut self, pool: &MySqlPool) -> StoreResult<Self> {
-        if let Some(api) = self.config.api.as_mut() {
-            api.services = sqlx::query_scalar("SELECT service_name FROM global_api_services WHERE revision_id=? ORDER BY position")
-                .bind(self.revision).fetch_all(pool).await?;
-        }
-        Ok(self)
-    }
 }
 
 async fn global_transport_row(
@@ -213,109 +162,6 @@ async fn load_quic(pool: &MySqlPool, revision: i64) -> StoreResult<Option<QuicCo
         max_datagram_size: parse_number_or_string::<DatagramSize>(
             &row.try_get::<String, _>("quic_max_datagram_size")?,
         )?,
-    }))
-}
-
-async fn load_datagram(pool: &MySqlPool, revision: i64) -> StoreResult<Option<DatagramConfig>> {
-    let row = global_transport_row(pool, revision).await?;
-    if !row.try_get::<bool, _>("datagram_configured")? {
-        return Ok(None);
-    }
-    Ok(Some(DatagramConfig {
-        enabled: row.try_get("datagram_enabled")?,
-        udp_over_datagram: row.try_get("udp_over_datagram")?,
-        tun_packets_over_datagram: row.try_get("tun_packets_over_datagram")?,
-        policy: parse_string_enum(&row.try_get::<String, _>("datagram_policy")?)?,
-        max_queue_delay_ms: row.try_get("datagram_max_queue_delay_ms")?,
-        fast_dns_retry: row.try_get("fast_dns_retry")?,
-        fast_dns_retry_delay_ms: row.try_get("fast_dns_retry_delay_ms")?,
-    }))
-}
-
-async fn load_fec(pool: &MySqlPool, revision: i64) -> StoreResult<Option<FecConfig>> {
-    let row = global_transport_row(pool, revision).await?;
-    if !row.try_get::<bool, _>("fec_configured")? {
-        return Ok(None);
-    }
-    let protect_classes = sqlx::query_scalar(
-        "SELECT packet_class FROM global_fec_protect_classes WHERE revision_id=? ORDER BY position",
-    )
-    .bind(revision)
-    .fetch_all(pool)
-    .await?;
-    Ok(Some(FecConfig {
-        mode: parse_string_enum(&row.try_get::<String, _>("fec_mode")?)?,
-        max_overhead_percent: row.try_get("fec_max_overhead_percent")?,
-        protect_classes,
-        avoid_bulk_tcp: row.try_get("fec_avoid_bulk_tcp")?,
-        disable_for_sequential_dns: row.try_get("fec_disable_for_sequential_dns")?,
-        min_concurrency_for_block_fec: usize::try_from(
-            row.try_get::<u64, _>("fec_min_concurrency")?,
-        )
-        .map_err(decode_error)?,
-        max_generation_packets: row.try_get("fec_max_generation_packets")?,
-        max_generation_delay_ms: row.try_get("fec_max_generation_delay_ms")?,
-        recovery_deadline_ms: row.try_get("fec_recovery_deadline_ms")?,
-        dedup_window_packets: usize::try_from(row.try_get::<u64, _>("fec_dedup_window_packets")?)
-            .map_err(decode_error)?,
-    }))
-}
-
-async fn load_tun(pool: &MySqlPool, revision: i64) -> StoreResult<Option<TunConfig>> {
-    let Some(row) = sqlx::query("SELECT * FROM tun_settings WHERE revision_id=?")
-        .bind(revision)
-        .fetch_optional(pool)
-        .await?
-    else {
-        return Ok(None);
-    };
-    let linux = row
-        .try_get::<bool, _>("linux_configured")?
-        .then(|| TunLinuxConfig {
-            backend: parse_string_enum(
-                &row.try_get::<String, _>("linux_backend")
-                    .unwrap_or_else(|_| "tun".into()),
-            )
-            .unwrap_or_default(),
-            af_xdp: TunAfXdpConfig {
-                interface: row.try_get("af_xdp_interface").ok().flatten(),
-                queue_id: row.try_get::<u64, _>("af_xdp_queue_id").unwrap_or(0) as u32,
-                ring_entries: row.try_get::<u64, _>("af_xdp_ring_entries").unwrap_or(2048) as u32,
-                frame_count: row.try_get::<u64, _>("af_xdp_frame_count").unwrap_or(4096) as u32,
-                frame_size: row.try_get::<u64, _>("af_xdp_frame_size").unwrap_or(2048) as u32,
-                force_copy: row.try_get("af_xdp_force_copy").unwrap_or(true),
-                force_zerocopy: row.try_get("af_xdp_force_zerocopy").unwrap_or(false),
-            },
-        });
-    Ok(Some(TunConfig {
-        name: row.try_get("interface_name")?,
-        address: row.try_get("address_value")?,
-        netmask: row.try_get("netmask")?,
-        mtu: u16::try_from(row.try_get::<u32, _>("mtu")?).map_err(decode_error)?,
-        bypass_mark: u32::try_from(row.try_get::<u64, _>("bypass_mark")?).map_err(decode_error)?,
-        outbound_interface: row.try_get("outbound_interface")?,
-        redirect_port: u16::try_from(row.try_get::<u32, _>("redirect_port")?)
-            .map_err(decode_error)?,
-        dns_port: u16::try_from(row.try_get::<u32, _>("dns_port")?).map_err(decode_error)?,
-        wintun_file: row.try_get("wintun_file")?,
-        batch: TunBatchConfig {
-            enabled: row.try_get("batch_enabled")?,
-            max_packets: usize::try_from(row.try_get::<u64, _>("batch_max_packets")?)
-                .map_err(decode_error)?,
-            max_delay_us: row.try_get("batch_max_delay_us")?,
-            latency_flush_bytes: usize::try_from(
-                row.try_get::<u64, _>("batch_latency_flush_bytes")?,
-            )
-            .map_err(decode_error)?,
-        },
-        sessions: TunSessionConfig {
-            udp_max: usize::try_from(row.try_get::<u64, _>("udp_max_sessions")?)
-                .map_err(decode_error)?,
-            udp_idle_timeout_sec: row.try_get("udp_idle_timeout_sec")?,
-            tcp_max: usize::try_from(row.try_get::<u64, _>("tcp_max_sessions")?)
-                .map_err(decode_error)?,
-        },
-        linux,
     }))
 }
 
@@ -600,19 +446,6 @@ async fn load_stream(
         .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {
         stream.grpc_settings = Some(GrpcConfig { service_name: grpc.try_get("service_name")?, multi_mode: grpc.try_get("multi_mode")? });
     }
-    if let Some(kcp) = sqlx::query("SELECT header_type, mtu, tti_ms, uplink_capacity, downlink_capacity, congestion, read_buffer_size, write_buffer_size FROM kcp_settings WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
-        .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? {
-        stream.kcp_settings = Some(KcpConfig {
-            header: kcp.try_get("header_type")?,
-            mtu: u16::try_from(kcp.try_get::<u32, _>("mtu")?).map_err(decode_error)?,
-            tti: kcp.try_get("tti_ms")?,
-            uplink_capacity: kcp.try_get("uplink_capacity")?,
-            downlink_capacity: kcp.try_get("downlink_capacity")?,
-            congestion: kcp.try_get("congestion")?,
-            read_buffer_size: kcp.try_get("read_buffer_size")?,
-            write_buffer_size: kcp.try_get("write_buffer_size")?,
-        });
-    }
     Ok(Some(stream))
 }
 
@@ -623,7 +456,7 @@ async fn load_endpoint_tuning(
     id: i64,
     settings: &mut EndpointSettings,
 ) -> StoreResult<()> {
-    let Some(row) = sqlx::query("SELECT congestion_mode,min_ack_rate,max_queue_delay_ms,pacing_gain,loss_compensation,quic_reuse_port,quic_endpoints,quic_recv_buffer_bytes,quic_send_buffer_bytes,datagram_enabled,udp_over_datagram,datagram_policy,fec_mode,fec_max_overhead_percent FROM endpoint_tuning WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
+    let Some(row) = sqlx::query("SELECT congestion_mode,min_ack_rate,max_queue_delay_ms,pacing_gain,loss_compensation,quic_reuse_port,quic_endpoints,quic_recv_buffer_bytes,quic_send_buffer_bytes FROM endpoint_tuning WHERE revision_id=? AND endpoint_kind=? AND endpoint_id=?")
         .bind(revision).bind(kind).bind(id).fetch_optional(pool).await? else { return Ok(()); };
 
     let congestion_mode: Option<String> = row.try_get("congestion_mode")?;
@@ -668,27 +501,6 @@ async fn load_endpoint_tuning(
         });
     }
 
-    let datagram_enabled: Option<bool> = row.try_get("datagram_enabled")?;
-    let udp_over_datagram: Option<bool> = row.try_get("udp_over_datagram")?;
-    let datagram_policy: Option<String> = row.try_get("datagram_policy")?;
-    if datagram_enabled.is_some() || udp_over_datagram.is_some() || datagram_policy.is_some() {
-        settings.datagram = Some(DatagramOverrides {
-            enabled: datagram_enabled,
-            udp_over_datagram,
-            policy: datagram_policy,
-            ..Default::default()
-        });
-    }
-
-    let fec_mode: Option<String> = row.try_get("fec_mode")?;
-    let max_overhead_percent: Option<u8> = row.try_get("fec_max_overhead_percent")?;
-    if fec_mode.is_some() || max_overhead_percent.is_some() {
-        settings.fec = Some(FecOverrides {
-            mode: fec_mode,
-            max_overhead_percent,
-            ..Default::default()
-        });
-    }
     Ok(())
 }
 
@@ -727,12 +539,10 @@ async fn load_sniffing(
 }
 
 async fn load_dns(pool: &MySqlPool, revision: i64) -> StoreResult<Option<DnsConfig>> {
-    let Some(row) = sqlx::query(
-        "SELECT enabled, fake_ip_enabled, fake_ip_pool FROM dns_config WHERE revision_id = ?",
-    )
-    .bind(revision)
-    .fetch_optional(pool)
-    .await?
+    let Some(row) = sqlx::query("SELECT enabled FROM dns_config WHERE revision_id = ?")
+        .bind(revision)
+        .fetch_optional(pool)
+        .await?
     else {
         return Ok(None);
     };
@@ -745,17 +555,10 @@ async fn load_dns(pool: &MySqlPool, revision: i64) -> StoreResult<Option<DnsConf
     .bind(revision)
     .fetch_all(pool)
     .await?;
-    let fake_ip = row
-        .try_get::<bool, _>("fake_ip_enabled")?
-        .then(|| FakeIpConfig {
-            enabled: true,
-            pool: row
-                .try_get::<Option<String>, _>("fake_ip_pool")
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| "198.18.0.0/15".into()),
-        });
-    Ok(Some(DnsConfig { servers, fake_ip }))
+    Ok(Some(DnsConfig {
+        servers,
+        fake_ip: None,
+    }))
 }
 
 async fn load_routing(pool: &MySqlPool, revision: i64) -> StoreResult<Option<RoutingConfig>> {
@@ -896,11 +699,6 @@ fn parse_profile(value: &str) -> StoreResult<ProfileMode> {
     match value {
         "compat" => Ok(ProfileMode::Compat),
         "fast" => Ok(ProfileMode::Fast),
-        "latency" => Ok(ProfileMode::Latency),
-        "throughput" => Ok(ProfileMode::Throughput),
-        "badnet" => Ok(ProfileMode::Badnet),
-        "mobile" => Ok(ProfileMode::Mobile),
-        "stealth" => Ok(ProfileMode::Stealth),
         other => Err(value_error("profile", other)),
     }
 }
@@ -925,7 +723,6 @@ fn parse_network(value: &str) -> StoreResult<NetworkType> {
         "httpupgrade" => Ok(NetworkType::HttpUpgrade),
         "grpc" => Ok(NetworkType::Grpc),
         "quic" => Ok(NetworkType::Quic),
-        "kcp" => Ok(NetworkType::Kcp),
         "splithttp" | "xhttp" => Ok(NetworkType::SplitHttp),
         other => Err(value_error("network", other)),
     }

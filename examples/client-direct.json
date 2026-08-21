@@ -1,0 +1,50 @@
+{
+  "dns": {
+    "servers": ["1.1.1.1"],
+    "fake_ip": {
+      "enabled": true,
+      "pool": "198.18.0.0/15"
+    }
+  },
+  "tun": {
+    "name": "blackwire-tun",
+    "address": "198.18.0.1",
+    "netmask": "255.255.0.0",
+    "mtu": 1500,
+    "bypassMark": 4660,
+    "redirectPort": 12345,
+    "dnsPort": 5300,
+    "batch": {
+      "enabled": true,
+      "maxPackets": 64,
+      "maxDelayUs": 200,
+      "latencyFlushBytes": 8192
+    },
+    "sessions": {
+      "udpMax": 4096,
+      "udpIdleTimeoutSec": 60,
+      "tcpMax": 16384
+    }
+  },
+  "inbounds": [
+    {
+      "tag": "tun-socks",
+      "protocol": "socks",
+      "listen": "127.0.0.1",
+      "port": 12345
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "outboundTag": "direct"
+      }
+    ]
+  }
+}

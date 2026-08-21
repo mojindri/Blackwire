@@ -12,14 +12,15 @@
 //!   - **Per-user connection cap** — `limits.maxConnectionsPerUser`
 //!   - **Per-user bandwidth policy** — `upMbps` / `downMbps` fields on client entries
 //!
-//! # What does NOT hot-reload (yet)?
+//! # What uses prepared handover?
 //!
-//! These require a process restart because they are wired at startup:
+//! Structural settings are applied automatically by building a replacement
+//! instance inside the running process:
 //!
 //!   - Inbound listen addresses / ports
 //!   - Outbound server addresses
 //!   - TLS / REALITY key material on existing listeners
-//!   - New inbound or outbound tags (handlers are not created on the fly)
+//!   - New inbound or outbound tags
 //!
 //! # How it works
 //!
@@ -37,7 +38,6 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-use async_trait::async_trait;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use tracing::info;
@@ -101,10 +101,6 @@ pub struct ReloadState {
     >,
     /// Shared per-user connection limiter updated in place on reload.
     pub user_connection_limiter: Arc<UserConnectionLimiter>,
-    /// Inbound tags from the active config (HandlerService ListInbounds).
-    pub inbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
-    /// Outbound tags from the active config (HandlerService ListOutbounds).
-    pub outbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
     /// Cached geo matchers; skips file re-read when path and mtime are unchanged.
     geo_cache: Arc<Mutex<GeoCache>>,
 }
@@ -125,8 +121,6 @@ impl ReloadState {
                 std::collections::HashMap<String, Arc<blackwire_config::schema::SniffingConfig>>,
             >,
         >,
-        inbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
-        outbound_tags: Arc<std::sync::RwLock<Vec<String>>>,
         user_connection_limiter: Arc<UserConnectionLimiter>,
     ) -> Self {
         Self {
@@ -138,8 +132,6 @@ impl ReloadState {
             hysteria2_auth_stores,
             tuic_auth_stores,
             sniffing,
-            inbound_tags,
-            outbound_tags,
             user_connection_limiter,
             geo_cache: Arc::new(Mutex::new(GeoCache::default())),
         }
@@ -176,17 +168,6 @@ impl ReloadState {
         let count = new_sniffing.len();
         self.sniffing.store(Arc::new(new_sniffing));
         info!(count, "sniffing map hot-swapped");
-
-        if let Ok(mut tags) = self.inbound_tags.write() {
-            let mut next = Vec::with_capacity(config.inbounds.len());
-            next.extend(config.inbounds.iter().map(|i| i.tag.clone()));
-            *tags = next;
-        }
-        if let Ok(mut tags) = self.outbound_tags.write() {
-            let mut next = Vec::with_capacity(config.outbounds.len());
-            next.extend(config.outbounds.iter().map(|o| o.tag.clone()));
-            *tags = next;
-        }
 
         set_user_bandwidth_policies(build_user_bandwidth_policies(&config.inbounds));
         info!("per-user bandwidth policy hot-swapped");
@@ -260,73 +241,7 @@ impl ReloadState {
     }
 }
 
-#[async_trait]
-impl blackwire_api::management::InboundManagement for ReloadState {
-    async fn list_inbound_tags(&self) -> Vec<String> {
-        self.inbound_tags
-            .read()
-            .map(|t| t.clone())
-            .unwrap_or_default()
-    }
-
-    async fn list_outbound_tags(&self) -> Vec<String> {
-        self.outbound_tags
-            .read()
-            .map(|t| t.clone())
-            .unwrap_or_default()
-    }
-
-    async fn vless_user_count(&self, inbound_tag: &str) -> Option<i64> {
-        self.vless_registry(inbound_tag).map(|r| r.len() as i64)
-    }
-
-    async fn list_vless_users(
-        &self,
-        inbound_tag: &str,
-        email: &str,
-    ) -> Result<Vec<blackwire_api::management::VlessUserRecord>, String> {
-        let registry = self
-            .vless_registry(inbound_tag)
-            .ok_or_else(|| format!("inbound '{inbound_tag}' has no VLESS user registry"))?;
-        Ok(registry
-            .list_users(email)
-            .into_iter()
-            .map(|u| blackwire_api::management::VlessUserRecord {
-                email: u.email.to_string(),
-                uuid: uuid::Uuid::from_bytes(u.uuid).to_string(),
-                flow: u.flow.clone(),
-                level: 0,
-            })
-            .collect())
-    }
-
-    async fn list_connections(&self) -> Vec<blackwire_connmgr::ConnectionSnapshot> {
-        blackwire_connmgr::global_manager().list()
-    }
-
-    async fn close_connections(
-        &self,
-        selector: blackwire_connmgr::CloseSelector,
-    ) -> Result<usize, String> {
-        Ok(blackwire_connmgr::global_manager().close(selector).matched)
-    }
-}
-
 impl ReloadState {
-    fn vless_registry(&self, inbound_tag: &str) -> Option<Arc<VlessUserRegistry>> {
-        if !self
-            .inbound_tags
-            .read()
-            .map(|tags| tags.iter().any(|t| t == inbound_tag))
-            .unwrap_or(false)
-        {
-            return None;
-        }
-        self.vless_registries
-            .get(inbound_tag)
-            .map(|r| Arc::clone(r.value()))
-    }
-
     /// Load geo data, reusing the cached matchers when the files haven't changed.
     ///
     /// Checks file size + mtime before re-reading. The expensive part (protobuf
@@ -390,9 +305,7 @@ impl ReloadState {
     }
 }
 
-/// Returns inbound tags whose listen address/port changed (requires process restart).
-///
-/// Matches Xray behavior: listener sockets are not recreated on `reload`.
+/// Returns inbound tags whose listen address/port changed and need instance handover.
 pub fn inbound_listener_changes(old: &Config, new: &Config) -> Vec<String> {
     let mut changed = Vec::new();
     for new_in in &new.inbounds {
@@ -412,36 +325,31 @@ pub fn inbound_listener_changes(old: &Config, new: &Config) -> Vec<String> {
     changed
 }
 
-/// Returns `true` when a validated config change requires rebuilding the running instance.
+/// Returns `true` when a validated config change needs a prepared in-process handover.
 ///
 /// Routing, DNS, sniffing, and supported inbound auth lists are hot-swappable via [`ReloadState::apply`].
 /// Structural changes such as listeners, transport wrappers, and outbound definitions
-/// need a fresh `Instance` because the handler graph is built at startup.
-pub fn requires_instance_restart(old: &Config, new: &Config) -> bool {
+/// use a fresh `Instance` because the handler graph is built at startup. The runtime
+/// prepares it before atomically swapping, without restarting the process.
+pub fn requires_instance_handover(old: &Config, new: &Config) -> bool {
     if !inbound_listener_changes(old, new).is_empty() {
         return true;
     }
 
     if old.metrics_addr != new.metrics_addr
-        || old.api != new.api
+        || old.profile != new.profile
+        || serialized_value_changed(&old.fast, &new.fast)
+        || old.vision != new.vision
+        || old.first_packet_boost != new.first_packet_boost
+        || serialized_value_changed(&old.log, &new.log)
+        || old.stats != new.stats
         || old.quic != new.quic
-        || old.datagram != new.datagram
-        || old.fec != new.fec
     {
         return true;
     }
 
     if normalized_limits_value(&old.limits) != normalized_limits_value(&new.limits) {
         return true;
-    }
-
-    match (
-        serde_json::to_value(&old.tun),
-        serde_json::to_value(&new.tun),
-    ) {
-        (Ok(a), Ok(b)) if a != b => return true,
-        (Err(_), _) | (_, Err(_)) => return true,
-        _ => {}
     }
 
     match (
@@ -467,6 +375,13 @@ pub fn requires_instance_restart(old: &Config, new: &Config) -> bool {
     }
 
     false
+}
+
+fn serialized_value_changed<T: serde::Serialize>(old: &T, new: &T) -> bool {
+    match (serde_json::to_value(old), serde_json::to_value(new)) {
+        (Ok(old), Ok(new)) => old != new,
+        _ => true,
+    }
 }
 
 fn normalized_limits_value(limits: &blackwire_config::schema::LimitsConfig) -> Vec<u8> {

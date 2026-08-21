@@ -109,14 +109,6 @@ impl UploadQueue {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub async fn close(self: &Arc<Self>) {
-        let mut st = self.state.lock().await;
-        st.closed = true;
-        drop(st);
-        self.bump_wake();
-    }
-
     fn take_reader(self: &Arc<Self>) -> UploadQueueReader {
         let wake_rx = self
             .wake_rx

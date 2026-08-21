@@ -1,5 +1,8 @@
 export type PageKey = "dashboard" | "users" | "inbounds" | "outbounds" | "sections" | "service" | "settings";
 
+export type { CoreSettings } from "../generated/CoreSettings";
+import type { CoreSettings } from "../generated/CoreSettings";
+
 export interface Settings {
   firewallAutoOpen: boolean;
   publicBaseUrl: string;
@@ -13,46 +16,13 @@ export interface Settings {
   adaptiveTuningState: Record<string, unknown>;
 }
 
-export interface CoreSettings {
-  profile: "compat" | "fast" | "latency" | "throughput" | "badnet" | "mobile" | "stealth";
-  fast: null | {
-    strictProduction: boolean; pool: "adaptive" | "disabled" | "fixed"; splice: "adaptive" | "disabled" | "always";
-    relay: { engine: "legacy" | "v2"; flush: "immediate" | "deferred" | "adaptive"; initialBuffer: number; maxBuffer: number };
-    linux: { zerocopy: "disabled" | "bulk" | "always"; zerocopyMinBytes: number; ioUring: "disabled" | "auto" | "require"; afXdp: "disabled" | "auto" | "require" };
-  };
-  budget: null | { maxProtocolLayers: number; allowSniffing: boolean; allowFakeIp: boolean; maxRouteRules: number; maxHandshakeMs: number; preferDirectCopy: boolean; preferDatagramForUdp: boolean };
-  vision: null | { directCopy: "auto" | "disabled" | "require"; maxPacketsToFilter: number; allowSpliceAfterDirect: boolean };
-  firstPacketBoost: null | { enabled: boolean; dns: boolean; tlsClientHello: boolean; sendEarlyPayload: boolean; duplicateControlOnBadnet: boolean; priority: "normal" | "high" | "critical" };
-  log: { level: string; json: boolean; file: string };
-  metricsAddr: string | null;
-  api: null | { listen: string; token: string | null; services: string[] };
-  stats: null | { enabled: boolean };
-  limits: {
-    maxConnections: number | null;
-    maxConnectionsPerInbound: number | null;
-    maxConnectionsPerUser: number | null;
-    maxHandshakeSeconds: number | null;
-    maxIdleSeconds: number | null;
-  };
-  quic: null | { reusePort: boolean; endpoints: number | string; recvBufferBytes: number; sendBufferBytes: number; maxDatagramSize: number | string };
-  datagram: null | { enabled: boolean; udpOverDatagram: boolean; tunPacketsOverDatagram: boolean; policy: "standard" | "h2-plus"; maxQueueDelayMs: number; fastDnsRetry: boolean; fastDnsRetryDelayMs: number };
-  fec: null | { mode: "off" | "xor1-of-n" | "reed-solomon" | "raptor-like" | "auto"; maxOverheadPercent: number; protectClasses: string[]; avoidBulkTcp: boolean; disableForSequentialDns: boolean; minConcurrencyForBlockFec: number; maxGenerationPackets: number; maxGenerationDelayMs: number; recoveryDeadlineMs: number; dedupWindowPackets: number };
-  tun: null | {
-    name: string; address: string; netmask: string; mtu: number; bypassMark: number; outboundInterface: string | null; redirectPort: number; dnsPort: number; wintunFile: string | null;
-    batch: { enabled: boolean; maxPackets: number; maxDelayUs: number; latencyFlushBytes: number };
-    sessions: { udpMax: number; udpIdleTimeoutSec: number; tcpMax: number };
-    linux: null | { backend: "tun" | "afxdp"; afXdp: { interface: string | null; queueId: number; ringEntries: number; frameCount: number; frameSize: number; forceCopy: boolean; forceZerocopy: boolean } };
-  };
-}
-
 export interface Status {
   setupRequired: boolean;
   databaseConnected: boolean;
   schemaVersion: number;
   desiredRevision: number;
   activeRevision: number | null;
-  pendingMaintenanceRevision: number | null;
-  activationState: "active" | "activating" | "pendingMaintenance" | "failed";
+  activationState: "active" | "activating" | "failed";
   lastActivationError: string | null;
   runtimeReachable: boolean;
   lastReconciliation: string;
@@ -210,8 +180,8 @@ export interface ApplyResult {
   revision: number;
   parentRevision: number;
   activeRevision: number | null;
-  state: "active" | "activating" | "pendingMaintenance" | "failed";
-  activationClass: "hotSwap" | "listenerHandover" | "maintenanceRequired";
+  state: "active" | "activating" | "failed";
+  activationClass: "hotSwap" | "listenerHandover";
   message: string;
 }
 
@@ -236,8 +206,6 @@ export interface RoutingDns {
   geoipFile: string | null;
   geositeFile: string | null;
   dnsServers: string[];
-  fakeIpEnabled: boolean;
-  fakeIpPool: string;
   rules: RouteInput[];
   balancers: BalancerInput[];
 }
@@ -250,7 +218,7 @@ export interface BalancerInput {
   healthCheck: null | { url: string; intervalSecs: number; timeoutSecs: number; maxFailures: number };
 }
 
-export interface CapabilityItem {
+interface CapabilityItem {
   key: string;
   label: string;
   status: "supported" | "experimental" | "deprecated" | "unsupported";
@@ -277,7 +245,7 @@ export interface RevisionSummary {
   parentRevision: number | null;
   actor: string;
   summary: string;
-  activationClass: "hotSwap" | "listenerHandover" | "maintenanceRequired";
+  activationClass: "hotSwap" | "listenerHandover";
   createdAt: string;
 }
 

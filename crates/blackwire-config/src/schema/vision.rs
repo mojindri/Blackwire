@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Vision direct-copy policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum VisionDirectCopyPolicy {
     /// Enable splice/zero-copy lowering after the required Vision handoff.
@@ -14,7 +14,7 @@ pub enum VisionDirectCopyPolicy {
 }
 
 /// XTLS Vision optimization settings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct VisionConfig {
     /// Optimization policy after Vision's protocol-required direct handoff.

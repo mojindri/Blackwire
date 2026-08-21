@@ -1,4 +1,4 @@
-//! In-process counters exposed through Xray `StatsService` gRPC.
+//! In-process counters used by dashboard persistence and runtime policy.
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
@@ -37,8 +37,8 @@ pub fn increment(name: &str, delta: i64) {
 // connection — pure overhead on short-lived (churned) connections.
 //
 // Instead we resolve each inbound's counter handles once and cache the
-// `Arc<AtomicI64>` directly. The atomics still live in `COUNTERS`, so the Xray
-// `StatsService` query path is unchanged — these are just cached clones.
+// `Arc<AtomicI64>` directly. The atomics still live in `COUNTERS`, so dashboard
+// persistence and internal queries read the same values.
 
 /// Global connection counter, resolved once.
 static CONN_TOTAL: Lazy<Arc<AtomicI64>> = Lazy::new(|| counter("connections>>>total"));
@@ -228,8 +228,7 @@ mod tests {
 
     #[test]
     fn counters_share_storage_with_query() {
-        // The cached-handle path must update the same atomics the StatsService
-        // query() reads — i.e. counter names are unchanged by the caching.
+        // The cached-handle path must update the same atomics query() reads.
         record_connection_accepted("bench-in", "tcp");
         record_relay_traffic("bench-in", None, 100, 200);
         let total = get("inbound>>>bench-in>>>connections>>>total", false).unwrap();

@@ -131,8 +131,8 @@ jobs:
           done
           cargo fetch --locked
 
-      - name: Build release binary
-        run: cargo build --release --locked --bin blackwire
+      - name: Build release binaries
+        run: cargo build --release --locked --bin blackwire --bin blackwire-client
 
       - name: Package Unix asset
         if: runner.os != 'Windows'
@@ -140,7 +140,9 @@ jobs:
         run: |
           mkdir -p dist/${{ matrix.asset }}
           cp target/release/${{ matrix.binary }} dist/${{ matrix.asset }}/
+          cp target/release/blackwire-client dist/${{ matrix.asset }}/
           chmod +x dist/${{ matrix.asset }}/${{ matrix.binary }}
+          chmod +x dist/${{ matrix.asset }}/blackwire-client
           cp README.md CHANGELOG.md dist/${{ matrix.asset }}/
           tar -C dist -czf dist/${{ matrix.archive }} ${{ matrix.asset }}
           (cd dist && shasum -a 256 ${{ matrix.archive }} > ${{ matrix.archive }}.sha256)
@@ -181,6 +183,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "dist/${{ matrix.asset }}" | Out-Null
           Copy-Item "target/release/${{ matrix.binary }}" "dist/${{ matrix.asset }}/"
+          Copy-Item "target/release/blackwire-client.exe" "dist/${{ matrix.asset }}/"
           Copy-Item README.md,CHANGELOG.md "dist/${{ matrix.asset }}/"
           Compress-Archive -Path "dist/${{ matrix.asset }}" -DestinationPath "dist/${{ matrix.archive }}" -Force
           $hash = (Get-FileHash "dist/${{ matrix.archive }}" -Algorithm SHA256).Hash.ToLower()

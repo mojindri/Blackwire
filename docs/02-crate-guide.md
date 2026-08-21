@@ -261,7 +261,6 @@ This crate is about carrying bytes, not interpreting proxy headers.
 - gRPC
 - QUIC
 - Hysteria2 transport helpers
-- mKCP
 - TUN
 - ShadowTLS
 
@@ -346,27 +345,24 @@ This is the executable, `blackwire`.
 - how a real run starts
 - what command-line tools exist for operators
 
-## `blackwire-api`
+## `blackwire-client`
 
 ### Purpose
 
-gRPC management/stats API crate.
+This is the separate local proxy and full-device client executable.
 
-### Current Status
+### Main Responsibilities
 
-Handler and Stats services are wired. Handler configuration mutation RPCs are
-rejected; MySQL revisions are the only configuration write path.
-
-### Why It Matters
-
-It provides runtime control-plane operations:
-
-- runtime inspection and connection operations
-- stats exposure
+- validate a file-owned client configuration
+- require a matching loopback SOCKS interception inbound
+- own the TUN device, routes, protected egress, and graceful cleanup
+- reuse the shared core, DNS/FakeIP, protocol, and transport implementations
 
 ### Read First
 
-- `crates/blackwire-api/src/lib.rs`
+- `crates/blackwire-client/src/main.rs`
+- `crates/blackwire-client/src/lib.rs`
+- `docs/client-app.md`
 
 ## `tests`
 
@@ -462,9 +458,6 @@ Use this ownership map:
 
 - `blackwire-cli`
   executable
-
-- `blackwire-api`
-  future management surface
 
 - `tests`
   behavior proof

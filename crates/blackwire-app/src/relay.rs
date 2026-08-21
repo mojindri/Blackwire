@@ -56,59 +56,6 @@ pub const ADAPTIVE_SPLICE_MIN_BYTES: u64 = 0;
 #[cfg(not(target_os = "linux"))]
 pub const ADAPTIVE_SPLICE_LONG_STREAM_AFTER: Duration = Duration::from_millis(0);
 
-/// Relay bytes between two streams until either side closes.
-///
-/// Returns `(bytes_client_to_server, bytes_server_to_client)`.
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) async fn relay_bidirectional(
-    inbound: BoxedStream,
-    outbound: BoxedStream,
-) -> io::Result<(u64, u64)> {
-    relay_bidirectional_with_splice_policy(inbound, outbound, FastSplicePolicy::Always).await
-}
-
-/// Relay bytes with an explicit Fast Profile splice policy.
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) async fn relay_bidirectional_with_splice_policy(
-    inbound: BoxedStream,
-    outbound: BoxedStream,
-    splice_policy: FastSplicePolicy,
-) -> io::Result<(u64, u64)> {
-    relay_bidirectional_with_policies(
-        inbound,
-        outbound,
-        splice_policy,
-        FastRelayConfig::default(),
-        FastLinuxConfig::default(),
-        VisionConfig::default(),
-    )
-    .await
-}
-
-/// Relay bytes with explicit Fast Profile splice and userspace relay policies.
-#[allow(dead_code)]
-pub async fn relay_bidirectional_with_policies(
-    inbound: BoxedStream,
-    outbound: BoxedStream,
-    splice_policy: FastSplicePolicy,
-    relay_policy: FastRelayConfig,
-    linux_policy: FastLinuxConfig,
-    vision_policy: VisionConfig,
-) -> io::Result<(u64, u64)> {
-    relay_bidirectional_with_policies_and_recorder(
-        inbound,
-        outbound,
-        splice_policy,
-        relay_policy,
-        linux_policy,
-        vision_policy,
-        None,
-    )
-    .await
-}
-
 /// Relay bytes with explicit policies and optional live traffic accounting.
 pub async fn relay_bidirectional_with_policies_and_recorder(
     inbound: BoxedStream,
@@ -1036,7 +983,6 @@ fn update_full_read_streak(current: u8, read_len: usize, buf_len: usize) -> u8 {
     }
 }
 
-#[allow(dead_code)]
 fn record_relay_path_bytes(path: &'static str, up: u64, down: u64) {
     metrics::counter!(
         "proxy_relay_bytes_total",
@@ -1133,9 +1079,14 @@ mod tests {
         let (mut client_b, server_b) = tcp_pair().await;
 
         let relay = tokio::spawn(async move {
-            relay_bidirectional(
+            relay_bidirectional_with_policies_and_recorder(
                 Box::new(PrependedStream::new(server_a, b"pre-a-".to_vec())),
                 Box::new(PrependedStream::new(server_b, b"pre-b-".to_vec())),
+                FastSplicePolicy::default(),
+                FastRelayConfig::default(),
+                FastLinuxConfig::default(),
+                VisionConfig::default(),
+                None,
             )
             .await
             .unwrap()

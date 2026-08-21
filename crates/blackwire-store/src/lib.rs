@@ -26,6 +26,7 @@ mod sqlx {
     pub(crate) use sqlx_core::pool;
     pub(crate) use sqlx_core::query::query;
     pub(crate) use sqlx_core::query_scalar::query_scalar;
+    pub(crate) use sqlx_core::raw_sql::raw_sql;
     pub(crate) use sqlx_core::row::Row;
     pub(crate) use sqlx_core::transaction::Transaction;
     pub(crate) use sqlx_mysql::{MySql, MySqlPool};

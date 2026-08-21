@@ -65,12 +65,6 @@ export function SectionsPage({ value, outbounds, busy, onSave }: { value: Routin
           <Textarea className="routing-dns-textarea" rows={7} value={text(form.dnsServers)} placeholder={"1.1.1.1\nhttps://dns.example/dns-query"} onChange={(event) => setForm({ ...form, dnsServers: lines(event.target.value) })} />
         </Field>
         <div className="routing-rail-divider" />
-        <label className="routing-switch-row">
-          <span><strong>FakeIP mapping</strong><small>Return synthetic addresses for domain-aware TUN routing.</small></span>
-          <input type="checkbox" checked={form.fakeIpEnabled} onChange={(event) => setForm({ ...form, fakeIpEnabled: event.target.checked })} />
-        </label>
-        {form.fakeIpEnabled ? <Field label="FakeIP address pool" hint="Use a private, non-routed CIDR range."><Input value={form.fakeIpPool} placeholder="198.18.0.0/15" onChange={(event) => setForm({ ...form, fakeIpPool: event.target.value })} /></Field> : null}
-        <div className="routing-rail-divider" />
         <Field label="GeoIP database" hint="Optional path to geoip.dat on the Blackwire host."><Input value={form.geoipFile ?? ""} placeholder="/usr/share/blackwire/geoip.dat" onChange={(event) => setForm({ ...form, geoipFile: event.target.value || null })} /></Field>
         <Field label="GeoSite database" hint="Optional path to geosite.dat on the Blackwire host."><Input value={form.geositeFile ?? ""} placeholder="/usr/share/blackwire/geosite.dat" onChange={(event) => setForm({ ...form, geositeFile: event.target.value || null })} /></Field>
         <div className="routing-rail-stat"><Globe2 size={16} /><span><strong>{form.dnsServers.length}</strong> configured {form.dnsServers.length === 1 ? "resolver" : "resolvers"}</span></div>
