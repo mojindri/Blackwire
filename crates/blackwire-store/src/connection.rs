@@ -419,13 +419,10 @@ async fn execute_migration_script(
     conn: &mut sqlx::pool::PoolConnection<MySql>,
     script: &str,
 ) -> StoreResult<()> {
-    for statement in script
-        .split(';')
-        .map(str::trim)
-        .filter(|statement| !statement.is_empty())
-    {
-        sqlx::Executor::execute(&mut **conn, statement).await?;
-    }
+    // MySQL does not support several DDL statements through its prepared
+    // statement protocol. `raw_sql` deliberately uses the text protocol and
+    // supports the complete semicolon-separated migration script.
+    sqlx::raw_sql(script).execute(&mut **conn).await?;
     Ok(())
 }
 
