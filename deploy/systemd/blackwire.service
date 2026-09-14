@@ -43,6 +43,8 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/blackwire /run/blackwire
 PrivateTmp=true
+RuntimeDirectory=blackwire
+RuntimeDirectoryMode=0750
 
 # Prevent privilege escalation.
 NoNewPrivileges=true
