@@ -1,0 +1,12 @@
+// Let the Blackwire control panel manage only the Blackwire runtime unit.
+polkit.addRule(function(action, subject) {
+    if (action.id != "org.freedesktop.systemd1.manage-units" || subject.user != "blackwire") {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    if (unit == "blackwire.service" && ["start", "stop", "restart"].indexOf(verb) >= 0) {
+        return polkit.Result.YES;
+    }
+});

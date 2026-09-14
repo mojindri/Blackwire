@@ -164,6 +164,8 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=${STATE_DIR} ${RUN_DIR}
 PrivateTmp=true
+RuntimeDirectory=blackwire
+RuntimeDirectoryMode=0750
 NoNewPrivileges=true
 Environment=RUST_LOG=info
 
@@ -207,6 +209,12 @@ UNIT
     rm -f "$unit"
 }
 
+install_ui_runtime_authorization() {
+    sudo_cmd install -d -m 0755 /etc/polkit-1/rules.d
+    sudo_cmd install -m 0644 deploy/polkit/49-blackwire-runtime.rules \
+        /etc/polkit-1/rules.d/49-blackwire-runtime.rules
+}
+
 install_ui() {
     [ "$INSTALL_BLACK_UI" = 1 ] || return 0
     [ -n "$UI_DATABASE_URL_FILE" ] || die "INSTALL_BLACK_UI=1 requires UI_DATABASE_URL_FILE for a separate UI account"
@@ -223,12 +231,14 @@ install_ui() {
     sudo_cmd install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$BLACK_UI_DATA_DIR"
     install_credential "$UI_DATABASE_URL_FILE" "$CONFIG_DIR/ui-database-url"
     install_ui_unit
+    install_ui_runtime_authorization
     rm -rf "$work"
 }
 
 uninstall() {
     sudo_cmd systemctl disable --now blackwire black-ui >/dev/null 2>&1 || true
     sudo_cmd rm -f /etc/systemd/system/blackwire.service /etc/systemd/system/black-ui.service
+    sudo_cmd rm -f /etc/polkit-1/rules.d/49-blackwire-runtime.rules
     sudo_cmd rm -f "$PREFIX/bin/blackwire" "$PREFIX/bin/black-ui"
     sudo_cmd systemctl daemon-reload >/dev/null 2>&1 || true
     log "application binaries removed; MySQL data, credentials, and legacy files were retained"
